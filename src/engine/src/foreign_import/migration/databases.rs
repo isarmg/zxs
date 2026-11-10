@@ -1,7 +1,10 @@
 //! Separate, inert original-scope databases derived from each capsule's own
 //! full native prefix. Never install these into active or new-identity roots.
 use super::*;
-use crate::engine::foreign_databases::{MAX_BYTES, PreparedForeignDatabases};
+use crate::{
+    engine::foreign_databases::{MAX_BYTES, PreparedForeignDatabases},
+    history_package::AdmittedState,
+};
 use transaction::ensure_exact;
 
 const DIRECTORY: &str = "foreign-chain-databases";
@@ -40,17 +43,17 @@ struct DatabaseIntent<'a> {
     report: &'a ForeignOriginalDatabasesReport,
     inventory: &'a Inventory,
 }
-#[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct Binding {
+#[derive(Serialize)]
+struct Binding<'a> {
     identity: PhysicalBinding,
-    intent_digest: String,
+    intent_digest: &'a str,
 }
 struct Prepared {
     images: PreparedForeignDatabases,
     inventory: Inventory,
     report: ForeignOriginalDatabasesReport,
     intent: Vec<u8>,
+    intent_digest: String,
 }
 fn budget() -> InspectionBudget {
     InspectionBudget {
@@ -66,20 +69,23 @@ impl ForeignMigrationTransaction {
     pub fn preview_original_databases(
         &self,
     ) -> Result<(ForeignOriginalDatabasesReport, ForeignDatabaseStatus)> {
-        let prepared = Prepared::capture(self)?;
+        let (prepared, _) = Prepared::capture(self)?;
         let status = prepared.status(self)?;
         Ok((prepared.report, status))
     }
     /// Read-only original status, including full independent image comparison
     /// after completion. No missing member, image or marker is repaired.
     pub fn original_database_status(&self) -> Result<ForeignDatabaseStatus> {
-        let prepared = Prepared::capture(self)?;
-        prepared.status(self)
+        self.original_database_state().map(|(status, _)| status)
+    }
+    pub(super) fn original_database_state(&self) -> Result<(ForeignDatabaseStatus, AdmittedState)> {
+        let (prepared, state) = Prepared::capture(self)?;
+        Ok((prepared.status(self)?, state))
     }
     /// Prepare a separate inert sibling, retaining every original identity.
     /// Completed missing/corrupt material is rejected rather than rebuilt.
     pub fn prepare_original_databases(&self) -> Result<ForeignOriginalDatabasesReport> {
-        let prepared = Prepared::capture(self)?;
+        let (prepared, _) = Prepared::capture(self)?;
         let status = prepared.status(self)?;
         let reservation = reservation(self);
         let path = self.parent.path().join(DIRECTORY);
@@ -146,7 +152,7 @@ fn parent_completion(transaction: &ForeignMigrationTransaction) -> PathBuf {
     ))
 }
 impl Prepared {
-    fn capture(transaction: &ForeignMigrationTransaction) -> Result<Self> {
+    fn capture(transaction: &ForeignMigrationTransaction) -> Result<(Self, AdmittedState)> {
         transaction.check_names()?;
         let Placement::ChainMaterial {
             chain_digest,
@@ -165,7 +171,7 @@ impl Prepared {
         let source = transaction.verify_replica()?;
         projection::Projection::from_replica(&transaction.intent.plan, &source)?
             .verify(&transaction.capsule, &transaction.intent.plan.budget)?;
-        let images = PreparedForeignDatabases::capture(&source)?;
+        let (images, state) = PreparedForeignDatabases::capture(&source)?;
         let mut inventory = Inventory {
             directories: BTreeSet::new(),
             files: BTreeMap::new(),
@@ -213,17 +219,22 @@ impl Prepared {
             ));
         }
         transaction.check_names()?;
-        Ok(Self {
-            images,
-            inventory,
-            report,
-            intent,
-        })
+        let intent_digest = blake3::hash(&intent).to_hex().to_string();
+        Ok((
+            Self {
+                images,
+                inventory,
+                report,
+                intent,
+                intent_digest,
+            },
+            state,
+        ))
     }
     fn binding(&self, root: &DiskRoot) -> Result<Vec<u8>> {
         Ok(canonical_json(&Binding {
             identity: PhysicalBinding::of(root)?,
-            intent_digest: blake3::hash(&self.intent).to_hex().to_string(),
+            intent_digest: &self.intent_digest,
         })?)
     }
     fn check_binding(&self, root: &DiskRoot) -> Result<()> {

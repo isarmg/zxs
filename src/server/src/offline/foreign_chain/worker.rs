@@ -141,7 +141,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
             let observation = original_databases(&target, &plan)?;
             databases::match_expected(&plan, &observation, &expected)?;
             exact_source(&target, &plan)?;
-            let proposal = identity::Proposal::capture(&configuration, &plan, &observation)?;
+            let (proposal, _) = identity::Proposal::capture(&configuration, &plan, &observation)?;
             original(&target, &configuration, &plan)?;
             Ok(Output::Identity { proposal })
         }
@@ -376,6 +376,7 @@ fn contents(root: &OpenAt2Root, operation: OperationId) -> Result<()> {
 }
 
 fn original_databases(target: &ManagedPool, plan: &Plan) -> Result<databases::Observation> {
+    let chain_digest = digest(&plan.binding)?;
     let mut targets = Vec::with_capacity(plan.binding.lower.len());
     let mut statuses = Vec::with_capacity(plan.binding.lower.len());
     for (item, digest) in plan.binding.lower.iter().zip(&plan.capsule_digests) {
@@ -390,7 +391,7 @@ fn original_databases(target: &ManagedPool, plan: &Plan) -> Result<databases::Ob
         let (report, status) = owner.preview_original_databases()?;
         if report.target_level != item.directory.level
             || report.capsule_digest != *digest
-            || report.chain_digest != super::digest(&plan.binding)?
+            || report.chain_digest != chain_digest
         {
             return Err("original databases do not bind this exact complete-chain target".into());
         }
@@ -476,10 +477,10 @@ fn prepare(
         }
         native_plans.push(native);
     }
+    let all_roots = plan.roots();
     for (item, progress) in plan.binding.lower.iter().zip(&observed.targets) {
         if progress.progress == Progress::Unstarted {
-            let excluded = plan
-                .roots()
+            let excluded = all_roots
                 .iter()
                 .filter(|path| path.as_str() != item.directory.root_path.as_str())
                 .map(PathBuf::from)
@@ -541,12 +542,13 @@ fn object_identities(
     }
     let databases = original_databases(target, plan)?;
     databases::match_expected(plan, &databases, expected_databases)?;
-    let proposal = identity::Proposal::capture(configuration, plan, &databases)?;
+    let (proposal, proposed_configuration) =
+        identity::Proposal::capture(configuration, plan, &databases)?;
     let actor = target.auth().sole_identity()?;
     let naming = target.backend().capture_foreign_identity_target(
         &actor,
         storage_engine::ForeignIdentityTargetRequest {
-            proposed_configuration: proposal.configuration(configuration)?,
+            proposed_configuration,
             operation_id: plan.binding.operation_id,
             request_digest: digest(plan)?.parse()?,
             chain_digest: digest(&plan.binding)?.parse()?,

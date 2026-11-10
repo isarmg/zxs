@@ -228,14 +228,7 @@ impl Engine {
 }
 
 impl Prepared {
-    pub(super) fn capture(
-        target: &ForeignIdentityTarget,
-        source: &ForeignImportPreview,
-    ) -> Result<Self> {
-        let (original, admitted) = source.visit_original_states(|_, _, _, _| Ok(()))?;
-        Self::from_state(target, source.source_level(), original, admitted.state())
-    }
-    fn from_state(
+    pub(super) fn from_state(
         target: &ForeignIdentityTarget,
         source_level: u32,
         original: ForeignOriginalStateReport,

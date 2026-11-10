@@ -22,8 +22,8 @@ struct Binding<'a> {
     capsule_digest: String,
     report: &'a ForeignIdentityClosureReport,
 }
-struct Material {
-    prepared: Prepared,
+pub(super) struct Material {
+    pub(super) prepared: Prepared,
     binding: Vec<u8>,
     intent: PathBuf,
     mapping: PathBuf,
@@ -63,7 +63,7 @@ impl ForeignMigrationTransaction {
     }
 }
 impl Material {
-    fn capture(
+    pub(super) fn capture(
         transaction: &ForeignMigrationTransaction,
         target: &ForeignIdentityTarget,
     ) -> Result<Self> {
@@ -90,19 +90,22 @@ impl Material {
             *target_level,
             &transaction.intent.plan.source_path,
         )?;
-        let ForeignDatabaseStatus::Verified { report } = transaction.original_database_status()?
-        else {
+        let (status, state) = transaction.original_database_state()?;
+        let ForeignDatabaseStatus::Verified { report } = status else {
             return Err(invalid(
                 "original three-scope databases must independently verify before object identity preparation",
             ));
         };
+        // Reuse the State admitted with these databases; retain the final
+        // local FULL/inventory readback.
         let source = transaction.verify_replica()?;
-        let prepared = Prepared::capture(target, &source)?;
-        if prepared.report.original != report.original {
-            return Err(changed(
-                "native identity closure and original database State disagree",
-            ));
-        }
+        let prepared = Prepared::from_state(
+            target,
+            source.source_level(),
+            report.original,
+            state.state(),
+        )?;
+        source.revalidate_source()?;
         let binding = canonical_json(&Binding {
             format: "zxs-foreign-object-identity-binding",
             parent: PhysicalBinding::of(&transaction.parent)?,
@@ -127,7 +130,7 @@ impl Material {
                 .join(format!("{prefix}-complete.json")),
         })
     }
-    fn status(
+    pub(super) fn status(
         &self,
         transaction: &ForeignMigrationTransaction,
     ) -> Result<ForeignIdentityClosureStatus> {

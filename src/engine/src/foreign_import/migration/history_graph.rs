@@ -71,23 +71,17 @@ impl Material {
         transaction: &ForeignMigrationTransaction,
         target: &ForeignIdentityTarget,
     ) -> Result<Self> {
-        let (identities, identity_status) = transaction.preview_identity_closure(target)?;
-        if identity_status
-            != (ForeignIdentityClosureStatus::Verified {
-                report: Box::new(identities.clone()),
-            })
-        {
+        let identities = super::identity_closure::Material::capture(transaction, target)?;
+        if !matches!(
+            identities.status(transaction)?,
+            ForeignIdentityClosureStatus::Verified { .. }
+        ) {
             return Err(invalid(
                 "exact object identity material must complete before graph preparation",
             ));
         }
         let source = transaction.verify_replica()?;
-        let prepared = PreparedGraph::capture(target, &source)?;
-        if prepared.report.identities != identities {
-            return Err(changed(
-                "native graph, original identity material and database State disagree",
-            ));
-        }
+        let prepared = PreparedGraph::capture(identities.prepared, &source)?;
         let binding = canonical_json(&Binding {
             format: "zxs-foreign-source-scoped-graph-binding",
             parent: PhysicalBinding::of(&transaction.parent)?,

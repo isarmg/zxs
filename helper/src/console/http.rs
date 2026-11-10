@@ -15,10 +15,11 @@ use http_routing::{
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{MethodRouter, get, post},
 };
 use json_codec::json;
 use std::time::Duration;
+use storage_engine::offline_maintenance::Operation;
 use tokio::sync::OwnedSemaphorePermit;
 
 #[derive(Debug)]
@@ -93,141 +94,159 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/status", get(status))
         .route(
             "/api/initialization/storage-directories-preview",
-            post(first_storage_directories_preview),
+            maintenance(Operation::FirstStorageDirectoriesPreview),
         )
         .route(
             "/api/initialization/storage-directories-prepare",
-            post(first_storage_directories_prepare),
+            maintenance(Operation::FirstStorageDirectoriesPrepare),
         )
         .route(
             "/api/initialization/storage-preview",
-            post(first_storage_preview),
+            maintenance(Operation::FirstStoragePreview),
         )
         .route(
             "/api/initialization/storage-recover-preview",
-            post(first_storage_recover),
+            maintenance(Operation::FirstStorageRecover),
         )
         .route(
             "/api/initialization/storage-create",
-            post(first_storage_create),
+            maintenance(Operation::FirstStorageCreate),
         )
-        .route("/api/disks/registrations", post(disk_removal_inventory))
+        .route(
+            "/api/disks/registrations",
+            maintenance(Operation::DiskRemovalInventory),
+        )
         .route(
             "/api/disks/terminal-chain-export",
-            post(terminal_chain_export),
+            maintenance(Operation::TerminalChainExport),
         )
         .route(
             "/api/disks/terminal-chain-readmission-proposal",
-            post(terminal_chain_readmission_proposal),
+            maintenance(Operation::TerminalChainReadmissionProposal),
         )
         .route(
             "/api/disks/terminal-chain-target-status",
-            post(terminal_chain_target_status),
+            maintenance(Operation::TerminalChainTargetStatus),
         )
         .route(
             "/api/disks/terminal-chain-target-synchronize",
-            post(terminal_chain_target_synchronize),
+            maintenance(Operation::TerminalChainTargetSynchronize),
         )
         .route(
             "/api/disks/terminal-chain-first-prepare",
-            post(terminal_chain_first_prepare),
+            maintenance(Operation::TerminalChainFirstPrepare),
         )
         .route(
             "/api/disks/terminal-chain-first-publish",
-            post(terminal_chain_first_publish),
+            maintenance(Operation::TerminalChainFirstPublish),
         )
         .route(
             "/api/disks/terminal-chain-current",
-            post(terminal_chain_current),
+            maintenance(Operation::TerminalChainCurrent),
         )
         .route(
             "/api/disks/terminal-chain-activation-plan",
-            post(terminal_chain_activation_plan),
+            maintenance(Operation::TerminalChainActivationPlan),
         )
         .route(
             "/api/disks/terminal-chain-io-decide",
-            post(terminal_chain_io_decide),
+            maintenance(Operation::TerminalChainIoDecide),
         )
         .route(
             "/api/disks/terminal-chain-generation-log",
-            post(terminal_chain_generation_log),
+            maintenance(Operation::TerminalChainGenerationLog),
         )
         .route(
             "/api/disks/terminal-chain-generation-select",
-            post(terminal_chain_generation_select),
+            maintenance(Operation::TerminalChainGenerationSelect),
         )
         .route(
             "/api/disks/terminal-chain-generation-read",
-            post(terminal_chain_generation_read),
+            maintenance(Operation::TerminalChainGenerationRead),
         )
-        .route("/api/disks/deregister-preview", post(disk_removal_preview))
+        .route(
+            "/api/disks/deregister-preview",
+            maintenance(Operation::DiskRemovalPreview),
+        )
         .route(
             "/api/disks/deregister-original",
-            post(disk_removal_original),
+            maintenance(Operation::DiskRemovalOriginal),
         )
-        .route("/api/disks/deregister-commit", post(disk_removal_commit))
+        .route(
+            "/api/disks/deregister-commit",
+            maintenance(Operation::DiskRemovalCommit),
+        )
         .route(
             "/api/disks/terminal-removal-inspect",
-            post(terminal_removal_inspect),
+            maintenance(Operation::TerminalRemovalInspect),
         )
         .route(
             "/api/disks/terminal-retirement-preview",
-            post(terminal_retirement_preview),
+            maintenance(Operation::TerminalRetirementPreview),
         )
         .route(
             "/api/disks/terminal-retirement-original",
-            post(terminal_retirement_original),
+            maintenance(Operation::TerminalRetirementOriginal),
         )
         .route(
             "/api/disks/terminal-retirement-commit",
-            post(terminal_retirement_commit),
+            maintenance(Operation::TerminalRetirementCommit),
         )
         .route(
             "/api/disks/readmission-preview",
-            post(disk_readmission_preview),
+            maintenance(Operation::DiskReadmissionPreview),
         )
         .route(
             "/api/disks/readmission-original",
-            post(disk_readmission_original),
+            maintenance(Operation::DiskReadmissionOriginal),
         )
         .route(
             "/api/disks/readmission-commit",
-            post(disk_readmission_commit),
+            maintenance(Operation::DiskReadmissionCommit),
         )
-        .route("/api/disks/add-preview", post(disk_addition_preview))
-        .route("/api/disks/add-original", post(disk_addition_original))
-        .route("/api/disks/add-commit", post(disk_addition_commit))
+        .route(
+            "/api/disks/add-preview",
+            maintenance(Operation::DiskAdditionPreview),
+        )
+        .route(
+            "/api/disks/add-original",
+            maintenance(Operation::DiskAdditionOriginal),
+        )
+        .route(
+            "/api/disks/add-commit",
+            maintenance(Operation::DiskAdditionCommit),
+        )
         .route(
             "/api/disks/foreign-chain-preview",
-            post(foreign_chain_preview),
+            maintenance(Operation::ForeignChainPreview),
         )
         .route(
             "/api/disks/foreign-chain-original",
-            post(foreign_chain_original),
+            maintenance(Operation::ForeignChainOriginal),
         )
         .route(
             "/api/disks/foreign-chain-prepare",
-            post(foreign_chain_prepare),
+            maintenance(Operation::ForeignChainPrepare),
         )
         .route(
             "/api/disks/foreign-chain-databases-preview",
-            post(foreign_chain_databases_preview),
+            maintenance(Operation::ForeignChainDatabasesPreview),
         )
         .route(
             "/api/disks/foreign-chain-databases-prepare",
-            post(foreign_chain_databases_prepare),
+            maintenance(Operation::ForeignChainDatabasesPrepare),
         )
         .route(
             "/api/disks/foreign-chain-identity-preview",
-            post(foreign_chain_identity_preview),
+            maintenance(Operation::ForeignChainIdentityPreview),
         )
         .route(
             "/api/disks/foreign-chain-objects-preview",
-            post(foreign_chain_objects_preview),
+            maintenance(Operation::ForeignChainObjectsPreview),
         )
         .route(
             "/api/disks/foreign-chain-objects-prepare",
-            post(foreign_chain_objects_prepare),
+            maintenance(Operation::ForeignChainObjectsPrepare),
         )
         .route("/api/authority/check", post(check))
         .route("/api/authority/export", post(export))
@@ -272,12 +291,15 @@ pub(super) fn router(state: State) -> Router {
         )
         .route(
             "/api/credentials/reset-preview",
-            post(administrator_reset_preview),
+            maintenance(Operation::AdministratorResetPreview),
         )
-        .route("/api/credentials/reset", post(administrator_reset))
+        .route(
+            "/api/credentials/reset",
+            maintenance(Operation::AdministratorReset),
+        )
         .route(
             "/api/credentials/reset-recover-preview",
-            post(administrator_reset_recover_preview),
+            maintenance(Operation::AdministratorResetRecoverPreview),
         )
         .route("/api/credentials/samba-preview", post(samba_reset_preview))
         .route("/api/credentials/samba-reset", post(samba_reset))
@@ -302,15 +324,15 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/initialization/runtime-prepare", post(runtime_prepare))
         .route(
             "/api/initialization/administrator-preview",
-            post(first_administrator_preview),
+            maintenance(Operation::FirstAdministratorPreview),
         )
         .route(
             "/api/initialization/administrator-create",
-            post(first_administrator_create),
+            maintenance(Operation::FirstAdministratorCreate),
         )
         .route(
             "/api/initialization/administrator-recover-preview",
-            post(first_administrator_recover_preview),
+            maintenance(Operation::FirstAdministratorRecoverPreview),
         )
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), security))
@@ -853,41 +875,6 @@ fn configuration_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Fai
     )
 }
 
-async fn administrator_reset_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::AdministratorResetPreview,
-    )
-    .await
-}
-async fn administrator_reset(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::AdministratorReset,
-    )
-    .await
-}
-
-async fn administrator_reset_recover_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::AdministratorResetRecoverPreview,
-    )
-    .await
-}
-
 async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failure> {
     let bytes = tokio::time::timeout(
         Duration::from_secs(15),
@@ -915,95 +902,6 @@ async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failur
             "Invalid credential request; password values and parser details are not returned.",
         )
     })
-}
-async fn first_administrator_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstAdministratorPreview,
-    )
-    .await
-}
-async fn first_administrator_recover_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstAdministratorRecoverPreview,
-    )
-    .await
-}
-async fn first_administrator_create(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstAdministratorCreate,
-    )
-    .await
-}
-
-async fn first_storage_directories_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstStorageDirectoriesPreview,
-    )
-    .await
-}
-async fn first_storage_directories_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstStorageDirectoriesPrepare,
-    )
-    .await
-}
-async fn first_storage_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstStoragePreview,
-    )
-    .await
-}
-async fn first_storage_recover(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstStorageRecover,
-    )
-    .await
-}
-async fn first_storage_create(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::FirstStorageCreate,
-    )
-    .await
 }
 
 async fn samba_reset_preview(
@@ -1075,406 +973,12 @@ fn samba_reset_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failu
     )
 }
 
-async fn foreign_chain_objects_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainObjectsPreview,
+fn maintenance(operation: Operation) -> MethodRouter<State> {
+    post(
+        move |ExtractState(state): ExtractState<State>, request: Request| {
+            maintenance_operation(state, request, operation)
+        },
     )
-    .await
-}
-async fn foreign_chain_objects_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainObjectsPrepare,
-    )
-    .await
-}
-
-async fn foreign_chain_identity_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainIdentityPreview,
-    )
-    .await
-}
-async fn foreign_chain_databases_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainDatabasesPreview,
-    )
-    .await
-}
-async fn foreign_chain_databases_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainDatabasesPrepare,
-    )
-    .await
-}
-
-async fn foreign_chain_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainPreview,
-    )
-    .await
-}
-async fn foreign_chain_original(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainOriginal,
-    )
-    .await
-}
-async fn foreign_chain_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::ForeignChainPrepare,
-    )
-    .await
-}
-
-async fn disk_addition_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskAdditionPreview,
-    )
-    .await
-}
-
-async fn disk_addition_original(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskAdditionOriginal,
-    )
-    .await
-}
-
-async fn disk_addition_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskAdditionCommit,
-    )
-    .await
-}
-
-async fn disk_removal_inventory(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskRemovalInventory,
-    )
-    .await
-}
-
-async fn disk_removal_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskRemovalPreview,
-    )
-    .await
-}
-
-async fn disk_removal_original(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskRemovalOriginal,
-    )
-    .await
-}
-
-async fn disk_removal_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskRemovalCommit,
-    )
-    .await
-}
-
-async fn terminal_removal_inspect(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalRemovalInspect,
-    )
-    .await
-}
-
-async fn terminal_retirement_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalRetirementPreview,
-    )
-    .await
-}
-
-async fn terminal_retirement_original(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalRetirementOriginal,
-    )
-    .await
-}
-
-async fn terminal_retirement_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalRetirementCommit,
-    )
-    .await
-}
-
-async fn disk_readmission_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskReadmissionPreview,
-    )
-    .await
-}
-
-async fn disk_readmission_original(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskReadmissionOriginal,
-    )
-    .await
-}
-
-async fn disk_readmission_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::DiskReadmissionCommit,
-    )
-    .await
-}
-
-async fn terminal_chain_export(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainExport,
-    )
-    .await
-}
-
-async fn terminal_chain_readmission_proposal(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainReadmissionProposal,
-    )
-    .await
-}
-
-async fn terminal_chain_target_status(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainTargetStatus,
-    )
-    .await
-}
-async fn terminal_chain_target_synchronize(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainTargetSynchronize,
-    )
-    .await
-}
-
-async fn terminal_chain_first_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainFirstPrepare,
-    )
-    .await
-}
-
-async fn terminal_chain_first_publish(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainFirstPublish,
-    )
-    .await
-}
-
-async fn terminal_chain_current(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainCurrent,
-    )
-    .await
-}
-
-async fn terminal_chain_activation_plan(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainActivationPlan,
-    )
-    .await
-}
-
-async fn terminal_chain_io_decide(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainIoDecide,
-    )
-    .await
-}
-
-async fn terminal_chain_generation_log(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainGenerationLog,
-    )
-    .await
-}
-
-async fn terminal_chain_generation_select(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainGenerationSelect,
-    )
-    .await
-}
-
-async fn terminal_chain_generation_read(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    maintenance_operation(
-        state,
-        request,
-        storage_engine::offline_maintenance::Operation::TerminalChainGenerationRead,
-    )
-    .await
 }
 
 /// The helper is only the HTTP transport for management semantics. The matching
@@ -1482,7 +986,7 @@ async fn terminal_chain_generation_read(
 async fn maintenance_operation(
     state: State,
     request: Request,
-    operation: storage_engine::offline_maintenance::Operation,
+    operation: Operation,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
     let bytes = tokio::time::timeout(

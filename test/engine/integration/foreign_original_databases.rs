@@ -522,3 +522,77 @@ fn interrupted_history_graph_completion_preserves_and_rechecks_original_bytes() 
     assert!(owner.prepare_history_graph(&target).is_err());
     assert_eq!(fs::read(&path).unwrap(), b"changed graph");
 }
+
+#[test]
+fn completed_identity_and_graph_material_still_recheck_each_replicas_full_body() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    owner.prepare_identity_closure(&target).unwrap();
+    owner.prepare_history_graph(&target).unwrap();
+    let mapping = roots[0].join(format!(".zxs-foreign-identities-{operation}.json"));
+    let graph = roots[0].join(format!(".zxs-foreign-graphs-{operation}.json"));
+    let mapping_bytes = fs::read(&mapping).unwrap();
+    let graph_bytes = fs::read(&graph).unwrap();
+    let version = f
+        .engine
+        .state()
+        .versions
+        .values()
+        .find(|version| version.creation_primary_slot_id == "P01")
+        .unwrap();
+    let mut directories = vec![roots[0].join("material/source")];
+    let mut bodies = Vec::new();
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                directories.push(entry.path());
+            } else if entry.file_name() == std::ffi::OsStr::new(&version.storage_name) {
+                bodies.push(entry.path());
+            }
+        }
+    }
+    assert_eq!(bodies.len(), 1);
+    let body = bodies.pop().unwrap();
+    let mut changed = fs::read(&body).unwrap();
+    changed[0] ^= 1;
+    fs::write(&body, &changed).unwrap();
+    assert!(owner.preview_identity_closure(&target).is_err());
+    assert!(owner.prepare_identity_closure(&target).is_err());
+    assert!(owner.preview_history_graph(&target).is_err());
+    assert!(owner.prepare_history_graph(&target).is_err());
+    assert_eq!(fs::read(&mapping).unwrap(), mapping_bytes);
+    assert_eq!(fs::read(&graph).unwrap(), graph_bytes);
+    assert_eq!(fs::read(&body).unwrap(), changed);
+    let healthy = published_owner(&roots[1], operation, &digests[1]);
+    healthy.prepare_identity_closure(&target).unwrap();
+    healthy.prepare_history_graph(&target).unwrap();
+}
+
+#[test]
+fn completed_identity_and_graph_material_cannot_replace_missing_original_state() {
+    let f = fixture();
+    let operation = OperationId::generate().unwrap();
+    let (roots, digests) = identity_capsules(&f, operation);
+    let (_, target) = identity_targets(&f, operation, &roots);
+    let owner = published_owner(&roots[0], operation, &digests[0]);
+    owner.prepare_identity_closure(&target).unwrap();
+    owner.prepare_history_graph(&target).unwrap();
+    let original = roots[0].join("material/source/metadata/objects/state-control-auth");
+    fs::remove_dir_all(&original).unwrap();
+    assert!(owner.preview_identity_closure(&target).is_err());
+    assert!(owner.prepare_identity_closure(&target).is_err());
+    assert!(owner.preview_history_graph(&target).is_err());
+    assert!(owner.prepare_history_graph(&target).is_err());
+    assert!(!original.exists());
+    for kind in ["identities", "graphs"] {
+        assert!(
+            roots[0]
+                .join(format!(".zxs-foreign-{kind}-{operation}-complete.json"))
+                .is_file()
+        );
+    }
+}

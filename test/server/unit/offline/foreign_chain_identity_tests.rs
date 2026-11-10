@@ -118,10 +118,38 @@ fn fixture() -> (Config, Plan, databases::Observation) {
 #[test]
 fn entire_chain_has_distinct_stable_target_identities_without_reusing_original_seal() {
     let (configuration, plan, observation) = fixture();
-    let proposal = Proposal::capture(&configuration, &plan, &observation).unwrap();
-    let again = Proposal::capture(&configuration, &plan, &observation).unwrap();
+    let (proposal, proposed) = Proposal::capture(&configuration, &plan, &observation).unwrap();
+    let (again, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     assert_eq!(digest(&proposal).unwrap(), digest(&again).unwrap());
     assert_eq!(proposal.targets.len(), 3);
+    assert_eq!(
+        digest(&proposed).unwrap(),
+        proposal.proposed_configuration_digest
+    );
+    assert_eq!(
+        proposed.disks.len(),
+        configuration.disks.len() + proposal.targets.len()
+    );
+    assert_eq!(
+        json_codec::to_value(&proposed.disks[..configuration.disks.len()]).unwrap(),
+        json_codec::to_value(&configuration.disks).unwrap()
+    );
+    for (disk, target) in proposed.disks[configuration.disks.len()..]
+        .iter()
+        .zip(&proposal.targets)
+    {
+        assert_eq!(disk.disk_id, target.registration.disk_id);
+        assert_eq!(disk.slot_id, target.registration.slot_id);
+        assert_eq!(
+            disk.binding_generation,
+            target.registration.binding_generation
+        );
+        assert_eq!(disk.root, std::path::PathBuf::from(&target.root_path));
+        assert_eq!(disk.level, target.level);
+        assert_eq!(disk.upstream_slot_id, target.upstream_slot_id);
+        assert_eq!(disk.metadata_member, target.metadata_member);
+        assert_eq!(disk.capacity_bytes, None);
+    }
     let mut ids = BTreeSet::new();
     for (index, target) in proposal.targets.iter().enumerate() {
         assert_eq!(target.level, index as u32 + 1);
@@ -195,9 +223,9 @@ fn original_full_state_must_bind_the_exact_foreign_source_registration() {
 #[test]
 fn proposal_digest_binds_every_selected_physical_root_and_the_original_operation() {
     let (configuration, mut plan, observation) = fixture();
-    let first = Proposal::capture(&configuration, &plan, &observation).unwrap();
+    let (first, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     plan.binding.lower[0].selection.root_identity.inode += 1;
-    let second = Proposal::capture(&configuration, &plan, &observation).unwrap();
+    let (second, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     assert_ne!(digest(&first).unwrap(), digest(&second).unwrap());
     assert_ne!(
         first.targets[0].registration.disk_id,

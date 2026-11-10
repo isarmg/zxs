@@ -24,30 +24,11 @@ pub(super) struct Proposal {
     proposed_configuration_digest: String,
 }
 impl Proposal {
-    pub(super) fn configuration(&self, current: &Config) -> Result<Config> {
-        let mut proposed = current.clone();
-        for item in &self.targets {
-            proposed.disks.push(DiskConfig {
-                slot_id: item.registration.slot_id.clone(),
-                disk_id: item.registration.disk_id.clone(),
-                root: item.root_path.clone().into(),
-                level: item.level,
-                upstream_slot_id: item.upstream_slot_id.clone(),
-                metadata_member: item.metadata_member,
-                binding_generation: item.registration.binding_generation,
-                capacity_bytes: None,
-            });
-        }
-        if digest(&proposed)? != self.proposed_configuration_digest {
-            return Err("identity proposal no longer preserves its original current Config".into());
-        }
-        Ok(proposed)
-    }
     pub(super) fn capture(
         configuration: &Config,
         plan: &Plan,
         observation: &databases::Observation,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Config)> {
         plan.validate()?;
         if digest(configuration)? != plan.binding.configuration_digest {
             return Err(
@@ -95,14 +76,15 @@ impl Proposal {
             plan.binding.source.physical.clone(),
         )?);
         ValidatedConfig::try_from(proposed.clone())?;
-        Ok(Self {
+        let proposal = Self {
             request_digest,
             database_digest: digest(&observation.expected(plan)?)?,
             original: original.clone(),
             source_registration: plan.binding.source.registration.clone(),
             targets,
             proposed_configuration_digest: digest(&proposed)?,
-        })
+        };
+        Ok((proposal, proposed))
     }
 }
 fn append_target(

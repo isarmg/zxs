@@ -77,10 +77,9 @@ struct Archive<'a> {
 }
 impl PreparedGraph {
     pub(in crate::foreign_import) fn capture(
-        target: &ForeignIdentityTarget,
+        identities: Prepared,
         source: &ForeignImportPreview,
     ) -> Result<Self> {
-        let identities = Prepared::capture(target, source)?;
         let mapper = remap::Remap::new(&identities.objects);
         let mut histories = Vec::new();
         let mut bytes_left = MAX_GRAPH_BYTES;
@@ -128,10 +127,11 @@ impl PreparedGraph {
             "foreign-source-scoped-mapped-history-graphs",
             &archive,
         )?;
+        let histories = archive.histories.len();
         let report = ForeignHistoryGraphReport {
-            identities: identities.report.clone(),
+            identities: identities.report,
             graph_digest,
-            histories: archive.histories.len(),
+            histories,
             versions,
             unavailable_versions,
             graph_bytes: bytes.len() as u64,

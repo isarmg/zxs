@@ -1,7 +1,9 @@
 //! Original-identity three-scope images from a full foreign native prefix.
 //! No active installation or replacement identity is provided by this module.
 use super::disk_catalog::PreparedDiskScopes;
-use crate::{container_storage::backup_databases::PreparedDatabases, *};
+use crate::{
+    container_storage::backup_databases::PreparedDatabases, history_package::AdmittedState, *,
+};
 use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicBool};
 
 pub(crate) const MAX_BYTES: usize = 192 * 1024 * 1024;
@@ -15,7 +17,7 @@ pub(crate) struct PreparedForeignDatabases {
     bytes: usize,
 }
 impl PreparedForeignDatabases {
-    pub(crate) fn capture(source: &ForeignImportPreview) -> Result<Self> {
+    pub(crate) fn capture(source: &ForeignImportPreview) -> Result<(Self, AdmittedState)> {
         let stop = AtomicBool::new(false);
         let mut disks = None;
         let (state, admitted) =
@@ -65,7 +67,7 @@ impl PreparedForeignDatabases {
             database.verify(database.bytes())?;
             result.add(database.path(), database.bytes().to_vec())?;
         }
-        Ok(result)
+        Ok((result, admitted))
     }
     fn add(&mut self, path: PathBuf, bytes: Vec<u8>) -> Result<()> {
         let total = self.bytes.checked_add(bytes.len()).ok_or_else(budget)?;
