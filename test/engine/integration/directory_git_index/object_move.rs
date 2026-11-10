@@ -168,6 +168,85 @@ fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object()
 }
 
 #[test]
+fn unborn_empty_repository_moves_before_its_first_user_commit() {
+    let (temp, mut engine, source, destination) = fixture_for(Route::EmptyDisk);
+    mkdir(&mut engine, &source, "empty");
+    initialize(&mut engine, &source, "empty");
+    let original = status(&engine, &source, "empty");
+    assert!(original.initialized && original.staged && !original.unstaged);
+    assert!(original.head_tree_id.is_none());
+
+    let target = move_to(&mut engine, &source, &destination, "empty", "moved");
+    let moved = status(&engine, &target, "moved");
+    assert!(moved.initialized && moved.staged && !moved.unstaged);
+    assert!(!moved.needs_restage && moved.head_tree_id.is_none());
+    assert_eq!(moved.index_generation, original.index_generation);
+    let git = &engine.state().directory_git_repositories[&moved.directory_id];
+    let index = &git.branches[moved.directory_branch_id.as_ref().unwrap()].index_tree_id;
+    assert!(engine.state().directory_trees[index].entries.is_empty());
+    assert!(engine.state().versions.is_empty());
+    assert!(
+        engine
+            .directory_git_main_workspace(&target.repository_id, &moved.directory_id)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+
+    // A normal restart must retain the initialized but not yet committed state.
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(status(&engine, &target, "moved"), moved);
+    let first = commit_reviewed(
+        &mut engine,
+        &target,
+        &moved,
+        OperationId::generate().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first.result["no_change"], false);
+    let empty_head = first.result["head_tree_id"].as_str().unwrap().to_owned();
+    let empty_tree = engine.state().directory_trees[&empty_head].clone();
+    assert!(empty_tree.entries.is_empty() && empty_tree.directory_refs.is_empty());
+    assert!(empty_tree.parent_tree_id.is_none());
+    let marker = &engine.state().commits[&empty_tree.commit_id];
+    assert_eq!(marker.kind, "directory_commit");
+    assert_eq!(marker.provenance.as_deref(), Some(empty_head.as_str()));
+    assert!(marker.parent_commit_ids.is_empty());
+
+    // Saving into the moved repository still does not advance its user HEAD.
+    save(&mut engine, &target, "moved/first", b"first saved contents");
+    let working = status(&engine, &target, "moved");
+    assert!(!working.staged && working.unstaged);
+    assert_eq!(working.head_tree_id.as_deref(), Some(empty_head.as_str()));
+    assert_eq!(bytes(&engine, &target, "moved/first"), b"first saved contents");
+    stage_owned(&mut engine, &target, "moved");
+    let reviewed = status(&engine, &target, "moved");
+    assert!(reviewed.staged && !reviewed.unstaged);
+    let saved = commit_reviewed(
+        &mut engine,
+        &target,
+        &reviewed,
+        OperationId::generate().unwrap(),
+    )
+    .unwrap();
+    let saved_head = saved.result["head_tree_id"].as_str().unwrap();
+    assert_eq!(
+        engine.state().directory_trees[saved_head]
+            .parent_tree_id
+            .as_deref(),
+        Some(empty_head.as_str())
+    );
+    assert_eq!(
+        snapshot_files(&engine, saved_head)["first"],
+        b"first saved contents"
+    );
+    assert_eq!(engine.state().directory_trees[&empty_head], empty_tree);
+    let complete = status(&engine, &target, "moved");
+    assert!(!complete.staged && !complete.unstaged && !complete.needs_restage);
+}
+
+#[test]
 fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() {
     for route in [Route::SameDisk, Route::ExistingDisk, Route::EmptyDisk] {
         let (_temp, mut engine, source, destination) = fixture_for(route);
