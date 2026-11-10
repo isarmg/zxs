@@ -272,3 +272,34 @@ fn server_disk_observation_vector_is_strictly_decoded_and_retained() {
     value["observation_failure"]["source"] = json!("private source");
     assert!(json_codec::from_value::<wire::Disk>(value).is_err());
 }
+
+#[test]
+fn history_power_reasons_require_current_strings_not_object_aliases() {
+    for reason in [
+        "sensor_unavailable",
+        "sensor_unreadable",
+        "sampling",
+        "counter_reset",
+        "disk_offline",
+        "simulated_disk",
+        "sensor_ambiguous",
+    ] {
+        let mut valid = fixture(1, 2);
+        valid["samples"][0]["cpu"]["power_unavailable_reason"] = reason.into();
+        valid["samples"][0]["disks"][0]["power_unavailable_reason"] = reason.into();
+        assert!(decode(valid.clone(), "1h").is_ok());
+        let mut alias = json!({});
+        alias[reason] = Value::Null;
+        for target in ["cpu", "disk"] {
+            let mut invalid = valid.clone();
+            let sample = &mut invalid["samples"][0];
+            let record = if target == "cpu" {
+                &mut sample["cpu"]
+            } else {
+                &mut sample["disks"][0]
+            };
+            record["power_unavailable_reason"] = alias.clone();
+            assert!(decode(invalid, "1h").is_err(), "{target}: {reason}");
+        }
+    }
+}

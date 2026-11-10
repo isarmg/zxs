@@ -83,6 +83,8 @@ pub enum ErrorSource {
     DiskDetails(#[source] crate::admin::DiskDetailsError),
     #[error("invalid monitor history: {0}")]
     MonitorHistory(#[source] crate::monitor::HistoryError),
+    #[error("invalid live monitor snapshot: {0}")]
+    MonitorSnapshot(#[source] json_codec::Error),
     #[error("{0}")]
     AdminResponse(#[source] crate::admin::ResponseError),
     #[error("invalid activity history: {0}")]

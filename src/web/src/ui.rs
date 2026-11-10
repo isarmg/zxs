@@ -136,13 +136,6 @@ pub(crate) fn accept_read_response<T>(
     true
 }
 
-pub(crate) fn list(value: &Value, key: &str) -> Vec<Value> {
-    value
-        .as_array()
-        .or_else(|| value.get(key).and_then(Value::as_array))
-        .cloned()
-        .unwrap_or_default()
-}
 pub(crate) fn feedback(error: &api::Error) -> Feedback {
     Feedback {
         message: format!("HTTP {} · {}", error.status, error),

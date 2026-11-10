@@ -1,7 +1,5 @@
 //! One current-window projection shared by every chart. No wire JSON survives ingress.
-mod wire;
-
-use super::Metric;
+use super::{Metric, ratio, wire};
 use crate::api;
 use std::collections::HashMap;
 
@@ -82,26 +80,6 @@ fn timestamp(value: &str) -> Result<f64, Error> {
     }
     Ok(parsed.unix_timestamp_nanos() as f64 / 1_000_000_000.)
 }
-fn ratio(used: Option<u64>, total: Option<u64>) -> Option<f64> {
-    match (used, total) {
-        (Some(used), Some(total)) if total > 0 && used <= total => {
-            Some(used as f64 * 100. / total as f64)
-        }
-        _ => None,
-    }
-}
-fn percent(value: Option<f64>) -> Result<Option<f64>, Error> {
-    if value.is_some_and(|v| !v.is_finite() || !(0.0..=100.0).contains(&v)) {
-        return Err(Error::Field("usage_percent"));
-    }
-    Ok(value)
-}
-fn power(value: Option<f64>) -> Result<Option<f64>, Error> {
-    if value.is_some_and(|v| !v.is_finite() || v < 0.) {
-        return Err(Error::Field("power_watts"));
-    }
-    Ok(value)
-}
 fn project(value: json_codec::Value, range: &str) -> Result<History, Error> {
     let response: wire::Response = json_codec::from_value(value).map_err(Error::Decode)?;
     if response.range != range || !super::RANGES.contains(&range) {
@@ -128,9 +106,10 @@ fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
     let mut disks = HashMap::with_capacity(sample.disks.len());
     for disk in sample.disks {
         // Bucket capacity averages remain valid even if its last observation is offline.
-        let usage =
-            percent(disk.usage_percent)?.or_else(|| ratio(disk.used_bytes, disk.total_bytes));
-        let power = power(disk.power_watts)?;
+        let usage = disk
+            .usage_percent
+            .or_else(|| ratio(disk.used_bytes, disk.total_bytes));
+        let power = disk.power_watts;
         if disk.id.is_empty()
             || disks
                 .insert(
@@ -148,8 +127,8 @@ fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
     }
     Ok(Sample {
         time: timestamp(&sample.collected_at)?,
-        cpu: percent(sample.cpu.usage_percent)?,
-        cpu_power: power(sample.cpu.power_watts)?,
+        cpu: sample.cpu.usage_percent,
+        cpu_power: sample.cpu.power_watts,
         memory: ratio(sample.memory.used_bytes, sample.memory.total_bytes),
         disks,
     })

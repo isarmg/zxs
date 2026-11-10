@@ -1,5 +1,32 @@
 use super::*;
 
+fn accept_live_response(model: &mut Model, value: Value) {
+    accept_status_response(model, live::decode(value));
+}
+
+fn live_response(disks: Vec<Value>) -> Value {
+    json_codec::json!({
+        "collected_at":"2026-01-01T00:00:00Z",
+        "cpu":{"usage_percent":25.0,"logical_count":8,"power_watts":null,"power_unavailable_reason":"sampling"},
+        "memory":{"used_bytes":"25","total_bytes":"100","available_bytes":"75"},
+        "disks":disks,"disk_sampling_unavailable":false
+    })
+}
+fn live_disk() -> Value {
+    json_codec::json!({
+        "observation_failure":null,"id":"P01","name":"Disk P01","online":true,"read_only":false,"simulation":false,
+        "total_bytes":"1000","used_bytes":"300","available_bytes":"600",
+        "usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"sensor_unavailable"
+    })
+}
+fn disk_metric(power: bool) -> Metric {
+    Metric::Disk {
+        id: "P01".into(),
+        name: "Disk P01".into(),
+        power,
+    }
+}
+
 fn empty_history(range: &str) -> Value {
     json_codec::json!({
         "range":range, "from":"2026-01-01T00:00:00Z",
@@ -88,26 +115,38 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
 
 #[test]
 fn missing_or_invalid_samples_are_never_reported_as_zero_usage_or_power() {
-    assert_eq!(percent(&Value::Null), None);
-    assert_eq!(ratio(&Value::Null, &Value::from(100)), None);
-    assert_eq!(ratio(&Value::from(101), &Value::from(100)), None);
-    assert_eq!(ratio(&Value::from(20), &Value::from(100)), Some(20.));
-    assert_eq!(power(&Value::Null), None);
-    assert_eq!(power(&Value::from(-1)), None);
-    assert_eq!(
-        Metric::CpuPower.value(&json_codec::json!({"cpu":{"power_watts":0.0}})),
-        Some(0.)
-    );
-    assert_eq!(
-        Metric::Disk {
-            id: "P01".into(),
-            name: "P01".into(),
-            power: true
-        }
-        .value(&json_codec::json!({"disks":[{"id":"B01","power_watts":12.0}]})),
-        None
-    );
+    assert_eq!(ratio(None, Some(100)), None);
+    assert_eq!(ratio(Some(101), Some(100)), None);
+    assert_eq!(ratio(Some(20), Some(100)), Some(20.));
+    assert_eq!(ratio(Some(0), Some(0)), None);
+    assert_eq!(Metric::Cpu.value(None), None);
+    let mut value = live_response(vec![live_disk()]);
+    value["cpu"]["usage_percent"] = Value::Null;
+    value["cpu"]["power_watts"] = Value::from(0.0);
+    value["disks"][0]["id"] = "B01".into();
+    let snapshot = live::decode(value.clone()).unwrap();
+    assert_eq!(Metric::Cpu.value(Some(&snapshot)), None);
+    assert_eq!(Metric::CpuPower.value(Some(&snapshot)), Some(0.));
+    assert_eq!(disk_metric(true).value(Some(&snapshot)), None);
+    for (record, field, invalid) in [
+        ("cpu", "usage_percent", Value::from(101)),
+        ("cpu", "usage_percent", Value::from(-1)),
+        ("cpu", "power_watts", Value::from(-1)),
+    ] {
+        let mut invalid_value = value.clone();
+        invalid_value[record][field] = invalid;
+        assert!(live::decode(invalid_value).is_err());
+    }
+    for (field, invalid) in [
+        ("usage_percent", Value::from(101)),
+        ("power_watts", Value::from(-1)),
+    ] {
+        let mut invalid_value = value.clone();
+        invalid_value["disks"][0][field] = invalid;
+        assert!(live::decode(invalid_value).is_err());
+    }
 }
+
 #[test]
 fn changing_history_range_rejects_an_earlier_response_even_after_switching_back() {
     let mut model = Model::default();
@@ -227,56 +266,47 @@ fn valid_zero_capacity_is_not_missing_or_malformed() {
 
 #[test]
 fn disk_usage_preserves_physical_used_bytes_when_free_space_is_reserved() {
-    let metric = Metric::Disk {
-        id: "P01".into(),
-        name: "P01".into(),
-        power: false,
-    };
-    let mut snapshot = json_codec::json!({"disks":[{
-        "id":"P01", "online":true,
-        "total_bytes":"1000", "available_bytes":"600", "used_bytes":"300",
-        "usage_percent":30.0
-    }]});
-    assert_eq!(metric.value(&snapshot), Some(30.0));
+    let metric = disk_metric(false);
+    let mut value = live_response(vec![live_disk()]);
+    let snapshot = live::decode(value.clone()).unwrap();
+    assert_eq!(metric.value(Some(&snapshot)), Some(30.0));
+    assert_eq!(metric.subtitle(Some(&snapshot)), "300 B / 1000 B");
+    value["disks"][0]["usage_percent"] = Value::Null;
+    let snapshot = live::decode(value.clone()).unwrap();
+    assert_eq!(metric.value(Some(&snapshot)), Some(30.0));
+    value["disks"][0]["used_bytes"] = Value::Null;
+    let snapshot = live::decode(value).unwrap();
+    assert_eq!(metric.value(Some(&snapshot)), None);
     assert_eq!(
-        metric.subtitle(&snapshot, &observations::DiskIssues::new()),
-        "300 B / 1000 B"
-    );
-    snapshot["disks"][0]["usage_percent"] = Value::Null;
-    assert_eq!(metric.value(&snapshot), Some(30.0));
-    snapshot["disks"][0]["used_bytes"] = Value::Null;
-    assert_eq!(metric.value(&snapshot), None);
-    assert_eq!(
-        metric.subtitle(&snapshot, &observations::DiskIssues::new()),
+        metric.subtitle(Some(&snapshot)),
         format!("{} / 1000 B", t("不可用", "Unavailable"))
     );
 }
 
 #[test]
 fn disk_sampling_notice_distinguishes_unavailable_from_empty_success() {
-    assert!(disk_sampling_notice(&Value::Null).is_none());
-    let mut snapshot = json_codec::json!({
-        "cpu":{"usage_percent":25.0},
-        "memory":{"used_bytes":"25","total_bytes":"100"},
-        "disks":[], "disk_sampling_unavailable":false
-    });
-    assert!(disk_sampling_notice(&snapshot).is_none());
-    snapshot["disk_sampling_unavailable"] = Value::Bool(true);
+    assert!(disk_sampling_notice(None).is_none());
+    let mut value = live_response(vec![]);
+    let snapshot = live::decode(value.clone()).unwrap();
+    assert!(disk_sampling_notice(Some(&snapshot)).is_none());
+    value["disk_sampling_unavailable"] = Value::Bool(true);
+    let snapshot = live::decode(value.clone()).unwrap();
     assert_eq!(
-        disk_sampling_notice(&snapshot),
+        disk_sampling_notice(Some(&snapshot)),
         Some(t(
             "磁盘采样不可用，无法确认当前磁盘状态。",
             "Disk sampling is unavailable; current disk status cannot be confirmed.",
         ))
     );
-    assert_eq!(Metric::Cpu.value(&snapshot), Some(25.0));
-    assert_eq!(Metric::Memory.value(&snapshot), Some(25.0));
+    assert_eq!(Metric::Cpu.value(Some(&snapshot)), Some(25.0));
+    assert_eq!(Metric::Memory.value(Some(&snapshot)), Some(25.0));
     assert_eq!(
-        metrics(&snapshot),
+        metrics(Some(&snapshot)),
         vec![Metric::Cpu, Metric::CpuPower, Metric::Memory]
     );
-    snapshot["disk_sampling_unavailable"] = Value::Bool(false);
-    assert!(disk_sampling_notice(&snapshot).is_none());
+    value["disk_sampling_unavailable"] = Value::Bool(false);
+    let snapshot = live::decode(value).unwrap();
+    assert!(disk_sampling_notice(Some(&snapshot)).is_none());
 }
 
 #[test]
@@ -334,18 +364,18 @@ fn disk_capacity_failure_is_visible_without_exposing_source_messages() {
         "../../../../test/server/fixtures/disk-observation-unavailable.json"
     ))
     .unwrap();
-    let snapshot = json_codec::json!({"disks":[record]});
+    let snapshot = live_response(vec![record]);
     let metric = Metric::Disk {
         id: "P01".into(),
         name: "Disk".into(),
         power: false,
     };
     let mut model = Model::default();
-    accept_status_response(&mut model, snapshot);
+    accept_live_response(&mut model, snapshot);
     assert!(model.failure.is_none());
-    assert!(metric.value(&model.snapshot).is_none());
+    assert!(metric.value(model.snapshot.as_ref()).is_none());
     assert_eq!(
-        metric.subtitle(&model.snapshot, &model.observation_issues),
+        metric.subtitle(model.snapshot.as_ref()),
         t("容量观测失败", "Capacity observation failed")
     );
 }
@@ -358,29 +388,39 @@ fn invalid_live_observation_classification_clears_stale_snapshot_and_preserves_d
     .unwrap();
     for field in ["stage", "code", "extra"] {
         let mut model = Model::default();
-        let valid = json_codec::json!({"disks":[record.clone()]});
-        accept_status_response(&mut model, valid.clone());
+        let valid = live_response(vec![record.clone()]);
+        accept_live_response(&mut model, valid.clone());
         assert!(model.failure.is_none());
         let mut invalid = valid;
         invalid["disks"][0]["observation_failure"][field] = Value::String("unknown".into());
-        accept_status_response(&mut model, invalid);
-        assert!(model.snapshot.is_null());
-        assert!(model.observation_issues.is_empty());
+        accept_live_response(&mut model, invalid);
+        assert!(model.snapshot.is_none());
         assert!(model.failure.is_some());
-        assert!(model.snapshot_decode_failure.is_some());
+        assert!(model.failure.as_ref().unwrap().source.is_some());
     }
 }
 
 #[test]
 fn live_observation_boundary_requires_explicit_classification_and_unique_disk_ids() {
-    let null = json_codec::json!({"disks":[{"id":"P01","observation_failure":null}]});
-    assert_eq!(observations::decode(&null).unwrap()["P01"], None);
-    for invalid in [
-        json_codec::json!({"disks":[{"id":"P01"}]}),
-        json_codec::json!({"disks":[{"id":"","observation_failure":null}]}),
-        json_codec::json!({"disks":[{"id":"P01","observation_failure":null},{"id":"P01","observation_failure":null}]}),
-    ] {
-        assert!(observations::decode(&invalid).is_err());
+    let valid = live_response(vec![live_disk()]);
+    assert!(
+        live::decode(valid.clone())
+            .unwrap()
+            .disk("P01")
+            .unwrap()
+            .observation_failure
+            .is_none()
+    );
+    let mut missing = valid.clone();
+    missing["disks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("observation_failure");
+    let mut empty = valid.clone();
+    empty["disks"][0]["id"] = "".into();
+    let duplicate = live_response(vec![live_disk(), live_disk()]);
+    for invalid in [missing, empty, duplicate] {
+        assert!(live::decode(invalid).is_err());
     }
 }
 
@@ -420,4 +460,222 @@ fn refresh_is_pending_until_each_status_page_read_settles() {
     assert!(refreshing(&state));
     state.monitor.scrub.loading = false;
     assert!(!refreshing(&state));
+}
+
+#[test]
+fn live_telemetry_rejects_partial_unknown_and_legacy_wire_records() {
+    let valid = live_response(vec![live_disk()]);
+    for path in [vec![], vec!["cpu"], vec!["memory"], vec!["disks", "0"]] {
+        let original = match path.as_slice() {
+            [] => &valid,
+            ["disks", "0"] => &valid["disks"][0],
+            [key] => &valid[*key],
+            _ => unreachable!(),
+        };
+        let fields = original.as_object().unwrap().keys().map(String::as_str);
+        for field in fields.chain(std::iter::once("unknown")) {
+            let mut invalid = valid.clone();
+            let record = match path.as_slice() {
+                [] => &mut invalid,
+                ["disks", "0"] => &mut invalid["disks"][0],
+                [key] => &mut invalid[*key],
+                _ => unreachable!(),
+            };
+            if field == "unknown" {
+                record[field] = Value::Bool(true);
+            } else {
+                record.as_object_mut().unwrap().remove(field);
+            }
+            assert!(live::decode(invalid).is_err(), "{path:?}: {field}");
+        }
+    }
+    for field in [
+        "power_unavailable_reason",
+        "online",
+        "read_only",
+        "simulation",
+        "name",
+    ] {
+        let mut invalid = valid.clone();
+        invalid["disks"][0][field] = Value::Null;
+        if field == "power_unavailable_reason" {
+            invalid["disks"][0][field] = "unknown-reason".into();
+        }
+        assert!(live::decode(invalid).is_err(), "{field}");
+    }
+    assert!(live::decode(valid["disks"].clone()).is_err());
+    assert!(live::decode(Value::Null).is_err());
+}
+
+#[test]
+fn live_capacity_uses_current_canonical_u64_strings_without_javascript_rounding() {
+    for record in ["memory", "disk"] {
+        for field in ["used_bytes", "total_bytes", "available_bytes"] {
+            for invalid in [
+                json_codec::json!(4),
+                json_codec::json!("001"),
+                json_codec::json!("-1"),
+                json_codec::json!("1.5"),
+                json_codec::json!(""),
+                json_codec::json!("18446744073709551616"),
+            ] {
+                let mut value = live_response(vec![live_disk()]);
+                let target = if record == "disk" {
+                    &mut value["disks"][0]
+                } else {
+                    &mut value[record]
+                };
+                target[field] = invalid;
+                assert!(live::decode(value).is_err(), "{record}.{field}");
+            }
+        }
+    }
+    let mut value = live_response(vec![live_disk()]);
+    value["disks"][0]["total_bytes"] = u64::MAX.to_string().into();
+    value["disks"][0]["used_bytes"] = (u64::MAX - 1).to_string().into();
+    let snapshot = live::decode(value).unwrap();
+    let disk = snapshot.disk("P01").unwrap();
+    assert_eq!(disk.total_bytes, Some(u64::MAX));
+    assert_eq!(disk.used_bytes, Some(u64::MAX - 1));
+}
+
+#[test]
+fn live_snapshot_identity_and_index_follow_one_immutable_response() {
+    let mut model = Model::default();
+    let disks = (0..512)
+        .map(|index| {
+            let mut disk = live_disk();
+            disk["id"] = format!("P{index}").into();
+            disk["name"] = format!("Disk {index}").into();
+            disk
+        })
+        .collect();
+    let value = live_response(disks);
+    accept_live_response(&mut model, value.clone());
+    let original = model.snapshot.clone();
+    accept_live_response(&mut model, value.clone());
+    assert!(original == model.snapshot);
+    let snapshot = model.snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.disk("P511").unwrap().name, "Disk 511");
+    let metrics = metrics(Some(snapshot));
+    assert_eq!(metrics.len(), 3 + 512 * 2);
+    assert_eq!(metrics[3].key(), "disk-P0-capacity");
+    assert_eq!(metrics.last().unwrap().key(), "disk-P511-power");
+    let mut changed = value;
+    changed["disks"][511]["id"] = "renamed".into();
+    accept_live_response(&mut model, changed);
+    assert!(original != model.snapshot);
+    let snapshot = model.snapshot.as_ref().unwrap();
+    assert!(snapshot.disk("P511").is_none());
+    assert!(snapshot.disk("renamed").is_some());
+    assert!(original.as_ref().unwrap().disk("P511").is_some());
+    let mut invalid = live_response(vec![live_disk()]);
+    invalid["cpu"]["power_unavailable_reason"] = "private-wire-marker".into();
+    accept_live_response(&mut model, invalid);
+    assert!(model.snapshot.is_none());
+    assert!(
+        model
+            .failure
+            .as_ref()
+            .unwrap()
+            .source
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("private-wire-marker")
+    );
+    assert!(
+        !model
+            .failure
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("private-wire-marker")
+    );
+    accept_live_response(&mut model, live_response(vec![]));
+    assert!(model.failure.is_none());
+}
+
+#[test]
+fn live_disks_keep_offline_and_sensor_states_distinct() {
+    let mut value = live_response(vec![live_disk()]);
+    value["disks"][0]["online"] = Value::Bool(false);
+    value["disks"][0]["power_unavailable_reason"] = "disk_offline".into();
+    let snapshot = live::decode(value.clone()).unwrap();
+    assert_eq!(disk_metric(false).value(Some(&snapshot)), None);
+    assert_eq!(
+        disk_metric(false).subtitle(Some(&snapshot)),
+        t("离线", "Offline")
+    );
+    assert_eq!(
+        disk_metric(true).subtitle(Some(&snapshot)),
+        t("硬盘离线", "Disk is offline")
+    );
+    value["disks"][0]["power_watts"] = Value::from(0.0);
+    let snapshot = live::decode(value).unwrap();
+    assert_eq!(disk_metric(true).value(Some(&snapshot)), Some(0.));
+    assert_eq!(
+        disk_metric(true).subtitle(Some(&snapshot)),
+        t("实时功耗 · W", "Live power · W")
+    );
+}
+
+#[test]
+fn live_request_failure_retains_the_previous_snapshot_and_complete_diagnostic() {
+    let mut model = Model::default();
+    accept_live_response(&mut model, live_response(vec![live_disk()]));
+    let previous = model.snapshot.clone();
+    let mut error = api::error(
+        storage_contract::ErrorCode::InjectedFailure,
+        "exact failure",
+    );
+    error.status = 503;
+    error.request_id = Some("live-request".into());
+    accept_status_response(&mut model, Err(error));
+    assert!(model.snapshot == previous);
+    let error = model.failure.as_ref().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
+    assert_eq!(error.status, 503);
+    assert_eq!(error.message, "exact failure");
+    assert_eq!(error.request_id.as_deref(), Some("live-request"));
+    assert_eq!(feedback(error).request_id.as_deref(), Some("live-request"));
+    accept_live_response(&mut model, Value::Null);
+    assert!(model.snapshot.is_none());
+    let error = model.failure.as_ref().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(api::ErrorSource::MonitorSnapshot(_))
+    ));
+    assert!(std::error::Error::source(error).unwrap().source().is_some());
+}
+
+#[test]
+fn live_power_reasons_require_the_current_string_tokens_not_object_aliases() {
+    for reason in [
+        "sensor_unavailable",
+        "sensor_unreadable",
+        "sampling",
+        "counter_reset",
+        "disk_offline",
+        "simulated_disk",
+        "sensor_ambiguous",
+    ] {
+        let mut valid = live_response(vec![live_disk()]);
+        valid["cpu"]["power_unavailable_reason"] = reason.into();
+        valid["disks"][0]["power_unavailable_reason"] = reason.into();
+        assert!(live::decode(valid.clone()).is_ok());
+        let mut alias = json_codec::json!({});
+        alias[reason] = Value::Null;
+        for target in ["cpu", "disk"] {
+            let mut invalid = valid.clone();
+            let record = if target == "cpu" {
+                &mut invalid["cpu"]
+            } else {
+                &mut invalid["disks"][0]
+            };
+            record["power_unavailable_reason"] = alias.clone();
+            assert!(live::decode(invalid).is_err(), "{target}: {reason}");
+        }
+    }
 }

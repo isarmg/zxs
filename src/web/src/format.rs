@@ -1,4 +1,3 @@
-use json_codec::Value;
 use web_interface::i18n::t;
 
 pub fn bytes(value: u64) -> String {
@@ -13,19 +12,6 @@ pub fn bytes(value: u64) -> String {
         index += 1;
     }
     format!("{n:.1} {}", units[index - 1])
-}
-pub fn parse_u64(v: &Value) -> Option<u64> {
-    match v {
-        Value::Number(n) => n.as_u64(),
-        Value::String(s) => {
-            if s == "0" || !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()) {
-                s.parse().ok()
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 /// Display the server's UTC timestamp directly, without browser locale or
 /// timezone conversion. UTC wire values remain identical in both UI languages.
