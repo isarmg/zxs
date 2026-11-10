@@ -25,7 +25,10 @@ fn body_version(number: u64, history: &str, file: &str, bytes: &[u8]) -> FileVer
         file_id: file.into(),
         creation_primary_slot_id: "P01".into(),
         logical_size: bytes.len() as u64,
-        version_sequence: number,
+        version_sequence: match number {
+            2 => 31,
+            _ => number,
+        },
         content_hash: ContentHash::from_digest(hash),
         checksum_chunk_bytes: 262_144,
         checksum_manifest_hash: blake3::hash(&checksums).to_hex().to_string(),
@@ -257,12 +260,15 @@ impl Fixture {
         let other = id("file", 2);
         let h1 = id("history", 1);
         let h2 = id("history", 2);
-        let mut state = State::default();
+        let mut state = State {
+            sequence: 33,
+            ..State::default()
+        };
         for (number, history, owner, slots, content_state) in [
             (1, &h1, &file, vec!["P01", "B01"], ContentState::Available),
-            (2, &h1, &file, vec!["B01", "C01"], ContentState::Purged),
-            (3, &h2, &file, vec!["C01"], ContentState::Migrated),
-            (4, &h1, &other, vec!["P01"], ContentState::Available),
+            (2, &h1, &file, vec!["B01"], ContentState::Purged),
+            (3, &h1, &file, vec!["C01"], ContentState::Migrated),
+            (4, &h2, &other, vec!["P01"], ContentState::Available),
         ] {
             let version = body_version(number, history, owner, b"independent physical body");
             state.placements.insert(
@@ -305,22 +311,26 @@ impl Fixture {
         root.pending_file_versions
             .insert(file.clone(), id("ver", 1));
         state.branches.insert(root.branch_id.clone(), root);
-        let mut file_branch = branch(2, &h2, Some(&file), &id("ver", 3));
+        let mut file_branch = branch(2, &h1, Some(&file), &id("ver", 1));
         file_branch
             .pending_file_versions
-            .insert(file.clone(), id("ver", 3));
+            .insert(file.clone(), id("ver", 1));
         state
             .branches
             .insert(file_branch.branch_id.clone(), file_branch);
-        let target = branch(3, &h1, Some(&other), &id("ver", 4));
+        let target = branch(3, &h1, Some(&file), &id("ver", 2));
         state.branches.insert(target.branch_id.clone(), target);
-        // Source ownership and file-global contexts are independent of the
-        // current container history. These are projection-only relation fixtures.
+        let unrelated = branch(4, &h2, Some(&other), &id("ver", 4));
+        state
+            .branches
+            .insert(unrelated.branch_id.clone(), unrelated);
+        // Physical preparation includes file-local SQLite admission: aliases and
+        // retained nodes must belong to this file and its one retained history.
         state.file_branch_aliases.insert(id("br", 2), id("br", 3));
         state.file_contexts.insert(
             "repository/old-alias".into(),
             FileContext {
-                node_id: Some(id("ver", 3)),
+                node_id: Some(id("ver", 1)),
                 selection_generation: 8,
                 branch_id: id("br", 2),
                 inherited_from: Some(id("br", 1)),
@@ -332,7 +342,7 @@ impl Fixture {
             file_id: file.clone(),
             version_id: id("ver", 1),
             parent_node_ids: vec![id("ver", 1)],
-            branch_id: id("br", 1),
+            branch_id: id("br", 2),
             kind: FileMetadataKind::Tags,
             tags: BTreeSet::from(["blue".into(), "重要".into()]),
             operation_id: OperationId::generate().unwrap(),
@@ -348,12 +358,12 @@ impl Fixture {
             .insert(metadata.node_id.clone(), metadata);
         for (number, sequence) in [(1, 30), (2, 20)] {
             let node = FilePathNode {
-                node_id: id("fpath", number),
+                node_id: id("fnode", number),
                 history_tree_id: h1.clone(),
                 file_id: file.clone(),
                 version_id: id("ver", 1),
                 parent_node_ids: vec![id("fmeta", 1)],
-                branch_id: id("br", 1),
+                branch_id: id("br", 2),
                 path: format!("new-{number}.txt"),
                 previous_path: "seed.txt".into(),
                 operation_id: OperationId::generate().unwrap(),
@@ -368,21 +378,21 @@ impl Fixture {
         }
         state
             .file_node_parents
-            .insert(id("ver", 2), vec![id("fpath", 2)]);
+            .insert(id("ver", 2), vec![id("fnode", 2)]);
         for number in [2, 1] {
             let event = FileBranchMerge {
                 merge_id: id("fmerge", number),
                 history_tree_id: h1.clone(),
                 file_id: file.clone(),
-                input_branch_ids: vec![id("br", 1), id("br", 2)],
+                input_branch_ids: vec![id("br", 2), id("br", 3)],
                 input_node_ids: vec![id("ver", 1), id("ver", 2)],
                 chosen_node_id: id("ver", 2),
                 result_node_id: id("ver", 2),
-                surviving_branch_id: id("br", 1),
+                surviving_branch_id: id("br", 3),
                 reused_node: true,
-                parent_node_ids: vec![id("ver", 1), id("fpath", number)],
+                parent_node_ids: vec![id("ver", 1), id("fnode", number)],
                 operation_id: OperationId::generate().unwrap(),
-                sequence: number,
+                sequence: 31 + number,
             };
             state
                 .file_branch_merges
@@ -513,7 +523,7 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
 }
 
 #[test]
-fn deleted_migrated_version_retains_old_only_history_route_without_recreating_content() {
+fn deleted_migrated_version_retains_old_only_route_without_recreating_content() {
     let fixture = Fixture::new();
     let resources = Arc::new(DiskResources::open(&fixture.config, true).unwrap());
     let mut after = fixture.state.clone();
@@ -524,16 +534,59 @@ fn deleted_migrated_version_retains_old_only_history_route_without_recreating_co
     let owners = DerivedOwners::from_state(&fixture.state);
     let transition = ProjectionTransition::new(&fixture.state, &after, Some(&owners)).unwrap();
     let expected = fixture.expected(&fixture.state, &after);
-    let old_history = ("C01".into(), id("history", 2), fixture.file.clone());
-    assert!(expected.contains_key(&old_history));
+    let old_route = ("C01".into(), id("history", 1), fixture.file.clone());
+    assert!(expected.contains_key(&old_route));
+    assert!(
+        full_locations(&after, &after, &fixture.file)
+            .iter()
+            .all(|(slot, _)| slot != "C01")
+    );
     let mut prepared =
         prepare_names(&fixture.config, &resources, &transition, MAX_METADATA).unwrap();
     assert_eq!(staged_bytes(&mut prepared), expected);
-    let old: Value = json_codec::from_slice(&expected[&old_history]).unwrap();
-    assert_eq!(old["versions"], json!([]));
+    let old: Value = json_codec::from_slice(&expected[&old_route]).unwrap();
+    let retained = old["versions"].as_array().unwrap();
+    assert_eq!(retained.len(), 2);
+    assert!(retained.iter().all(|row| row["version_id"] != id("ver", 3)));
     assert!(!old["path_contexts"].as_object().unwrap().is_empty());
     assert!(!old["branch_aliases"].as_object().unwrap().is_empty());
     prepared.apply().unwrap();
+    fixture.assert_bodies_unchanged();
+}
+
+#[test]
+fn empty_history_descriptor_preserves_file_global_relations_without_local_rows() {
+    let fixture = Fixture::new();
+    let state = &fixture.state;
+    let history = id("history", 2);
+    let transition = ProjectionTransition::new(state, state, None).unwrap();
+    let mut description = projection::FileDescription::new(transition.next(), &fixture.file);
+    let mut nodes = crate::business::file_nodes::NodeProjection::from_merge_events(
+        state,
+        state
+            .file_branch_merges
+            .values()
+            .filter(|event| event.file_id == fixture.file),
+    );
+    let actual = description.encode_history(&history, state, &mut nodes);
+    let expected: Value = json_codec::from_slice(&full_descriptor(
+        state,
+        &fixture.file,
+        &history,
+        "C01",
+        "current.txt",
+    ))
+    .unwrap();
+    assert_eq!(expected["versions"], json!([]));
+    assert_eq!(json!(actual.versions), expected["versions"]);
+    assert_eq!(json!(actual.inherited), expected["inherited_branches"]);
+    assert_eq!(json!(actual.paths), expected["path_nodes"]);
+    assert_eq!(json!(actual.metadata), expected["metadata_nodes"]);
+    assert_eq!(actual.merges, expected["branch_merges"]);
+    assert_eq!(json!(description.contexts), expected["path_contexts"]);
+    assert_eq!(json!(description.aliases), expected["branch_aliases"]);
+    assert!(!expected["path_contexts"].as_object().unwrap().is_empty());
+    assert!(!expected["branch_aliases"].as_object().unwrap().is_empty());
     fixture.assert_bodies_unchanged();
 }
 

@@ -100,7 +100,7 @@ fn reserve(state: &mut State, version: &FileVersion) -> String {
             fork_commit_id: new_id("commit").unwrap(),
             branch_kind: storage_contract::BranchKind::File,
             file_id: Some(version.file_id.clone()),
-            file_node_id: None,
+            file_node_id: Some(version.version_id.clone()),
             pending_file_versions: BTreeMap::from([(
                 version.file_id.clone(),
                 version.version_id.clone(),
@@ -113,7 +113,10 @@ fn reserve(state: &mut State, version: &FileVersion) -> String {
 }
 
 fn with_version(version: &FileVersion) -> State {
-    let mut state = State::default();
+    let mut state = State {
+        sequence: version.version_sequence,
+        ..State::default()
+    };
     state
         .versions
         .insert(version.version_id.clone(), version.clone());
