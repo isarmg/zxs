@@ -1,8 +1,7 @@
 //! Shared bounded record storage for file and directory SQLite materializations.
 use crate::{Error, ErrorCode, Result};
 use data_serialization::Serialize;
-use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-use sqlite_access::{Connection, Executor, Row, SqliteConnection};
+use sqlite_access::{Executor, Row, SqliteConnection};
 
 pub(crate) const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_RECORD_BYTES: usize = 12 * 1024 * 1024;
@@ -59,87 +58,46 @@ impl Schema {
         sequence: u64,
         hash: &str,
     ) -> Result<Prepared> {
-        let bytes = crate::sqlite_connection::run(
-            SqliteConnectOptions::new()
-                .in_memory(true)
-                .journal_mode(SqliteJournalMode::Memory),
+        let bytes = crate::sqlite_connection::materialize(
+            MAX_BYTES,
+            || self.budget(),
             async |connection| {
-                connection.execute("PRAGMA page_size=4096").await?;
-                connection.execute("PRAGMA max_page_count=4096").await?;
-                let mut tx = connection.begin().await?;
-                tx.execute(self.identity).await?;
-                tx.execute(self.records).await?;
+                connection.execute(self.identity).await?;
+                connection.execute(self.records).await?;
                 sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?,?)")
                     .bind(self.format)
                     .bind(owners[0])
                     .bind(owners[1])
                     .bind(sequence.to_string())
                     .bind(hash)
-                    .execute(&mut *tx)
+                    .execute(&mut *connection)
                     .await?;
                 for record in records {
                     sqlite_access::query("INSERT INTO records VALUES(?,?,?)")
                         .bind(record.kind)
                         .bind(record.id)
                         .bind(record.body)
-                        .execute(&mut *tx)
+                        .execute(&mut *connection)
                         .await?;
                 }
-                tx.commit().await?;
-                let bytes = connection.serialize(None).await?;
-                if bytes.len() > MAX_BYTES {
-                    return Err(self.budget());
-                }
-                Ok(bytes.to_vec())
+                Ok(())
             },
         )?;
         Ok(Prepared { bytes })
     }
 
     pub(super) async fn verify_schema(&self, connection: &mut SqliteConnection) -> Result<()> {
-        platform_io::sqlite::enable_defensive(connection)
-            .await
-            .map_err(|error| {
-                Error::from(std::io::Error::other(error)).context(
-                    ErrorCode::ContainerLayoutInvalid,
-                    format!("cannot secure {} SQLite reader", self.name),
-                )
-            })?;
-        let limits = platform_io::sqlite::ConnectionLimits::new(MAX_BYTES as u32)
-            .with_max_sql_bytes(4096)
-            .with_max_vm_operations(100_000)
-            .with_max_bind_parameters(16);
-        platform_io::sqlite::apply_connection_limits(connection, limits)
-            .await
-            .map_err(|error| {
-                Error::from(std::io::Error::other(error)).context(
-                    ErrorCode::ContainerLayoutInvalid,
-                    format!("cannot bound {} SQLite reader", self.name),
-                )
-            })?;
-        let schemas = sqlite_access::query(
-        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT) AS name,CAST(substr(CAST(type AS BLOB),1,257) AS TEXT) AS type,CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT) AS tbl_name,CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) AS sql FROM sqlite_schema ORDER BY name LIMIT 4",
-    )
-    .fetch_all(&mut *connection)
-    .await?;
         let expected = [
             ("identity", "table", "identity", Some(self.identity)),
             ("records", "table", "records", Some(self.records)),
             ("sqlite_autoindex_records_1", "index", "records", None),
         ];
-        if schemas.len() != expected.len() {
-            return Err(self.invalid("has unexpected schema objects"));
-        }
-        for (row, (name, kind, table, ddl)) in schemas.into_iter().zip(expected) {
-            if row.try_get::<String, _>("name")? != name
-                || row.try_get::<String, _>("type")? != kind
-                || row.try_get::<String, _>("tbl_name")? != table
-                || row.try_get::<Option<String>, _>("sql")?.as_deref() != ddl
-            {
-                return Err(self.invalid("schema differs from the supported format"));
-            }
-        }
-        Ok(())
+        crate::sqlite_connection::require_schema(
+            connection,
+            &expected,
+            &format!("{} database", self.name),
+        )
+        .await
     }
     pub(super) async fn read_records(
         &self,

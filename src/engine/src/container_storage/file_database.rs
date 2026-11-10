@@ -3,10 +3,7 @@
 pub(crate) use super::local_database::MAX_BYTES;
 use super::local_database::{Prepared, Record};
 use crate::{Error, ErrorCode, Result, state_projection::StateProjection};
-use sqlite_access::{
-    Row, SqliteConnection,
-    sqlite::{SqliteConnectOptions, SqliteOwnedBuf},
-};
+use sqlite_access::{Row, SqliteConnection};
 
 pub(super) mod changes;
 pub(super) mod install;
@@ -279,14 +276,7 @@ fn verify_snapshot(bytes: &[u8]) -> Result<VerifiedSnapshot> {
     if bytes.len() > MAX_BYTES {
         return Err(SCHEMA.budget());
     }
-    let database = SqliteOwnedBuf::try_from(bytes)?;
-    crate::sqlite_connection::run(
-        SqliteConnectOptions::new().in_memory(true),
-        async |connection| {
-            connection.deserialize(None, database, true).await?;
-            verify_connection(&mut *connection).await
-        },
-    )
+    crate::sqlite_connection::read_image(bytes, MAX_BYTES as u32, verify_connection)
 }
 async fn verify_connection(connection: &mut SqliteConnection) -> Result<VerifiedSnapshot> {
     SCHEMA.verify_schema(connection).await?;

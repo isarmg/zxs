@@ -1,13 +1,8 @@
 //! SQLite is built/read in memory. The disk-facing adapter reads bounded bytes
 //! under the retained I/O gate and gives them to the common safe installer.
+use super::codec;
 use super::*;
-use crate::sqlite_connection::load_read_only;
-use sqlite_access::{
-    Connection, Executor, Row, SqliteConnection,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
-};
-
-mod directories;
+use sqlite_access::{Executor, Row, SqliteConnection};
 
 const FORMAT: &str = "disk-current-local-catalog";
 const IDENTITY: &str = "CREATE TABLE identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,scope TEXT NOT NULL,source_sequence TEXT NOT NULL,records_hash TEXT NOT NULL) STRICT";
@@ -17,50 +12,37 @@ const VERSIONS: &str =
 const DIRECTORIES: &str = "CREATE TABLE backup_directories(ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),body TEXT NOT NULL) STRICT";
 
 pub(super) fn encode(snapshot: &DiskCatalogSnapshot, hash: &str) -> Result<Vec<u8>> {
-    crate::sqlite_connection::run(
-        SqliteConnectOptions::new()
-            .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory),
-        async |connection| {
-            connection.execute("PRAGMA page_size=4096").await?;
-            connection.execute("PRAGMA max_page_count=8192").await?;
-            let mut tx = connection.begin().await?;
-            tx.execute(IDENTITY).await?;
-            tx.execute(VERSIONS).await?;
-            tx.execute(DIRECTORIES).await?;
-            let scope = json_codec::to_string(&snapshot.identity)?;
-            sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?)")
-                .bind(FORMAT)
-                .bind(scope)
-                .bind(snapshot.source_sequence.to_string())
-                .bind(hash)
-                .execute(&mut *tx)
+    crate::sqlite_connection::materialize(MAX_DATABASE_BYTES, budget, async |connection| {
+        connection.execute(IDENTITY).await?;
+        connection.execute(VERSIONS).await?;
+        connection.execute(DIRECTORIES).await?;
+        let scope = json_codec::to_string(&snapshot.identity)?;
+        sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?)")
+            .bind(FORMAT)
+            .bind(scope)
+            .bind(snapshot.source_sequence.to_string())
+            .bind(hash)
+            .execute(&mut *connection)
+            .await?;
+        for row in &snapshot.versions {
+            let bytes = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?;
+            let body = std::str::from_utf8(&bytes).expect("invariant: metadata is UTF-8");
+            sqlite_access::query("INSERT INTO versions VALUES(?,?)")
+                .bind(&row.version.version_id)
+                .bind(body)
+                .execute(&mut *connection)
                 .await?;
-            for row in &snapshot.versions {
-                let bytes = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?;
-                let body = std::str::from_utf8(&bytes).expect("invariant: metadata is UTF-8");
-                sqlite_access::query("INSERT INTO versions VALUES(?,?)")
-                    .bind(&row.version.version_id)
-                    .bind(body)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            for (ordinal, row) in snapshot.backup_directories.iter().enumerate() {
-                let bytes = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?;
-                sqlite_access::query("INSERT INTO backup_directories VALUES(?,?)")
-                    .bind(ordinal as i64)
-                    .bind(std::str::from_utf8(&bytes).expect("invariant: metadata is UTF-8"))
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            tx.commit().await?;
-            let bytes = connection.serialize(None).await?;
-            if bytes.len() > MAX_DATABASE_BYTES {
-                return Err(budget());
-            }
-            Ok(bytes.to_vec())
-        },
-    )
+        }
+        for (ordinal, row) in snapshot.backup_directories.iter().enumerate() {
+            let bytes = crate::disk::encode_metadata(row, MAX_RECORD_BYTES)?;
+            sqlite_access::query("INSERT INTO backup_directories VALUES(?,?)")
+                .bind(ordinal as i64)
+                .bind(std::str::from_utf8(&bytes).expect("invariant: metadata is UTF-8"))
+                .execute(&mut *connection)
+                .await?;
+        }
+        Ok(())
+    })
 }
 
 pub(super) fn read(
@@ -70,49 +52,31 @@ pub(super) fn read(
     if bytes.len() > MAX_DATABASE_BYTES {
         return Err(budget());
     }
-    let database = SqliteOwnedBuf::try_from(bytes)?;
-    crate::sqlite_connection::run(
-        SqliteConnectOptions::new().in_memory(true),
-        async |connection| {
-            load_read_only(connection, database, MAX_DATABASE_BYTES as u32).await?;
-            read_connection(&mut *connection, identity).await
-        },
-    )
+    crate::sqlite_connection::read_image(bytes, MAX_DATABASE_BYTES as u32, async |connection| {
+        read_connection(connection, identity).await
+    })
 }
 
 async fn read_connection(
     connection: &mut SqliteConnection,
     identity: &DiskRegistrationIdentity,
 ) -> Result<DiskCatalogSnapshot> {
-    let schema = sqlite_access::query(
-        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(type AS BLOB),1,257) AS TEXT),CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT),CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) FROM sqlite_schema ORDER BY name LIMIT 5",
+    crate::sqlite_connection::require_schema(
+        connection,
+        &[
+            (
+                "backup_directories",
+                "table",
+                "backup_directories",
+                Some(DIRECTORIES),
+            ),
+            ("identity", "table", "identity", Some(IDENTITY)),
+            ("sqlite_autoindex_versions_1", "index", "versions", None),
+            ("versions", "table", "versions", Some(VERSIONS)),
+        ],
+        "disk catalog",
     )
-    .fetch_all(&mut *connection)
     .await?;
-    if schema.len() != 4 {
-        return Err(invalid("disk catalog has unexpected schema objects"));
-    }
-    for (row, (name, kind, table, sql)) in schema.into_iter().zip([
-        (
-            "backup_directories",
-            "table",
-            "backup_directories",
-            Some(DIRECTORIES),
-        ),
-        ("identity", "table", "identity", Some(IDENTITY)),
-        ("sqlite_autoindex_versions_1", "index", "versions", None),
-        ("versions", "table", "versions", Some(VERSIONS)),
-    ]) {
-        if row.try_get::<String, _>(0)? != name
-            || row.try_get::<String, _>(1)? != kind
-            || row.try_get::<String, _>(2)? != table
-            || row.try_get::<Option<String>, _>(3)?.as_deref() != sql
-        {
-            return Err(invalid(
-                "disk catalog schema differs from the supported format",
-            ));
-        }
-    }
     let headers = sqlite_access::query(
         "SELECT singleton,CAST(substr(CAST(format AS BLOB),1,65) AS TEXT) AS format,substr(CAST(scope AS BLOB),1,8193) AS scope,CAST(substr(CAST(source_sequence AS BLOB),1,21) AS TEXT) AS source_sequence,CAST(substr(CAST(records_hash AS BLOB),1,65) AS TEXT) AS records_hash FROM identity LIMIT 2",
     )
@@ -186,7 +150,23 @@ async fn read_connection(
         total += length;
         versions.push(value);
     }
-    let backup_directories = directories::read(connection, versions.len(), &mut total).await?;
+    // The exact local directory row set shares the current catalog's total quota.
+    let backup_directories = codec::DIRECTORY_ROWS
+        .read(
+            connection,
+            MAX_ROWS - versions.len(),
+            &mut total,
+            |previous: Option<&DiskCatalogDirectory>, value| {
+                value.validate()?;
+                if previous.is_some_and(|previous| previous.key() >= value.key()) {
+                    return Err(invalid(
+                        "disk directories are not unique and in identity/path order",
+                    ));
+                }
+                Ok(())
+            },
+        )
+        .await?;
     let snapshot = DiskCatalogSnapshot {
         identity: stored_identity,
         source_sequence: sequence,

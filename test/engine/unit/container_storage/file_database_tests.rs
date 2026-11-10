@@ -3,6 +3,7 @@
 use super::*;
 use crate::*;
 use platform_io::sqlite::block_on_sqlite_connection;
+use sqlite_access::sqlite::{SqliteConnectOptions, SqliteOwnedBuf};
 use sqlite_access::{Connection, Executor};
 use std::{
     collections::{BTreeMap, BTreeSet},

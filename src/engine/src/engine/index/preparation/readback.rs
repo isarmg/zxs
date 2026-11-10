@@ -1,11 +1,8 @@
 //! Complete readback shared by bounded images and the installed WAL connection.
 //! The caller's frozen State is the comparison source, not a new authority.
 use super::{CURRENT_STATE_TABLE, HISTORY_INDEX, HISTORY_TABLE, MAX_BYTES, scope, system_changes};
-use crate::{Error, ErrorCode, Result, State, sqlite_connection::load_read_only};
-use sqlite_access::{
-    Row, SqliteConnection,
-    sqlite::{SqliteConnectOptions, SqliteOwnedBuf},
-};
+use crate::{Error, ErrorCode, Result, State};
+use sqlite_access::{Row, SqliteConnection};
 
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::ContainerLayoutInvalid, message)
@@ -18,14 +15,9 @@ pub(super) fn verify(
 ) -> Result<()> {
     // encode_state already bounded both the source and the serialized image.
     checkpoint()?;
-    let database = SqliteOwnedBuf::try_from(bytes)?;
-    crate::sqlite_connection::run(
-        SqliteConnectOptions::new().in_memory(true),
-        async |connection| {
-            load_read_only(connection, database, MAX_BYTES as u32).await?;
-            verify_connection(&mut *connection, state, checkpoint).await
-        },
-    )
+    crate::sqlite_connection::read_image(bytes, MAX_BYTES as u32, async |connection| {
+        verify_connection(connection, state, checkpoint).await
+    })
 }
 
 /// The caller owns the snapshot: an immutable decoded image or a read
@@ -46,12 +38,6 @@ pub(in crate::engine::index) async fn verify_connection(
 }
 
 async fn schema(connection: &mut SqliteConnection) -> Result<()> {
-    // BLOB prefixes bound unknown schema strings without hiding trailing NULs.
-    let actual = sqlite_access::query(
-        "SELECT substr(CAST(name AS BLOB),1,257),substr(CAST(type AS BLOB),1,257),substr(CAST(tbl_name AS BLOB),1,257),substr(CAST(sql AS BLOB),1,4097) FROM sqlite_schema ORDER BY name LIMIT 11",
-    )
-    .fetch_all(&mut *connection)
-    .await?;
     let expected = [
         (
             "current_state",
@@ -114,23 +100,7 @@ async fn schema(connection: &mut SqliteConnection) -> Result<()> {
             Some(system_changes::TABLE),
         ),
     ];
-    if actual.len() != expected.len() {
-        return Err(invalid(
-            "prepared SYSTEM image has unexpected schema objects",
-        ));
-    }
-    for (row, (name, kind, table, sql)) in actual.iter().zip(expected) {
-        if row.try_get::<Vec<u8>, _>(0)? != name.as_bytes()
-            || row.try_get::<Vec<u8>, _>(1)? != kind.as_bytes()
-            || row.try_get::<Vec<u8>, _>(2)? != table.as_bytes()
-            || row.try_get::<Option<Vec<u8>>, _>(3)?.as_deref() != sql.map(str::as_bytes)
-        {
-            return Err(invalid(
-                "prepared SYSTEM image schema differs from the supported projection",
-            ));
-        }
-    }
-    Ok(())
+    crate::sqlite_connection::require_schema(connection, &expected, "prepared SYSTEM image").await
 }
 
 async fn marker(connection: &mut SqliteConnection, sequence: u64) -> Result<()> {

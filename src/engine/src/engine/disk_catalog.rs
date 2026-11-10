@@ -9,6 +9,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod codec;
 mod database;
 mod directories;
 pub use directories::DiskCatalogDirectory;

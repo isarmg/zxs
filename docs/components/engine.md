@@ -8,6 +8,8 @@ Add root-extension 与 Exit stop-plan 共用私有 `activation::plan_store` 持�
 
 PortableAuthority 将冷读与构造时完整验证的谱系保留在私有共享不可变数据中，内部查询借用该谱系，克隆共享同一证明；Genesis、普通链与 Abort 证据信封的当前 JSON 表示不变。缓存只覆盖存储值派生，实际磁盘、来源 State、成员身份与发布验证仍在原使用边界进行。
 
+FILE、DIRECTORY、当前／历史盘目录与 SYSTEM 冷镜像共用 `sqlite_connection::read_image`，在只读装载前配置 SQLite 限额，操作结束后关闭连接。四种派生库编码共用内存事务、页额和序列化生命周期，SYSTEM 原取消检查与编码事务仍在本流程内。严格 schema 使用有界 BLOB 前缀比较保留全部字节；各格式的领域身份、记录摘要、完整性及 SYSTEM 实际 State 比较继续独立。当前目录与历史目录的 ordinal 记录共用逐行有界读取，先限额再复制正文，不合并它们各自的领域顺序和覆盖证明。
+
 | 目录 / 模块 | 职责 |
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |

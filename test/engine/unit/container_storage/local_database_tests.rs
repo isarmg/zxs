@@ -1,6 +1,7 @@
 use super::super::{directory_database, file_database};
 use super::*;
-use sqlite_access::sqlite::SqliteOwnedBuf;
+use sqlite_access::Connection;
+use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf};
 
 fn records(schema: &Schema) -> Vec<Record> {
     let mut records = schema.records();
