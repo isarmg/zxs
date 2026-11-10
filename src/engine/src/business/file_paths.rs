@@ -208,24 +208,19 @@ impl Engine {
             json!({"file_id":file,"source_version_id":version,"source_node_id":node,"name":name.as_str()}),
             |engine, state, _| {
                 source_node(state, file, version, node)?;
-                let mut result = file::create_file_branch_change(
+                let created = file::create_file_branch_change(
                     &engine.planning_context(),
                     state,
                     file::FileBranchCreation {file_id:file,source_version:version,name:name.as_str(),name_key:name.key()},
                     principal,
                     operation,
                 )?;
-                let branch = result["branch_id"].as_str().ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "branch receipt missing",
-                    )
-                })?;
                 state
                     .branches
-                    .get_mut(branch)
-                    .expect("created branch")
+                    .get_mut(&created.branch_id)
+                    .expect("invariant: branch was created in this mutation")
                     .file_node_id = Some(node.into());
+                let mut result = created.receipt();
                 result["source_node_id"] = json!(node);
                 Ok(result)
             },

@@ -1179,16 +1179,11 @@ pub(crate) fn prepare_file_write(
         principal,
         operation,
     )?;
-    let id = result["branch_id"].as_str().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "file fork receipt missing",
-        )
-    })?;
+    let id = result.branch_id;
     let inherited_node = context_at_key(state, &repository, key).and_then(|c| c.node_id);
     state
         .branches
-        .get_mut(id)
+        .get_mut(&id)
         .ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::StateInvalid,
@@ -1196,14 +1191,14 @@ pub(crate) fn prepare_file_write(
             )
         })?
         .file_node_id = inherited_node.clone();
-    state.file_selections.insert(file_id.into(), id.into());
+    state.file_selections.insert(file_id.into(), id.clone());
     state.file_write_origins.remove(file_id);
     state.file_contexts.insert(
         context_key_from_key(&repository, key),
         FileContext {
             node_id: inherited_node.clone(),
             selection_generation: 0,
-            branch_id: id.into(),
+            branch_id: id,
             inherited_from: None,
         },
     );

@@ -300,35 +300,16 @@ fn selected_current_file(engine: &Engine, branch: &Branch, file: &str) -> Result
         })
 }
 
-fn publish_selected_file_source(
-    state: &mut State,
-    selected: SelectedFile,
-    path: Option<&name_policy::PortablePath>,
-    principal: &str,
-    operation: OperationId,
+/// Materialize one writable root snapshot from the caller's admitted view.
+/// Selection owns context cleanup; creating an unselected branch must not do it.
+fn writable_file_namespace(
+    state: &State,
+    repository: &Repository,
     view: Option<&crate::engine::CurrentNamespaces>,
-) -> Result<String> {
-    let SelectedFile { branch, source } = selected;
-    let branch_id = branch.branch_id.as_str();
-    let file_id = branch
-        .file_id
-        .as_deref()
-        .expect("invariant: selected file has an independent branch");
-    let repository = state
-        .repositories
-        .values()
-        .find(|r| r.history_tree_id == branch.history_tree_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::RepositoryNotFound,
-                "file directory missing",
-            )
-        })?;
+) -> Result<Commit> {
     let main = state
         .branches
         .get(&repository.main_branch_id)
-        .cloned()
         .ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::BranchNotFound,
@@ -365,7 +346,38 @@ fn publish_selected_file_source(
         current
             .pending_file_versions
             .retain(|file, _| live.contains(file.as_str()));
-        view.remove_hidden_contexts(state, &repository.repository_id, &main.branch_id);
+    }
+    Ok(current)
+}
+
+fn publish_selected_file_source(
+    state: &mut State,
+    selected: SelectedFile,
+    path: Option<&name_policy::PortablePath>,
+    principal: &str,
+    operation: OperationId,
+    view: Option<&crate::engine::CurrentNamespaces>,
+) -> Result<String> {
+    let SelectedFile { branch, source } = selected;
+    let branch_id = branch.branch_id.as_str();
+    let file_id = branch
+        .file_id
+        .as_deref()
+        .expect("invariant: selected file has an independent branch");
+    let repository = state
+        .repositories
+        .values()
+        .find(|r| r.history_tree_id == branch.history_tree_id)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::RepositoryNotFound,
+                "file directory missing",
+            )
+        })?;
+    let current = writable_file_namespace(state, &repository, view)?;
+    if let Some(view) = view {
+        view.remove_hidden_contexts(state, &repository.repository_id, &repository.main_branch_id);
     }
     let selected_key = path
         .map(name_policy::PortablePath::key)
@@ -431,7 +443,7 @@ fn publish_selected_file_source(
         pending_file_versions.remove(file_id);
     }
     if let Some(view) = view {
-        view.validate_draft(&main.branch_id, &entries)?;
+        view.validate_draft(&repository.main_branch_id, &entries)?;
     }
     let live_files: BTreeSet<String> = entries
         .iter()
@@ -612,13 +624,49 @@ pub(crate) struct FileBranchCreation<'a> {
     pub name_key: &'a str,
 }
 
-pub(crate) fn create_file_branch_change(
+pub(super) struct CreatedFileBranch<'a> {
+    pub(super) branch_id: String,
+    commit_id: String,
+    history_tree_id: String,
+    file_id: &'a str,
+    source_version: &'a str,
+}
+
+impl CreatedFileBranch<'_> {
+    /// Encode the permanent operation receipt only at its mutation boundary.
+    pub(super) fn receipt(self) -> json_codec::Value {
+        let Self {
+            branch_id,
+            commit_id,
+            history_tree_id,
+            file_id,
+            source_version,
+        } = self;
+        json!({
+            "file_id": file_id,
+            "branch_id": branch_id,
+            "commit_id": commit_id,
+            "history_tree_id": history_tree_id,
+            "copied_files": "0",
+            "placeholder_files": "0",
+            "materialized": false,
+            "inherited": true,
+            "own_version_id": null,
+            "version_id": source_version,
+            "source_version_id": source_version,
+            "content_state": "PENDING",
+            "selected": false,
+        })
+    }
+}
+
+pub(super) fn create_file_branch_change<'a>(
     engine: &crate::engine::PlanningContext<'_>,
     state: &mut State,
-    source: FileBranchCreation<'_>,
+    source: FileBranchCreation<'a>,
     principal: &str,
     operation: OperationId,
-) -> Result<json_codec::Value> {
+) -> Result<CreatedFileBranch<'a>> {
     let FileBranchCreation {
         file_id,
         source_version,
@@ -647,47 +695,7 @@ pub(crate) fn create_file_branch_change(
     }
     let repo = engine.repository_for_history(&source.history_tree_id)?;
 
-    let main = state
-        .branches
-        .get(&repo.main_branch_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::BranchNotFound,
-                "directory branch missing",
-            )
-        })?;
-    if main.state != BranchState::Active {
-        return Err(Error::new(
-            storage_contract::ErrorCode::BranchNotActive,
-            "directory is not writable",
-        ));
-    }
-    let mut current = state
-        .commits
-        .get(&main.head_commit_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "directory head missing",
-            )
-        })?;
-    if let Some(view) = engine.current_namespaces {
-        view.require_branch_write(state, &main.branch_id)?;
-        current.entries = view
-            .branch_entries(&main.branch_id, &current.commit_id)?
-            .to_vec();
-        let live: BTreeSet<&str> = current
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-            .map(|entry| entry.file_id.as_str())
-            .collect();
-        current
-            .pending_file_versions
-            .retain(|file, _| live.contains(file.as_str()));
-    }
+    let current = writable_file_namespace(state, repo, engine.current_namespaces)?;
     let original = current
         .entries
         .iter()
@@ -759,9 +767,13 @@ pub(crate) fn create_file_branch_change(
             state: BranchState::Active,
         },
     );
-    Ok(
-        json!({"file_id":file_id,"branch_id":id,"commit_id":commit_id,"history_tree_id":source.history_tree_id,"copied_files":"0","placeholder_files":"0","materialized":false,"inherited":true,"own_version_id":null,"version_id":source_version,"source_version_id":source_version,"content_state":"PENDING","selected":false}),
-    )
+    Ok(CreatedFileBranch {
+        branch_id: id,
+        commit_id,
+        history_tree_id: source.history_tree_id,
+        file_id,
+        source_version,
+    })
 }
 
 impl Engine {
@@ -923,6 +935,7 @@ impl Engine {
                     principal,
                     operation,
                 )
+                .map(CreatedFileBranch::receipt)
             },
         )
     }
@@ -1114,3 +1127,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/file/pending_regressions.rs"]
 mod pending_regressions;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/file/writable_namespace.rs"]
+mod writable_namespace_tests;

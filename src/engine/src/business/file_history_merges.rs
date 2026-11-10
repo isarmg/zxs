@@ -239,16 +239,13 @@ impl Engine {
                         request.principal,
                         request.operation_id,
                     )?;
-                    let branch = created["branch_id"]
-                        .as_str()
-                        .expect("invariant: branch creation returns its new identity");
                     state
                         .branches
-                        .get_mut(branch)
+                        .get_mut(&created.branch_id)
                         .expect("invariant: branch was created in this mutation")
                         .file_node_id = Some(input.source_node_id.clone());
                     inputs.push(FileMergeInput {
-                        branch_id: branch.into(),
+                        branch_id: created.branch_id,
                         expected_node_id: input.source_node_id.clone(),
                     });
                 }
