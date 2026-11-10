@@ -186,7 +186,26 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             }
                             options
                         }));
-                        view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{source.get_value()}</span><Select label=t("关联分支","Associated branch") options=options value=selected disabled=branch_disabled on_change=Callback::new(move |value:String|assign_branch(state,instance,source.get_value(),value))/></div>}
+                        let preview=Memo::new(move |_|{
+                            if review_needed.get() {
+                                return None;
+                            }
+                            state.with(|s|{
+                                let draft=s.files.tag_edit.as_ref().filter(|draft|draft.instance==instance)?;
+                                let node=s.files.checked_nodes.get(&source.get_value())?;
+                                let projected=result_tags(node,&draft.add,&draft.remove);
+                                let labels=|tags:&BTreeSet<String>|{
+                                    if tags.is_empty(){t("无标签","No tags")}
+                                    else{tags.iter().cloned().collect::<Vec<_>>().join(" / ")}
+                                };
+                                Some(format!("{}: {} → {} · {}/{}",t("标签预览","Tag preview"),
+                                    labels(&node.tags),labels(&projected),projected.len(),storage_contract::MAX_FILE_TAGS))
+                            })
+                        });
+                        view!{<div class="zxs-stack">
+                            <div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{source.get_value()}</span><Select label=t("关联分支","Associated branch") options=options value=selected disabled=branch_disabled on_change=Callback::new(move |value:String|assign_branch(state,instance,source.get_value(),value))/></div>
+                            <p class="zxs-row">{move ||preview.get()}</p>
+                        </div>}
                     }).collect_view()}
                 </div>
                 <div class="zxs-file-toolbar zxs-flow">
@@ -200,6 +219,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         <input class="zxs-input zxs-input--compact" aria-label=t("新增标签","Add tag") maxlength=128 data-max-bytes=storage_contract::MAX_TAG_BYTES.to_string() disabled=disabled prop:value=move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.input.clone()).unwrap_or_default()) on:input=move |event|edit_input(state,instance,event_target_value(&event)) on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();add_input(state,instance);}}/>
                     </label>
                     <button class="zxs-button" disabled=disabled on:click=move |_|add_input(state,instance)>{t("添加标签","Add tag")}</button>
+                    <span class="zxs-row">{move ||state.with(|s|s.files.tag_edit.as_ref()
+                        .filter(|draft|draft.instance==instance)
+                        .map(|draft|format!("{} {}/{} · {} {}/{}",t("新增","Add"),draft.add.len(),storage_contract::MAX_FILE_TAGS,
+                            t("移除","Remove"),draft.remove.len(),storage_contract::MAX_FILE_TAGS)))}</span>
                 </div>
                 <div class="zxs-node-tags zxs-flow">
                     {move ||changes.get().into_iter().map(move |(add,name)|{

@@ -555,6 +555,14 @@ fn request(draft: &Draft, selected: &Selection) -> Result<Value, String> {
             "Select nodes, then add or remove tags.",
         ));
     }
+    if draft.add.len() > storage_contract::MAX_FILE_TAGS
+        || draft.remove.len() > storage_contract::MAX_FILE_TAGS
+    {
+        return Err(t(
+            "每次最多新增16个、移除16个不同标签，请减少本次更改。",
+            "Each action can add up to 16 distinct tags and remove up to 16. Reduce this action's changes.",
+        ));
+    }
     if selected.root() != Some(draft.root()) || selected.len() != draft.targets.len() {
         return Err(missing_node());
     }
