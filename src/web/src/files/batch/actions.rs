@@ -3,7 +3,10 @@ use super::*;
 use crate::files::model::FileOperation;
 pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
     if matches!(kind, Kind::Move | Kind::Rename)
-        && state.with_untracked(|state| !state.files.directory_branches_supported)
+        && state.with_untracked(|state| {
+            super::super::relocation::available(state, entry.as_ref())
+                || !state.files.directory_branches_supported
+        })
     {
         super::super::relocation::start(state, entry);
         return;

@@ -532,17 +532,58 @@ fn open_repository(state: RwSignal<State>, model: RwSignal<Model>, directory: &s
     }
 }
 
+struct ChildSnapshot {
+    path: String,
+    branch: String,
+    tree: String,
+}
+
+fn child_snapshot(state: &State, model: &Model, directory: &str) -> Option<ChildSnapshot> {
+    let path = repository_destination(state, model, directory)?;
+    let child = model
+        .status
+        .as_ref()?
+        .children
+        .iter()
+        .find(|child| child.directory_id == directory)?;
+    Some(ChildSnapshot {
+        path,
+        branch: child.directory_branch_id.clone(),
+        tree: child.head_tree_id.clone()?,
+    })
+}
+
+fn preview_child(state: RwSignal<State>, model: RwSignal<Model>, directory: &str) {
+    let snapshot = state.with_untracked(|state| {
+        model.with_untracked(|model| child_snapshot(state, model, directory))
+    });
+    if let Some(snapshot) = snapshot {
+        actions::preview_directory_snapshot(state, snapshot.path, snapshot.branch, snapshot.tree);
+    }
+}
+
 fn child_view(
     state: RwSignal<State>,
     model: RwSignal<Model>,
     child: DirectoryGitChildStatus,
 ) -> impl IntoView {
+    let committed = child.head_tree_id.is_some();
     let id = StoredValue::new(child.directory_id);
     view! {<section class="zxs-frame zxs-stack" data-directory-git-child=id.get_value()>
         <h3 class="zxs-row">{path_label(&child.path)}</h3>
         <button type="button" class="zxs-button" data-open-directory-child=id.get_value()
             disabled=move ||state.with(|state|model.with(|model|repository_destination(state,model,&id.get_value()).is_none()))
             on:click=move |_|open_repository(state,model,&id.get_value())>{t("进入子仓库暂存／提交","Open child repository to stage / commit")}</button>
+        <button type="button" class="zxs-button" data-preview-directory-child=id.get_value()
+            disabled=move ||!committed || state.with(|state| {
+                actions::pending(state) || model.with(|model|model.reviewed(state).is_none())
+            })
+            on:click=move |_|preview_child(state,model,&id.get_value())>
+            {t("预览子仓库当前提交", "Preview the child's current commit")}
+        </button>
+        <Show when=move ||committed>
+            <p class="zxs-row">{t("预览只读取子仓库已提交的内容，不包含未提交工作，也不改变父级暂存引用。", "Preview reads the child's committed content, excluding uncommitted work, and does not change the parent's staged reference.")}</p>
+        </Show>
         <p class="zxs-row">{if child.dirty{t("子仓库有未提交的工作更改；父级不会代为提交。","The child repository has uncommitted work. A parent commit does not commit it.")}else{t("子仓库工作内容已提交。","The child repository has no uncommitted work.")}}</p>
         <p class="zxs-row">{if child.head_tree_id.is_none(){t("子仓库尚无提交，不能暂存引用。","The child repository has no commit to stage.")}else if child.reference_changed{t("子仓库当前提交与父级暂存引用不同。","The child's current commit differs from the parent's staged reference.")}else{t("父级暂存引用已指向子仓库当前提交。","The parent's staged reference points to the child's current commit.")}}</p>
         <p class="zxs-row">{if child.staged{t("该子仓库引用已暂存，等待父级提交。","This child reference is staged for the next parent commit.")}else{t("该子仓库引用没有已暂存更改。","This child reference has no staged change.")}}</p>
@@ -683,3 +724,4 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 #[cfg(test)]
 #[path = "../../../../test/web/unit/files/staging_tests.rs"]
 mod tests;
+

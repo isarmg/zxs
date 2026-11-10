@@ -23,6 +23,7 @@ struct CapturedFiles<'a> {
 fn same_entry_target(request: &ObjectMoveRequest) -> bool {
     request.target_repository_id.as_ref() == Some(&request.source_repository_id)
         && request.target_entry_id.as_ref() == Some(&request.source_entry_id)
+        && request.target_path.key() == request.source_path.key()
 }
 
 fn require_identity(original: &ObjectMoveFact, files: Option<&CapturedFiles<'_>>) -> Result<()> {

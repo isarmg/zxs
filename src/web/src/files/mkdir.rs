@@ -122,7 +122,7 @@ pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
 
 pub(super) fn start_relocation(
     state: RwSignal<State>,
-    relocation: storage_contract::file_relocation::FileRelocation,
+    movement: storage_contract::file_relocation::ObjectMoveRequest,
 ) -> Option<String> {
     if !state
         .with_untracked(|s| actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s))
@@ -133,7 +133,7 @@ pub(super) fn start_relocation(
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
     let record =
-        match state.with_untracked(|s| Record::capture_relocation(s, operation, relocation)) {
+        match state.with_untracked(|s| Record::capture_relocation(s, operation, movement)) {
             Ok(record) => Arc::new(record),
             Err(error) => {
                 fail(state, error);

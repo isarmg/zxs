@@ -138,7 +138,7 @@ fn target_scope(state: &State, request: &ObjectMoveRequest, source: &Entry, curr
     }
     let occupied = tree.get_key(request.target_path.key());
     let same_source = occupied.is_some_and(|entry| repository.repository_id == request.source_repository_id.as_str()
-        && entry.entry_id == source.entry_id);
+        && entry.entry_id == source.entry_id && entry.lookup_key() == source.lookup_key());
     let displaced = if same_source {
         // A case-only rename names the same object, even if the transport sent
         // its captured target identity. It must not delete its own history.
@@ -210,7 +210,7 @@ fn current_entries(
     }
     let depth = root.path().split('/').count();
     snapshot.iter().filter(|entry| in_scope(entry, root)).map(|entry| {
-        let destination = if entry.entry_id == root.entry_id {
+        let destination = if entry.lookup_key() == root.lookup_key() {
             request.target_path.clone()
         } else {
             entry.location().rebase(depth, &request.target_path)?
@@ -229,21 +229,24 @@ fn current_entries(
 }
 
 fn arrival_entries(
-    state: &State,
     request: &ObjectMoveRequest,
     target: &MoveTarget,
     entries: &[MoveEntry],
     maximum: usize,
 ) -> Result<Vec<Entry>> {
-    let source_ids = entries.iter().map(|entry| entry.source.entry_id.as_str()).collect::<BTreeSet<_>>();
+    let source_occurrences = entries.iter().map(|entry|
+        (entry.source.entry_id.as_str(), entry.source.lookup_key())).collect::<BTreeSet<_>>();
     let mut arrival = match target {
         MoveTarget::Existing { repository, namespace, displaced_entries, .. } => {
-            let displaced = displaced_entries.iter().map(|entry| entry.entry_id.as_str())
+            let displaced = displaced_entries.iter().map(|entry| (entry.entry_id.as_str(), entry.lookup_key()))
                 .collect::<BTreeSet<_>>();
-            namespace::NamespaceTree::from_current_state(state, &repository.repository_id, namespace).visible_entries().filter(|entry| {
-                !displaced.contains(entry.entry_id.as_str())
+            // Hidden rows still reserve names and consume the same namespace
+            // budget as the rows published by compose. Visibility belongs to
+            // target admission, not this complete candidate projection.
+            namespace.iter().filter(|entry| {
+                !displaced.contains(&(entry.entry_id.as_str(), entry.lookup_key()))
                     && (repository.repository_id != request.source_repository_id.as_str()
-                        || !source_ids.contains(entry.entry_id.as_str()))
+                        || !source_occurrences.contains(&(entry.entry_id.as_str(), entry.lookup_key())))
             }).cloned().collect::<Vec<_>>()
         }
         MoveTarget::EmptyDisk { .. } => Vec::new(),
@@ -349,10 +352,10 @@ fn capture(state: &State, request: &ObjectMoveRequest, basis: &NamespaceBasis, m
     let source_repository = state.repositories.get(request.source_repository_id.as_str())
         .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "move source repository missing"))?;
     let entries = current_entries(state, request, &basis.source_entries)?;
-    let source = entries.iter().find(|entry| entry.source.entry_id == request.source_entry_id.as_str())
+    let source = entries.iter().find(|entry| entry.source.lookup_key() == request.source_path.key())
         .expect("invariant: captured move includes its source identity");
     let target = target_scope(state, request, &source.source, &basis.target_entries)?;
-    let target_entries = arrival_entries(state, request, &target, &entries, maximum)?;
+    let target_entries = arrival_entries(request, &target, &entries, maximum)?;
     let directories = directory_members(state, &entries);
     let files = file_members(state, &entries, &directories);
     let same_repository = request.target_repository_id.as_ref() == Some(&request.source_repository_id);

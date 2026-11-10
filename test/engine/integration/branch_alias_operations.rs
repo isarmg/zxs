@@ -10,6 +10,8 @@ use storage_engine::{
 mod batch_planning_scenarios;
 #[path = "branch_alias_operations/copy_alias_scenarios.rs"]
 mod copy_alias_scenarios;
+#[path = "branch_alias_operations/object_move_scenarios.rs"]
+mod object_move_scenarios;
 #[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
 mod deletion_rebase_scenarios;
 #[path = "../support/directory_git_fixture.rs"]

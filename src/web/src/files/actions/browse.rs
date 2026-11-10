@@ -204,9 +204,9 @@ fn begin_directory_snapshot(
     state.change_page(crate::ui::Page::Files);
     true
 }
-/// Only a node or committed branch reference from a validated, current
-/// directory-history page supplies this immutable read target. It never
-/// acquires branch-checkout authority.
+/// A validated current history page or child-repository status supplies
+/// the committed branch/tree pair for this immutable read target.
+/// Preview never acquires branch-checkout or staging authority.
 pub(crate) fn preview_directory_snapshot(
     state: RwSignal<State>,
     path: String,
@@ -493,3 +493,4 @@ pub(crate) fn select_entry(state: RwSignal<State>, entry: Entry) {
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/actions/browse/tests.rs"]
 mod tests;
+

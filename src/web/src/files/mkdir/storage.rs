@@ -17,6 +17,8 @@ enum Format {
     OriginalRequest,
     #[serialization(rename = "ordinary-file-relocation-original-request")]
     FileRelocation,
+    #[serialization(rename = "object-move-original-request")]
+    ObjectMove,
     #[serialization(rename = "directory-branch-original-request")]
     DirectoryBranch,
 }
@@ -27,8 +29,13 @@ enum Namespace {
         request: DirectoryRequest,
     },
     UninitializedRoot,
+    // Already retained originals keep their exact request and receipt binding.
+    // New moves are captured only as ObjectMove below.
     FileRelocation {
         relocation: storage_contract::file_relocation::FileRelocation,
+    },
+    ObjectMove {
+        movement: storage_contract::file_relocation::ObjectMoveRequest,
     },
     Repository {
         repository: HistoryRepositoryId,
@@ -88,17 +95,29 @@ impl Record {
                 relocation.destination.as_str(),
                 relocation.repository_id.as_str(),
             ),
+            Namespace::ObjectMove { movement } => format!(
+                "{} → {}/{}",
+                self.path(), movement.target_slot_id, movement.target_path.as_str(),
+            ),
             Namespace::UninitializedRoot | Namespace::Repository { .. } => self.path().to_owned(),
         };
         format!("{}/{} · {}", self.stored.slot, path, self.operation())
     }
     pub(super) fn can_lookup(&self) -> bool {
-        self.digest.is_some() || matches!(&self.stored.namespace, Namespace::FileRelocation { .. })
+        self.digest.is_some()
+            || matches!(&self.stored.namespace, Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. })
     }
     fn key(&self) -> String {
         format!("{}{}", prefix(self.principal()), self.operation())
     }
     pub(super) fn request(&self) -> (&'static str, String, Value) {
+        if let Namespace::ObjectMove { movement } = &self.stored.namespace {
+            return (
+                "POST",
+                format!("/api/file-manager/disks/{}/object-move", api::segment(&self.stored.slot)),
+                json!({"operation_id":self.operation(),"movement":movement}),
+            );
+        }
         if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
             return request.request(&self.stored.slot, self.path(), self.operation());
         }
@@ -125,6 +144,18 @@ impl Record {
         )
     }
     pub(super) fn matches_receipt(&self, receipt: &Value, origin: ReceiptOrigin) -> bool {
+        if let Namespace::ObjectMove { movement } = &self.stored.namespace {
+            let Some(versions) = receipt["result"]["version_mapping"].as_object() else {
+                return false;
+            };
+            let protection = if versions.is_empty() {
+                storage_contract::ProtectionAtPublish::NotApplicable
+            } else {
+                storage_contract::ProtectionAtPublish::TargetMet
+            };
+            return receipt["protection_at_publish"] == json!(protection)
+                && movement.matches_receipt(self.principal(), receipt);
+        }
         if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
             return self.digest.as_deref() == receipt["request_digest"].as_str()
                 && request.matches_receipt(receipt);
@@ -149,7 +180,7 @@ impl Record {
                 && receipt["result"]["path"].as_str() == Some(relocation.source.as_str());
         }
         let path = match &self.stored.namespace {
-            Namespace::DirectoryBranch { .. } | Namespace::FileRelocation { .. } => {
+            Namespace::DirectoryBranch { .. } | Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. } => {
                 unreachable!("invariant: relocation handled above")
             }
             Namespace::UninitializedRoot => self.path(),
@@ -214,32 +245,23 @@ impl Record {
     pub(super) fn capture_relocation(
         state: &State,
         operation: OperationId,
-        relocation: storage_contract::file_relocation::FileRelocation,
+        movement: storage_contract::file_relocation::ObjectMoveRequest,
     ) -> Result<Self, api::Error> {
         let entry = state
             .files
             .entries
             .iter()
             .find(|entry| {
-                entry.entry_id() == relocation.entry_id.as_str()
-                    && entry.file_id() == relocation.file_id.as_str()
-                    && entry.repository_path() == Some(relocation.source.as_str())
-                    && entry.repository_id() == Some(relocation.repository_id.as_str())
+                entry.entry_id() == movement.source_entry_id.as_str()
+                    && entry.repository_path() == Some(movement.source_path.as_str())
+                    && entry.repository_id() == Some(movement.source_repository_id.as_str())
                     && !entry.read_only()
                     && !entry.backup()
                     && !entry.retained_history()
             })
-            .ok_or_else(|| failure("The captured file is no longer in the current listing."))?;
-        if state.files.repository_id != relocation.repository_id.as_str()
-            || state.files.namespace_head != relocation.expected_head.as_str()
-            || state.files.directory_branches_supported
-        {
-            return Err(failure(
-                "The original ordinary namespace changed; review it again.",
-            ));
-        }
+            .ok_or_else(|| failure("The captured object is no longer in the current listing."))?;
         let stored = Stored {
-            format: Format::FileRelocation,
+            format: Format::ObjectMove,
             principal: state.principal.clone(),
             operation,
             slot: state.files.slot.clone(),
@@ -247,13 +269,13 @@ impl Record {
                 name_policy::PortablePath::parse(entry.path())
                     .map_err(|source| decode_error(source.into()))?,
             ),
-            namespace: Namespace::FileRelocation { relocation },
+            namespace: Namespace::ObjectMove { movement },
         };
         let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
         let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(limit(
-                "The original file move exceeds 32 KiB; no request was sent.",
+                "The original object move exceeds 32 KiB; no request was sent.",
             ));
         }
         Self::bind(stored, Arc::from(bytes))
@@ -292,6 +314,7 @@ impl Record {
                 Format::OriginalRequest,
                 Namespace::UninitializedRoot | Namespace::Repository { .. }
             ) | (Format::FileRelocation, Namespace::FileRelocation { .. })
+                | (Format::ObjectMove, Namespace::ObjectMove { .. })
                 | (Format::DirectoryBranch, Namespace::DirectoryBranch { .. })
         ) {
             return Err(failure("The retained request format and action disagree."));
@@ -305,6 +328,18 @@ impl Record {
             .as_ref()
             .map_or("", name_policy::PortablePath::as_str);
         let digest = match &stored.namespace {
+            Namespace::ObjectMove { movement } => {
+                movement.require_target_intent().map_err(decode_error)?;
+                name_policy::validate_slot(&movement.target_slot_id)
+                    .map_err(|source| decode_error(source.into()))?;
+                let source = movement.source_path.as_str();
+                if source != display_path
+                    && display_path.split_once('/').map(|(_, tail)| tail) != Some(source)
+                {
+                    return Err(failure("The original object paths do not share one namespace."));
+                }
+                None
+            }
             Namespace::DirectoryBranch { request } => {
                 request.validate(display_path)?;
                 Some(request.digest(&stored.principal)?)

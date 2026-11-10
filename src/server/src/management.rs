@@ -1264,6 +1264,13 @@ impl Backend for ManagementBackend {
             .backend()?
             .create_disk_directory(identity, request)
     }
+    fn move_disk_object(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::MoveDiskObject,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.move_disk_object(identity, request)
+    }
     fn create_disk_write_session(
         &self,
         identity: &crate::auth::Identity,
