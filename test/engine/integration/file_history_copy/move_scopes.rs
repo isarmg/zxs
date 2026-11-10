@@ -210,7 +210,13 @@ fn payload_scope_never_receives_system_history_or_another_disks_sql_rows() {
 
 #[test]
 fn cold_scoped_read_and_explicit_retry_keep_the_original_images_and_native_digest() {
-    let mut fixture = Fixture::new(false);
+    for current in [false, true] {
+        cold_scoped_retry(current);
+    }
+}
+
+fn cold_scoped_retry(current: bool) {
+    let mut fixture = Fixture::new(current);
     let (projection, recovery) = input(&mut fixture);
     let first = prepare(&mut fixture, &projection, &recovery);
     let path = stage(&fixture).join("proposed-system.sqlite");
@@ -409,22 +415,47 @@ fn scoped_stage_requires_original_native_bytes_and_respects_cancellation_before_
 }
 
 #[test]
-fn generation_without_a_complete_historical_recipe_remains_explicitly_unsupported() {
+fn activated_current_generation_prepares_exact_scopes_without_publishing_the_move() {
     let mut fixture = Fixture::new(true);
     let (projection, recovery) = input(&mut fixture);
     let source = fixture.engine.state().clone();
+    let report = prepare(&mut fixture, &projection, &recovery);
+    let stored = manifest(&fixture);
+    assert_eq!(report.operation_id(), projection.operation_id());
+    assert_eq!(report.source_sequence(), source.sequence);
+    assert_eq!(report.participant_disks(), 4);
     assert_eq!(
+        report.databases(),
+        report.system_publications() + 1 + 3 * report.participant_disks()
+    );
+    assert_eq!(
+        stored["published_source_sequence"],
+        source.sequence.to_string()
+    );
+    assert_eq!(
+        stored["unaccepted_proposed_sequence"],
+        projection.proposed_sequence().to_string()
+    );
+    assert_eq!(fixture.engine.state(), &source);
+    assert!(
+        !fixture
+            .engine
+            .state()
+            .operations
+            .contains_key(&projection.operation_id())
+    );
+    assert!(
         fixture
             .engine
-            .prepare_file_history_move_scoped_databases(
-                &projection,
-                recovery.digest(),
-                &HistoryWindowCancellation::new()
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::UnsupportedOperation
+            .file_deletion(projection.capture().source_file_id().as_str())
+            .is_none()
     );
-    assert!(!stage(&fixture).join(MANIFEST).exists());
-    assert_eq!(fixture.engine.state(), &source);
+    assert!(
+        fixture
+            .engine
+            .namespace_tree(&fixture.target.main_branch_id)
+            .unwrap()
+            .entries()
+            .is_empty()
+    );
 }

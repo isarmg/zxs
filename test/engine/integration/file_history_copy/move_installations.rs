@@ -105,7 +105,26 @@ fn one_original_record_allows_only_exact_replica_completion() {
     let (projection, recovery) = input(&mut fixture);
     let first = prepare(&mut fixture.engine, &projection, &recovery);
     let record = fs::read(fixture.temp.path().join("system").join(RECORD)).unwrap();
-    for disk in &fixture.engine.config().disks {
+    let participants: Vec<_> = fixture
+        .engine
+        .config()
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member || disk.slot_id == "D04")
+        .collect();
+    assert_eq!(participants.len(), 4);
+    let uninvolved = fixture
+        .engine
+        .config()
+        .disks
+        .iter()
+        .find(|disk| disk.slot_id == "D05")
+        .unwrap()
+        .root
+        .join(RECORD);
+    assert!(!uninvolved.exists());
+    for disk in participants {
+        assert_eq!(fs::read(disk.root.join(RECORD)).unwrap(), record);
         fs::remove_file(disk.root.join(RECORD)).unwrap();
     }
     let before = tree(fixture.temp.path());
@@ -130,8 +149,13 @@ fn one_original_record_allows_only_exact_replica_completion() {
         first.disk_database_intents()
     );
     for disk in &fixture.engine.config().disks {
-        assert_eq!(fs::read(disk.root.join(RECORD)).unwrap(), record);
+        if disk.metadata_member || disk.slot_id == "D04" {
+            assert_eq!(fs::read(disk.root.join(RECORD)).unwrap(), record);
+        } else {
+            assert!(!disk.root.join(RECORD).exists());
+        }
     }
+    assert!(!uninvolved.exists());
     let after = tree(fixture.temp.path());
     for (path, entry) in before {
         assert!(

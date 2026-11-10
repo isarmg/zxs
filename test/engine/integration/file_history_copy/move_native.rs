@@ -1,7 +1,7 @@
 //! One prospective native receipt, never an accepted or visible move result.
 use super::move_decision::plan;
 use super::*;
-use std::{fs, path::PathBuf};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 fn stage(fixture: &Fixture) -> PathBuf {
@@ -433,7 +433,16 @@ fn native_templates_keep_source_fenced_and_reject_a_damaged_target_full() {
                 .join(target)
                 .join("content")
                 .join(&fixture.engine.state().versions[source].creation_name);
-            fs::write(body, b"damaged full copy").unwrap();
+            let original = bytes(&fixture.engine, source);
+            let permissions = fs::metadata(&body).unwrap().permissions();
+            assert_eq!(permissions.mode() & 0o777, 0o400);
+            let mut damaged = fs::read(&body).unwrap();
+            damaged[0] ^= 1;
+            fs::set_permissions(&body, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(&body, &damaged).unwrap();
+            fs::set_permissions(&body, permissions).unwrap();
+            assert_eq!(fs::read(&body).unwrap(), damaged);
+            assert_eq!(bytes(&fixture.engine, source), original);
         }
         assert_eq!(
             fixture
