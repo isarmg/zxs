@@ -61,6 +61,7 @@ pub(in crate::file_deletion) fn capture(
     let mut seen = BTreeSet::new();
     let mut targets = BTreeMap::new();
     let mut sources = Vec::with_capacity(request.items.len());
+    let mut scopes = current.map(|view| view.batch_sources(state));
     for item in &request.items {
         if item.target.is_some() {
             return Err(Error::new(
@@ -81,8 +82,9 @@ pub(in crate::file_deletion) fn capture(
             ));
         }
         require_current(state, branch)?;
-        let admitted = current
-            .map(|view| view.batch_scope(state, &branch.directory_branch_id))
+        let admitted = scopes
+            .as_mut()
+            .map(|scopes| scopes.get(&branch.directory_branch_id))
             .transpose()?;
         if admitted.is_none()
             && state

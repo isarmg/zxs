@@ -84,6 +84,7 @@ pub(crate) fn requested(
     if request.kind != DirectoryBatchKind::Delete {
         return Ok(false);
     }
+    let mut scopes = current.map(|view| view.batch_sources(state));
     for item in &request.items {
         let Some(branch) = state
             .directory_branches
@@ -91,8 +92,9 @@ pub(crate) fn requested(
         else {
             continue;
         };
-        let admitted = current
-            .map(|view| view.batch_scope(state, &branch.directory_branch_id))
+        let admitted = scopes
+            .as_mut()
+            .map(|scopes| scopes.get(&branch.directory_branch_id))
             .transpose()?;
         let scope = admitted.as_ref().map_or(branch, |scope| scope.branch());
         if scope.entries.iter().any(|entry| {

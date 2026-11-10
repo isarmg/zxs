@@ -300,6 +300,41 @@ fn assert_clean_graph(engine: &Engine, directory: &str, hidden: &[Entry]) {
 }
 
 #[test]
+fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
+    let mut fixture = Fixture::new();
+    fixture.exit_and_select(MembershipExitAction::Deregister);
+    let state = fixture.engine.state();
+    let current = fixture.engine.current_namespaces.as_ref().unwrap();
+    let mut sources = current.batch_sources(state);
+    let admitted = sources.get(&fixture.root).unwrap();
+    assert_eq!(
+        admitted.selected_tree_id(),
+        state.directory_tree_selections[&fixture.repo.repository_id]
+    );
+    assert_ne!(
+        admitted.selected_tree_id(),
+        state.directory_branches[&fixture.root].head_tree_id
+    );
+    assert!(admitted.branch().entries.contains(&fixture.original_child));
+    assert!(!admitted.branch().entries.contains(&fixture.later_child));
+    for hidden in &fixture.hidden {
+        assert!(!admitted.branch().entries.contains(hidden));
+    }
+    let expected = admitted.branch().clone();
+    let address = std::ptr::from_ref(admitted);
+    assert!(sources.scope.is_some());
+    let repeated = sources.get(&fixture.root).unwrap();
+    assert!(std::ptr::eq(address, repeated));
+    assert_eq!(repeated.branch(), &expected);
+    assert_eq!(
+        sources.get(&fixture.inactive).err().unwrap().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert!(sources.scope.is_none());
+    assert_eq!(sources.get(&fixture.root).unwrap().branch(), &expected);
+}
+
+#[test]
 fn disk_exit_selected_projection_batch_copies_exact_selected_versions_and_reopens() {
     let mut fixture = Fixture::new();
     fixture.exit_and_select(MembershipExitAction::Deregister);

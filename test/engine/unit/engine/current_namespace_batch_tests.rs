@@ -369,6 +369,87 @@ fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_n
 }
 
 #[test]
+fn membership_registry_current_file_delete_batch_keeps_each_shared_scope_precondition() {
+    let mut fixture = Fixture::new(true);
+    save(
+        &mut fixture.engine,
+        &fixture.repo.main_branch_id,
+        "dir/c",
+        b"second retained file",
+    );
+    let scope = initialize(&mut fixture, "dir");
+    fixture.project(false);
+    let first = item(&fixture, &scope, "dir/b", None);
+    let second = item(&fixture, &scope, "dir/c", None);
+    let files = [current(&fixture, "dir/b"), current(&fixture, "dir/c")];
+    let commits = fixture.engine.state.commits.clone();
+    let raw = fixture.engine.state.directory_branches[&scope]
+        .entries
+        .clone();
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let mut stale = second.clone();
+    stale.source.expected_tree_id = new_id("dtree").unwrap();
+    for (items, code) in [
+        (
+            vec![first.clone(), stale],
+            ErrorCode::DirectoryBranchConflict,
+        ),
+        (
+            vec![first.clone(), first.clone()],
+            ErrorCode::BatchMappingConflict,
+        ),
+    ] {
+        let request = DirectoryNamespaceBatch {
+            kind: DirectoryBatchKind::Delete,
+            items,
+        };
+        assert_eq!(
+            apply(&mut fixture, &request, op()).unwrap_err().code(),
+            code
+        );
+        assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    }
+    let request = DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Delete,
+        items: vec![first, second],
+    };
+    let operation = op();
+    let receipt = apply(&mut fixture, &request, operation).unwrap();
+    assert_eq!(receipt.kind, "file.delete.batch");
+    assert_eq!(fixture.engine.state.file_deletions.len(), 2);
+    assert!(
+        !fixture
+            .engine
+            .state
+            .file_deletions
+            .contains_key(&fixture.removed.file_id)
+    );
+    for (file, bytes) in files
+        .iter()
+        .zip([b"retained".as_slice(), b"second retained file"])
+    {
+        assert_eq!(
+            fixture.engine.state.file_deletions[&file.file_id].operation_id,
+            operation
+        );
+        assert!(
+            fixture
+                .engine
+                .namespace_tree(&fixture.repo.main_branch_id)
+                .unwrap()
+                .get(file.path())
+                .is_none()
+        );
+        assert_eq!(body(&fixture.engine, file), bytes);
+    }
+    assert_eq!(fixture.engine.state.directory_branches[&scope].entries, raw);
+    assert_eq!(fixture.engine.state.commits, commits);
+    let after = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(apply(&mut fixture, &request, operation).unwrap(), receipt);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), after);
+}
+
+#[test]
 fn membership_registry_current_batch_delete_records_only_visible_occurrences() {
     let mut fixture = Fixture::new(true);
     let root = initialize(&mut fixture, "");

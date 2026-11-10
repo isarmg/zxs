@@ -20,6 +20,32 @@ impl CurrentBatchScope {
     }
 }
 
+/// Reuse consecutive items' exact admitted source, bound to one immutable
+/// input. Switching branches releases it before capturing another, so a batch
+/// retains at most one scope. Per-item HEAD and occurrence checks stay separate.
+pub(crate) struct CurrentBatchSources<'a> {
+    state: &'a State,
+    current: &'a CurrentNamespaces,
+    scope: Option<CurrentBatchScope>,
+}
+
+impl CurrentBatchSources<'_> {
+    pub(crate) fn get(&mut self, id: &str) -> Result<&CurrentBatchScope> {
+        if self
+            .scope
+            .as_ref()
+            .is_none_or(|scope| scope.branch.directory_branch_id != id)
+        {
+            self.scope = None;
+            self.scope = Some(self.current.batch_scope(self.state, id)?);
+        }
+        Ok(self
+            .scope
+            .as_ref()
+            .expect("invariant: the requested source was admitted"))
+    }
+}
+
 fn unsupported_selection() -> Error {
     Error::new(
         ErrorCode::RecoveryRequired,
@@ -250,6 +276,14 @@ fn current_contexts(state: &State, branch: &mut DirectoryBranch) -> Result<()> {
 }
 
 impl CurrentNamespaces {
+    pub(crate) fn batch_sources<'a>(&'a self, state: &'a State) -> CurrentBatchSources<'a> {
+        CurrentBatchSources {
+            state,
+            current: self,
+            scope: None,
+        }
+    }
+
     /// The returned type is usable only with this mutation's immutable input.
     /// Expected-head checks remain against State before this source is captured.
     pub(crate) fn batch_scope(&self, state: &State, id: &str) -> Result<CurrentBatchScope> {
