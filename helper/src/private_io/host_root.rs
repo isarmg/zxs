@@ -13,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Root creation is helper-only. The generic lease reader never creates it.
 pub(crate) struct HostRoot {
     parent_path: PathBuf,
     parent: OpenAt2Root,
@@ -77,8 +76,6 @@ impl HostRoot {
         };
         let metadata = file.metadata()?;
         let mode = metadata.mode() & 0o7777;
-        // Only the fixed, unpublished staging name may still have mkdir's
-        // private mode. The live root must already have its final attributes.
         let initial_pending = name == &self.pending && mode == 0o700;
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || (mode != 0o755 && !initial_pending)
@@ -126,12 +123,9 @@ impl HostRoot {
             )
             .into());
         }
-        // Lock the future daemon inode before publishing its public name.
         let _root_lock = AdvisoryLock::directory(root.directory())?;
         self.check_named(&self.pending, root.identity())?;
         self.recheck_parent()?;
-        // A retry after mkdir resumes this same empty, administrative-owned
-        // pending inode. Never chmod the final root or any nonempty staging tree.
         root.directory()
             .set_permissions(std::fs::Permissions::from_mode(0o755))?;
         root.directory().sync_all()?;

@@ -1,6 +1,3 @@
-//! Fixed embedded ZXS/VFS installation and separately confirmed program repair.
-//! These operations never initialize storage, configure or start services.
-//! The separate maintenance transport runs only the sealed matching payload.
 mod baseline;
 pub(crate) mod materials;
 mod payload;
@@ -12,8 +9,6 @@ pub(crate) use payload::Metadata as PayloadMetadata;
 pub(crate) fn verified_payload_metadata() -> Result<PayloadMetadata> {
     Ok(payload::required()?.metadata())
 }
-/// Hold the normal program-publication lock while configuration is derived from
-/// the exact installed payload. Configuration never repairs a different binary.
 pub(crate) struct InstalledProgram {
     destination: crate::private_io::ProgramDestination,
     payload: payload::Payload,

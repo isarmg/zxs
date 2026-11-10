@@ -1,5 +1,3 @@
-//! First-install runtime directories only. Never clears used runtime state or
-//! turns a directory receipt into storage/service readiness evidence.
 mod directories;
 
 use super::Input;
@@ -191,8 +189,6 @@ fn bind_original(mut prepared: Prepared) -> Result<Prepared> {
                         "runtime completion started without its complete original intent".into(),
                     );
                 }
-                // Completion staging is created only after every path exists.
-                // Its absence of a receipt is not authority to recreate paths.
                 prepared
                     .directories
                     .completed(&prepared.preview.request_digest)?;

@@ -1,5 +1,3 @@
-//! Restore only the exact recorded embedded payload. This does not authorize
-//! a version change, execute the program, or open runtime data/configuration.
 use super::{
     baseline::{self, PayloadIdentity},
     payload,

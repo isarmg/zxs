@@ -1,6 +1,3 @@
-//! One explicitly confirmed reset of an existing local Samba account. External
-//! Samba commands have no exactly-once token: unknown outcomes are retained and
-//! must not be automatically replayed or represented as a rollback.
 pub(crate) mod enrollment;
 mod state;
 use super::{Input as DeploymentInput, install};
@@ -146,8 +143,6 @@ fn prepare(input: Input) -> Result<Prepared> {
     let testparm = Executable::open(Program::Testparm)?;
     let pdbedit = Executable::open(Program::Pdbedit)?;
     let smbpasswd = Executable::open(Program::Smbpasswd)?;
-    // Only exact helper-generated files are accepted, so includes, shell hooks
-    // and arbitrary backends cannot be introduced by request strings.
     state::require_local_configuration(&testparm)?;
     configuration.require_existing()?;
     let database = state::Database::open()?;
@@ -191,8 +186,6 @@ pub(super) fn require_activation(
     pdbedit: &Executable,
     account: &crate::account::Snapshot,
 ) -> Result<()> {
-    // Do not let a nominally read-only pdbedit query initialize a missing
-    // passdb. Require the existing native file and preserve its exact revision.
     let database = state::Database::open()?;
     state::require_local_configuration(testparm)?;
     state::require_existing_account(pdbedit, account)?;
@@ -252,8 +245,6 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
         return Err("Samba configuration, account, database metadata or fixed programs differ from the exact preview; no password command was admitted".into());
     }
     prepared.unchanged()?;
-    // One-shot intent creation is the admission point. Even a missing receipt
-    // or failed spawn cannot prove a previous external command did not commit.
     let recorded = prepared.configuration.host().read_operation(
         &prepared.name(),
         "plan.json",
@@ -284,8 +275,6 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
 fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
     prepared.unchanged()?;
     state::require_existing_account(&prepared.pdbedit, &prepared.plan.account)?;
-    // pdbedit is not called with export/hash/modification flags. Unexpected
-    // metadata changes, including its own maintenance, prevent password write.
     prepared.unchanged()?;
     prepared.smbpasswd.password(
         &[

@@ -1,5 +1,3 @@
-//! Explicit first registration after proving the selected local account absent.
-//! External writers must remain stopped; uncertain commands are never replayed.
 use super::{Input, Original, hex, state};
 use crate::{
     Result,
@@ -228,9 +226,6 @@ pub(crate) fn create(input: Create) -> Result<Status> {
 }
 fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
     prepared.unchanged()?;
-    // Native -a becomes a password change for an existing name. The exact
-    // absence proof and stopped external-writer precondition must still hold;
-    // our directory lock is not a Samba transaction lock for other root tools.
     prepared.smbpasswd.password(
         &[
             "-L",

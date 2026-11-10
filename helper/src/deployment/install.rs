@@ -1,5 +1,3 @@
-//! Confirmed, no-overwrite installation of fixed configuration files. This is
-//! deliberately not daemon reload/start/enable, Samba passdb, or a ready marker.
 pub(crate) mod recovery;
 use super::{Input, model, render};
 use crate::{
@@ -203,8 +201,6 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
     Ok(build(input)?.preview)
 }
 
-/// An error after the intent is durable does not claim rollback. Keep the
-/// request and possible installed files, then retry only this exact operation.
 #[derive(Debug)]
 struct InstallationPending {
     request_digest: String,

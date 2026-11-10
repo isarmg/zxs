@@ -102,8 +102,6 @@ pub(super) fn bridge_socket(service_uid: u32) -> Result<Value> {
     {
         return Err("ZXS bridge socket changed during observation".into());
     }
-    // This is a native socket observation, not an authenticated bridge or SMB
-    // session. The daemon's own admission remains the authority for each RPC.
     Ok(
         json!({"socket_published":true, "device":before.dev().to_string(),
         "inode":before.ino().to_string(), "bridge_protocol_session_verified":false,

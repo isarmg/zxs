@@ -1,4 +1,3 @@
-//! Controlled build-input snapshot. Legal completeness is not inferred here.
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,

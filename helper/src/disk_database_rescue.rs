@@ -1,4 +1,3 @@
-//! Standalone rescue files, never active disk database installation.
 use crate::{Result, disk_databases, print, private_io};
 use command_line::{Subcommand, ValueEnum};
 use json_codec::json;

@@ -1,4 +1,3 @@
-//! Minimal host preparation, not account/system/storage initialization.
 use crate::{Result, print, private_io::HostRoot};
 use command_line::Subcommand;
 use data_serialization::{Deserialize, Serialize};

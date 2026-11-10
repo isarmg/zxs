@@ -1,5 +1,3 @@
-//! Secret-bearing enrollment uses the same admission, work owner and redaction
-//! boundary as existing-account resets. Status never replays an external command.
 use super::*;
 use crate::deployment::samba_password::{self, enrollment};
 

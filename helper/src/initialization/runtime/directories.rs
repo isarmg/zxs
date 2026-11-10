@@ -1,4 +1,3 @@
-//! Fixed first-install paths, held below the same administrative host inode.
 use crate::{Result, private_io::BundleDestination};
 use data_serialization::Serialize;
 use platform_io::fs_safety::{
@@ -194,8 +193,6 @@ impl Directories {
         let (owner, mode) = self.attributes(spec);
         let final_attributes =
             (metadata.uid(), metadata.gid()) == owner && metadata.mode() & 0o7777 == mode;
-        // Only this exact request's private staging inode can finish ownership
-        // handoff. A final directory is never chmodded or chowned.
         let initial_staging = pending && metadata.uid() == 0 && metadata.mode() & 0o7777 == 0o700;
         if !final_attributes && !initial_staging {
             return Err(format!(
@@ -304,7 +301,6 @@ impl Directories {
         digest: &str,
         revalidate: impl Fn() -> Result<()>,
     ) -> Result<Vec<&'static str>> {
-        // Inspect all seven destinations before creating the first one.
         self.inspect(digest)?;
         let mut created = Vec::new();
         for spec in SPECS {

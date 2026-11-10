@@ -27,8 +27,6 @@ pub(super) struct Samba {
 }
 impl Samba {
     pub fn open(account: &LocalAccount, peer_uid: u32) -> Result<Self> {
-        // The dedicated smbd runs its trusted bridge connection as root. Do
-        // not silently start it against an unrelated configured peer identity.
         if peer_uid != 0 {
             return Err("the supported dedicated Samba unit requires the explicitly configured trusted peer UID 0".into());
         }

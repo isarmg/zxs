@@ -1,5 +1,3 @@
-//! Same-payload repair retains both an independent backup and the exchanged
-//! original inode. No data/configuration directory is opened here.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

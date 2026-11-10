@@ -1,5 +1,3 @@
-//! Supported existing local tdbsam target. No database creation, credential
-//! extraction, remote/LDAP backend or password-format translation lives here.
 pub(super) mod enrollment;
 use crate::{
     Result,

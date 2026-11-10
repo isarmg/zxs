@@ -1,4 +1,3 @@
-//! Snapshot one already-built matching ZXS executable. Never download or run it.
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Read, path::PathBuf};
 
@@ -124,7 +123,6 @@ fn main() {
     materials::prepare(&out, binding);
 }
 
-// Build scripts cannot depend on platform-io; this byte formatter has no I/O.
 fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(bytes.len() * 2);

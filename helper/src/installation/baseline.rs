@@ -1,4 +1,3 @@
-//! One immutable same-payload installation baseline, never an upgrade license.
 use super::payload;
 use crate::{
     Result,

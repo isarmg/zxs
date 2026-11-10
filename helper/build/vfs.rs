@@ -1,4 +1,3 @@
-//! Snapshot the matching offline VFS product. No target-host code is executed.
 use super::materials;
 use std::{env, fs, path::Path};
 

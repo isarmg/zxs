@@ -1,5 +1,3 @@
-//! Helper-only fixed system executables. Execute the held ELF descriptor, not a
-//! later PATH lookup. External-program output is bounded and never logged.
 use crate::Result;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::{
@@ -172,8 +170,6 @@ impl Executable {
         }
         Ok(bytes)
     }
-    /// Unit observation also needs systemctl's explicit not-found exit status.
-    /// Failed commands never become success solely because their stdout parses.
     pub(crate) fn capture_status(&self, args: &[&str]) -> Result<(ExitStatus, Vec<u8>)> {
         let child = self
             .command(args)?
@@ -192,8 +188,6 @@ impl Executable {
         Ok((status, bytes))
     }
     pub(crate) fn password(&self, args: &[&str], password: &SecretString) -> Result<()> {
-        // Only smbpasswd's silent local input protocol uses this method. No
-        // argv/environment, output capture or receipt contains password bytes.
         if !matches!(self.kind, Program::Smbpasswd) {
             return Err("password input is only admitted to the fixed smbpasswd program".into());
         }
@@ -355,8 +349,6 @@ impl Drop for Joined {
         if self.reaped {
             return;
         }
-        // The unreaped PID still pins our private process group. The owner is
-        // retained until the child is reaped, even through uninterruptible I/O.
         if let Err(error) = kill_process_group(Pid::from_child(&self.child), Signal::KILL)
             && error != rustix::io::Errno::SRCH
         {

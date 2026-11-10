@@ -1,5 +1,3 @@
-//! Explicit local service identity preparation through systemd-sysusers.
-//! The native tool owns passwd/group locking and account-file publication.
 use crate::{
     Result,
     account::{LocalAccount, LocalGroup, Name},
@@ -105,7 +103,6 @@ fn binding(account: &LocalAccount) -> Binding {
     Binding { uid, gid }
 }
 fn instruction(input: &Input) -> String {
-    // Name already excludes whitespace, quotes, escapes and option prefixes.
     format!("u {} - - {HOME} {SHELL}", input.service_user.as_str())
 }
 impl Prepared {
@@ -253,8 +250,6 @@ pub(crate) fn prepare(input: Prepare) -> Result<Outcome> {
             return Err("a group now exists without the original service account; inspect the possibly partial native operation, do not adopt or replace that group".into());
         }
         prepared.host.recheck()?;
-        // Native sysusers never changes an existing user's UID, group, home or
-        // shell. A partial group-only result needs inspection, not group adoption.
         executable.capture(&["--inline", &instruction(&prepared.plan.input)])?;
         current = prepared.observe()?;
     }

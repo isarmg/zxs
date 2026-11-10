@@ -1,5 +1,3 @@
-//! Exact public license/notice bytes. Never extracts an archive or mutates the
-//! installed program, runtime state, configuration or credentials.
 use crate::{Result, private_io};
 use data_serialization::Serialize;
 use sha2::{Digest, Sha256};

@@ -50,7 +50,7 @@ async function post(path, body) {
   const response = await fetch(path, {method:"POST", credentials:"omit", cache:"no-store", headers:{"Content-Type":"application/json","X-ZXS-Helper-CSRF":csrf}, body:JSON.stringify(body)});
   if (!response.ok) {
     let message = `辅助工具拒绝请求（HTTP ${response.status}）`;
-    try { const value = await response.json(); if (value.error && typeof value.error.message === "string") message += `：${value.error.message}`; } catch { /* Retain the concrete HTTP failure when no JSON diagnostic was delivered. */ }
+    try { const value = await response.json(); if (value.error && typeof value.error.message === "string") message += `：${value.error.message}`; } catch {   }
     throw new Error(message);
   }
   return response;
@@ -294,7 +294,6 @@ async function sendActivation(original) {
     const retained = localStorage.getItem(key);
     if (text.length > 16 * 1024 || (!retained && count >= 16)) throw new Error("原请求保存预算已满");
     if (retained && retained !== text) throw new Error("同摘要已有不同原请求，未覆盖");
-    // Per-digest immutable keys preserve other tabs' different requests.
     localStorage.setItem(key,text);
     if (localStorage.getItem(key) !== text) throw new Error("原启动请求未能准确读回");
     refreshActivationRecords(original.request_digest);
@@ -1132,8 +1131,6 @@ byId("foreign-chain-objects-form").addEventListener("submit", async event => {
     setBusy(false);
   }
 });
-// Browser retention is only a selector. The root-owned immutable plan and
-// native parent reservations remain authoritative; no stored plan is executed.
 try {
   const saved = localStorage.getItem(foreignChainSelectorKey);
   if (saved !== null) {
@@ -1246,7 +1243,6 @@ byId("disk-remove-commit-form").addEventListener("submit", async event => {
   finally { diskRemovalPreview = null; byId("disk-remove-commit-form").hidden = true; setBusy(false); }
 });
 
-// This is UI state only. Native SYSTEM owns decision, Stop and final receipts.
 let terminalRetirementPreview = null;
 function resetTerminalRetirement() {
   terminalRetirementPreview = null;

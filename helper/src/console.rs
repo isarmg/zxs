@@ -1,5 +1,3 @@
-//! Independent maintenance HTTP owner. Source-disk access remains read-only;
-//! program installation is a separate fixed-path, no-overwrite operation.
 mod boundary;
 mod http;
 mod work;
@@ -61,8 +59,6 @@ pub(crate) fn run(options: Options) -> Result<()> {
         .max_blocking_threads(1)
         .enable_all()
         .build()?;
-    // Dropping this runtime waits for the blocking read owner even if an HTTP
-    // request was disconnected. A stuck device is not falsely reported drained.
     runtime.block_on(serve(options))
 }
 

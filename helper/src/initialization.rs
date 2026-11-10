@@ -1,4 +1,3 @@
-//! Staged offline first installation: layout, administrator, and initial storage.
 pub(crate) mod account;
 mod layout;
 pub(crate) mod runtime;

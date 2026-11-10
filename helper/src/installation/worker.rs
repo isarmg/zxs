@@ -1,5 +1,3 @@
-//! Execute only a sealed anonymous copy of the already verified embedded payload.
-//! No installed binary, temporary pathname, PATH lookup or network fetch is used.
 use crate::Result;
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use std::{fs::File, io::Write, os::unix::fs::PermissionsExt};

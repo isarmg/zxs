@@ -1,5 +1,3 @@
-//! Only the helper's sealed same-source build product can become an installed
-//! module. A user-supplied module or self-authored receipt is never an input.
 use crate::Result;
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

@@ -1,5 +1,3 @@
-//! A missing-account proof for the exact native local passdb. This does not
-//! create a database; only the separately confirmed smbpasswd command may do so.
 use super::*;
 use platform_io::fs_safety::Error as FileError;
 use sha2::{Digest, Sha256};
@@ -58,7 +56,6 @@ impl Target {
                     .map(|metadata| FileStamp::of(&metadata))
             })
             .transpose()?;
-        // A list command must never initialize a missing database during preview.
         let accounts = if existing.is_some() {
             accounts(program)?
         } else {

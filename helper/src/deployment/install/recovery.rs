@@ -1,5 +1,3 @@
-//! Resume only one exact recorded configuration installation. The original
-//! input is evidence, not authority to replace existing files or activate them.
 use super::{Input, Prepared};
 use crate::{
     Result,
@@ -87,8 +85,6 @@ fn read_original(host: &BundleDestination, digest: &str) -> Result<Input> {
 fn recover(digest: &str) -> Result<Prepared> {
     require_digest(digest)?;
     super::require_root()?;
-    // Keep the host lease while loading inputs and opening the remaining
-    // resources. Reopening it inside build would contend with our own lease.
     let host = BundleDestination::open(Path::new("/zxs"))?;
     let input = read_original(&host, digest)?;
     let prepared = super::build_at(input, host)?;
@@ -123,8 +119,6 @@ fn ordered_state(
         (Absent, Absent, Absent) => RecoveryState::NotRecorded,
     })
 }
-/// Inspect all retained stages before any write, including ordinary same-plan
-/// retries. Published evidence and completion-stage missing files are not healed.
 pub(super) fn check_records(prepared: &Prepared) -> Result<RecoveryState> {
     prepared.recheck()?;
     let plan = &prepared.preview.plan;

@@ -1,4 +1,3 @@
-//! Fixed existing system directories; no package extraction, mkdir or repair.
 use super::*;
 use crate::installation::vfs_payload::{MODULE_DIRECTORY, MODULE_PATH};
 use platform_io::fs_safety::RelativePath;

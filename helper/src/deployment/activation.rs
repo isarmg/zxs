@@ -1,6 +1,3 @@
-//! Explicit privileged service-manager handoff after existing installation.
-//! No data initialization, package/account installation, rollback or implicit
-//! retry lives here. systemd and the normal daemon own their observable states.
 mod health;
 mod paths;
 mod samba;
@@ -107,8 +104,6 @@ impl Prepared {
             (None, None) => None,
             _ => return Err("Samba activation context is incomplete".into()),
         };
-        // Current runtime state is intentionally not in the digest. Start and
-        // enable are separately observable, idempotent service-manager actions.
         let plan = json!({"format":"zxs-explicit-service-activation","revision":1,
             "input":input,"host_device":paths.identity().device.to_string(),
             "host_inode":paths.identity().inode.to_string(),"payload":program.metadata(),
@@ -299,8 +294,6 @@ pub(crate) fn activate(input: Commit) -> Result<Value> {
     {
         return Err("explicit activation confirmation and stopped external configuration/service administration are required; no service action was attempted".into());
     }
-    // Establish lock order before opening the installation/configuration
-    // parents. Read-only unit observation does not acquire a filesystem lock.
     let observer = Executable::open(Program::Systemctl)?;
     let active = units::read(&observer, units::ZXS)?.active()?;
     let lease = if active {
@@ -312,9 +305,6 @@ pub(crate) fn activate(input: Commit) -> Result<Value> {
     let prepared = Prepared::open(input.input)?;
     prepared.require_digest(&input.request_digest)?;
     let result = start(&prepared, lease);
-    // A failed/expired systemctl may already have queued a job. Do not stop,
-    // disable, roll back, or blindly repeat it. Return the exact original input
-    // correlation and a fresh read-only observation when available.
     match result {
         Ok(()) => prepared.observe(),
         Err(error) => Ok(json!({"state":"activation_incomplete_or_unknown",
@@ -355,8 +345,6 @@ fn start(prepared: &Prepared, lease: Option<ServiceLease>) -> Result<()> {
             units::conflict(&prepared.systemctl, name)?;
         }
     }
-    // An inactive daemon's host lease was acquired before the program and
-    // configuration parents. An already active exact daemon retains its owner.
     if let Some(lease) = &lease {
         lease.recheck()?;
         if lease.identity() != prepared.paths.identity() {
@@ -392,8 +380,6 @@ fn start(prepared: &Prepared, lease: Option<ServiceLease>) -> Result<()> {
         prepared.require_smb(&units::read(&prepared.systemctl, units::SMB)?)?;
     }
     prepared.recheck()?;
-    // No data-path write follows this explicit handoff. The ordinary daemon's
-    // own initialization/authority/startup gates remain mandatory.
     drop(lease);
     if !active {
         prepared

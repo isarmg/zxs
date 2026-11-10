@@ -1,4 +1,3 @@
-//! Offline auxiliary utility. Stop the daemon before using it.
 mod account;
 mod authority;
 mod configuration;
@@ -192,8 +191,6 @@ impl Args {
     }
 }
 
-/// Final local diagnostic boundary. Escape controls so untrusted paths and
-/// nested causes cannot inject terminal commands or forge additional lines.
 fn diagnostic_chain(error: &(dyn std::error::Error + 'static)) -> String {
     let mut message = String::new();
     let mut current = Some(error);
@@ -219,7 +216,6 @@ fn main() {
         .with_max_level(tracing::Level::WARN)
         .with_ansi(false)
         .with_writer(std::io::stderr)
-        // Stderr is the final diagnostic sink; do not recursively report its write failures.
         .log_internal_errors(false)
         .init();
     if let Err(error) = run(args) {
@@ -381,8 +377,6 @@ fn run(args: Args) -> Result<()> {
             version,
             output,
         } => {
-            // The receipt represents this path as JSON text. Reject an
-            // unrepresentable destination before exporting any verified bytes.
             let output_text = output
                 .to_str()
                 .ok_or("offline export output path must be valid UTF-8 for JSON output")?;
@@ -392,8 +386,6 @@ fn run(args: Args) -> Result<()> {
     }
 }
 
-/// Engine open can replay durable work even for a command named preview or
-/// export. Keep its host lease until the synchronous command and all owners end.
 fn requires_service_exclusion(command: &Command) -> bool {
     match command {
         Command::ObjectDatabase { command } => {
