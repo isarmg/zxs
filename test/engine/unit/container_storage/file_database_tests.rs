@@ -2,7 +2,10 @@
 //! separately exercised after the shared held-resource installer is integrated.
 use super::*;
 use crate::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    os::unix::fs::PermissionsExt,
+};
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 fn op() -> OperationId {
@@ -588,7 +591,10 @@ fn isolated_file_material_rebuilds_sqlite_after_original_system_and_database_are
         history_tree_id: fixture.repo.history_tree_id.clone(),
     };
     let bytes = fixture.bytes();
-    let survivor = tempfile::tempdir().unwrap();
+    let survivor = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     std::fs::write(survivor.path().join(NAME), bytes).unwrap();
     drop(fixture);
     let material = inspect_object_database_material(
@@ -614,13 +620,22 @@ fn isolated_file_material_rebuilds_sqlite_after_original_system_and_database_are
 #[test]
 fn file_material_refuses_wrong_scope_and_retains_unknown_sidecar() {
     let fixture = Fixture::new();
-    let survivor = tempfile::tempdir().unwrap();
+    let survivor = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let bytes = fixture.bytes();
     std::fs::write(survivor.path().join(NAME), &bytes).unwrap();
     let scope = ObjectDatabaseScope::File {
         file_id: fixture.file.file_id.clone(),
         history_tree_id: fixture.repo.history_tree_id.clone(),
     };
+    inspect_object_database_material(
+        std::fs::File::open(survivor.path()).unwrap(),
+        survivor.path().into(),
+        &scope,
+    )
+    .unwrap();
     let wrong = ObjectDatabaseScope::File {
         file_id: format!("file_{}", "a".repeat(32)),
         history_tree_id: fixture.repo.history_tree_id.clone(),

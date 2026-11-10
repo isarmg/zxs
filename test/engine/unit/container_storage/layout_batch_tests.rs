@@ -2,7 +2,7 @@
 use super::super::layout_locator::LayoutBinding;
 use super::*;
 use crate::disk::DiskRoot;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 fn identifier(prefix: &str, digit: char) -> String {
     format!("{prefix}_{}", digit.to_string().repeat(32))
@@ -29,7 +29,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let root = DiskRoot::open(temporary.path()).unwrap();
         let history_id = identifier("history", '1');
         let history = root.path().join("histories").join(&history_id);
