@@ -44,6 +44,11 @@
 - 首次安装保存原计划后临时禁止 Debian 包脚本启动服务，完成后取消本次新 Samba 默认单元自启并清理本次策略；已有单元不接管。复用固定 ELF 程序、任务 owner 与退出回收，APT 写操作预算 20 分钟。未知结果只查询原状态，明确收尾不重复 APT；部分 dpkg 状态仍须检查处理。
 - 三组 JS 实际处理器／Python 接线、十个 Rust 文件格式、JS 语法、CLI golden 对源码及补丁检查通过。新增原生回归只有源码，未本地编译或运行 APT／systemd。Debian 隔离 root 安装、断电恢复、真实浏览器／SMB 与完整离线包闭包仍待验证；本片保留已恢复的普通注释，未修改真实主机。
 
+## 本轮文件数据库测试显式导入
+
+- CI #1042 的 core 与 workspace 在文件数据库单测三处报 E0425：生产连接重构后，测试通过 super 通配导入依赖的 block_on_sqlite_connection 不再位于父模块。测试显式导入 platform_io::sqlite 已公开的函数，保留最新 Connection/Executor 导入、三处原调用及全部断言。
+- 单行代码补丁与 rustfmt 检查通过；未本地编译或运行 Rust 测试，实际修复由后续准确提交的全量 CI 验证。生产路径、连接关闭和错误传播不改。
+
 ## 本轮服务启动隔离脚本路径清单
 
 - CI #1037 的 846 项 Python 回归仅静态路径清单失败：service_startup 新增的真实 manifest-relative service_namespace.py 引用尚未登记。本片在 reviewed inventory 精确增加该文件引用，并将固定计数 11 改为 12、补齐来源集合；保留逐字段完整比较和目标存在性检查。

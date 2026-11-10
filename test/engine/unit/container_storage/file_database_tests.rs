@@ -2,6 +2,7 @@
 //! separately exercised after the shared held-resource installer is integrated.
 use super::*;
 use crate::*;
+use platform_io::sqlite::block_on_sqlite_connection;
 use sqlite_access::{Connection, Executor};
 use std::{
     collections::{BTreeMap, BTreeSet},
