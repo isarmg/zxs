@@ -109,7 +109,7 @@ fn in_scope(entry: &Entry, root: &Entry) -> bool {
             && namespace::is_descendant(entry.lookup_key(), root.lookup_key()))
 }
 
-fn target_scope(state: &State, request: &ObjectMoveRequest, current: &[Entry]) -> Result<MoveTarget> {
+fn target_scope(state: &State, request: &ObjectMoveRequest, source: &Entry, current: &[Entry]) -> Result<MoveTarget> {
     let Some(id) = request.target_repository_id.as_ref() else {
         if state.repositories.values().any(|repository| {
             repository.file_manager_root && repository.primary_slot_id == request.target_slot_id
@@ -136,16 +136,36 @@ fn target_scope(state: &State, request: &ObjectMoveRequest, current: &[Entry]) -
         return Err(Error::new(ErrorCode::NameCollision,
             "move destination is reserved by a deleted object; restore or choose another name"));
     }
-    let displaced = tree.get_key(request.target_path.key()).filter(|entry| {
-        request.target_repository_id.as_ref() != Some(&request.source_repository_id)
-            || entry.entry_id != request.source_entry_id.as_str()
-    });
-    match (request.replace, request.target_entry_id.as_ref(), displaced) {
-        (_, None, None) => {}
-        (true, Some(expected), Some(actual)) if expected.as_str() == actual.entry_id => {}
-        (false, _, Some(_)) => return Err(Error::new(ErrorCode::NameCollision,
-            "move destination exists without replacement intent")),
-        _ => return Err(changed()),
+    let occupied = tree.get_key(request.target_path.key());
+    let same_source = occupied.is_some_and(|entry| repository.repository_id == request.source_repository_id.as_str()
+        && entry.entry_id == source.entry_id);
+    let displaced = if same_source {
+        // A case-only rename names the same object, even if the transport sent
+        // its captured target identity. It must not delete its own history.
+        if request.target_entry_id.as_ref().is_some_and(|id| id.as_str() != source.entry_id) {
+            return Err(changed());
+        }
+        None
+    } else {
+        match (request.replace, request.target_entry_id.as_ref(), occupied) {
+            (_, None, None) => {}
+            (true, Some(expected), Some(actual)) if expected.as_str() == actual.entry_id => {}
+            (false, _, Some(_)) => return Err(Error::new(ErrorCode::NameCollision,
+                "move destination exists without replacement intent")),
+            _ => return Err(changed()),
+        }
+        occupied
+    };
+    if let Some(actual) = displaced {
+        if actual.kind != source.kind {
+            return Err(Error::new(ErrorCode::InvalidMove,
+                "replacement requires the same file or directory kind"));
+        }
+        if actual.kind == NamespaceEntryKind::Directory && current.iter().any(|entry|
+            namespace::is_descendant(entry.lookup_key(), actual.lookup_key())) {
+            return Err(Error::new(ErrorCode::DirectoryNotEmpty,
+                "replacement requires an empty directory, including retained deleted children"));
+        }
     }
     let parent_key = request.target_path.key().rsplit_once('/').map(|(parent, _)| parent);
     if parent_key.is_some_and(|key| {
@@ -328,8 +348,10 @@ fn capture(state: &State, request: &ObjectMoveRequest, basis: &NamespaceBasis, m
     request.require_target_intent()?;
     let source_repository = state.repositories.get(request.source_repository_id.as_str())
         .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "move source repository missing"))?;
-    let target = target_scope(state, request, &basis.target_entries)?;
     let entries = current_entries(state, request, &basis.source_entries)?;
+    let source = entries.iter().find(|entry| entry.source.entry_id == request.source_entry_id.as_str())
+        .expect("invariant: captured move includes its source identity");
+    let target = target_scope(state, request, &source.source, &basis.target_entries)?;
     let target_entries = arrival_entries(state, request, &target, &entries, maximum)?;
     let directories = directory_members(state, &entries);
     let files = file_members(state, &entries, &directories);

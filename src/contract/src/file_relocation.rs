@@ -54,8 +54,11 @@ fn required_file<'de, D: Deserializer<'de>>(
 
 impl ObjectMoveRequest {
     pub fn require_target_intent(&self) -> crate::Result<()> {
+        let same_object = self.target_repository_id.as_ref() == Some(&self.source_repository_id)
+            && self.target_entry_id.as_ref() == Some(&self.source_entry_id)
+            && self.target_path.key() == self.source_path.key();
         if self.target_slot_id.is_empty()
-            || (!self.replace && self.target_entry_id.is_some())
+            || (!self.replace && self.target_entry_id.is_some() && !same_object)
             || (self.target_repository_id.is_none() && self.target_entry_id.is_some())
         {
             return Err(crate::Error::new(
