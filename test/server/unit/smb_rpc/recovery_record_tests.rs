@@ -83,7 +83,7 @@ fn successful_flush_and_write_through_persist_each_new_generation() {
                 write_through,
             )
             .unwrap();
-        let file = File::from(descriptor.unwrap());
+        let file = File::from(descriptor);
         let source = writer(&client, opened.handle).source.clone();
         let first = writer(&client, opened.handle).operation_id;
         let start = persist::replacements();
@@ -134,7 +134,7 @@ fn create_and_truncate_reuse_open_record_but_detach_refreshes_retained_state() {
                 false,
             )
             .unwrap();
-        let file = File::from(descriptor.unwrap());
+        let file = File::from(descriptor);
         let source = writer(&client, opened.handle).source.clone();
         let operation = writer(&client, opened.handle).operation_id;
         client

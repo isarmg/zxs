@@ -41,10 +41,7 @@ impl Session {
             .backend
             .lookup_current(&self.identity, &self.branch, path)
     }
-    pub(super) fn dispatch(
-        &mut self,
-        request: Request,
-    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
+    pub(super) fn dispatch(&mut self, request: Request) -> Result<Reply, DispatchError> {
         let request = request
             .parse_operation_id()
             .map_err(|error| DispatchError {
@@ -57,7 +54,7 @@ impl Session {
     pub(super) fn dispatch_admitted(
         &mut self,
         request: Request<OperationId>,
-    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
+    ) -> Result<Reply, DispatchError> {
         let is_namespace = matches!(&request, Request::Namespace { .. });
         let dirty_handle = match &request {
             Request::Dirty { handle } => Some(*handle),
@@ -99,10 +96,7 @@ impl Session {
         })
     }
 
-    fn dispatch_request(
-        &mut self,
-        request: Request<OperationId>,
-    ) -> Result<(Reply, Option<OwnedFd>), ApiError> {
+    fn dispatch_request(&mut self, request: Request<OperationId>) -> Result<Reply, ApiError> {
         let value = match request {
             Request::Hello { .. } | Request::HelloDefault { .. } => {
                 return Err(ApiError::invalid("hello is allowed only once"));
@@ -117,21 +111,22 @@ impl Session {
             } => {
                 return self
                     .open(path, writable, create, truncate, exclusive, write_through)
-                    .map(|(value, descriptor)| (Reply::Open(value), descriptor));
+                    .map(|(metadata, descriptor)| Reply::Open {
+                        metadata,
+                        descriptor,
+                    });
             }
             Request::AuthorizeRead { handle } => {
                 return self
                     .handle_metadata(self.authorize_read(handle)?)
-                    .map(|metadata| (Reply::Metadata(metadata), None));
+                    .map(Reply::Metadata);
             }
             Request::Read {
                 handle,
                 offset,
                 length,
             } => {
-                return self
-                    .read(handle, offset, length)
-                    .map(|bytes| (Reply::Read(bytes), None));
+                return self.read(handle, offset, length).map(Reply::Read);
             }
             Request::PrepareWrite { handle, end, bytes } => {
                 self.prepare_write(handle, end, bytes)?
@@ -142,12 +137,10 @@ impl Session {
             Request::Detach { handle } => self.detach(handle)?,
             Request::Abort { handle } => self.close(handle, true)?,
             Request::Stat { path } => {
-                return self.stat(&path).map(|stat| (Reply::Stat(stat), None));
+                return self.stat(&path).map(Reply::Stat);
             }
             Request::ReadDirectory { handle, restart } => {
-                return self
-                    .read_directory(handle, restart)
-                    .map(|page| (Reply::Directory(page), None));
+                return self.read_directory(handle, restart).map(Reply::Directory);
             }
             Request::Namespace {
                 kind,
@@ -157,6 +150,6 @@ impl Session {
                 operation_id,
             } => self.namespace(kind, path, destination, replace, operation_id)?,
         };
-        Ok((Reply::Json(value), None))
+        Ok(Reply::Json(value))
     }
 }

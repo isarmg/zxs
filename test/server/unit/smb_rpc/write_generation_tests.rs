@@ -27,7 +27,7 @@ fn call(session: &mut Session, sent: &mut Vec<Sent>, request: VfsRequest) -> io:
     sent.push(kind);
     session
         .dispatch(request)
-        .map(|(value, _)| json_reply(value))
+        .map(json_reply)
         .map_err(|error| io::Error::other(error.error))
 }
 
@@ -55,7 +55,7 @@ impl Vfs {
         let opened: OpenResult = result;
         Self {
             handle: opened.handle,
-            file: File::from(descriptor.unwrap()),
+            file: File::from(descriptor),
             sequence: WriteSequence::new(write_through),
             sent: Vec::new(),
         }

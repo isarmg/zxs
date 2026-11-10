@@ -44,7 +44,7 @@ impl DefaultShare {
         &mut self,
         location: Location,
         id: u64,
-    ) -> Result<(OpenResult, Option<OwnedFd>, RoutedHandle), ApiError> {
+    ) -> Result<(OpenResult, OwnedFd, RoutedHandle), ApiError> {
         let (entry_id, path, scope, pending, next_cursor, exhausted, namespace) = match location {
             Location::Root => {
                 let topology = self.shared.backend.topology_snapshot(&self.identity)?;
@@ -116,7 +116,7 @@ impl DefaultShare {
         };
         Ok((
             opened,
-            Some(descriptor),
+            descriptor,
             RoutedHandle::Directory(VirtualDirectory {
                 scope,
                 pending,
@@ -215,7 +215,7 @@ impl DefaultShare {
         &mut self,
         id: u64,
         request: Request<OperationId>,
-    ) -> Result<(Reply, Option<OwnedFd>), ApiError> {
+    ) -> Result<Reply, ApiError> {
         let account = self.shared.account.clone();
         let binding = account.read()?;
         binding.require_generation(self.account_generation)?;
@@ -224,7 +224,7 @@ impl DefaultShare {
             Request::Close { .. } | Request::Abort { .. } | Request::Detach { .. }
         ) {
             self.handles.remove(&id);
-            return Ok((Reply::Json(json!({"closed":true})), None));
+            return Ok(Reply::Json(json!({"closed":true})));
         }
         let topology = self.shared.backend.topology_snapshot(&self.identity)?;
         let RoutedHandle::Directory(directory) = self
@@ -256,21 +256,18 @@ impl DefaultShare {
         match request {
             Request::Flush { .. } => {
                 directory._file.sync_all().map_err(ApiError::io)?;
-                Ok((Reply::Json(json!({"saved":true,"changed":false})), None))
+                Ok(Reply::Json(json!({"saved":true,"changed":false})))
             }
-            Request::AuthorizeRead { .. } => Ok((
-                Reply::Metadata(AuthorizedMetadata {
-                    mtime: FileMtime::NotFile {},
-                }),
-                None,
-            )),
+            Request::AuthorizeRead { .. } => Ok(Reply::Metadata(AuthorizedMetadata {
+                mtime: FileMtime::NotFile {},
+            })),
             Request::ReadDirectory { restart, .. } => {
                 let scope = directory.scope.clone();
                 let page = match scope {
                     VirtualScope::Root { .. } => self.read_root_page(id, restart, topology)?,
                     VirtualScope::Disk { slot, .. } => self.read_disk_page(id, &slot, restart)?,
                 };
-                Ok((Reply::Directory(page), None))
+                Ok(Reply::Directory(page))
             }
             _ => Err(directory_only()),
         }

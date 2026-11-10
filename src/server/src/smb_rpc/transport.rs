@@ -6,10 +6,7 @@ enum ConnectionSession {
     Default(default_share::DefaultShare),
 }
 impl ConnectionSession {
-    fn dispatch(
-        &mut self,
-        request: Request,
-    ) -> Result<(Reply, Option<OwnedFd>), session::DispatchError> {
+    fn dispatch(&mut self, request: Request) -> Result<Reply, session::DispatchError> {
         match self {
             Self::Repository(session) => session.dispatch(request),
             Self::Default(session) => session.dispatch(request),
@@ -201,7 +198,7 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
             _ => None,
         };
         match session.dispatch(request) {
-            Ok((result, fd)) => send_success(&mut stream, result, fd, operation_id)?,
+            Ok(result) => send_success(&mut stream, result, operation_id)?,
             // Repository binding errors remain ordinary business errors so
             // callers can finish close/recovery exchanges. Account selection
             // separately shuts down registered connections and fences every RPC.
@@ -215,7 +212,6 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
 fn send_success(
     stream: &mut FrameStream,
     result: Reply,
-    descriptor: Option<OwnedFd>,
     requested_operation: Option<String>,
 ) -> io::Result<()> {
     let operation_id = match &result {
@@ -223,14 +219,14 @@ fn send_success(
             .get("operation_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        Reply::Open(_)
+        Reply::Open { .. }
         | Reply::Stat(_)
         | Reply::Metadata(_)
         | Reply::Directory(_)
         | Reply::Read(_) => None,
     }
     .or(requested_operation);
-    let response = ResponsePayload::Ok { result };
+    let response = ResponsePayload::Ok { result: &result };
     let payload = json_codec::to_vec(&response).map_err(io::Error::other)?;
     if payload.len() > smb_protocol::protocol::MAX_FRAME_BYTES {
         drop(payload);
@@ -241,7 +237,15 @@ fn send_success(
             operation_id,
         }, None);
     }
-    stream.send_serialized(&payload, descriptor.as_ref().map(AsFd::as_fd))
+    let descriptor = match &result {
+        Reply::Open { descriptor, .. } => Some(descriptor.as_fd()),
+        Reply::Json(_)
+        | Reply::Stat(_)
+        | Reply::Metadata(_)
+        | Reply::Directory(_)
+        | Reply::Read(_) => None,
+    };
+    stream.send_serialized(&payload, descriptor)
 }
 
 fn response_error(error: ApiError, operation_id: Option<String>) -> Response {

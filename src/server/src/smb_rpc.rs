@@ -54,7 +54,10 @@ mod tests;
 #[derive(Debug)]
 enum Reply {
     Json(Value),
-    Open(OpenResult),
+    Open {
+        metadata: OpenResult,
+        descriptor: OwnedFd,
+    },
     Stat(StatResult),
     Metadata(AuthorizedMetadata),
     Directory(DirectoryPage),
@@ -68,7 +71,7 @@ impl Serialize for Reply {
     ) -> Result<S::Ok, S::Error> {
         match self {
             Self::Json(value) => value.serialize(serializer),
-            Self::Open(value) => value.serialize(serializer),
+            Self::Open { metadata, .. } => metadata.serialize(serializer),
             Self::Stat(value) => value.serialize(serializer),
             Self::Metadata(value) => value.serialize(serializer),
             Self::Directory(value) => value.serialize(serializer),

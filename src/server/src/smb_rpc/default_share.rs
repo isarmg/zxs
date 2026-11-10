@@ -217,10 +217,7 @@ impl DefaultShare {
         Ok(key)
     }
 
-    pub(super) fn dispatch(
-        &mut self,
-        request: Request,
-    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
+    pub(super) fn dispatch(&mut self, request: Request) -> Result<Reply, DispatchError> {
         let request = request
             .parse_operation_id()
             .map_err(|error| failure(ApiError::invalid_source(error), None))?;
@@ -268,7 +265,7 @@ impl DefaultShare {
         truncate: bool,
         exclusive: bool,
         write_through: bool,
-    ) -> Result<(Reply, Option<OwnedFd>), ApiError> {
+    ) -> Result<Reply, ApiError> {
         let account = self.shared.account.clone();
         let binding = account.read()?;
         binding.require_generation(self.account_generation)?;
@@ -340,10 +337,13 @@ impl DefaultShare {
         };
         opened.handle = id;
         self.handles.insert(id, route);
-        Ok((Reply::Open(opened), descriptor))
+        Ok(Reply::Open {
+            metadata: opened,
+            descriptor,
+        })
     }
 
-    fn stat(&mut self, path: &str) -> Result<(Reply, Option<OwnedFd>), ApiError> {
+    fn stat(&mut self, path: &str) -> Result<Reply, ApiError> {
         let account = self.shared.account.clone();
         let binding = account.read()?;
         binding.require_generation(self.account_generation)?;
@@ -379,20 +379,17 @@ impl DefaultShare {
                         .expect("invariant: prefix contains a slot")
                         .into();
                 }
-                return Ok((Reply::Stat(result), None));
+                return Ok(Reply::Stat(result));
             }
         };
-        Ok((
-            Reply::Stat(StatResult {
-                entry_id,
-                kind: storage_contract::NamespaceEntryKind::Directory,
-                path: canonical_path,
-                name,
-                size: 0,
-                mtime: FileMtime::NotFile {},
-            }),
-            None,
-        ))
+        Ok(Reply::Stat(StatResult {
+            entry_id,
+            kind: storage_contract::NamespaceEntryKind::Directory,
+            path: canonical_path,
+            name,
+            size: 0,
+            mtime: FileMtime::NotFile {},
+        }))
     }
 
     fn namespace(
@@ -402,7 +399,7 @@ impl DefaultShare {
         destination: Option<String>,
         replace: bool,
         operation_id: OperationId,
-    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
+    ) -> Result<Reply, DispatchError> {
         (|| {
             let account = self.shared.account.clone();
             let binding = account.read()?;
@@ -430,7 +427,7 @@ impl DefaultShare {
                     operation_id,
                 )?
             {
-                return Ok((Reply::Json(reply), None));
+                return Ok(Reply::Json(reply));
             }
             let admission = super::namespace::NamespaceAdmission::acquire(
                 &self.shared,
@@ -446,7 +443,7 @@ impl DefaultShare {
             // Root namespaces cannot be renamed/deleted through the contents API.
             if let Some(path) = destination {
                 let reply = self.move_object(source, &path, admission, replace)?;
-                return Ok((Reply::Json(reply), None));
+                return Ok(Reply::Json(reply));
             }
             let SmbRelativePath::Entry(path) = source.relative_path else {
                 return Err(ApiError::unsupported());
@@ -458,7 +455,7 @@ impl DefaultShare {
                 .get_mut(&key)
                 .expect("invariant: selected session was inserted")
                 .namespace_admitted(input, admission)?;
-            Ok((Reply::Json(result), None))
+            Ok(Reply::Json(result))
         })()
         .map_err(|mut error| {
             // Namespace requests never permit automatic replay, including
@@ -468,10 +465,7 @@ impl DefaultShare {
         })
     }
 
-    fn handle(
-        &mut self,
-        mut request: Request<OperationId>,
-    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
+    fn handle(&mut self, mut request: Request<OperationId>) -> Result<Reply, DispatchError> {
         let handle = match &mut request {
             Request::AuthorizeRead { handle }
             | Request::Read { handle, .. }

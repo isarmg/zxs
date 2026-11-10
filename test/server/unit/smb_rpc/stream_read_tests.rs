@@ -289,14 +289,13 @@ fn dispatched_read_retains_the_verified_slice_after_cache_release() {
     let (_temp, shared, _, branch) = fixture();
     let mut active = session(shared, &branch);
     let (opened, _placeholder) = open_file(&mut active, false);
-    let (reply, descriptor) = active
+    let reply = active
         .dispatch(Request::Read {
             handle: opened.handle,
             offset: 1,
             length: 2,
         })
         .unwrap();
-    assert!(descriptor.is_none());
     let Reply::Read(bytes) = reply else {
         panic!("read dispatch built a JSON value instead of retaining verified bytes");
     };

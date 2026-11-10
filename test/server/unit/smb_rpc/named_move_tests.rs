@@ -41,7 +41,7 @@ fn named_move_retries_the_exact_native_intent_after_a_lost_publication_reply() {
     );
     assert_eq!(fs::read(&record).unwrap(), bytes);
     assert_eq!(backend.move_requests.lock().unwrap().len(), 1);
-    let (reply, _) = client.dispatch(rename(operation, false)).unwrap();
+    let reply = client.dispatch(rename(operation, false)).unwrap();
     let reply = json_reply(reply);
     assert_eq!(reply["operation_kind"], OBJECT_MOVE_KIND);
     assert_eq!(reply["commit_state"], "PUBLISHED");

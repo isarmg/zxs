@@ -11,7 +11,7 @@ fn first_save(
     let (opened, descriptor) = client
         .open(path.into(), true, create, false, false, false)
         .unwrap();
-    let file = File::from(descriptor.unwrap());
+    let file = File::from(descriptor);
     // A genuinely unpublished new path has no captured file context yet.
     client
         .dispatch(Request::PrepareWrite {

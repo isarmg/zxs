@@ -38,7 +38,7 @@ impl Session {
         truncate: bool,
         exclusive: bool,
         write_through: bool,
-    ) -> Result<(OpenResult, Option<OwnedFd>), ApiError> {
+    ) -> Result<(OpenResult, OwnedFd), ApiError> {
         let options = OpenOptions::parse(writable, create, truncate, exclusive, write_through)?;
         let path = if path.is_empty() {
             SmbRelativePath::Root
@@ -53,7 +53,7 @@ impl Session {
         &mut self,
         path: SmbRelativePath,
         options: OpenOptions,
-    ) -> Result<(OpenResult, Option<OwnedFd>), ApiError> {
+    ) -> Result<(OpenResult, OwnedFd), ApiError> {
         let OpenOptions {
             writable,
             create,
@@ -164,7 +164,7 @@ impl Session {
                 workspace_id: None,
                 mtime: smb_protocol::protocol::FileMtime::NotFile {},
             };
-            return Ok((result, Some(fd)));
+            return Ok((result, fd));
         }
         let path = path.expect("invariant: a file handle has an admitted entry path");
         let mtime = match version.as_deref() {
@@ -358,7 +358,7 @@ impl Session {
             workspace_id,
             mtime,
         };
-        Ok((result, Some(fd)))
+        Ok((result, fd))
     }
     pub(super) fn authorize_read(&self, handle: u64) -> Result<&Handle, ApiError> {
         let opened = self.handles.get(&handle).ok_or_else(missing_handle)?;

@@ -180,9 +180,6 @@ fn oversized_success_is_a_business_error_and_the_connection_remains_usable() {
     let worker = std::thread::spawn(move || {
         let mut stream = FrameStream::new(server).unwrap();
         for operation_id in [None, Some("result-operation")] {
-            let (descriptor, mut peer) = UnixStream::pair().unwrap();
-            peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .unwrap();
             let mut result = json!({"large":"x".repeat(smb_protocol::protocol::MAX_FRAME_BYTES)});
             if let Some(operation_id) = operation_id {
                 result["operation_id"] = operation_id.into();
@@ -190,13 +187,11 @@ fn oversized_success_is_a_business_error_and_the_connection_remains_usable() {
             send_success(
                 &mut stream,
                 Reply::Json(result),
-                Some(descriptor.into()),
                 Some("original-operation".into()),
             )
             .unwrap();
-            assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
         }
-        send_success(&mut stream, Reply::Json(json!({"alive":true})), None, None).unwrap();
+        send_success(&mut stream, Reply::Json(json!({"alive":true})), None).unwrap();
     });
     let mut stream = FrameStream::new(client).unwrap();
     for expected_operation in ["original-operation", "result-operation"] {
@@ -379,4 +374,72 @@ fn closed_session_admission_is_not_reported_as_capacity_exhaustion() {
     let (_root, shared, _backend, _branch) = super::super::tests::fixture();
     shared.authenticated_sessions.close();
     let _permit = acquire_session_permit(&shared).unwrap();
+}
+
+#[test]
+fn open_reply_owns_its_descriptor_through_delivery_size_rejection_and_send_failure() {
+    use std::os::unix::net::UnixStream;
+    for (oversized, disconnected) in [(false, false), (true, false), (false, true)] {
+        let (client, server) = UnixStream::pair().unwrap();
+        let mut stream = FrameStream::new(server).unwrap();
+        let (descriptor, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let metadata = OpenResult {
+            entry_id: "directory".into(),
+            kind: storage_contract::NamespaceEntryKind::Directory,
+            path: if oversized {
+                "x".repeat(smb_protocol::protocol::MAX_FRAME_BYTES)
+            } else {
+                "directory".into()
+            },
+            handle: 1,
+            size: 0,
+            max_file_bytes: 4096,
+            version_id: None,
+            workspace_id: None,
+            mtime: smb_protocol::protocol::FileMtime::NotFile {},
+        };
+        let expected = json_codec::to_value(&metadata).unwrap();
+        let reply = Reply::Open {
+            metadata,
+            descriptor: descriptor.into(),
+        };
+        assert_eq!(json_codec::to_value(&reply).unwrap(), expected);
+        if disconnected {
+            drop(client);
+            assert!(send_success(&mut stream, reply, None).is_err());
+        } else {
+            send_success(&mut stream, reply, None).unwrap();
+            let mut client = FrameStream::new(client).unwrap();
+            let (response, received) = client.receive::<Response>().unwrap();
+            if oversized {
+                assert!(received.is_none());
+                assert!(matches!(
+                    response,
+                    Response::Error {
+                        code: storage_contract::ErrorCode::ResponseTooLarge,
+                        operation_id: None,
+                        retryable: false,
+                        ..
+                    }
+                ));
+                send_success(&mut stream, Reply::Json(json!({"alive": true})), None).unwrap();
+                let (response, descriptor) = client.receive::<Response>().unwrap();
+                assert!(descriptor.is_none());
+                assert!(matches!(response, Response::Ok { result } if result["alive"] == true));
+            } else {
+                assert!(matches!(response, Response::Ok { result } if result == expected));
+                let mut received = UnixStream::from(received.unwrap());
+                received.write_all(b"owned").unwrap();
+                let mut bytes = [0u8; 5];
+                peer.read_exact(&mut bytes).unwrap();
+                assert_eq!(&bytes, b"owned");
+                drop(received);
+            }
+        }
+        // The reply retained its only local descriptor until send finished.
+        // Once any transferred copy is gone, no owner may keep this peer alive.
+        assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
+    }
 }

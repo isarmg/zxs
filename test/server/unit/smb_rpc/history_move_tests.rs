@@ -215,10 +215,9 @@ fn default_move_passes_both_pinned_bindings_and_cleans_only_confirmed_intent() {
         CommitState::Published,
         "arrived.txt",
     )));
-    let (reply, descriptor) = share(&roots)
+    let reply = share(&roots)
         .dispatch(request(operation, "b/arrived.txt", false))
         .unwrap();
-    assert!(descriptor.is_none());
     let reply = json_reply(reply);
     assert_eq!(reply["operation_kind"], OBJECT_MOVE_KIND);
     let calls = roots.backend.move_requests.lock().unwrap();

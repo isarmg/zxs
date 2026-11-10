@@ -4,16 +4,14 @@ use smb_protocol::protocol::{
 };
 
 fn stat(active: &mut Session, path: &str) -> StatResult {
-    let (value, descriptor) = active
+    let value = active
         .dispatch(Request::Stat { path: path.into() })
         .unwrap();
-    assert!(descriptor.is_none());
     json_codec::from_value(json_reply(value)).unwrap()
 }
 
 fn handle_time(active: &mut Session, handle: u64) -> FileMtime {
-    let (value, descriptor) = active.dispatch(Request::AuthorizeRead { handle }).unwrap();
-    assert!(descriptor.is_none());
+    let value = active.dispatch(Request::AuthorizeRead { handle }).unwrap();
     json_codec::from_value::<AuthorizedMetadata>(json_reply(value))
         .unwrap()
         .mtime
@@ -27,10 +25,9 @@ fn directory(active: &mut Session) -> OpenResult {
 }
 
 fn page(active: &mut Session, handle: u64, restart: bool) -> DirectoryPage {
-    let (value, descriptor) = active
+    let value = active
         .dispatch(Request::ReadDirectory { handle, restart })
         .unwrap();
-    assert!(descriptor.is_none());
     json_codec::from_value(json_reply(value)).unwrap()
 }
 
@@ -106,7 +103,7 @@ fn mtime_new_work_is_unpublished_until_flush_and_truncate_keeps_the_saved_baseli
         handle_time(&mut active, fresh.handle),
         FileMtime::Unpublished {}
     );
-    File::from(file.unwrap()).write_all_at(b"first", 0).unwrap();
+    File::from(file).write_all_at(b"first", 0).unwrap();
     active.dirty(fresh.handle).unwrap();
     assert_eq!(
         handle_time(&mut active, fresh.handle),
@@ -210,7 +207,7 @@ fn mtime_write_through_dirty_uses_the_confirmed_publication_even_if_later_projec
         .open("report.txt".into(), true, false, false, false, true)
         .unwrap();
     let opened: OpenResult = value;
-    let file = File::from(descriptor.unwrap());
+    let file = File::from(descriptor);
     file.write_all_at(b"new", 0).unwrap();
     active.dirty(opened.handle).unwrap();
     let first_head = match &active.handles[&opened.handle] {
@@ -349,7 +346,7 @@ fn mtime_parsing_rejects_noncanonical_or_out_of_range_saved_timestamps() {
 fn metadata_dispatch_keeps_typed_payloads_until_wire_serialization() {
     let (_temp, shared, _, branch) = fixture();
     let mut active = session(shared, &branch);
-    let (reply, descriptor) = active
+    let reply = active
         .dispatch(Request::Open {
             path: "report.txt".into(),
             writable: false,
@@ -359,22 +356,23 @@ fn metadata_dispatch_keeps_typed_payloads_until_wire_serialization() {
             write_through: false,
         })
         .unwrap();
-    assert!(descriptor.is_some());
-    let Reply::Open(opened) = reply else {
+    let Reply::Open {
+        metadata: opened,
+        descriptor,
+    } = reply
+    else {
         panic!("open lost its typed payload")
     };
+    let descriptor = File::from(descriptor);
+    assert!(descriptor.metadata().is_ok());
     let handle = opened.handle;
     let replies = [
         active
             .dispatch(Request::Stat {
                 path: "report.txt".into(),
             })
-            .unwrap()
-            .0,
-        active
-            .dispatch(Request::AuthorizeRead { handle })
-            .unwrap()
-            .0,
+            .unwrap(),
+        active.dispatch(Request::AuthorizeRead { handle }).unwrap(),
     ];
     assert!(matches!(&replies[0], Reply::Stat(_)));
     assert!(matches!(&replies[1], Reply::Metadata(_)));
@@ -388,7 +386,7 @@ fn metadata_dispatch_keeps_typed_payloads_until_wire_serialization() {
     }
     active.close(handle, false).unwrap();
     let root = directory(&mut active);
-    let (page, _) = active
+    let page = active
         .dispatch(Request::ReadDirectory {
             handle: root.handle,
             restart: false,

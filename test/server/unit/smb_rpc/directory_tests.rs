@@ -138,7 +138,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
         .unwrap();
     // The open descriptor keeps its snapshot, even before its first read.
     // Rewind cannot follow the replacement at the original alias path.
-    let (old, _) = session
+    let old = session
         .dispatch(Request::ReadDirectory {
             handle: opened.handle,
             restart: false,

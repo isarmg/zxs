@@ -1070,7 +1070,7 @@ fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
     let (result, fd) = session
         .open("report.txt".into(), writable, false, false, false, false)
         .unwrap();
-    (result, File::from(fd.unwrap()))
+    (result, File::from(fd))
 }
 
 fn json_reply(reply: Reply) -> Value {
@@ -1302,7 +1302,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         let (opened, fd) = client
             .open(path.into(), true, true, false, false, false)
             .unwrap();
-        File::from(fd.unwrap()).write_all_at(bytes, 0).unwrap();
+        File::from(fd).write_all_at(bytes, 0).unwrap();
         client.dirty(opened.handle).unwrap();
         client.close(opened.handle, false).unwrap();
     }
@@ -1355,8 +1355,8 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let (opened, fd) = client
         .open("a/report.txt".into(), false, false, false, false, false)
         .unwrap();
-    let _reader = File::from(fd.unwrap());
-    let (reply, _) = client
+    let _reader = File::from(fd);
+    let reply = client
         .dispatch(Request::Namespace {
             operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
@@ -1399,7 +1399,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let (opened, fd) = client
         .open("b/report.txt".into(), true, false, false, false, false)
         .unwrap();
-    File::from(fd.unwrap()).write_all_at(b"edited", 0).unwrap();
+    File::from(fd).write_all_at(b"edited", 0).unwrap();
     client.dirty(opened.handle).unwrap();
     client.close(opened.handle, false).unwrap();
     assert_eq!(
@@ -1422,14 +1422,12 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
     let (opened, file) = original
         .open("future/new.txt".into(), true, true, false, false, false)
         .unwrap();
-    let file = File::from(file.unwrap());
+    let file = File::from(file);
     let mut creator = session(shared.clone(), &branch);
     let (other, other_fd) = creator
         .open("future/other.txt".into(), true, true, false, false, false)
         .unwrap();
-    File::from(other_fd.unwrap())
-        .write_all_at(b"other", 0)
-        .unwrap();
+    File::from(other_fd).write_all_at(b"other", 0).unwrap();
     creator.dirty(other.handle).unwrap();
     creator.close(other.handle, false).unwrap();
     checkpoint_directory_fixture(&backend, &repository(&shared), "future");
@@ -1471,7 +1469,7 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     let (opened, file) = creator
         .open("nested/other.txt".into(), true, true, false, false, false)
         .unwrap();
-    File::from(file.unwrap()).write_all_at(b"other", 0).unwrap();
+    File::from(file).write_all_at(b"other", 0).unwrap();
     creator.dirty(opened.handle).unwrap();
     creator.close(opened.handle, false).unwrap();
     let (repository, _main, _draft) = directory_fixture(&shared, &backend);
@@ -1841,7 +1839,7 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
         .open("other.txt".into(), true, true, false, false, false)
         .unwrap();
     let second: OpenResult = result;
-    let second_file = File::from(fd.unwrap());
+    let second_file = File::from(fd);
     first_file.write_all_at(b"one", 0).unwrap();
     one.dirty(first.handle).unwrap();
     second_file.write_all_at(b"two", 0).unwrap();
@@ -1998,7 +1996,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     let (opened, fd) = one
         .open("dir/file.txt".into(), true, true, false, false, false)
         .unwrap();
-    let file = File::from(fd.unwrap());
+    let file = File::from(fd);
     assert_eq!(
         two.dispatch(Request::Namespace {
             operation_id: new_id("op").unwrap(),
@@ -2079,7 +2077,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
             false,
         )
         .unwrap();
-    let file = File::from(fd.unwrap());
+    let file = File::from(fd);
     file.write_all_at(b"content", 0).unwrap();
     session.dirty(opened.handle).unwrap();
     session.close(opened.handle, false).unwrap();
@@ -2087,7 +2085,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
         let (opened, _) = session
             .open(path.into(), false, false, false, false, false)
             .unwrap();
-        let (listed, _) = session
+        let listed = session
             .dispatch(Request::ReadDirectory {
                 handle: opened.handle,
                 restart: false,
@@ -2949,7 +2947,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         panic!("expected writer")
     };
     assert_eq!(writer.path, "é.txt");
-    let file = File::from(fd.unwrap());
+    let file = File::from(fd);
     file.write_all_at(b"new", 0).unwrap();
     session.dirty(opened.handle).unwrap();
     session.flush(opened.handle).unwrap();
