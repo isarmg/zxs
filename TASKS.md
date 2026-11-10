@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`2c92f45a`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`2ff562f9`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Current 移动目录观察夹具
+
+- CI #1104（cb2483a6）的非空目标移动已成功，失败发生于后续 assert_visible 枚举历史 config.disks、读取已注销 D05 的目录。改按当前 registered_disks 检查每个登记盘的 catalog 与 history 精确发布序列，不要求退出盘重新加入当前视图。
+- Current 专项在移动前、发布后、冷重开后三次明确检查四个登记盘及 D05 不再登记，catalog／history 均返回 DiskUnavailable。非冲突目标文件、正文、源 D、原收据和冷重试断言保留。
+- 仅改一份根测试及本清单，生产注销围栏、发布顺序和退出盘不访问规则不变。固定 Rust 1.99 格式及严格补丁检查通过；未本地编译或执行 Rust 测试，真实回归待本提交 CI。
 
 ## 本轮 Engine 别名所有者夹具
 

@@ -65,7 +65,7 @@ fn assert_visible(
     assert!(
         matches!(engine.index_health(), IndexHealth::Ready { sequence } if sequence == engine.state().sequence)
     );
-    for disk in &engine.config().disks {
+    for disk in engine.registered_disks() {
         assert_eq!(
             engine
                 .disk_catalog_observation(&disk.slot_id)
@@ -347,6 +347,32 @@ fn native_move_rejects_a_name_collision_without_a_new_intent_or_source_deletion(
 #[test]
 fn native_move_keeps_noncolliding_target_files_in_an_activated_current_generation() {
     let mut fixture = Fixture::new(true);
+    let retired = fixture.engine.config().disks[4].slot_id.clone();
+    let assert_retired = |engine: &Engine| {
+        assert_eq!(engine.registered_disks().count(), 4);
+        assert!(
+            engine
+                .registered_disks()
+                .all(|disk| disk.slot_id != retired)
+        );
+        assert_eq!(
+            engine
+                .disk_catalog_observation(&retired)
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::DiskUnavailable
+        );
+        assert_eq!(
+            engine
+                .disk_history_observation(&retired)
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::DiskUnavailable
+        );
+    };
+    assert_retired(&fixture.engine);
     save(
         &mut fixture.engine,
         &fixture.target,
@@ -368,6 +394,7 @@ fn native_move_keeps_noncolliding_target_files_in_an_activated_current_generatio
         &old,
         operation,
     );
+    assert_retired(&fixture.engine);
     assert_eq!(
         entry(&fixture.engine, &fixture.target, "existing.txt"),
         existing
@@ -382,6 +409,7 @@ fn native_move_keeps_noncolliding_target_files_in_an_activated_current_generatio
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_visible(&engine, &source, &target, &old, operation);
+    assert_retired(&engine);
     assert_eq!(entry(&engine, &target, "existing.txt"), existing);
     assert_eq!(bytes(&engine, &existing.version_id), b"keep target");
     assert_eq!(
