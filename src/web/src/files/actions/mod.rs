@@ -14,7 +14,7 @@ pub(crate) use history::{
 
 pub(crate) use browse::{
     change_page, edit_search, go_directory, go_directory_details, go_root, load_disks,
-    load_entries, open_disk, open_preview_origin, preview_directory_branch,
+    load_entries, open_disk, open_disk_directory, open_preview_origin, preview_directory_branch,
     preview_directory_snapshot, refresh_directory, return_to_default, return_to_default_file,
     search, select_entry,
 };

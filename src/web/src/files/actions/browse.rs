@@ -76,9 +76,15 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
 }
 
 pub(crate) fn open_disk(state: RwSignal<State>, slot: String) {
+    open_disk_directory(state, slot, String::new());
+}
+
+/// Open a known disk-relative folder with one ordinary, current listing read.
+pub(crate) fn open_disk_directory(state: RwSignal<State>, slot: String, directory: String) {
     state.update(|s| {
         s.notices.leave();
         s.files.navigate(Navigation::Disk(slot));
+        s.files.directory = directory;
         s.change_page(crate::ui::Page::Files);
     });
     load_entries(state);
