@@ -53,4 +53,4 @@ Foundation 按主要职能组织在 `src/foundation/`。目录分类不等于 Ca
 - 分组后的重命名、整合、上游升级、源码裁剪及外置测试移动。
 - 共享来源、链式来源或固定平台/密码学证明所有者的生命周期变更。
 
-不得通过重算历史摘要、跳过验证或保留兼容目录继续执行。源码治理命令见[工具说明](../tools/rust-sources.md)，测试路径与未启用材料的边界见[测试布局](test-layout.md)，持续门禁见[Foundation CI](foundation-ci.md)。
+不得通过重算历史摘要、跳过验证或保留兼容目录继续执行。源码治理命令见[工具说明](../tools/rust-sources.md)，测试路径与未启用材料的边界见[测试布局](test-layout.md)，持续门禁见Foundation CI。

@@ -1,6 +1,6 @@
 # Futures：异步值、流与任务原语
 
-[组件目录](README.md) · [基础能力](../architecture/foundation-groups.md) · [来源清单](../THIRD_PARTY_RUST_SOURCES.md)
+组件目录 · [基础能力](../architecture/foundation-groups.md) · [来源清单](../THIRD_PARTY_RUST_SOURCES.md)
 
 ## 编译边界
 

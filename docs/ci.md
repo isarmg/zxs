@@ -13,7 +13,7 @@
 | `quality` | 自有 workspace 的格式与严格 Clippy；宿主机全部目标及 Web 的 WASM release 编译，所有本地依赖的 Rust warning/error 均失败；基础源码不自动格式化 |
 | `security` | 固定 cargo-audit 查询当前 RustSec 与 registry/yank 状态；独立扫描器锁、产品根锁和活动／已合并实现的原始身份均扫描，告警或扫描不完整失败；退役及已升级替换的旧身份单列历史记录 |
 | `workspace` | 服务端、核心、认证、平台、直接服务入口、离线辅助工具、HTTP 与 socket 测试；同 job 对准确 platform-io libtest 运行原子写屏障／故障子进程，拒绝零测试通过；另行串行运行真实大历史包用例 |
-| `phase-one-core` job | 独立执行一期 100 项业务回归、两项真实 mount namespace 准入回归及一项提案证明复用对抗回归；保持三个 Cargo 构建调用，要求十个当前产物和 103 项唯一完成记录，不等待 workspace 长测；必须组合相应提案复用源码，见[适用条件、子链预算与验证边界](validation/phase1-system-admission-ci-20261106.md) |
+| `phase-one-core` job | 独立执行一期 100 项业务回归、两项真实 mount namespace 准入回归及一项提案证明复用对抗回归；保持三个 Cargo 构建调用，要求十个当前产物和 103 项唯一完成记录，不等待 workspace 长测；必须组合相应提案复用源码，见适用条件、子链预算与验证边界 |
 | `foundation` | Linux amd64 UAPI、libc ABI、rustix 双后端 syscall、系统/socket/mio、停车锁、搜索/进程及随机数后端回归；ring 预生成/本地生成的库、集成与 CAVP 矩阵；密码哈希、真实 storage-client 消费者启用的 IDNA 全标量及数值/集合等限定 lib 测试；不是全部上游测试 |
 | `web` | Web 应用、公共 runtime 与 CSR 内核/宏的单元、集成及 Rustdoc 测试；过程宏通过仅开发依赖的真实消费者验证文档 |
 | `contracts` | 契约工具测试及全仓 schema、配置、文档链接检查 |
@@ -25,7 +25,7 @@
 
 `browser-smoke` 成功完成单个 ELF 的内嵌 Web 运行验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含 `zxs-VERSION-debian13-amd64` 主程序、`zxs-helper-VERSION-debian13-amd64` 独立辅助工具、`zxs-source-VERSION.tar.gz` 完整源码与收据归档，以及 `SHA256SUMS` 四文件集合（`VERSION` 为构建版本），供检查或部署演练；下载后仍须完整校验摘要。
 
-CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完整场景成功后，使用同一私有复制的最终 ELF 追加独立 `--foreign-review-only` 外来历史审核场景，不减少原场景或改变并发。第二次调用不带文件页截图参数，任何一次失败都阻止安装候选组装。开关仅接受 `0` 或 `1`，缺省为 `0`；Release 工作流未启用，仍保持原验收范围。审核场景的实际网络、可访问性与截图证据由 `foreign-review-browser-${{ github.sha }}` artifact 保留 7 天；未生成证据不表示通过。此接线尚未经过真实 Chrome 执行，脚本模型、原生夹具与静态检查不能替代浏览器结果；场景只审核计划，不执行迁入。详见 [浏览器验收工具](tools/browser-smoke.md)。
+CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完整场景成功后，使用同一私有复制的最终 ELF 追加独立 `--foreign-review-only` 外来历史审核场景，不减少原场景或改变并发。第二次调用不带文件页截图参数，任何一次失败都阻止安装候选组装。开关仅接受 `0` 或 `1`，缺省为 `0`；Release 工作流未启用，仍保持原验收范围。审核场景的实际网络、可访问性与截图证据由 `foreign-review-browser-${{ github.sha }}` artifact 保留 7 天；未生成证据不表示通过。此接线尚未经过真实 Chrome 执行，脚本模型、原生夹具与静态检查不能替代浏览器结果；场景只审核计划，不执行迁入。详见 浏览器验收工具。
 
 该候选只表示此 job 的打包、浏览器及组装检查通过，不代表同次 CI 的其他并行门禁已通过。它不会创建标签、GitHub Release 或公开发布；也不等同于 Release 工作流的 `workflow_dispatch` 演练，后者还通过版本工具验证并等待全部发布验证分片和固定 Samba SDK 检查，最终提供 `release-complete`。正式发布前仍须检查完整工作流结果及首发验收清单。
 
