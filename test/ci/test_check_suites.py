@@ -48,11 +48,12 @@ class SuiteCoverageTests(unittest.TestCase):
             SUITE_RECEIPT=str(self.receipt),
         )
 
-    def suite(self, name):
+    def suite(self, name, *, workspace_shard=""):
         self.receipt.unlink(missing_ok=True)
         subprocess.run(
             ["bash", str(self.root / ".github/scripts/check.sh"), name],
-            cwd="/tmp", env=self.environment, capture_output=True, text=True, check=True,
+            cwd="/tmp", env=dict(self.environment, ZXS_WORKSPACE_SHARD=workspace_shard),
+            capture_output=True, text=True, check=True,
         )
         return [json.loads(line) for line in self.receipt.read_text().splitlines()]
 
@@ -91,6 +92,23 @@ class SuiteCoverageTests(unittest.TestCase):
         ):
             expected.append({"tool": "cargo", "args": prefix + ["--features", features]})
         self.assertEqual(self.suite("smb-protocol"), expected)
+
+    def test_workspace_reference_recipe_ignores_enclosing_job_shard(self):
+        self.environment.pop("ZXS_WORKSPACE_SHARD", None)
+        expected = self.suite("workspace")
+        self.environment["ZXS_WORKSPACE_SHARD"] = "single"
+        self.assertEqual(self.suite("workspace"), expected)
+
+    def test_workspace_shards_dispatch_once_without_running_reference_recipe(self):
+        shards = tuple(f"tests-{index}" for index in range(8)) + (
+            "checks-docs", "io-0", "io-1", "io-2", "ignored",
+        )
+        for shard in shards:
+            with self.subTest(shard=shard):
+                self.assertEqual(self.suite("workspace", workspace_shard=shard), [{
+                    "tool": "python3",
+                    "args": [".github/scripts/check-workspace-shards.py", shard],
+                }])
 
     def test_workspace_checks_native_capabilities_before_product_tests(self):
         calls = self.suite("workspace")
