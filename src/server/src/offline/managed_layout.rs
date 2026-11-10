@@ -268,7 +268,7 @@ fn entries(root: &OpenAt2Root, allowed: &[&str]) -> Result<()> {
 pub(crate) fn first_storage_names(paths: &[String]) -> Result<Vec<name_policy::PortablePath>> {
     names(paths)?;
     Ok(storage_server::storage_directories::portable_root_names(
-        paths.iter().map(|path| Path::new(path)),
+        paths.iter().map(Path::new),
     )?)
 }
 pub(crate) fn names(paths: &[String]) -> Result<BTreeSet<String>> {
