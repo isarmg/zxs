@@ -579,8 +579,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         <section class="zxs-stack zxs-directory-staging" aria-label=t("目录仓库","Directory repository")>
             <h3 class="zxs-row">{t("类 Git 目录仓库","Git-like directory repository")}</h3>
             <p class="zxs-row">{t("文件保存立即持久化，不自动生成目录提交。未单独初始化的子目录属于最近的已初始化祖先；独立子仓库通过明确暂存的提交引用加入父级，父级绝不代替子仓库提交。普通浏览始终读取工作内容，历史需明确选择。","File saves are durable without creating directory commits. Uninitialized folders belong to their nearest initialized ancestor. Independent child repositories enter the parent through explicitly staged commit references; a parent never commits a child. Normal browsing reads working content; history must be selected explicitly.")}</p>
-            <button type="button" class="zxs-button" data-directory-git-refresh="" disabled=move ||model.with(|model|model.reading)||state.with(actions::pending)
-                on:click=move |_|load(state,model,target.get_untracked())>{t("刷新仓库状态","Refresh repository status")}</button>
             <Show when=move ||model.with(|model|model.reading)><p class="zxs-row" role="status">{t("正在读取仓库状态…","Reading repository status…")}</p></Show>
             {move ||model.with(|model|model.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
             {move ||model.with(|model|model.status.clone()).map(|status|view!{
