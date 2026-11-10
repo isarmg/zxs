@@ -205,7 +205,8 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             )}</p>
         </Show>
         {super::relocation::controls(state)}
-        <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("目录分支管理需要先手动初始化当前目录的独立仓库。","Initialize this directory as an independent repository before managing its branches.")}</p></Show>
+        {inline::first_folder_hint(state)}
+        <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.repository_id.is_empty()&&!s.files.directory_branches_supported)><p class="zxs-row">{t("目录分支管理需要先手动初始化当前目录的独立仓库。","Initialize this directory as an independent repository before managing its branches.")}</p></Show>
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
         {super::placement::view(state)}

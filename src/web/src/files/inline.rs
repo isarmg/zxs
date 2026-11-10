@@ -7,6 +7,28 @@ use web_interface::{html, i18n::t, prelude::*};
 // Branch labels and notes retain their metadata budget; namespace names use name-policy.
 pub(super) const MAX_TEXT_BYTES: usize = storage_contract::MAX_NOTE_BYTES;
 
+fn needs_first_folder(model: &super::model::Model) -> bool {
+    model.loaded
+        && !model.loading
+        && model.writable
+        && !model.slot.is_empty()
+        && model.directory.is_empty()
+        && model.repository_id.is_empty()
+        && model.query.is_empty()
+        && model.total_entries == 0
+}
+
+pub(super) fn first_folder_hint(state: RwSignal<State>) -> impl IntoView {
+    view! {
+        <Show when=move ||state.with(|state|needs_first_folder(&state.files))>
+            <p class="zxs-row" role="status" data-first-folder="">{t(
+                "先用“新建文件夹”创建第一个目录。创建确认后，可在当前目录详情或新文件夹详情中手动初始化独立仓库；建目录不会自动初始化或提交。",
+                "Use New folder to create the first folder. Once creation is confirmed, initialize an independent repository in the current folder's Details or the new folder's Details. Creating a folder does not initialize or commit a repository.",
+            )}</p>
+        </Show>
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum Target {
     CreateDirectory,

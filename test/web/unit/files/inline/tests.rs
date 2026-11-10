@@ -1,6 +1,83 @@
 use super::*;
 use crate::files::model::FileOperation;
 
+fn first_folder_model() -> super::super::model::Model {
+    super::super::model::Model {
+        slot: "P01".into(),
+        loaded: true,
+        writable: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn first_folder_guidance_requires_a_current_unfiltered_empty_primary_root() {
+    let current = first_folder_model();
+    assert!(needs_first_folder(&current));
+    for change in 0..8 {
+        let mut model = current.clone();
+        match change {
+            0 => model.loaded = false,
+            1 => model.loading = true,
+            2 => model.writable = false,
+            3 => model.slot.clear(),
+            4 => model.directory = "existing".into(),
+            5 => model.repository_id = "repo_00000000000000000000000000000001".into(),
+            6 => model.query = "no matches".into(),
+            7 => model.total_entries = 1,
+            _ => unreachable!(),
+        }
+        assert!(!needs_first_folder(&model), "change {change}");
+    }
+}
+
+#[test]
+fn first_creation_guidance_retires_only_after_the_refreshed_repository_context() {
+    let mut model = first_folder_model();
+    assert!(needs_first_folder(&model));
+    model.loading = true;
+    assert!(!needs_first_folder(&model));
+    model.loading = false;
+    model.repository_id = "repo_00000000000000000000000000000001".into();
+    model.total_entries = 1;
+    assert!(!needs_first_folder(&model));
+    assert!(!model.directory_branches_supported);
+    assert!(model.directory_branches.is_empty());
+
+    // An existing but empty repository still offers explicit initialization,
+    // rather than asking for a needless extra folder.
+    model.total_entries = 0;
+    assert!(!needs_first_folder(&model));
+}
+
+#[test]
+fn first_folder_hint_does_not_bypass_details_page_write_fences() {
+    let mut state = State {
+        authenticated: true,
+        page: crate::ui::Page::Details,
+        files: first_folder_model(),
+        ..Default::default()
+    };
+    state.management.storage = crate::management::Storage::Ready;
+    assert!(needs_first_folder(&state.files));
+    assert!(actions::write_allowed(&state));
+    for change in 0..4 {
+        let mut next = state.clone();
+        match change {
+            0 => next.files.mutation_pending = true,
+            1 => next
+                .files
+                .operations
+                .push(FileOperation::unknown("original")),
+            2 => next.management.storage = crate::management::Storage::RecoveryRequired,
+            3 => next.authenticated = false,
+            _ => unreachable!(),
+        }
+        assert!(!actions::write_allowed(&next), "change {change}");
+        assert!(next.files.repository_id.is_empty());
+    }
+}
+
 fn unobserved_draft(state: RwSignal<State>) -> Draft {
     Draft::unobserved_in(state, EditScope::Location)
 }

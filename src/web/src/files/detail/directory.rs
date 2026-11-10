@@ -76,6 +76,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <div class="zxs-file-toolbar zxs-flow">
                 <button class="zxs-button" data-zxs-directory-files="" disabled=move ||navigation_disabled.get()
                     on:click=move |_|crate::ui::navigate(state,crate::ui::Page::Files)>{t("查看本目录文件","View this folder’s files")}</button>
+                {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
                 <button class="zxs-button" data-directory-git-refresh="" disabled=move ||navigation_disabled.get()
                     on:click=move |_|actions::refresh_directory(state)>{t("刷新目录与仓库状态","Refresh folder and repository status")}</button>
                 <Show when=move ||state.with(|s|s.files.directory_preview.is_some())>
@@ -83,6 +84,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                         on:click=move |_|actions::open_preview_origin(state)>{t("返回原目录详情", "Return to source folder Details")}</button>
                 </Show>
             </div>
+            {inline::first_folder_hint(state)}
             <p class="zxs-row">{move ||state.with(|s|super::super::model::join_path(&s.files.slot,&s.files.directory))}</p>
             <div class="zxs-file-toolbar zxs-flow">
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
