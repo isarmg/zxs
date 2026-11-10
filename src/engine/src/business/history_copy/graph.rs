@@ -344,11 +344,11 @@ pub(in crate::business) fn project(
     if let Some(note) = previous.file_notes.get(&source.file) {
         next.file_notes.insert(file.clone(), note.clone());
     }
-    if let Some(origin) = previous.file_write_origins.get(&source.file) {
-        if let Some(mapped_origin) = ids.get(origin).filter(|id| id.starts_with("dbr_")) {
-            next.file_write_origins
-                .insert(file.clone(), mapped_origin.clone());
-        }
+    if let Some(origin) = previous.file_write_origins.get(&source.file)
+        && let Some(mapped_origin) = ids.get(origin).filter(|id| id.starts_with("dbr_"))
+    {
+        next.file_write_origins
+            .insert(file.clone(), mapped_origin.clone());
     }
     if let Some(generation) = previous.file_selection_generations.get(&source.file) {
         next.file_selection_generations

@@ -368,7 +368,7 @@ pub(super) fn project_creation(
             history_tree_id: history_id.clone(),
             kind: "root".into(),
             parent_commit_ids: Vec::new(),
-            tree_id: tree_id,
+            tree_id,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),

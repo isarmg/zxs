@@ -29,12 +29,11 @@ fn same_entry_target(request: &ObjectMoveRequest) -> bool {
 }
 
 fn require_identity(original: &ObjectMoveFact, files: Option<&CapturedFiles<'_>>) -> Result<()> {
-    if let Some(files) = files {
-        if original.source_file_id.as_ref() != files.source
-            || original.displaced_target_file_id.as_ref() != files.target
-        {
-            return Err(conflict());
-        }
+    if let Some(files) = files
+        && (original.source_file_id.as_ref() != files.source
+            || original.displaced_target_file_id.as_ref() != files.target)
+    {
+        return Err(conflict());
     }
     Ok(())
 }

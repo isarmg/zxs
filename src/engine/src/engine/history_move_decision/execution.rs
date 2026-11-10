@@ -283,10 +283,10 @@ impl Engine {
             if !request.matches(&namespace) || original_target.as_ref() != replacement {
                 return Err(conflict());
             }
-            if let Some(source) = captured_source {
-                if !source.matches(&self.state, &namespace)? {
-                    return Err(conflict());
-                }
+            if let Some(source) = captured_source
+                && !source.matches(&self.state, &namespace)?
+            {
+                return Err(conflict());
             }
             return Ok(original.clone());
         }
@@ -323,15 +323,14 @@ impl Engine {
             )?;
             self.project_file_history_move(capture, principal, operation, &cancellation)?
         };
-        if let Some(source) = captured_source {
-            if source.file_id != *projection.capture().source_file_id()
-                || !source.matches(&self.state, projection.capture().namespace())?
-            {
-                return Err(Error::new(
-                    ErrorCode::WorkspaceChanged,
-                    "move source differs from the originally captured entry and file",
-                ));
-            }
+        if let Some(source) = captured_source
+            && (source.file_id != *projection.capture().source_file_id()
+                || !source.matches(&self.state, projection.capture().namespace())?)
+        {
+            return Err(Error::new(
+                ErrorCode::WorkspaceChanged,
+                "move source differs from the originally captured entry and file",
+            ));
         }
         let original = self.save_file_history_move_recovery(&projection, &cancellation)?;
         #[cfg(feature = "fault-injection")]

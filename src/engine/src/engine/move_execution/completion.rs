@@ -256,12 +256,12 @@ impl CompletionBinding {
             let Some(owner) = engine.disk_resources.available(&disk) else {
                 continue;
             };
-            if let Some(active) = read(&owner.root, &owner.root.path().join(ACTIVE))? {
-                if active.operation == candidate.operation_id {
-                    return Err(invalid(
-                        "original move still has an active completion binding",
-                    ));
-                }
+            if let Some(active) = read(&owner.root, &owner.root.path().join(ACTIVE))?
+                && active.operation == candidate.operation_id
+            {
+                return Err(invalid(
+                    "original move still has an active completion binding",
+                ));
             }
             if let Some(retired) = read_completed(&owner.root, candidate.operation_id)? {
                 retired.require_candidate(candidate, hash)?;

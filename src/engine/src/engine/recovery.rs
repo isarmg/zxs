@@ -302,17 +302,16 @@ impl Engine {
         prepared: PreparedRecovery,
     ) -> Result<()> {
         let move_retained = self.move_is_retained();
-        if let Some(selected) = &self.move_completion {
-            if prepared
+        if let Some(selected) = &self.move_completion
+            && prepared
                 .records
                 .keys()
                 .any(|sequence| *sequence > selected.sequence())
-            {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "journal extends beyond the retained complete move candidate",
-                ));
-            }
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "journal extends beyond the retained complete move candidate",
+            ));
         }
         if let Some(choice) = &self.history_move_choice {
             if prepared
