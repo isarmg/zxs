@@ -766,12 +766,14 @@ fn parent_checkout_rejects_replacing_a_live_child_ancestor_identity() {
 }
 
 #[test]
-fn parent_checkout_cannot_resurrect_a_deleted_independent_child_repository() {
+fn parent_checkout_cannot_restore_a_child_moved_under_an_independent_owner() {
     for replace_path in [false, true] {
-        let (_temp, mut engine, repo) = fixture();
+        let (temp, mut engine, repo) = fixture();
         save(&mut engine, &repo, "child/file", b"retained child");
         initialize(&mut engine, &repo, "child");
-        commit(&mut engine, &repo, "child");
+        let original_tree = commit(&mut engine, &repo, "child");
+        let child = status(&engine, &repo, "child").directory_id;
+        let historical = engine.state.directory_trees[&original_tree].clone();
         initialize(&mut engine, &repo, "");
         stage_child(&mut engine, &repo, "", "child");
         commit(&mut engine, &repo, "");
@@ -779,7 +781,7 @@ fn parent_checkout_cannot_resurrect_a_deleted_independent_child_repository() {
             .create_directory_branches(
                 &repo.repository_id,
                 None,
-                &storage_contract::BranchName::parse("before delete").unwrap(),
+                &storage_contract::BranchName::parse("before child ownership changes").unwrap(),
                 "admin",
                 OperationId::generate().unwrap(),
             )
@@ -788,19 +790,35 @@ fn parent_checkout_cannot_resurrect_a_deleted_independent_child_repository() {
             .as_str()
             .unwrap()
             .to_owned();
+        save(&mut engine, &repo, "container/keep", b"independent owner");
+        initialize(&mut engine, &repo, "container");
+        commit(&mut engine, &repo, "container");
         engine
             .file_namespace(
                 &repo.repository_id,
-                NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "child", None)
-                    .unwrap(),
+                NamespaceOperation::parse(
+                    NamespaceOperationKind::Rename,
+                    "child",
+                    Some("container/child"),
+                )
+                .unwrap(),
                 "admin",
                 OperationId::generate().unwrap(),
             )
             .unwrap();
+        assert_eq!(
+            status(&engine, &repo, "container/child").directory_id,
+            child
+        );
+        commit(&mut engine, &repo, "container/child");
+        stage_owned(&mut engine, &repo, "container");
+        stage_child(&mut engine, &repo, "container", "container/child");
+        commit(&mut engine, &repo, "container");
         if replace_path {
             save(&mut engine, &repo, "child/new", b"new ordinary directory");
         }
         stage_owned(&mut engine, &repo, "");
+        stage_child(&mut engine, &repo, "", "container");
         commit(&mut engine, &repo, "");
         let before = canonical_json(engine.state()).unwrap();
         let operation = OperationId::generate().unwrap();
@@ -808,14 +826,37 @@ fn parent_checkout_cannot_resurrect_a_deleted_independent_child_repository() {
             .select_default_directory_branch(&repo.repository_id, &old, "admin", operation)
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::DirectoryBranchConflict);
+        assert!(error.to_string().contains(
+            "checkout cannot restore an independent child repository absent from this live scope"
+        ));
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
         assert!(!engine.state.operations.contains_key(&operation));
+        assert_eq!(engine.state.directory_trees[&original_tree], historical);
+        assert_eq!(
+            status(&engine, &repo, "container/child").directory_id,
+            child
+        );
+        assert_eq!(
+            bytes(&engine, &repo, "container/child/file"),
+            b"retained child"
+        );
         if replace_path {
             assert_eq!(
                 bytes(&engine, &repo, "child/new"),
                 b"new ordinary directory"
             );
         }
+        drop(engine);
+        let engine = Engine::open(&temp.path().join("system")).unwrap();
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+        assert_eq!(
+            status(&engine, &repo, "container/child").directory_id,
+            child
+        );
+        assert_eq!(
+            bytes(&engine, &repo, "container/child/file"),
+            b"retained child"
+        );
     }
 }
 
