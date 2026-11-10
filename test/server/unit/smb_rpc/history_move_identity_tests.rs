@@ -155,26 +155,47 @@ fn replacement_retry_keeps_both_original_target_identities_after_publication() {
 }
 
 #[test]
-fn retained_move_intent_retries_original_identity_without_a_second_operation() {
+fn retained_file_intent_retries_original_identity_without_a_second_operation() {
     let roots = roots();
     let operation = OperationId::generate().unwrap();
-    let first = command(&roots, operation);
     let retry = command(&roots, operation);
+    let mut wrong_entry = command(&roots, operation);
+    let mut wrong_file = command(&roots, operation);
+    wrong_entry.expected_source_entry_id = new_id("entry").unwrap();
+    wrong_file.expected_source_file_id = HistoryFileId::parse(&new_id("file").unwrap()).unwrap();
     let old = original_entry(&roots);
-    roots.backend.inner.test_with_engine_locked(|engine| {
+    // Seed the already retained file operation, not a guessed failpoint in the
+    // new object planner. The SMB bridge must continue its exact old decision.
+    let (before, intent) = roots.backend.inner.test_with_engine_locked(|engine| {
         engine.inject_fault_once("move_after_original_intent");
+        let original = storage_engine::FileHistoryMovePathRequest {
+            source_repository_id: roots.source.repository_id.clone(),
+            source_path: "source.txt".into(),
+            target_repository_id: roots.target.repository_id.clone(),
+            target_name: "arrived.txt".into(),
+        };
+        assert!(engine.move_current_file(&original, "alice", operation).is_err());
+        assert!(!engine.state().operations.contains_key(&operation));
+        (
+            engine.state().clone(),
+            engine.inspect_file_history_move_recovery().unwrap().unwrap(),
+        )
     });
-    assert!(
-        roots
+    for changed in [wrong_entry, wrong_file] {
+        let error = roots
             .backend
             .inner
-            .move_current_file(&identity(&roots.shared), first)
-            .is_err()
-    );
-    let before = roots.backend.inner.test_with_engine_locked(|engine| {
-        assert!(!engine.state().operations.contains_key(&operation));
-        engine.inspect_file_history_move_recovery().unwrap().unwrap()
-    });
+            .move_current_file(&identity(&roots.shared), changed)
+            .unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::IdempotencyKeyReused);
+        roots.backend.inner.test_with_engine_locked(|engine| {
+            assert_eq!(engine.state(), &before);
+            assert_eq!(
+                engine.inspect_file_history_move_recovery().unwrap().as_ref(),
+                Some(&intent)
+            );
+        });
+    }
     assert_eq!(original_entry(&roots), old);
     assert!(lookup(&roots, &roots.target, "arrived.txt").is_none());
     let receipt = roots
@@ -183,6 +204,8 @@ fn retained_move_intent_retries_original_identity_without_a_second_operation() {
         .move_current_file(&identity(&roots.shared), retry)
         .unwrap();
     assert_eq!(receipt.operation_id, operation);
+    assert_eq!(receipt.kind, "file.history.move");
+    assert_eq!(receipt.sequence, before.sequence + 1);
     assert_eq!(receipt.commit_state, CommitState::Published);
     roots.backend.inner.test_with_engine_locked(|engine| {
         assert_eq!(
@@ -201,7 +224,7 @@ fn retained_move_intent_retries_original_identity_without_a_second_operation() {
         );
         assert!(engine.inspect_file_history_move_recovery().unwrap().is_none());
     });
-    assert_eq!(before.operation_id(), operation);
+    assert_eq!(intent.operation_id(), operation);
     assert!(lookup(&roots, &roots.source, "source.txt").is_none());
 }
 
