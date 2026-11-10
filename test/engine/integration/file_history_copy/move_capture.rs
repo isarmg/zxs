@@ -47,9 +47,15 @@ fn move_capture_rejects_a_regular_repository_instead_of_treating_it_as_a_disk_ro
         },
         &HistoryWindowCancellation::new(),
     );
-    assert_eq!(result.err().unwrap().code(), ErrorCode::UnsupportedOperation);
+    assert_eq!(
+        result.err().unwrap().code(),
+        ErrorCode::UnsupportedOperation
+    );
     assert_eq!(fixture.engine.state(), &before);
-    assert_eq!(entry(&fixture.engine, &fixture.source, "source.txt"), original);
+    assert_eq!(
+        entry(&fixture.engine, &fixture.source, "source.txt"),
+        original
+    );
     assert!(fixture.engine.file_deletion(&original.file_id).is_none());
 }
 

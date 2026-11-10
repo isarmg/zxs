@@ -353,7 +353,8 @@ fn replaced_directory_identity_case(committed: bool) {
         pool.engine
             .file_namespace(
                 &pool.repo.repository_id,
-                NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "docs", None).unwrap(),
+                NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "docs", None)
+                    .unwrap(),
                 "admin",
                 op(),
             )
