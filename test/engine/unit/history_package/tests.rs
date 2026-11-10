@@ -1,4 +1,6 @@
 use super::*;
+#[path = "directory_contents_tests.rs"]
+mod directory_contents;
 use crate::journal::RecordType;
 use std::{
     io::Read,
@@ -1450,6 +1452,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .unwrap();
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
     // Shared branches can advance without rewriting an older composition.
+    directory_contents::assert_frozen_payload_validation(&manifest, &first_tree);
     assert_ne!(
         manifest.directory_branches[&first].entries[0].version_id,
         advanced.version_id

@@ -28,6 +28,7 @@ pub use container_storage::{
     ObjectDatabaseReconstruction, ObjectDatabaseRecord, ObjectDatabaseScope,
     inspect_object_database_material, reconstruct_object_database_material,
 };
+mod directory_contents;
 mod directory_layout;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;

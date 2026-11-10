@@ -2,6 +2,7 @@
 //! Frozen trees remain historical evidence. A selected projection publishes new
 //! immutable trees only where its entries, contexts or descendant refs differ.
 use super::*;
+use crate::directory_contents::DirectoryContents;
 use crate::{DirectoryBranch, DirectoryTree, FileContext};
 
 fn invalid(message: &str) -> Error {
@@ -144,6 +145,7 @@ fn validate_context_for(
 fn project_branch(
     state: &State,
     source: &DirectoryBranch,
+    contents: DirectoryContents<'_>,
     entries: &[Entry],
     retained_children: &BTreeSet<&str>,
 ) -> Result<DirectoryBranch> {
@@ -151,11 +153,11 @@ fn project_branch(
         directory_branch_id: source.directory_branch_id.clone(),
         repository_id: source.repository_id.clone(),
         directory_id: source.directory_id.clone(),
-        path: source.path.clone(),
+        path: contents.path.to_owned(),
         name: source.name.clone(),
         parent_branch_id: source.parent_branch_id.clone(),
         head_tree_id: source.head_tree_id.clone(),
-        commit_id: source.commit_id.clone(),
+        commit_id: contents.commit_id.to_owned(),
         entries: entries.to_vec(),
         file_contexts: BTreeMap::new(),
         file_branches: BTreeMap::new(),
@@ -165,7 +167,7 @@ fn project_branch(
         sequence: source.sequence,
     };
     for entry in entries {
-        if at_key(&source.entries, entry.lookup_key()) != Some(entry) {
+        if at_key(contents.entries, entry.lookup_key()) != Some(entry) {
             return Err(invalid(
                 "directory projection imports an occurrence outside its source",
             ));
@@ -177,12 +179,15 @@ fn project_branch(
                 } else {
                     ContextUse::Current
                 };
-                let context = source
+                let context = contents
                     .file_contexts
                     .get(entry.lookup_key())
                     .ok_or_else(stale)?;
                 validate_context_for(state, &source.repository_id, entry, context, use_as)?;
-                let file_branch = source.file_branches.get(&entry.file_id).ok_or_else(stale)?;
+                let file_branch = contents
+                    .file_branches
+                    .get(&entry.file_id)
+                    .ok_or_else(stale)?;
                 let record = state.branches.get(file_branch).ok_or_else(stale)?;
                 if record.file_id.as_deref() != Some(entry.file_id.as_str())
                     || (use_as == ContextUse::Current && record.state != BranchState::Active)
@@ -199,14 +204,14 @@ fn project_branch(
                 branch
                     .file_branches
                     .insert(entry.file_id.clone(), file_branch.clone());
-                if let Some(origin) = source.inherited_files.get(&entry.file_id) {
+                if let Some(origin) = contents.inherited_files.get(&entry.file_id) {
                     branch
                         .inherited_files
                         .insert(entry.file_id.clone(), origin.clone());
                 }
             }
             NamespaceEntryKind::Directory => {
-                if let Some(reference) = source.directory_refs.get(&entry.entry_id) {
+                if let Some(reference) = contents.directory_refs.get(&entry.entry_id) {
                     branch
                         .directory_refs
                         .insert(entry.entry_id.clone(), reference.clone());
@@ -312,7 +317,13 @@ impl CurrentNamespaces {
         let owner = self.branch_entries(&repo.main_branch_id, &owner.head_commit_id)?;
         let path = current_path(owner, &repo.repository_id, &source.directory_id)?.to_owned();
         let entries = self.directory_entries(id, &source.head_tree_id)?;
-        let branch = project_branch(state, source, entries, retained_children)?;
+        let branch = project_branch(
+            state,
+            source,
+            DirectoryContents::from(source),
+            entries,
+            retained_children,
+        )?;
         let original = state
             .directory_trees
             .get_shared(&source.head_tree_id)
@@ -407,15 +418,13 @@ impl CurrentNamespaces {
                 entry.path(),
                 &tree.path,
             )?;
-            let mut snapshot = owner.clone();
-            snapshot.commit_id = tree.commit_id.clone();
-            snapshot.path = tree.path.clone();
-            snapshot.entries = tree.entries.clone();
-            snapshot.file_contexts = tree.file_contexts.clone();
-            snapshot.file_branches = tree.file_branches.clone();
-            snapshot.inherited_files = tree.inherited_files.clone();
-            snapshot.directory_refs = tree.directory_refs.clone();
-            let snapshot = project_branch(state, &snapshot, &kept, retained_children)?;
+            let snapshot = project_branch(
+                state,
+                owner,
+                DirectoryContents::from(tree.as_ref()),
+                &kept,
+                retained_children,
+            )?;
             for (child, reference) in &snapshot.directory_refs {
                 if branch.directory_refs.get(child) != Some(reference) {
                     return Err(invalid(

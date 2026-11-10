@@ -1,5 +1,6 @@
 //! Scoped logical history projection and closure validation, without storage I/O.
 use crate::business::{validate_branch_name, validate_entries};
+use crate::directory_contents::DirectoryContents;
 use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -370,23 +371,27 @@ impl HistoryManifest {
         };
         Ok(manifest)
     }
-    fn validate_directory_snapshot(&self, branch: &DirectoryBranch) -> Result<()> {
+    fn validate_directory_snapshot(
+        &self,
+        branch: &DirectoryBranch,
+        contents: DirectoryContents<'_>,
+    ) -> Result<()> {
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
         let commit = self
             .commits
-            .get(&branch.commit_id)
+            .get(contents.commit_id)
             .ok_or_else(|| invalid("directory composition commit is outside the history"))?;
-        let scope_key = name_policy::path_key(&branch.path);
-        if branch.path.is_empty() {
+        let scope_key = name_policy::path_key(contents.path);
+        if contents.path.is_empty() {
             if branch.directory_id != self.repository.repository_id {
                 return Err(invalid(
                     "root directory identity differs from its repository",
                 ));
             }
         } else {
-            name_policy::validate_path(&branch.path)?;
+            name_policy::validate_path(contents.path)?;
             validate_id(&branch.directory_id, "entry")?;
             if !commit.entries.iter().any(|entry| {
                 entry.kind == NamespaceEntryKind::Directory
@@ -402,7 +407,7 @@ impl HistoryManifest {
         let mut paths = BTreeSet::new();
         let mut entries = BTreeMap::<&str, &Entry>::new();
         let mut files = BTreeSet::new();
-        for entry in &branch.entries {
+        for entry in contents.entries {
             Self::validate_entry_envelope(entry)?;
             if (!scope_key.is_empty() && !entry.lookup_key().starts_with(&prefix))
                 || entry.entry_id == branch.directory_id
@@ -426,7 +431,7 @@ impl HistoryManifest {
                     .versions
                     .get(&entry.version_id)
                     .ok_or_else(|| invalid("directory composition version is missing"))?;
-                let shared = branch
+                let shared = contents
                     .file_branches
                     .get(&entry.file_id)
                     .and_then(|id| self.branches.get(id))
@@ -447,28 +452,28 @@ impl HistoryManifest {
                 }
             }
         }
-        if branch.file_branches.len() != files.len() {
+        if contents.file_branches.len() != files.len() {
             return Err(invalid(
                 "directory composition file branch coverage differs",
             ));
         }
-        let file_entries = branch
+        let file_entries = contents
             .entries
             .iter()
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .collect::<Vec<_>>();
-        if branch.file_contexts.len() != file_entries.len() {
+        if contents.file_contexts.len() != file_entries.len() {
             return Err(invalid("directory path context coverage differs"));
         }
         for entry in file_entries {
-            let context = branch
+            let context = contents
                 .file_contexts
                 .get(entry.lookup_key())
                 .ok_or_else(|| invalid("directory path write context is missing"))?;
             self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
         }
-        for (file, origin) in &branch.inherited_files {
-            if !branch.file_branches.contains_key(file)
+        for (file, origin) in contents.inherited_files {
+            if !contents.file_branches.contains_key(file)
                 || !self
                     .directory_branches
                     .get(origin)
@@ -479,7 +484,7 @@ impl HistoryManifest {
                 ));
             }
         }
-        for (directory, reference) in &branch.directory_refs {
+        for (directory, reference) in contents.directory_refs {
             let selected = self
                 .directory_branches
                 .get(&reference.directory_branch_id)
@@ -492,7 +497,7 @@ impl HistoryManifest {
                 .directory_branches
                 .get(&tree.directory_branch_id)
                 .ok_or_else(|| invalid("directory composition child tree owner is missing"))?;
-            if !branch.entries.iter().any(|entry| {
+            if !contents.entries.iter().any(|entry| {
                 entry.kind == NamespaceEntryKind::Directory && &entry.entry_id == directory
             }) || selected.directory_id != *directory
                 || owner.directory_id != *directory
@@ -1090,15 +1095,7 @@ impl HistoryManifest {
             if tree.tree_id != *id {
                 return Err(invalid("directory tree identity differs"));
             }
-            let mut snapshot = branch.clone();
-            snapshot.commit_id = tree.commit_id.clone();
-            snapshot.path = tree.path.clone();
-            snapshot.entries = tree.entries.clone();
-            snapshot.file_branches = tree.file_branches.clone();
-            snapshot.file_contexts = tree.file_contexts.clone();
-            snapshot.inherited_files = tree.inherited_files.clone();
-            snapshot.directory_refs = tree.directory_refs.clone();
-            self.validate_directory_snapshot(&snapshot)?;
+            self.validate_directory_snapshot(branch, DirectoryContents::from(tree))?;
             if let Some(parent) = &tree.parent_tree_id {
                 let previous = self
                     .directory_trees
@@ -1158,7 +1155,7 @@ impl HistoryManifest {
                     ));
                 }
             } else {
-                self.validate_directory_snapshot(branch)?;
+                self.validate_directory_snapshot(branch, DirectoryContents::from(branch))?;
                 if branch.sequence < head.sequence {
                     return Err(invalid(
                         "directory branch registration precedes its inherited tree",

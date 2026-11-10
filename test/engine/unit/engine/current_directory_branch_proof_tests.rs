@@ -1,6 +1,8 @@
 //! Actual retained D3 publication followed by directory business operations.
 //! All storage roots are temporary registered directories, never real devices.
 use super::*;
+#[path = "current_directory_contents_tests.rs"]
+mod directory_contents;
 use crate::*;
 use std::{
     fs,

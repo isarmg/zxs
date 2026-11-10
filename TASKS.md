@@ -1,10 +1,17 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`191d3c38`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`2cec695d`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
 
+
+## 本轮目录快照借用视图
+
+- `DirectoryContents` 穷尽投影 DirectoryBranch／DirectoryTree 的七项组合内容，保留独立 owner 的稳定目录身份和注册元数据。HistoryManifest 验证冻结树、current 目录投影读取历史子树时，不再先复制 owner 的当前内容再覆盖整份树内容。
+- 借用视图只表达来源，不授予准入；历史包的内容／引用闭包检查、当前 projection 的 exact occurrence、active／retained-child 上下文、owner identity 与后代图验证均保持原顺序和错误。输出仍持有所需条目及上下文，不改当前持久格式、旧格式拒绝、锁或 I/O／同步屏障。
+- 根测试补充 branch／tree 七字段直接借用与冻结来源隔离、七类历史树内容损坏拒绝，以及保留 c7273397 原复制算法的 current projection 对照：注销前后、当前分支／历史树、五种保留项组合、普通／retained-child 两种上下文及六种坏来源，比较完整序列化输出和错误码／文本。
+- 已完成固定 Rust 1.99 rustfmt、严格 patch／边界路径与字段对照静审；未在本地编译或运行 Rust。新断言及全量功能验证交本次 main push 的自动 CI，不能据静态检查宣称已运行通过。生产新增借用类型，不把本批记作删行成绩。
 
 ## 本轮文件创建结果与命名空间准入类型化
 
