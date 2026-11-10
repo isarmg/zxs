@@ -13,6 +13,11 @@ use json_codec::{Value, json};
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
+enum MutationAccess {
+    Current,
+    History,
+}
+
 pub(crate) fn namespace(
     state: RwSignal<State>,
     action: NamespaceAction,
@@ -79,6 +84,7 @@ pub(crate) fn initialize_directory_git(
 ) -> Option<String> {
     record_mutation(
         state,
+        MutationAccess::Current,
         "POST",
         format!(
             "/api/repositories/{}/directory-git/initialize",
@@ -98,6 +104,7 @@ pub(crate) fn stage_directory_child(
 ) -> Option<String> {
     record_mutation(
         state,
+        MutationAccess::Current,
         "POST",
         format!(
             "/api/repositories/{}/directory-git/children/stage",
@@ -118,6 +125,7 @@ pub(crate) fn stage_directory_owned(
 ) -> Option<String> {
     record_mutation(
         state,
+        MutationAccess::Current,
         "POST",
         format!(
             "/api/repositories/{}/directory-git/stage",
@@ -140,6 +148,7 @@ pub(crate) fn commit_directory(
     }
     record_mutation(
         state,
+        MutationAccess::Current,
         "POST",
         format!(
             "/api/repositories/{}/directory-branches/{}/commits",
@@ -173,6 +182,7 @@ pub(crate) fn rename_directory_branch(
     }
     record_mutation(
         state,
+        MutationAccess::Current,
         "PATCH",
         format!(
             "/api/repositories/{}/directory-branches/{}",
@@ -202,6 +212,7 @@ pub(crate) fn rename_file_branch(
     }
     record_mutation(
         state,
+        MutationAccess::Current,
         "PATCH",
         format!(
             "/api/file-manager/files/{}/branches/{}",
@@ -213,11 +224,15 @@ pub(crate) fn rename_file_branch(
 }
 fn record_mutation(
     state: RwSignal<State>,
+    access: MutationAccess,
     method: &'static str,
     endpoint: String,
     mut body: Value,
 ) -> Option<String> {
-    if !state.with_untracked(write_allowed) {
+    if !state.with_untracked(|state| match access {
+        MutationAccess::Current => write_allowed(state),
+        MutationAccess::History => history_write_allowed(state),
+    }) {
         return None;
     }
     let operation_id = crate::ui::file_operation_id(state)?;
@@ -262,40 +277,19 @@ pub(crate) fn update_note(
         Some(version) => ("versions", version),
         None => ("files", file),
     };
-    if id.is_empty() || !state.with_untracked(history_write_allowed) {
+    if id.is_empty() {
         return None;
     }
-    let operation_id = crate::ui::file_operation_id(state)?;
-    let endpoint = format!(
-        "/api/file-manager/{collection}/{}/metadata",
-        api::segment(&id)
-    );
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    state.update(|s| {
-        s.files.mutation_pending = true;
-    });
-    let submitted = operation_id.clone();
-    spawn_local(async move {
-        let result = api::request(
-            "POST",
-            &endpoint,
-            Some(json!({"note":note,"operation_id":operation_id})),
-        )
-        .await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                record_receipt(state, &operation_id, value);
-            }
-            Err(error) => {
-                record_failure(state, epoch, &operation_id, error);
-            }
-        }
-        state.update(|s| s.files.mutation_pending = false);
-    });
-    Some(submitted)
+    record_mutation(
+        state,
+        MutationAccess::History,
+        "POST",
+        format!(
+            "/api/file-manager/{collection}/{}/metadata",
+            api::segment(&id)
+        ),
+        json!({"note":note}),
+    )
 }
 
 pub(crate) fn update_node_note(
@@ -321,6 +315,7 @@ pub(crate) fn update_node_note(
     }
     record_mutation(
         state,
+        MutationAccess::Current,
         "PATCH",
         format!(
             "/api/file-manager/files/{}/nodes/{}",
@@ -353,7 +348,13 @@ pub(crate) fn create_branch(
     if let Some(node) = node.filter(|id| !id.is_empty()) {
         body["source_node_id"] = node.into();
     }
-    file_mutation(state, &file, "branches", body)
+    record_mutation(
+        state,
+        MutationAccess::History,
+        "POST",
+        format!("/api/file-manager/files/{}/branches", api::segment(&file)),
+        body,
+    )
 }
 /// File branch selection changes the inspected history node only.
 pub(crate) fn select_branch(state: RwSignal<State>, branch: String) {
@@ -425,50 +426,6 @@ pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
         json!({"branch_id":branch,"repository_id":repository,"path":path,"expected_node_id":node,"expected_head":head}),
     );
 }
-fn file_mutation(
-    state: RwSignal<State>,
-    file: &str,
-    action: &str,
-    mut body: Value,
-) -> Option<String> {
-    if !state.with_untracked(history_write_allowed) {
-        return None;
-    }
-    let id = crate::ui::file_operation_id(state)?;
-    if action == "select"
-        && let Some((repository, path)) = state.with_untracked(|s| {
-            s.files
-                .selected
-                .as_ref()
-                .and_then(crate::files::model::file_context)
-        })
-    {
-        body["repository_id"] = repository.into();
-        body["path"] = path.into();
-    }
-    body["operation_id"] = id.clone().into();
-    let endpoint = format!("/api/file-manager/files/{}/{action}", api::segment(file));
-    state.update(|s| s.files.mutation_pending = true);
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    let submitted = id.clone();
-    spawn_local(async move {
-        let result = api::request("POST", &endpoint, Some(body)).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                record_receipt(state, &id, value);
-            }
-            Err(error) => {
-                record_failure(state, epoch, &id, error);
-            }
-        }
-        state.update(|s| s.files.mutation_pending = false);
-    });
-    Some(submitted)
-}
-
 /// Definite HTTP rejection releases only this operation; ambiguous transport or
 /// malformed-success responses stay tied to the original ID for polling.
 pub(crate) fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error) {

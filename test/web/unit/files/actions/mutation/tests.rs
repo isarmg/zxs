@@ -26,7 +26,13 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             let _ = directory_branch(state, branch_source(), "draft".into());
             let _ = update_note(state, None, "note".into());
             select_branch(state, "other".into());
-            let _ = record_mutation(state, "PATCH", "/api/test".into(), json!({}));
+            let _ = record_mutation(
+                state,
+                MutationAccess::Current,
+                "PATCH",
+                "/api/test".into(),
+                json!({}),
+            );
             crate::files::review::submit(
                 state,
                 crate::files::review::Kind::Backup,
@@ -59,6 +65,67 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
         select_branch(state, "other".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
+}
+
+#[test]
+fn shared_dispatch_keeps_history_admission_before_ids_or_browser_work() {
+    let mut initial = State {
+        authenticated: true,
+        ..Default::default()
+    };
+    initial.management.storage = crate::management::Storage::Ready;
+    initial.files.writable = true;
+    initial.files.loaded = true;
+    initial.files.selected = Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
+    initial.files.file_history = crate::files::history::tests::history(json!({}));
+    assert!(history_write_allowed(&initial));
+    for change in 0..10 {
+        Owner::new().with(|| {
+            let mut blocked = initial.clone();
+            match change {
+                0 => blocked.authenticated = false,
+                1 => blocked.session_transition = crate::ui::SessionTransition::LoggingOut,
+                2 => blocked.management.storage = crate::management::Storage::RecoveryRequired,
+                3 => blocked.files.writable = false,
+                4 => blocked.files.loading = true,
+                5 => blocked.files.mutation_pending = true,
+                6 => blocked
+                    .files
+                    .operations
+                    .push(FileOperation::unknown("original")),
+                7 => blocked.files.history_loading = true,
+                8 => blocked.files.file_history.invalidate(),
+                9 => {
+                    blocked.files.selected = Some(crate::files::test_entries::entry(json!({
+                        "file_id":"file", "read_only":true,
+                    })));
+                }
+                _ => unreachable!(),
+            }
+            let pending = blocked.files.mutation_pending;
+            let operations = blocked.files.operations.len();
+            let state = RwSignal::new(blocked);
+            assert!(
+                update_note(state, None, "file note".into()).is_none(),
+                "{change}"
+            );
+            assert!(
+                update_note(state, Some("version".into()), "version note".into()).is_none(),
+                "{change}"
+            );
+            assert!(
+                create_branch(state, "version".into(), Some("node".into()), "draft".into())
+                    .is_none(),
+                "{change}"
+            );
+            state.with_untracked(|state| {
+                assert_eq!(state.files.mutation_pending, pending);
+                assert_eq!(state.files.operations.len(), operations);
+                assert!(state.files.default_operation.is_none());
+                assert!(state.errors.is_empty());
+            });
+        });
+    }
 }
 
 #[test]
