@@ -2831,6 +2831,7 @@ fn recorded_repository(id: &str) -> storage_contract::Repository {
         smb_enabled: true,
         smb_binding_generation: u64::MAX,
         file_manager_root: false,
+        directory_deletions: std::collections::BTreeMap::new(),
     }
 }
 

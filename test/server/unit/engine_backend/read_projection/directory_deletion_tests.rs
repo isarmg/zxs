@@ -82,6 +82,7 @@ fn deletion_list_tracks_current_mounts_after_parent_and_whole_owner_moves() {
     let original = engine
         .directory_deletion(&source.repository_id, &owner, &hidden.entry_id)
         .unwrap()
+        .unwrap()
         .clone();
     assert_eq!(original.path.as_str(), "project/container/hidden");
     assert!(original.files.is_empty() && engine.state().file_deletions.is_empty());
@@ -129,7 +130,9 @@ fn deletion_list_tracks_current_mounts_after_parent_and_whole_owner_moves() {
     let (target_owner, imported) = {
         let mut engine = backend.engine.lock().unwrap();
         assert_eq!(
-            engine.directory_deletion(&source.repository_id, &owner, &hidden.entry_id),
+            engine
+                .directory_deletion(&source.repository_id, &owner, &hidden.entry_id)
+                .unwrap(),
             Some(&original)
         );
         assert_eq!(engine.state().operations[&receipt.operation_id], receipt);
@@ -154,13 +157,15 @@ fn deletion_list_tracks_current_mounts_after_parent_and_whole_owner_moves() {
         let imported = engine
             .directory_deletion(&target.repository_id, &target_owner, &mounted.entry_id)
             .unwrap()
+            .unwrap()
             .clone();
         assert!(imported.files.is_empty() && engine.state().file_deletions.is_empty());
         assert_ne!(imported.node_id, original.node_id);
         (target_owner, imported)
     };
 
-    // Historical D remains readable, but its source owner is no longer mounted.
+    // The repository retains historical D, but the current getter and listing
+    // must not present its departed source owner as an active mount.
     let departed = list(&source.repository_id, &owner);
     assert!(departed.entries.is_empty() && departed.next_after.is_none());
     let arrived = list(&target.repository_id, &target_owner);
@@ -170,14 +175,43 @@ fn deletion_list_tracks_current_mounts_after_parent_and_whole_owner_moves() {
     assert_eq!(arrived.entries[0].operation_id, imported.operation_id);
     assert_eq!(arrived.entries[0].path.as_str(), "arrived/relocated/hidden");
     assert!(arrived.next_after.is_none());
+    let missing_repository = storage_contract::new_id("repo").unwrap();
+    assert_eq!(
+        backend
+            .current_directory_deletion(
+                &identity,
+                &missing_repository,
+                &owner,
+                &hidden.entry_id,
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::RepositoryNotFound
+    );
     let engine = backend.engine.lock().unwrap();
     assert_eq!(
-        engine.directory_deletion(&source.repository_id, &owner, &hidden.entry_id),
+        engine
+            .directory_deletion(&source.repository_id, &owner, &hidden.entry_id)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        engine.state().repositories[&source.repository_id]
+            .directory_deletions
+            .get(&hidden.entry_id),
         Some(&original)
     );
     assert_eq!(engine.state().operations[&receipt.operation_id], receipt);
     assert_eq!(
-        engine.directory_deletion(&target.repository_id, &target_owner, &imported.directory_id),
+        engine
+            .directory_deletion(&target.repository_id, &target_owner, &imported.directory_id)
+            .unwrap(),
+        Some(&imported)
+    );
+    assert_eq!(
+        engine.state().repositories[&target.repository_id]
+            .directory_deletions
+            .get(&imported.directory_id),
         Some(&imported)
     );
     assert!(

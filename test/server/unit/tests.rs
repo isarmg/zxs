@@ -278,6 +278,7 @@ impl Backend for TestBackend {
             smb_enabled: true,
             smb_binding_generation: 1,
             file_manager_root: false,
+            directory_deletions: std::collections::BTreeMap::new(),
         })
     }
     fn create_branch(

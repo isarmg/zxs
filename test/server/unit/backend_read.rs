@@ -69,6 +69,7 @@ fn repository_wire_preserves_binding_width_and_optional_root_marker() {
             smb_enabled: true,
             smb_binding_generation: u64::MAX,
             file_manager_root,
+            directory_deletions: std::collections::BTreeMap::new(),
         };
         let mut expected = json_codec::json!({"repository_id":"repository","name":"Café","history_tree_id":"history","main_branch_id":"branch","primary_slot_id":"P01","target_copies":3,"name_policy":name_policy::NAME_POLICY,"unicode_version":name_policy::UNICODE_VERSION,"smb_enabled":true,"smb_binding_generation":"18446744073709551615"});
         if file_manager_root {
