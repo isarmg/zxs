@@ -38,7 +38,14 @@ fn object_request(operation: OperationId) -> crate::MoveCurrentObject {
     let movement = source.movement("P02", None).unwrap();
     crate::MoveCurrentObject {
         source_binding: source.source_binding,
-        target: crate::MoveObjectTarget::Repository(source.target_binding),
+        source_slot_id: "P01".into(),
+        source_disk_id: id("disk", 1),
+        source_binding_generation: 7,
+        target: crate::MoveObjectTarget::Repository {
+            binding: source.target_binding,
+            disk_id: id("disk", 2),
+            binding_generation: 7,
+        },
         movement,
         expected_source_file_id: Some(source.expected_source_file_id),
         expected_target_file_id: None,
@@ -51,6 +58,7 @@ fn object_result(expected: &MoveReceipt) -> OperationResult {
     result.kind = OBJECT_MOVE_KIND.into();
     result.request_digest = expected.movement.digest("alice").unwrap();
     result.result = json!({
+        "version_mapping": std::collections::BTreeMap::from([(id("ver", 1), id("ver", 2))]),
         "movement": ObjectMoveFact {
             request: expected.movement.clone(),
             principal: "alice".into(),
@@ -137,8 +145,18 @@ fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
     let expected = MoveReceipt::object(&command).unwrap();
     let mut result = object_result(&expected);
     result.protection_at_publish = ProtectionAtPublish::NotApplicable;
+    result.result["version_mapping"] = json!({});
     let reply = expected.published_object_reply(result, "alice").unwrap();
     assert_eq!(reply["result"]["movement"]["source_file_id"], Value::Null);
+
+    let expected = MoveReceipt::object(&command).unwrap();
+    let mut missing_mapping = object_result(&expected);
+    missing_mapping.protection_at_publish = ProtectionAtPublish::NotApplicable;
+    missing_mapping.result.as_object_mut().unwrap().remove("version_mapping");
+    assert_eq!(
+        expected.published_object_reply(missing_mapping, "alice").unwrap_err().code,
+        storage_contract::ErrorCode::StateInvalid
+    );
 
     let expected = MoveReceipt::object(&command).unwrap();
     let mut wrong_file = object_result(&expected);
@@ -164,17 +182,22 @@ fn same_entry_reply_preserves_the_request_without_claiming_a_displaced_file() {
     command.movement.target_path = name_policy::PortablePath::parse("É.TXT").unwrap();
     command.movement.replace = true;
     command.expected_target_file_id = command.expected_source_file_id.clone();
-    command.target = crate::MoveObjectTarget::Repository(crate::auth::SmbBinding {
-        repository_id: command.source_binding.repository_id.clone(),
-        branch_id: command.source_binding.branch_id.clone(),
-        generation: command.source_binding.generation,
-    });
+    command.target = crate::MoveObjectTarget::Repository {
+        binding: crate::auth::SmbBinding {
+            repository_id: command.source_binding.repository_id.clone(),
+            branch_id: command.source_binding.branch_id.clone(),
+            generation: command.source_binding.generation,
+        },
+        disk_id: command.source_disk_id.clone(),
+        binding_generation: command.source_binding_generation,
+    };
     let digest = command.movement.digest("alice").unwrap();
     let expected = MoveReceipt::object(&command).unwrap();
     assert_eq!(expected.movement, command.movement);
     assert_eq!(expected.displaced_target_file_id, None);
     let mut result = object_result(&expected);
     result.protection_at_publish = ProtectionAtPublish::NotApplicable;
+    result.result["version_mapping"] = json!({});
     result.result["movement"]["target_repository_id"] = id("repo", 1).into();
     result.result["movement"]["target_entry_id"] = id("entry", 1).into();
     let reply = expected.published_object_reply(result, "alice").unwrap();

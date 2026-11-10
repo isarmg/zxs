@@ -430,3 +430,30 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
 
 #[path = "history_move_completion_tests.rs"]
 mod completion_tests;
+
+#[test]
+fn object_move_replay_rechecks_captured_disk_identity_and_generation() {
+    let roots = roots();
+    let actor = identity(&roots.shared);
+    let operation = OperationId::generate().unwrap();
+    let first = object_command(&roots, operation);
+    let retry = object_command(&roots, operation);
+    let mut wrong_source = object_command(&roots, operation);
+    wrong_source.source_disk_id = new_id("disk").unwrap();
+    let mut wrong_target = object_command(&roots, operation);
+    let crate::MoveObjectTarget::Repository { binding_generation, .. } = &mut wrong_target.target
+        else { panic!("fixture target must already have a root"); };
+    *binding_generation += 1;
+    let receipt = roots.backend.inner.move_current_object(&actor, first).unwrap();
+    let published = roots.backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    assert!(lookup(&roots, &roots.source, "source.txt").is_none());
+    for command in [wrong_source, wrong_target] {
+        assert_eq!(
+            roots.backend.inner.move_current_object(&actor, command).unwrap_err().code,
+            storage_contract::ErrorCode::WorkspaceChanged
+        );
+        roots.backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+    }
+    assert_eq!(roots.backend.inner.move_current_object(&actor, retry).unwrap(), receipt);
+    roots.backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+}

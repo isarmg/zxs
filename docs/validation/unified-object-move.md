@@ -21,6 +21,7 @@
 - SMB 完整源身份拒绝用例要求核心在原 receipt／intent 匹配中保留 source entry 与 file ID。旧实现只比较原路径及覆盖目标，适配器在已完成操作上跳过源核对，因此不能拿旧主线当本用例的正确实现。
 - 当前 SMB 接纳测试直接调用真实 backend，未认证 Samba SDK、操作系统挂载、物理断电或浏览器行为。
 - 泛化 SMB 接纳夹具已转发真实 MoveCurrentObject，原文件桥接只负责已有请求身份与旧 intent 续作；完成屏障直接走新对象入口。空盘 framed RPC 保留原 target_repository_id／target_binding 为 None，并要求同一操作完成根与搬运。
+- 泛化 command 必须携带原源 slot/disk/generation 和原目标 disk/generation；真实 backend 回执重放仍核两端磁盘。object 回执须显式提供 version_mapping，空 map 对应 NotApplicable、非空对应 TargetMet，缺失不默认为空。
 - 目录／目录仓库正常流程由公共 Engine 测试覆盖，不在协议层复制成员和故障矩阵。协议层只补目录显式 None 身份、same-entry 不产生 displaced file，以及新 object spool 不接受旧 file kind。
 - PortablePath 父路径与允许覆盖但目标缺失均由接纳测试转交核心；脚本化成功只证明输入映射，不证明缺失父目录能发布。目标父目录存在性和完整成员保留留在业务测试。
 

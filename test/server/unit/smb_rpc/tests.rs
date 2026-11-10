@@ -100,15 +100,22 @@ impl Backend for LostCommitReply {
         identity: &Identity,
         command: crate::MoveCurrentObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        let target_binding = match &command.target {
-            crate::MoveObjectTarget::Repository(binding) => Some(binding),
-            crate::MoveObjectTarget::EmptyDisk { .. } => None,
+        let (target_binding, target_disk_id, target_generation) = match &command.target {
+            crate::MoveObjectTarget::Repository { binding, disk_id, binding_generation } =>
+                (Some(binding), disk_id, binding_generation),
+            crate::MoveObjectTarget::EmptyDisk { disk_id, binding_generation } =>
+                (None, disk_id, binding_generation),
         };
         self.move_requests.lock().unwrap().push(json!({
             "source_repository_id": command.source_binding.repository_id,
             "source_branch_id": command.source_binding.branch_id,
             "source_generation": command.source_binding.generation.to_string(),
             "source_path": command.movement.source_path.as_str(),
+            "source_slot_id": command.source_slot_id,
+            "source_disk_id": command.source_disk_id,
+            "source_disk_generation": command.source_binding_generation.to_string(),
+            "target_disk_id": target_disk_id,
+            "target_disk_generation": target_generation.to_string(),
             "target_repository_id": command.movement.target_repository_id,
             "target_branch_id": target_binding.map(|binding| &binding.branch_id),
             "target_generation": target_binding.map(|binding| binding.generation.to_string()),

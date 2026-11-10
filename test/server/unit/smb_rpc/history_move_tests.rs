@@ -115,7 +115,12 @@ fn scripted_result(
         current_health: CurrentHealth::Healthy,
         request_digest: movement.digest("alice").unwrap(),
         sequence: 12,
-        result: json!({ "movement": ObjectMoveFact {
+        result: json!({
+            "version_mapping": std::collections::BTreeMap::from([(
+                original_entry(roots).version_id,
+                new_id("ver").unwrap(),
+            )]),
+            "movement": ObjectMoveFact {
             target_repository_id: movement.target_repository_id.clone().unwrap(),
             target_entry_id: movement.source_entry_id.clone(),
             source_file_id: Some(request.expected_source_file_id),
@@ -163,9 +168,21 @@ fn command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentFile {
 fn object_command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentObject {
     let request = command(roots, operation);
     let movement = request.movement(&roots.target.primary_slot_id, None).unwrap();
+    let topology = roots.shared.backend.topology_snapshot(&identity(&roots.shared)).unwrap();
+    let source = topology.slots.iter()
+        .find(|slot| slot.slot_id == roots.source.primary_slot_id).unwrap();
+    let target = topology.slots.iter()
+        .find(|slot| slot.slot_id == roots.target.primary_slot_id).unwrap();
     crate::MoveCurrentObject {
         source_binding: request.source_binding,
-        target: crate::MoveObjectTarget::Repository(request.target_binding),
+        source_slot_id: source.slot_id.clone(),
+        source_disk_id: source.disk_id.clone(),
+        source_binding_generation: source.binding_generation,
+        target: crate::MoveObjectTarget::Repository {
+            binding: request.target_binding,
+            disk_id: target.disk_id.clone(),
+            binding_generation: target.binding_generation,
+        },
         movement,
         expected_source_file_id: Some(request.expected_source_file_id),
         expected_target_file_id: None,

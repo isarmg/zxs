@@ -90,6 +90,7 @@
 - 协议回执增加目录 None 身份必须精确匹配，以及同一 entry 的大小写改名不产生被覆盖文件事实两项；原请求与摘要不改，首次 object spool 不接受旧 file 回执。不另复制发布状态或故障矩阵。
 - 复用真实 framed RPC 增加一次同盘目录 rename：已保存子文件、捕获目录 None 身份、丢回执后重连，源名已消失仍使用原 operation 返回同一结果且 State 不变。原“非空目标拒绝”用例改指真实已占用目标并期待 NameCollision；不再把支持的新跨盘入口当 UnsupportedOperation。
 - 目录及同一 entry 的纯成功回执按真实无新增正文语义使用 Published／NotApplicable／Healthy，不再用 TargetMet 掩盖泛化成功门的契约差异；旧 file 回执完整状态矩阵不变。
+- 泛化 command 新捕获源 slot/disk/generation 与目标 disk/generation 后，测试构造使用真实拓扑；已发表操作的错误源盘身份／目标盘代数仍拒绝且 State 不变，原捕获重试返回同一结果。脚本回执显式 version_mapping，缺失不得当空；空 map 与 NotApplicable 成功门一致。
 - 本片未执行、编译、格式化或运行 CI，不能称通过或可合入独立产品；待共同业务依赖整合后再按用户许可执行。
 
 ### 首版正常路径：空目录首装、Web 文件导航与 SMB 创建
