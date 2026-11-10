@@ -4,29 +4,7 @@
 use super::{rows::*, *};
 use crate::{ContentState, business::file_nodes};
 
-pub(super) const MAX_RECORD_BYTES: usize = 12 * 1024 * 1024;
-struct Records {
-    rows: Vec<Record>,
-    bytes: usize,
-}
-impl Records {
-    fn add<T: Serialize>(&mut self, kind: &'static str, id: &str, value: &T) -> Result<()> {
-        if self.rows.len() == MAX_ROWS {
-            return Err(budget());
-        }
-        let encoded = crate::disk::encode_metadata(value, MAX_RECORD_BYTES - self.bytes)?;
-        self.bytes += encoded.len() + id.len();
-        if self.bytes > MAX_RECORD_BYTES {
-            return Err(budget());
-        }
-        self.rows.push(Record {
-            kind,
-            id: id.to_owned(),
-            body: String::from_utf8(encoded).expect("invariant: metadata encoder emits UTF-8"),
-        });
-        Ok(())
-    }
-}
+pub(super) use super::super::local_database::MAX_RECORD_BYTES;
 pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<ProjectedRecords> {
     let events = crate::file_deletion::retained::events(view, file)?;
     let records = with_events(view, file, &events)?;
@@ -79,10 +57,7 @@ fn with_events(
     }
     let state = view.state();
     let memberships = view.owners().file_rows(file);
-    let mut rows = Records {
-        rows: Vec::new(),
-        bytes: 0,
-    };
+    let mut rows = SCHEMA.records();
     let mut nodes = file_nodes::NodeProjection::from_merge_events(
         state,
         memberships
@@ -187,7 +162,5 @@ fn with_events(
     if let Some(node) = state.file_deletions.get(file) {
         rows.add("deletion", &node.node_id, &DeletionRow::from(node))?;
     }
-    rows.rows
-        .sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
-    Ok(rows.rows)
+    Ok(rows.finish())
 }

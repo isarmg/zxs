@@ -55,14 +55,14 @@ pub(in crate::container_storage) fn reconstruct_material(
         });
     }
     validate_rows(&records, repository, directory, material.source_sequence())?;
-    Ok(encode_records(
-        records,
-        repository,
-        directory,
-        material.source_sequence(),
-        material.records_hash(),
-    )?
-    .bytes)
+    Ok(SCHEMA
+        .encode(
+            records,
+            [repository, directory],
+            material.source_sequence(),
+            material.records_hash(),
+        )?
+        .bytes)
 }
 
 fn decode<T: for<'de> Deserialize<'de> + Serialize>(body: &str) -> Result<T> {

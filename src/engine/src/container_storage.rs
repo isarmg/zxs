@@ -6,6 +6,7 @@ pub(crate) mod backup_ordinary;
 pub(crate) mod backup_original_objects;
 mod changes;
 mod directory_database;
+mod local_database;
 mod object_database;
 pub use object_database::{
     MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial, ObjectDatabaseReconstruction,

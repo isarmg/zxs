@@ -5,7 +5,7 @@ use storage_contract::{
     DirectoryBranch, DirectoryTree, NamespaceEntryKind, directory_git::DirectoryGitRepository,
 };
 
-pub(super) const MAX_RECORD_BYTES: usize = 12 * 1024 * 1024;
+pub(super) use super::super::local_database::MAX_RECORD_BYTES;
 
 #[derive(Serialize)]
 struct LocalBranch<'a> {
@@ -103,31 +103,7 @@ fn tree(state: &State, original: &DirectoryTree) -> Result<DirectoryTree> {
 
 pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
     let git = &state.directory_git_repositories[directory];
-    let mut records = Vec::new();
-    let mut bytes = 0;
-    fn add<T: Serialize>(
-        records: &mut Vec<Record>,
-        bytes: &mut usize,
-        kind: &'static str,
-        id: &str,
-        value: &T,
-    ) -> Result<()> {
-        if records.len() == MAX_ROWS {
-            return Err(budget());
-        }
-        let encoded = crate::disk::encode_metadata(value, MAX_RECORD_BYTES - *bytes)?;
-        *bytes += encoded.len() + id.len();
-        if *bytes > MAX_RECORD_BYTES {
-            return Err(budget());
-        }
-        let body = String::from_utf8(encoded).expect("invariant: metadata encoder emits UTF-8");
-        records.push(Record {
-            kind,
-            id: id.to_owned(),
-            body,
-        });
-        Ok(())
-    }
+    let mut records = SCHEMA.records();
     let mut local_git: DirectoryGitRepository = git.clone();
     for node in local_git.deletions.values_mut() {
         let scope = if node.owner_directory_id == node.repository_id {
@@ -153,13 +129,7 @@ pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
             *path = local(path, scope)?;
         }
     }
-    add(
-        &mut records,
-        &mut bytes,
-        "repository",
-        directory,
-        &local_git,
-    )?;
+    records.add("repository", directory, &local_git)?;
     let branches: BTreeMap<_, &DirectoryBranch> = state
         .directory_branches
         .iter()
@@ -168,9 +138,7 @@ pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
         })
         .collect();
     for (id, branch) in &branches {
-        add(
-            &mut records,
-            &mut bytes,
+        records.add(
             "branch",
             id,
             &LocalBranch {
@@ -189,13 +157,7 @@ pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
         .filter(|tree| branches.contains_key(&tree.directory_branch_id))
     {
         let projected = tree(state, original)?;
-        add(
-            &mut records,
-            &mut bytes,
-            "tree",
-            &original.tree_id,
-            &projected,
-        )?;
+        records.add("tree", &original.tree_id, &projected)?;
         let commit = &state.commits[&original.commit_id];
         if commit.kind == "directory_commit"
             && commit.provenance.as_deref() == Some(original.tree_id.as_str())
@@ -211,15 +173,8 @@ pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
                 .pending_file_versions
                 .retain(|file, version| own_versions.contains(&(file.as_str(), version.as_str())));
             commit.entries = projected.entries;
-            add(
-                &mut records,
-                &mut bytes,
-                "commit",
-                &commit.commit_id,
-                &commit,
-            )?;
+            records.add("commit", &commit.commit_id, &commit)?;
         }
     }
-    records.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
-    Ok(records)
+    Ok(records.finish())
 }

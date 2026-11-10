@@ -1,11 +1,13 @@
 //! A bounded repository-local SQLite materialization of admitted directory state.
 //! It carries local compositions, not external mount/path history or authority to
 //! elect a publication. SQLite never opens an attacker-replaceable disk pathname.
+pub(super) use super::local_database::MAX_BYTES;
+use super::local_database::{Prepared, Record};
 use crate::{Error, ErrorCode, Result, State, disk::DiskRoot};
 use data_serialization::Serialize;
 use sqlite_access::{
-    Connection, Executor, Row, SqliteConnection,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
+    Row, SqliteConnection,
+    sqlite::{SqliteConnectOptions, SqliteOwnedBuf},
 };
 use std::path::Path;
 
@@ -16,87 +18,31 @@ pub(super) use material::{read_material, reconstruct_material};
 pub(crate) const NAME: &str = ".zxs-directory.sqlite";
 const FORMAT: &str = "directory-local-compositions";
 pub(super) const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
-pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ROWS: usize = 65_536;
 const META: &str = "CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL, repository_id TEXT NOT NULL, directory_id TEXT NOT NULL, source_sequence TEXT NOT NULL, records_hash TEXT NOT NULL) STRICT";
 const RECORDS: &str = "CREATE TABLE records (kind TEXT NOT NULL CHECK(kind IN ('repository','branch','tree','commit')), id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id)) STRICT";
 
-#[derive(Serialize)]
-struct Record {
-    kind: &'static str,
-    id: String,
-    body: String,
-}
-
-pub(super) struct Prepared {
-    pub(super) bytes: Vec<u8>,
-}
+pub(super) const SCHEMA: super::local_database::Schema = super::local_database::Schema {
+    name: "directory",
+    format: FORMAT,
+    identity: META,
+    records: RECORDS,
+    kinds: &["repository", "branch", "tree", "commit"],
+};
 
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::ContainerLayoutInvalid, message)
-}
-fn budget() -> Error {
-    Error::new(
-        ErrorCode::ResourceLimit,
-        "directory database exceeds its bounded record or byte budget",
-    )
 }
 
 pub(super) fn prepare(state: &State, directory: &str) -> Result<Prepared> {
     let records = projection::records(state, directory)?;
     let hash = storage_contract::object_hash("directory-local-records", &records)?;
     let git = &state.directory_git_repositories[directory];
-    encode_records(
+    SCHEMA.encode(
         records,
-        &git.repository_id,
-        directory,
+        [&git.repository_id, directory],
         state.sequence,
         &hash,
     )
-}
-
-fn encode_records(
-    records: Vec<Record>,
-    repository: &str,
-    directory: &str,
-    sequence: u64,
-    hash: &str,
-) -> Result<Prepared> {
-    let bytes = crate::sqlite_connection::run(
-        SqliteConnectOptions::new()
-            .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory),
-        async |connection| {
-            connection.execute("PRAGMA page_size=4096").await?;
-            connection.execute("PRAGMA max_page_count=4096").await?;
-            let mut tx = connection.begin().await?;
-            tx.execute(META).await?;
-            tx.execute(RECORDS).await?;
-            sqlite_access::query("INSERT INTO identity VALUES(1,?,?,?,?,?)")
-                .bind(FORMAT)
-                .bind(repository)
-                .bind(directory)
-                .bind(sequence.to_string())
-                .bind(hash)
-                .execute(&mut *tx)
-                .await?;
-            for record in records {
-                sqlite_access::query("INSERT INTO records VALUES(?,?,?)")
-                    .bind(record.kind)
-                    .bind(record.id)
-                    .bind(record.body)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            tx.commit().await?;
-            let bytes = connection.serialize(None).await?;
-            if bytes.len() > MAX_BYTES {
-                return Err(budget());
-            }
-            Ok(bytes.to_vec())
-        },
-    )?;
-    Ok(Prepared { bytes })
 }
 
 /// Admit a stored materialization before preserving/moving or replacing it.
@@ -162,7 +108,7 @@ pub(super) fn verify_located_at(
 
 fn verify(bytes: &[u8]) -> Result<StoredIdentity> {
     if bytes.len() > MAX_BYTES {
-        return Err(budget());
+        return Err(SCHEMA.budget());
     }
     let database = SqliteOwnedBuf::try_from(bytes)?;
     crate::sqlite_connection::run(
@@ -174,124 +120,8 @@ fn verify(bytes: &[u8]) -> Result<StoredIdentity> {
     )
 }
 
-async fn verify_schema(connection: &mut SqliteConnection) -> Result<()> {
-    let schemas = sqlite_access::query(
-        "SELECT CAST(substr(CAST(name AS BLOB),1,257) AS TEXT) AS name,CAST(substr(CAST(type AS BLOB),1,257) AS TEXT) AS type,CAST(substr(CAST(tbl_name AS BLOB),1,257) AS TEXT) AS tbl_name,CAST(substr(CAST(sql AS BLOB),1,4097) AS TEXT) AS sql FROM sqlite_schema ORDER BY name LIMIT 4",
-    )
-    .fetch_all(&mut *connection)
-    .await?;
-    if schemas.len() != 3 {
-        return Err(invalid("directory database has unexpected schema objects"));
-    }
-    for (row, (name, kind, table, ddl)) in schemas.into_iter().zip([
-        ("identity", "table", "identity", Some(META)),
-        ("records", "table", "records", Some(RECORDS)),
-        ("sqlite_autoindex_records_1", "index", "records", None),
-    ]) {
-        if row.try_get::<String, _>("name")? != name
-            || row.try_get::<String, _>("type")? != kind
-            || row.try_get::<String, _>("tbl_name")? != table
-            || row.try_get::<Option<String>, _>("sql")?.as_deref() != ddl
-        {
-            return Err(invalid(
-                "directory database schema differs from the supported format",
-            ));
-        }
-    }
-    Ok(())
-}
-
-async fn read_records(connection: &mut SqliteConnection) -> Result<Vec<Record>> {
-    let mut records = Vec::<Record>::new();
-    let mut bytes = 0;
-    loop {
-        // One bounded row at a time: a corrupt database must not multiply a
-        // shared overflow payload across an unbounded fetch_all allocation.
-        // No sentinel can precede every untrusted key: enumerate the first row
-        // without a predicate, then continue from an actually observed key.
-        let row = match records.last() {
-            Some(last) => sqlite_access::query(
-                "SELECT CAST(substr(CAST(kind AS BLOB),1,17) AS TEXT) AS kind,CAST(substr(CAST(id AS BLOB),1,257) AS TEXT) AS id,length(CAST(id AS BLOB)) AS id_bytes,length(CAST(body AS BLOB)) AS body_bytes FROM records WHERE (records.kind,records.id)>(?,?) ORDER BY records.kind,records.id LIMIT 1",
-            )
-            .bind(last.kind)
-            .bind(&last.id)
-            .fetch_optional(&mut *connection)
-            .await?,
-            None => {
-                sqlite_access::query("SELECT CAST(substr(CAST(kind AS BLOB),1,17) AS TEXT) AS kind,CAST(substr(CAST(id AS BLOB),1,257) AS TEXT) AS id,length(CAST(id AS BLOB)) AS id_bytes,length(CAST(body AS BLOB)) AS body_bytes FROM records ORDER BY records.kind,records.id LIMIT 1")
-                    .fetch_optional(&mut *connection)
-                    .await?
-            }
-        };
-        let Some(row) = row else {
-            break;
-        };
-        if records.len() == MAX_ROWS {
-            return Err(budget());
-        }
-        let kind: String = row.try_get("kind")?;
-        let kind = match kind.as_str() {
-            "repository" => "repository",
-            "branch" => "branch",
-            "tree" => "tree",
-            "commit" => "commit",
-            _ => return Err(invalid("directory database record kind is unsupported")),
-        };
-        let id: String = row.try_get("id")?;
-        if id.is_empty() || id.len() > 256 || row.try_get::<i64, _>("id_bytes")? != id.len() as i64
-        {
-            return Err(invalid(
-                "directory database record identity is not bounded exact text",
-            ));
-        }
-        let length = usize::try_from(row.try_get::<i64, _>("body_bytes")?)
-            .map_err(|_| invalid("directory database record length is invalid"))?;
-        let remaining = projection::MAX_RECORD_BYTES - bytes;
-        if id.len() > remaining || length > remaining - id.len() {
-            return Err(budget());
-        }
-        // Check the aggregate budget before copying an untrusted record body.
-        let body: String = sqlite_access::query_scalar(
-            "SELECT CAST(substr(CAST(body AS BLOB),1,?) AS TEXT) FROM records WHERE kind=? AND id=?",
-        )
-        .bind((length + 1) as i64)
-        .bind(kind)
-        .bind(&id)
-        .fetch_one(&mut *connection)
-        .await?;
-        if body.len() != length {
-            return Err(invalid(
-                "directory database record length differs from its bytes",
-            ));
-        }
-        bytes += id.len() + length;
-        records.push(Record { kind, id, body });
-    }
-    Ok(records)
-}
-
 async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredIdentity> {
-    platform_io::sqlite::enable_defensive(connection)
-        .await
-        .map_err(|error| {
-            Error::from(std::io::Error::other(error)).context(
-                ErrorCode::ContainerLayoutInvalid,
-                "cannot secure directory SQLite reader",
-            )
-        })?;
-    let limits = platform_io::sqlite::ConnectionLimits::new(MAX_BYTES as u32)
-        .with_max_sql_bytes(4096)
-        .with_max_vm_operations(100_000)
-        .with_max_bind_parameters(16);
-    platform_io::sqlite::apply_connection_limits(connection, limits)
-        .await
-        .map_err(|error| {
-            Error::from(std::io::Error::other(error)).context(
-                ErrorCode::ContainerLayoutInvalid,
-                "cannot bound directory SQLite reader",
-            )
-        })?;
-    verify_schema(connection).await?;
+    SCHEMA.verify_schema(connection).await?;
     // Bound returned values in bytes, preserving NUL tails for exact rejection.
     let identities = sqlite_access::query(
         "SELECT singleton,CAST(substr(CAST(format AS BLOB),1,65) AS TEXT) AS format,CAST(substr(CAST(repository_id AS BLOB),1,257) AS TEXT) AS repository_id,CAST(substr(CAST(directory_id AS BLOB),1,257) AS TEXT) AS directory_id,CAST(substr(CAST(source_sequence AS BLOB),1,21) AS TEXT) AS source_sequence,CAST(substr(CAST(records_hash AS BLOB),1,65) AS TEXT) AS records_hash FROM identity LIMIT 2",
@@ -322,7 +152,7 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<StoredId
     let directory = super::layout_locator::DirectoryId::parse(&directory)?;
     let sequence =
         storage_contract::parse_u64_decimal(&owner.try_get::<String, _>("source_sequence")?)?;
-    let records = read_records(connection).await?;
+    let records = SCHEMA.read_records(connection, |_| Ok(())).await?;
     let records_hash = storage_contract::object_hash("directory-local-records", &records)?;
     if records_hash != owner.try_get::<String, _>("records_hash")? {
         return Err(invalid(

@@ -51,12 +51,12 @@ pub(in crate::container_storage) fn reconstruct_material(
         });
     }
     validate_records(&records, file, history, material.source_sequence())?;
-    Ok(encode_records(
-        records,
-        file,
-        history,
-        material.source_sequence(),
-        material.records_hash(),
-    )?
-    .bytes)
+    Ok(SCHEMA
+        .encode(
+            records,
+            [file, history],
+            material.source_sequence(),
+            material.records_hash(),
+        )?
+        .bytes)
 }
