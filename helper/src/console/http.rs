@@ -1,12 +1,11 @@
 use super::{MAX_REQUEST_BYTES, State, boundary, work};
 mod activation;
-mod configuration_recovery;
+mod job;
 mod materials;
 mod packages;
 mod response_body;
 mod samba_enrollment;
 mod service_account;
-mod vfs;
 use data_serialization::{Deserialize, de::DeserializeOwned};
 use http_routing::{
     Json, Router,
@@ -17,6 +16,7 @@ use http_routing::{
     response::{Html, IntoResponse, Response},
     routing::{MethodRouter, get, post},
 };
+use job::{Empty, Job};
 use json_codec::json;
 use std::time::Duration;
 use storage_engine::offline_maintenance::Operation;
@@ -59,6 +59,21 @@ impl IntoResponse for Failure {
 }
 
 pub(super) fn router(state: State) -> Router {
+    let program = Job::new("program_installation", "install_worker");
+    let repair = Job::new("same_payload_program_repair", "program_repair_worker");
+    let deployment = Job::new("inactive_deployment_preparation", "deployment_worker");
+    let host = Job::new("host_root_preparation", "host_worker");
+    let layout = Job::new("private_layout_preparation", "initialization_worker");
+    let runtime = Job::new("empty_runtime_preparation", "runtime_directory_worker");
+    let configuration = Job::new("configuration_file_installation", "configuration_worker");
+    let configuration_recovery = Job::new(
+        "configuration_file_installation",
+        "configuration_recovery_worker",
+    );
+    let service_account = Job::new("local_service_account", "account_worker");
+    let packages = Job::new("system_packages", "packages_worker");
+    let vfs = Job::new("sealed_vfs_installation", "vfs_installation_worker");
+    let activation = Job::new("service_activation", "activation_worker");
     Router::new()
         .route("/", get(index))
         .route("/console.css", get(styles))
@@ -66,30 +81,30 @@ pub(super) fn router(state: State) -> Router {
         .route("/service-account.js", get(service_account::script))
         .route(
             "/api/initialization/account-preview",
-            post(service_account::preview),
+            service_account.route(crate::initialization::account::preview),
         )
         .route(
             "/api/initialization/account-prepare",
-            post(service_account::prepare),
+            service_account.route(crate::initialization::account::prepare),
         )
         .route("/first-install.js", get(first_install_script))
         .route("/vfs-install.js", get(vfs_install_script))
         .route("/packages.js", get(packages::script))
         .route(
             "/api/initialization/packages-preview",
-            post(packages::preview),
+            packages.route(crate::initialization::packages::preview),
         )
         .route(
             "/api/initialization/packages-refresh",
-            post(packages::refresh),
+            packages.route(crate::initialization::packages::refresh),
         )
         .route(
             "/api/initialization/packages-install",
-            post(packages::install),
+            packages.route(crate::initialization::packages::install),
         )
         .route(
             "/api/initialization/packages-finish",
-            post(packages::finish),
+            packages.route(crate::initialization::packages::finish),
         )
         .route("/api/status", get(status))
         .route(
@@ -254,40 +269,70 @@ pub(super) fn router(state: State) -> Router {
         .route("/api/install/payload", get(install_payload))
         .route("/api/install/materials-download", post(materials::archive))
         .route("/api/install/materials-manifest", post(materials::manifest))
-        .route("/api/install/preview", post(install_preview))
-        .route("/api/install/commit", post(install_commit))
-        .route("/api/install/vfs-preview", post(vfs::preview))
-        .route("/api/install/vfs-status", post(vfs::status))
-        .route("/api/install/vfs-install", post(vfs::commit))
-        .route("/api/install/repair-preview", post(repair_preview))
+        .route(
+            "/api/install/preview",
+            program.route(|_: Empty| crate::installation::preview()),
+        )
+        .route(
+            "/api/install/commit",
+            program.route(crate::installation::commit),
+        )
+        .route(
+            "/api/install/vfs-preview",
+            vfs.route(|_: Empty| crate::installation::vfs::preview()),
+        )
+        .route(
+            "/api/install/vfs-status",
+            vfs.route(crate::installation::vfs::status),
+        )
+        .route(
+            "/api/install/vfs-install",
+            vfs.route(crate::installation::vfs::commit),
+        )
+        .route(
+            "/api/install/repair-preview",
+            repair.route(|_: Empty| crate::installation::repair::preview()),
+        )
         .route(
             "/api/install/repair-recover-preview",
-            post(repair_recover_preview),
+            repair.route(crate::installation::repair::recover_preview),
         )
-        .route("/api/install/repair-commit", post(repair_commit))
+        .route(
+            "/api/install/repair-commit",
+            repair.route(crate::installation::repair::commit),
+        )
         .route(
             "/api/deployment/activation-preview",
-            post(activation::preview),
+            activation.route(crate::deployment::activation::preview),
         )
         .route("/api/deployment/activate", post(activation::activate))
         .route(
             "/api/deployment/activation-status",
-            post(activation::status),
+            activation.route(crate::deployment::activation::status),
         )
-        .route("/api/deployment/preview", post(deployment_preview))
-        .route("/api/deployment/prepare", post(deployment_prepare))
+        .route(
+            "/api/deployment/preview",
+            deployment.route(crate::deployment::preview),
+        )
+        .route(
+            "/api/deployment/prepare",
+            deployment.route(crate::deployment::prepare),
+        )
         .route(
             "/api/deployment/install-preview",
-            post(configuration_preview),
+            configuration.route(crate::deployment::install::preview),
         )
-        .route("/api/deployment/install-files", post(configuration_install))
+        .route(
+            "/api/deployment/install-files",
+            configuration.route(crate::deployment::install::commit),
+        )
         .route(
             "/api/deployment/install-recover-preview",
-            post(configuration_recovery::preview),
+            configuration_recovery.route(crate::deployment::install::recovery::preview),
         )
         .route(
             "/api/deployment/install-recover-files",
-            post(configuration_recovery::commit),
+            configuration_recovery.route(crate::deployment::install::recovery::commit),
         )
         .route(
             "/api/credentials/reset-preview",
@@ -316,12 +361,27 @@ pub(super) fn router(state: State) -> Router {
             "/api/credentials/samba-account-status",
             post(samba_enrollment::status),
         )
-        .route("/api/host/preview", post(host_preview))
-        .route("/api/host/prepare", post(host_prepare))
-        .route("/api/initialization/layout-preview", post(layout_preview))
-        .route("/api/initialization/layout-prepare", post(layout_prepare))
-        .route("/api/initialization/runtime-preview", post(runtime_preview))
-        .route("/api/initialization/runtime-prepare", post(runtime_prepare))
+        .route(
+            "/api/host/preview",
+            host.route(|_: Empty| crate::host::preview()),
+        )
+        .route("/api/host/prepare", host.route(crate::host::prepare))
+        .route(
+            "/api/initialization/layout-preview",
+            layout.route(crate::initialization::preview),
+        )
+        .route(
+            "/api/initialization/layout-prepare",
+            layout.route(crate::initialization::prepare),
+        )
+        .route(
+            "/api/initialization/runtime-preview",
+            runtime.route(crate::initialization::runtime::preview),
+        )
+        .route(
+            "/api/initialization/runtime-prepare",
+            runtime.route(crate::initialization::runtime::prepare),
+        )
         .route(
             "/api/initialization/administrator-preview",
             maintenance(Operation::FirstAdministratorPreview),
@@ -536,343 +596,6 @@ async fn shutdown(
 
 async fn install_payload() -> Json<json_codec::Value> {
     Json(crate::installation::availability())
-}
-
-#[derive(Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct InstallPreviewRequest {}
-async fn install_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let _: InstallPreviewRequest = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::preview().map_err(install_failure)
-    })
-    .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "install_worker", error))??;
-    Ok(Json(preview).into_response())
-}
-async fn install_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::installation::Commit = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::commit(input).map_err(install_failure)
-    })
-    .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "install_worker", error))??;
-    Ok(Json(receipt).into_response())
-}
-fn install_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "program_installation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn repair_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let _: InstallPreviewRequest = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::repair::preview().map_err(repair_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "program_repair_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn repair_recover_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::installation::repair::Original = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::repair::recover_preview(input).map_err(repair_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "program_repair_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn repair_commit(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::installation::repair::Commit = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::installation::repair::commit(input).map_err(repair_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "program_repair_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn repair_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "same_payload_program_repair",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn deployment_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::preview(input).map_err(deployment_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deployment_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn deployment_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::Prepare = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::prepare(input).map_err(deployment_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "deployment_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn deployment_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "inactive_deployment_preparation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn host_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let _: InstallPreviewRequest = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::host::preview().map_err(host_failure)
-    })
-    .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "host_worker", error))??;
-    Ok(Json(preview).into_response())
-}
-async fn host_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::host::Prepare = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::host::prepare(input).map_err(host_failure)
-    })
-    .await
-    .map_err(|error| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, "host_worker", error))??;
-    Ok(Json(receipt).into_response())
-}
-fn host_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "host_root_preparation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn layout_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::preview(input).map_err(layout_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "initialization_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn layout_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::Prepare = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::prepare(input).map_err(layout_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "initialization_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn layout_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "private_layout_preparation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn runtime_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::runtime::preview(input).map_err(runtime_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "runtime_directory_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-
-async fn runtime_prepare(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::initialization::runtime::Prepare = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::initialization::runtime::prepare(input).map_err(runtime_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "runtime_directory_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-
-fn runtime_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "empty_runtime_preparation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
-}
-
-async fn configuration_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::install::preview(input).map_err(configuration_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "configuration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn configuration_install(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::install::Commit = input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::install::commit(input).map_err(configuration_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "configuration_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-fn configuration_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    Failure::message(
-        StatusCode::CONFLICT,
-        "configuration_file_installation",
-        &crate::diagnostic_chain(error.as_ref()),
-    )
 }
 
 async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failure> {
