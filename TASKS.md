@@ -704,3 +704,8 @@
 
 - [x] 将 layout batch、layout locator 和孤立 file database 材料三类测试夹具显式创建为 0700，覆盖旧全量 CI 中 35 个共享前置失败；保留生产权限、路径、身份和恢复检查及原有断言。材料负向用例增加正常读取前置，避免权限错误误满足错误 scope／sidecar 拒绝断言。
 - [x] 对照既有私有临时目录范式，Rust 1.99 rustfmt 和差异检查通过；未更改全局 umask，未本地编译，真实测试以对应提交的自动全量 CI 为准。
+
+## 本轮 Web 管理夹具初始化修复
+
+- CI #1052（`a6d2d08c`）和 #1053（`2c3ee0a6`）在管理响应测试发现 `field_reassign_with_default`；将 recovering 的初值并入同一 Model 结构体初始化，全部响应、错误与状态断言保持，不修改生产行为或增加 lint 豁免。
+- 对齐 `90baf3c1`，固定 Rust 1.99 rustfmt 检查通过；未本地编译或执行 Rust 测试，Clippy 与全量运行结果待本次 push CI。

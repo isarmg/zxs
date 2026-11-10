@@ -563,8 +563,10 @@ fn malformed_status_keeps_recovery_fences_and_does_not_refresh_files() {
 
 #[test]
 fn storage_response_accepts_current_embedded_and_managed_forms_only() {
-    let mut model = Model::default();
-    model.recovering = true;
+    let mut model = Model {
+        recovering: true,
+        ..Default::default()
+    };
     response::storage(json!({"state":"ready", "retryable":false}))
         .unwrap()
         .apply(&mut model);
