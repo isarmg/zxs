@@ -1,6 +1,7 @@
 //! Certified cancellation of an uncompleted pure addition or source-only backup
 //! fence. Generation identity is separate from its fixed-original-majority witness.
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use crate::metadata_map::Reference;
 use crate::metadata_map::{Encoder, ProofMeasure};
 use archive::persistent::abort_view::VerifiedAbortArchive;
@@ -336,7 +337,8 @@ impl AbortContext {
     ) -> Result<ObservedAbortVote> {
         let acceptance = self.acceptance(disk_id)?;
         let acceptance_hash = object_hash(ACCEPTANCE_KIND, acceptance)?;
-        decision.verify_abort(
+        decision.verify(
+            DecisionKind::Abort,
             &self.core.transition_hash,
             &acceptance.identity,
             &self.generation.hash,
@@ -426,7 +428,8 @@ impl AbortContext {
                 "abort acceptance differs from original member and fence",
             ));
         }
-        vote.decision.verify_abort(
+        vote.decision.verify(
+            DecisionKind::Abort,
             &self.core.transition_hash,
             &acceptance.identity,
             &self.generation.hash,

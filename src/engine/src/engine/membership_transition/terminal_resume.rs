@@ -12,6 +12,7 @@ use crate::engine::disk_registry::objects::{GraphObjects, collect_objects, read_
 use crate::engine::disk_registry::{
     DiskRegistryCommitment, VerifiedDiskRegistry, published::continuation::RegistryBoundary,
 };
+use crate::engine::membership_transition::decision::DecisionKind;
 use std::{collections::BTreeSet, sync::Arc};
 
 pub(in crate::engine) mod cancellation;
@@ -302,7 +303,8 @@ impl ResumeCore {
                     "resume target decision missing",
                 )
             })?;
-            vote.verify_terminal_resume(
+            vote.verify(
+                DecisionKind::TerminalResume,
                 &transition,
                 identity,
                 &proposal,
@@ -367,10 +369,13 @@ impl ResumeCore {
         self.verify_retained_seal(root, disk)?;
         let transition = object_hash(INTENT_KIND, &intent)?;
         let store = decision::DecisionStore::open(root, identity, &transition, false)?;
-        let observed = store.terminal_resume_receipt(
+        let observed = store.receipt(
+            DecisionKind::TerminalResume,
             &self.proposal.hash()?,
             &self.proposal.acceptance_hash(&disk.disk_id)?,
             false,
+            #[cfg(feature = "fault-injection")]
+            None,
         )?;
         if self.votes.get(&disk.disk_id) != Some(&observed) {
             return Err(Error::new(

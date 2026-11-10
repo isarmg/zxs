@@ -1,6 +1,7 @@
 //! An immutable blocking set of NEW membership choices cancels one exact
 //! unpublished request. The old terminal quorum never votes in the new slots.
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 
 pub(in crate::engine) mod attempts;
 
@@ -79,7 +80,8 @@ impl ResumeProposal {
             let identity = self.member_identity(&disk.disk_id)?;
             resume.insert(
                 disk.disk_id.clone(),
-                DecisionReceipt::plan_terminal_resume(
+                DecisionReceipt::plan(
+                    DecisionKind::TerminalResume,
                     &transition,
                     identity,
                     &self.hash()?,
@@ -89,7 +91,8 @@ impl ResumeProposal {
             if self.retained_request().is_none() {
                 cancel.insert(
                     disk.disk_id.clone(),
-                    DecisionReceipt::plan_terminal_resume_cancel(
+                    DecisionReceipt::plan(
+                        DecisionKind::TerminalResumeCancel,
                         &transition,
                         identity,
                         &self.cancellation_hash()?,
@@ -253,7 +256,8 @@ impl ResumeCancellation {
                         "retained roots cannot vote in fresh resume cancellation",
                     )
                 })?;
-            decision.verify_terminal_resume_cancel(
+            decision.verify(
+                DecisionKind::TerminalResumeCancel,
                 &transition,
                 identity,
                 &cancellation,

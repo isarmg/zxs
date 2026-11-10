@@ -4,6 +4,7 @@
 use super::super::decision::DecisionFault;
 use super::super::decision::{DecisionReceipt, DecisionStore};
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use std::collections::BTreeSet;
 
@@ -489,7 +490,8 @@ impl Engine {
                         || self.require_pending_addition_chain(),
                     )?;
                 }
-                let decision = store.decision.joint_receipt(
+                let decision = store.decision.receipt(
+                    DecisionKind::Joint,
                     &proposal.object.hash,
                     &acceptance.hash,
                     install,

@@ -2,6 +2,7 @@
 //! is not an authority anchor: detached callers must supply an independently
 //! retained digest. Live callers instead prove every actual original choice.
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 
 /// A caller-retained original native decision digest, NOT a value to discover
 /// from the same untrusted target it is meant to authenticate. Parsing checks
@@ -228,7 +229,8 @@ fn verify_original_members(certificate: &BackupDecisionCertificate) -> Result<()
             },
             MAX_DECISION_BYTES,
         )?;
-        certificate.decisions[&disk.disk_id].verify_backup(
+        certificate.decisions[&disk.disk_id].verify(
+            DecisionKind::BackupRegistryPlacement,
             &core.transition_hash,
             &member.identity,
             &certificate.core_hash,

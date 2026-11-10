@@ -6,6 +6,7 @@ use super::super::super::terminal_resume::cancellation::{
     ResumeCancellation, ResumeCancellationIntent, attempts,
 };
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 
 const CANCEL_INTENT_FILE: &str = "resume-cancel-intent.json";
 
@@ -309,9 +310,13 @@ impl TerminalMetadataResume {
                 .write_json(&member.root.path().join("disk.json"), &member.seal, false)?;
             let store =
                 DecisionStore::open(&member.root, &member.seal.identity, &transition, true)?;
-            let receipt = store.terminal_resume_cancel_receipt(
+            let receipt = store.receipt(
+                DecisionKind::TerminalResumeCancel,
                 &self.proposal.cancellation_hash()?,
                 &self.proposal.cancel_acceptance(&disk_id)?,
+                true,
+                #[cfg(feature = "fault-injection")]
+                None,
             )?;
             decisions.insert(disk_id, receipt);
         }

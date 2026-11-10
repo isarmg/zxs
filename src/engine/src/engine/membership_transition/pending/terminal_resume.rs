@@ -1,5 +1,6 @@
 //! Explicit terminal resumption holds SYSTEM and all selected fresh directories.
 //! Every new voter rereads the complete old archive; nonvoters prove readiness.
+use crate::engine::membership_transition::decision::DecisionKind;
 mod cancellation;
 mod data;
 use super::super::terminal_resume::cancellation::attempts;
@@ -426,10 +427,13 @@ impl TerminalMetadataResume {
                 &transition,
                 true,
             )?;
-            let receipt = store.terminal_resume_receipt(
+            let receipt = store.receipt(
+                DecisionKind::TerminalResume,
                 &proposal_hash,
                 &self.proposal.acceptance_hash(&disk.disk_id)?,
                 true,
+                #[cfg(feature = "fault-injection")]
+                None,
             )?;
             self.votes.insert(disk.disk_id.clone(), receipt);
         }

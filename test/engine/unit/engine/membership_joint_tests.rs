@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use std::fs;
 
 struct Fixture {
@@ -755,7 +756,14 @@ fn membership_joint_partial_abort_vetoes_every_new_vote_and_survives_restart() {
     )
     .unwrap();
     decisions
-        .abort_for_test(&"a".repeat(64), &"b".repeat(64))
+        .receipt(
+            DecisionKind::Abort,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
         .unwrap();
     let selected = fs::read(fixture.decision_path(2)).unwrap();
     for restart in [false, true] {
@@ -792,7 +800,14 @@ fn membership_joint_minority_joint_is_preserved_when_another_member_selects_abor
     )
     .unwrap();
     decisions
-        .abort_for_test(&"a".repeat(64), &"b".repeat(64))
+        .receipt(
+            DecisionKind::Abort,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
         .unwrap();
     assert!(fixture.engine.resume_membership_joint_decision().is_err());
     assert_eq!(fs::read(fixture.decision_path(0)).unwrap(), first);

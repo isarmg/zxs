@@ -5,6 +5,7 @@ use super::*;
 use crate::engine::backup_preparation::{
     BackupRegistryProjection, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
+use crate::engine::membership_transition::decision::DecisionKind;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
 };
@@ -200,7 +201,8 @@ impl BackupChoiceContext {
             )?;
             planned.insert(
                 id.clone(),
-                DecisionReceipt::plan_backup(
+                DecisionReceipt::plan(
+                    DecisionKind::BackupRegistryPlacement,
                     &self.transition_hash,
                     &source.evidence.identity,
                     &object.hash,
@@ -242,8 +244,16 @@ impl BackupChoiceContext {
             preparation_checkpoint(stop)?;
             prepared.recheck_names()?;
             source.recheck(stop)?;
-            let receipt = stores[id].backup_receipt(&object.hash, &acceptances[id].hash)?;
-            receipt.verify_backup(
+            let receipt = stores[id].receipt(
+                DecisionKind::BackupRegistryPlacement,
+                &object.hash,
+                &acceptances[id].hash,
+                true,
+                #[cfg(feature = "fault-injection")]
+                None,
+            )?;
+            receipt.verify(
+                DecisionKind::BackupRegistryPlacement,
                 &self.transition_hash,
                 &source.evidence.identity,
                 &object.hash,

@@ -1,6 +1,7 @@
 //! Source-only regressions for actual immutable choices, cancellation ownership,
 //! cold receipts, and exact successor attempts. The integration owner runs them.
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use crate::engine::membership_transition::decision::DecisionStore;
 use crate::{TerminalMetadataResumeCancelOutcome, TerminalMetadataResumeCancellationPhase};
 
@@ -35,17 +36,24 @@ fn choose(pending: &TerminalMetadataResume, count: usize, resume: bool) {
             DecisionStore::open(&member.root, &member.seal.identity, &transition, true).unwrap();
         if resume {
             store
-                .terminal_resume_receipt(
+                .receipt(
+                    DecisionKind::TerminalResume,
                     &pending.proposal.hash().unwrap(),
                     &pending.proposal.acceptance_hash(&disk.disk_id).unwrap(),
                     true,
+                    #[cfg(feature = "fault-injection")]
+                    None,
                 )
                 .unwrap();
         } else {
             store
-                .terminal_resume_cancel_receipt(
+                .receipt(
+                    DecisionKind::TerminalResumeCancel,
                     &pending.proposal.cancellation_hash().unwrap(),
                     &pending.proposal.cancel_acceptance(&disk.disk_id).unwrap(),
+                    true,
+                    #[cfg(feature = "fault-injection")]
+                    None,
                 )
                 .unwrap();
         }

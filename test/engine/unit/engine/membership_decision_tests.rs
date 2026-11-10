@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use std::{
     fs,
     sync::{Arc, Barrier},
@@ -78,6 +79,228 @@ fn changed_identity(identity: &MemberIdentity, field: &str, value: &str) -> Memb
     let mut encoded = json_codec::to_value(identity).unwrap();
     encoded[field] = json_codec::to_value(value).unwrap();
     json_codec::from_value(encoded).unwrap()
+}
+
+const DECISION_KINDS: [(DecisionKind, &str, &str); 8] = [
+    (
+        DecisionKind::BackupRegistryPlacement,
+        "BackupRegistryPlacement",
+        "core_hash",
+    ),
+    (DecisionKind::Readmission, "Readmission", "proposal_hash"),
+    (DecisionKind::Joint, "Joint", "proposal_hash"),
+    (DecisionKind::Abort, "Abort", "core_hash"),
+    (DecisionKind::TerminalResume, "TerminalResume", "core_hash"),
+    (
+        DecisionKind::TerminalChainReadmission,
+        "TerminalChainReadmission",
+        "core_hash",
+    ),
+    (
+        DecisionKind::TerminalChainIoAdmission,
+        "TerminalChainIoAdmission",
+        "core_hash",
+    ),
+    (
+        DecisionKind::TerminalResumeCancel,
+        "TerminalResumeCancel",
+        "core_hash",
+    ),
+];
+
+fn choose_kind(
+    store: &DecisionStore,
+    kind: DecisionKind,
+    install: bool,
+) -> Result<DecisionReceipt> {
+    store.receipt(
+        kind,
+        &"2".repeat(64),
+        &"3".repeat(64),
+        install,
+        #[cfg(feature = "fault-injection")]
+        None,
+    )
+}
+
+#[test]
+fn membership_decision_kinds_keep_exact_native_fields_and_receipt_binding() {
+    let fixture = Fixture::new();
+    let value = "2".repeat(64);
+    let acceptance = "3".repeat(64);
+    let changed = "4".repeat(64);
+    let other_identity = changed_identity(&fixture.identity, "binding_generation", "2");
+    for (kind, tag, field) in DECISION_KINDS {
+        let receipt = DecisionReceipt::plan(
+            kind,
+            &fixture.transition,
+            &fixture.identity,
+            &value,
+            &acceptance,
+        )
+        .unwrap();
+        // Independent wire fixture: a shared constructor must not rename the
+        // two proposal fields, collapse kinds or change the native hash input.
+        let mut choice = json_codec::json!({
+            "kind": tag,
+            "acceptance_hash": acceptance,
+        });
+        choice[field] = json_codec::to_value(&value).unwrap();
+        let record = json_codec::json!({
+            "format": "fenced-membership-decision",
+            "transition_hash": fixture.transition,
+            "identity": fixture.identity,
+            "choice": choice,
+        });
+        assert_eq!(
+            canonical_json(&receipt.record).unwrap(),
+            canonical_json(&record).unwrap(),
+            "{kind:?}",
+        );
+        assert_eq!(
+            receipt.record_hash,
+            object_hash(DECISION_KIND, &record).unwrap(),
+            "{kind:?}",
+        );
+        let decoded: DecisionReceipt = decode_strict(&canonical_json(&receipt).unwrap()).unwrap();
+        decoded
+            .verify(
+                kind,
+                &fixture.transition,
+                &fixture.identity,
+                &value,
+                &acceptance,
+            )
+            .unwrap();
+        for (transition, identity, value, acceptance) in [
+            (&changed, &fixture.identity, &value, &acceptance),
+            (&fixture.transition, &other_identity, &value, &acceptance),
+            (
+                &fixture.transition,
+                &fixture.identity,
+                &changed,
+                &acceptance,
+            ),
+            (&fixture.transition, &fixture.identity, &value, &changed),
+        ] {
+            assert_eq!(
+                decoded
+                    .verify(kind, transition, identity, value, acceptance)
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::LogFork,
+                "{kind:?}",
+            );
+        }
+        let mut forged = decoded;
+        forged.record_hash = changed.clone();
+        assert_eq!(
+            forged
+                .verify(
+                    kind,
+                    &fixture.transition,
+                    &fixture.identity,
+                    &value,
+                    &acceptance,
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::LogFork,
+        );
+    }
+}
+
+#[test]
+fn membership_decision_kinds_reject_malformed_hashes_before_local_selection() {
+    let fixture = Fixture::new();
+    let store = fixture.open();
+    let value = "2".repeat(64);
+    let acceptance = "3".repeat(64);
+    for (kind, _, _) in DECISION_KINDS {
+        for malformed in [
+            String::new(),
+            "1".repeat(63),
+            "A".repeat(64),
+            "g".repeat(64),
+        ] {
+            for (transition, value, acceptance) in [
+                (&malformed, &value, &acceptance),
+                (&fixture.transition, &malformed, &acceptance),
+                (&fixture.transition, &value, &malformed),
+            ] {
+                assert_eq!(
+                    DecisionReceipt::plan(kind, transition, &fixture.identity, value, acceptance,)
+                        .unwrap_err()
+                        .code(),
+                    ErrorCode::ObjectCorrupt,
+                );
+            }
+            for (value, acceptance) in [(&malformed, &acceptance), (&value, &malformed)] {
+                assert_eq!(
+                    store
+                        .receipt(
+                            kind,
+                            value,
+                            acceptance,
+                            true,
+                            #[cfg(feature = "fault-injection")]
+                            None,
+                        )
+                        .unwrap_err()
+                        .code(),
+                    ErrorCode::ObjectCorrupt,
+                );
+                assert!(!fixture.path().exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn membership_decision_every_kind_remains_disjoint_and_requires_actual_readback() {
+    for (chosen, _, _) in DECISION_KINDS {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        assert_eq!(
+            choose_kind(&store, chosen, false).unwrap_err().code(),
+            ErrorCode::RecoveryRequired,
+        );
+        assert!(!fixture.path().exists());
+        let planned = DecisionReceipt::plan(
+            chosen,
+            &fixture.transition,
+            &fixture.identity,
+            &"2".repeat(64),
+            &"3".repeat(64),
+        )
+        .unwrap();
+        assert!(store.verify_receipt(&planned, false).is_err());
+        assert!(!fixture.path().exists());
+        let selected = choose_kind(&store, chosen, true).unwrap();
+        assert_eq!(selected, planned);
+        let original = fs::read(fixture.path()).unwrap();
+        let reopened = fixture.open();
+        for (requested, _, _) in DECISION_KINDS {
+            for install in [false, true] {
+                let result = choose_kind(&reopened, requested, install);
+                if requested == chosen {
+                    assert_eq!(result.unwrap(), selected);
+                } else {
+                    assert_eq!(result.unwrap_err().code(), ErrorCode::LogFork);
+                }
+                assert_eq!(fs::read(fixture.path()).unwrap(), original);
+            }
+        }
+        reopened.verify_receipt(&selected, false).unwrap();
+        fs::write(fixture.path(), b"{broken").unwrap();
+        for synchronize in [false, true] {
+            assert!(reopened.verify_receipt(&selected, synchronize).is_err());
+            assert_eq!(fs::read(fixture.path()).unwrap(), b"{broken");
+        }
+        fs::remove_file(fixture.path()).unwrap();
+        assert!(reopened.verify_receipt(&selected, false).is_err());
+        assert!(!fixture.path().exists());
+    }
 }
 
 #[test]
@@ -287,7 +510,8 @@ fn membership_decision_portable_receipt_is_not_actual_local_selection() {
         record_hash: object_hash(DECISION_KIND, &record).unwrap(),
         record: record.clone(),
     };
-    fake.verify_joint(
+    fake.verify(
+        DecisionKind::Joint,
         &fixture.transition,
         &fixture.identity,
         &"2".repeat(64),
@@ -304,7 +528,8 @@ fn membership_decision_portable_receipt_is_not_actual_local_selection() {
     assert!(store.verify_receipt(&wrong, true).is_err());
     assert!(
         wrong
-            .verify_joint(
+            .verify(
+                DecisionKind::Joint,
                 &fixture.transition,
                 &fixture.identity,
                 &"2".repeat(64),

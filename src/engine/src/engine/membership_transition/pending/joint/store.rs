@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 
 pub(super) struct PreparedProposal {
     pub(super) object: PreparedMetadataObject,
@@ -648,7 +649,8 @@ fn verify_certificate_with(
                 "joint vote member binding differs",
             ));
         }
-        vote.decision.verify_joint(
+        vote.decision.verify(
+            DecisionKind::Joint,
             &verified.proposal.transition_hash,
             &vote.identity,
             proposal_hash,

@@ -2,6 +2,7 @@
 //! slot. This is not the later locator/Stop transaction or an Engine writer.
 use super::epoch::{ChainEpochSource, SelectedPlan};
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 
 const REQUEST: &str = "chain-io-decision-request.json";
 const COMPLETE: &str = "chain-io-decision.json";
@@ -43,7 +44,8 @@ impl Complete {
         let hash = plan.object()?.hash;
         Ok(Self {
             format: Format::Decided,
-            decision: DecisionReceipt::plan_terminal_chain_io(
+            decision: DecisionReceipt::plan(
+                DecisionKind::TerminalChainIoAdmission,
                 plan.epoch(),
                 &source.request().directory,
                 &hash,
@@ -311,10 +313,13 @@ impl<'a, 'm> Owner<'a, 'm> {
             self.plan.epoch(),
             !presence.target_complete,
         )?;
-        let actual = store.terminal_chain_io_receipt(
+        let actual = store.receipt(
+            DecisionKind::TerminalChainIoAdmission,
             &self.expected.plan_hash,
             &acceptance(&self.plan, &self.expected.plan_hash)?,
             !presence.target_complete,
+            #[cfg(feature = "fault-injection")]
+            None,
         )?;
         if actual != self.expected.decision {
             return Err(Error::new(

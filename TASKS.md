@@ -5,6 +5,14 @@
 
 
 
+
+## 本轮共同成员决定模型整合
+
+- Backup registry/placement、Readmission、Joint、Abort、TerminalResume、TerminalChainReadmission、TerminalChainIoAdmission 与 TerminalResumeCancel 共用具名 DecisionKind 和单一 record／portable receipt／本盘 receipt 算法。24 个生产调用点显式保留各自种类，删除平行构造器、terminal_chain_io 专用包装和仅供测试的决定写入入口；15 个生产文件净减少 286 行，不压缩业务语句。
+- 持久 Choice 标签、core_hash／proposal_hash 字段、记录身份、摘要域和回执结构不变；原全成员／多数门槛、Joint 新选择准入、Abort 少数已选槽跳过政策、Backup 全目标核验与 Terminal 取消边界不改。select／confirm、实际盘名与 inode 复核、文件／目录同步、未确定发布读回、I/O owner 与故障注入原体保留，不新增缓存、格式兼容或恢复路径。
+- 根测试保留原竞态／故障矩阵，补八种规范字节与摘要输入、畸形摘要拒绝、8×8 类别隔离、只读缺席拒绝、portable 计划不冒充本盘选择、冷开幂等及成功后损坏／缺失重新拒绝。原测试直接使用共同 receipt API，不扩大生产测试 hook。
+- 开发基线为 main `87307cd6`，发布时与最新 main `d58507d7` 核对，生产和测试路径未发生上游变化。静态核对通过：79 个 membership 子树文件对应远端 blob，24 个生产调用迁移可逆还原全部原调用方正文，20 个持久化／冲突政策函数与 9 个类型声明保持原体；固定 Rust 1.99 格式及严格差异检查通过。未本地编译或运行 Rust 测试，实际验收待准确提交 CI；本条不宣称 Backup 整条流程已完成重构。
+
 ## 本轮 SQLite 直接连接所有权统一
 
 - 直接读写索引连接共用一个初始化和失败关闭流程，入口仍分别选择创建策略、读写模式、busy timeout 与原生限额。WAL、FULL、defensive、限额设置与显式等待 close 的顺序不变；同时失败仍保留 InitializationAndClose 的两项原因，单独失败保持原错误映射。

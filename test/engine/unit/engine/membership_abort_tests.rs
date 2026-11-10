@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::membership_transition::decision::DecisionKind;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -87,9 +88,13 @@ impl Fixture {
     fn receipt(&self, context: &AbortContext, index: usize) -> DecisionReceipt {
         let acceptance = context.acceptance(self.id(index)).unwrap();
         self.store(context, index)
-            .abort_for_test(
+            .receipt(
+                DecisionKind::Abort,
                 &context.generation.hash,
                 &object_hash(ACCEPTANCE_KIND, acceptance).unwrap(),
+                true,
+                #[cfg(feature = "fault-injection")]
+                None,
             )
             .unwrap()
     }
@@ -113,7 +118,8 @@ impl Fixture {
 
     fn joint(&self, context: &AbortContext, index: usize) -> DecisionReceipt {
         self.store(context, index)
-            .joint_receipt(
+            .receipt(
+                DecisionKind::Joint,
                 &"a".repeat(64),
                 &"b".repeat(64),
                 true,
@@ -336,13 +342,17 @@ fn membership_abort_minor_joint_can_remain_but_no_joint_majority_can_double_vote
             assert!(
                 fixture
                     .store(&context, index)
-                    .abort_for_test(
+                    .receipt(
+                        DecisionKind::Abort,
                         &context.generation.hash,
                         &object_hash(
                             ACCEPTANCE_KIND,
                             context.acceptance(fixture.id(index)).unwrap()
                         )
-                        .unwrap()
+                        .unwrap(),
+                        true,
+                        #[cfg(feature = "fault-injection")]
+                        None,
                     )
                     .is_err()
             );
@@ -397,7 +407,8 @@ fn membership_abort_partial_abort_blocks_joint_and_keeps_original_bytes() {
     assert!(store.require_joint_allowed().is_err());
     assert!(
         store
-            .joint_receipt(
+            .receipt(
+                DecisionKind::Joint,
                 &"a".repeat(64),
                 &"b".repeat(64),
                 true,

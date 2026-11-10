@@ -2,6 +2,8 @@
 
 `storage-engine` 实现单写者、完整文件版本、不可变发布证明与离线恢复。对外入口由 `lib.rs` 导出；实现模块默认私有，不允许调用方绕过 `Engine` 的业务约束、操作幂等与发布流程。
 
+成员共同决定由 `membership_transition::decision` 的八种 `DecisionKind` 选择单一记录、portable receipt 与本盘收据算法。持久 `Choice` 标签及 `core_hash`／`proposal_hash` 字段保持原生表示，不混同 Backup、Joint、Abort、Readmission、Terminal 恢复、取消、链回接与后续 I/O 选择。各业务仍自行执行原固定成员、全目标、fresh admission 与少数已选槽政策；共同存储只确认指定的不可变槽位，保留实际文件／目录同步、命名身份复核、未确定结果读回与 I/O 生命周期。纯计划／验证不产生本盘耐久证据，也不授权目标 writer。
+
 membership 的 Exit、登记续作、readmission、terminal/resume 与 retirement 信封共用 `disk_registry::objects` 的持久图对象表示，JSON 仍是摘要到 `{kind,value}` 的有序映射。合并已准备图时保留冲突分类并直接移动解码树；信封读取只解析对象地址与种类，实际 registry/mask loader 统一限制字节、校验引用域摘要及完整业务图，避免在相邻读取层重复编码哈希。磁盘信封入口、归档认证、当前身份与提交屏障保持各自职责。
 
 Add root-extension 与 Exit stop-plan 共用私有 `activation::plan_store` 持有 SYSTEM、操作目录和选中 head，原生计划／head 的严格格式与领域验证继续归各流程负责。冷读、目录清单、writer 身份和完成记录只有一个存储实现；Exit 的发布前 PLAN／HEAD 同步保留为显式调用，Add 保持原只读核对，不改写入屏障。

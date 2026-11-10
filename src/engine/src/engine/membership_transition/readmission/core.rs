@@ -3,6 +3,7 @@
 use super::super::archive::persistent::abort_view::ArchivedAbortMember;
 use super::*;
 use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
+use crate::engine::membership_transition::decision::DecisionKind;
 
 const PROPOSAL_KIND: &str = "disk-readmission-proposal";
 const ACCEPTANCE_KIND: &str = "disk-readmission-acceptance";
@@ -214,7 +215,14 @@ impl Proposal {
         let verified = self.verify()?;
         let (identity, acceptance) = verified.acceptance(&disk.disk_id)?;
         let store = DecisionStore::open(root, &identity, &self.transition_hash, true)?;
-        store.readmission_receipt(&verified.hash, &acceptance)
+        store.receipt(
+            DecisionKind::Readmission,
+            &verified.hash,
+            &acceptance,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
     }
 }
 
@@ -333,7 +341,8 @@ impl ReadmissionCore {
                 )
             })?;
             let (identity, acceptance) = verified.acceptance(&disk.disk_id)?;
-            decision.verify_readmission(
+            decision.verify(
+                DecisionKind::Readmission,
                 &self.proposal.transition_hash,
                 &identity,
                 &verified.hash,
@@ -342,7 +351,8 @@ impl ReadmissionCore {
         }
         let request = request(intent)?;
         let (identity, acceptance) = verified.acceptance(&request.target.disk_id)?;
-        self.target_decision.verify_readmission(
+        self.target_decision.verify(
+            DecisionKind::Readmission,
             &self.proposal.transition_hash,
             &identity,
             &verified.hash,

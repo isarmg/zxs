@@ -10,6 +10,7 @@ use super::{
 use crate::engine::disk_lifecycle::terminal::{
     TerminalManagement, retirement::ChainReadmissionProposal,
 };
+use crate::engine::membership_transition::decision::DecisionKind;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::{Path, PathBuf};
 mod activation;
@@ -168,7 +169,8 @@ impl Selection {
         PreparedMetadataObject::new(SELECTION_KIND, self, MAX_METADATA)?;
         let certificate = Certificate {
             selection_hash: hash.clone(),
-            decision: DecisionReceipt::plan_terminal_chain(
+            decision: DecisionReceipt::plan(
+                DecisionKind::TerminalChainReadmission,
                 &hash,
                 &self.directory,
                 &hash,
@@ -186,7 +188,8 @@ impl Selection {
                 "chain target certificate changed the selected source",
             ));
         }
-        certificate.decision.verify_terminal_chain(
+        certificate.decision.verify(
+            DecisionKind::TerminalChainReadmission,
             &hash,
             &self.directory,
             &hash,

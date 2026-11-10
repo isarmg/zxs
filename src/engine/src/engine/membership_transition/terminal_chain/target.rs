@@ -2,6 +2,7 @@
 //! fresh seal, active journal, locator expansion or root discovery is supplied.
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::runtime::{management_error, open_store};
+use crate::engine::membership_transition::decision::DecisionKind;
 pub(super) struct Held {
     pub(super) root: DiskRoot,
     writer: std::sync::Arc<crate::disk::FenceOwner>,
@@ -112,7 +113,14 @@ impl Held {
         // Planning a certificate above never substitutes for this local vote.
         require_selected(management, selection)?;
         let store = DecisionStore::open(&self.root, &self.identity, &hash, true)?;
-        let decision = store.terminal_chain_receipt(&hash, &selection.acceptance()?, true)?;
+        let decision = store.receipt(
+            DecisionKind::TerminalChainReadmission,
+            &hash,
+            &selection.acceptance()?,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )?;
         let certificate = Certificate {
             selection_hash: hash.clone(),
             decision,
@@ -190,7 +198,14 @@ impl Held {
             .verify_installed_archive(&archive)?;
         selection.verify(&source)?;
         let store = DecisionStore::open(&self.root, &self.identity, &hash, false)?;
-        let actual = store.terminal_chain_receipt(&hash, &selection.acceptance()?, false)?;
+        let actual = store.receipt(
+            DecisionKind::TerminalChainReadmission,
+            &hash,
+            &selection.acceptance()?,
+            false,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )?;
         if actual != certificate.decision {
             return Err(Error::new(
                 ErrorCode::LogFork,
