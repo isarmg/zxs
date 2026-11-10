@@ -99,3 +99,66 @@ fn directory_batch_kind_preserves_request_bytes_and_digest_input() {
         }
     }
 }
+
+#[test]
+fn stored_content_tokens_and_custom_diagnostics_remain_exact() {
+    for (state, token) in [
+        (ContentState::Available, "AVAILABLE"),
+        (ContentState::Purged, "PURGED"),
+        (ContentState::Migrated, "MIGRATED"),
+        (ContentState::Retired, "RETIRED"),
+    ] {
+        let encoded = format!("\"{token}\"");
+        assert_eq!(state.as_str(), token);
+        assert_eq!(json_codec::to_string(&state).unwrap(), encoded);
+        assert_eq!(
+            json_codec::from_str::<ContentState>(&encoded).unwrap(),
+            state
+        );
+        assert!(json_codec::from_str::<ContentState>(&format!("{{{encoded}:null}}")).is_err());
+    }
+    assert_eq!(
+        json_codec::from_str::<ContentState>(r#""AV\u0041ILABLE""#).unwrap(),
+        ContentState::Available
+    );
+    for invalid in ["\"available\"", "\"UNKNOWN\"", "null", "0", "true", "[]"] {
+        assert!(json_codec::from_str::<ContentState>(invalid).is_err());
+    }
+    let content = json_codec::from_str::<ContentState>("0")
+        .unwrap_err()
+        .to_string();
+    assert!(content.contains("expected AVAILABLE, PURGED, MIGRATED or RETIRED as a string"));
+    let health = json_codec::from_str::<CurrentHealth>("0")
+        .unwrap_err()
+        .to_string();
+    assert!(health.contains("expected a current health string"));
+    let branch = json_codec::from_str::<BranchState>("0")
+        .unwrap_err()
+        .to_string();
+    assert!(branch.contains("expected BranchState string"));
+}
+
+#[test]
+fn namespace_entry_kind_tokens_and_diagnostics_remain_exact() {
+    for (kind, token) in [
+        (NamespaceEntryKind::File, "file"),
+        (NamespaceEntryKind::Directory, "directory"),
+    ] {
+        let encoded = format!("\"{token}\"");
+        assert_eq!(json_codec::to_string(&kind).unwrap(), encoded);
+        assert_eq!(
+            json_codec::from_str::<NamespaceEntryKind>(&encoded).unwrap(),
+            kind
+        );
+        assert!(
+            json_codec::from_str::<NamespaceEntryKind>(&format!("{{{encoded}:null}}")).is_err()
+        );
+    }
+    for invalid in ["\"FILE\"", "\"unknown\"", "null", "0", "true", "[]"] {
+        assert!(json_codec::from_str::<NamespaceEntryKind>(invalid).is_err());
+    }
+    let error = json_codec::from_str::<NamespaceEntryKind>("0")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("expected file or directory as a string"));
+}

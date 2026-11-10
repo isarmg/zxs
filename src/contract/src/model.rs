@@ -5,15 +5,22 @@ use std::{
     path::PathBuf,
 };
 
+// Unit-enum derive also accepts object aliases. This boundary only borrows
+// canonical string tokens and preserves each enum's diagnostic expectation.
 macro_rules! strict_string_deserialize {
     ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        strict_string_deserialize!($name, concat!(stringify!($name), " string"), {
+            $($variant => $wire),+
+        });
+    };
+    ($name:ident, $expected:expr, { $($variant:ident => $wire:literal),+ $(,)? }) => {
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 struct StringVisitor;
                 impl data_serialization::de::Visitor<'_> for StringVisitor {
                     type Value = $name;
                     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        formatter.write_str(concat!(stringify!($name), " string"))
+                        formatter.write_str($expected)
                     }
                     fn visit_str<E: data_serialization::de::Error>(self, token: &str) -> Result<Self::Value, E> {
                         match token {
@@ -184,24 +191,7 @@ macro_rules! string_state {
                 match self { $(Self::$variant => $wire),+ }
             }
         }
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                struct StateVisitor;
-                impl data_serialization::de::Visitor<'_> for StateVisitor {
-                    type Value = $name;
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        formatter.write_str(concat!(stringify!($name), " string"))
-                    }
-                    fn visit_str<E: data_serialization::de::Error>(self, token: &str) -> Result<Self::Value, E> {
-                        match token {
-                            $($wire => Ok($name::$variant),)+
-                            _ => Err(E::unknown_variant(token, &[$($wire),+])),
-                        }
-                    }
-                }
-                deserializer.deserialize_str(StateVisitor)
-            }
-        }
+        strict_string_deserialize!($name { $($variant => $wire),+ });
     };
 }
 
@@ -593,31 +583,9 @@ pub enum NamespaceEntryKind {
     File,
     Directory,
 }
-impl<'de> Deserialize<'de> for NamespaceEntryKind {
-    fn deserialize<D: data_serialization::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Self, D::Error> {
-        // Stored kinds are strings; a derived enum also accepts {"file": null}.
-        struct KindVisitor;
-        impl data_serialization::de::Visitor<'_> for KindVisitor {
-            type Value = NamespaceEntryKind;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("file or directory as a string")
-            }
-            fn visit_str<E: data_serialization::de::Error>(
-                self,
-                token: &str,
-            ) -> Result<Self::Value, E> {
-                match token {
-                    "file" => Ok(NamespaceEntryKind::File),
-                    "directory" => Ok(NamespaceEntryKind::Directory),
-                    _ => Err(E::unknown_variant(token, &["file", "directory"])),
-                }
-            }
-        }
-        deserializer.deserialize_str(KindVisitor)
-    }
-}
+strict_string_deserialize!(NamespaceEntryKind, "file or directory as a string", {
+    File => "file", Directory => "directory"
+});
 /// A logical deletion has no content identity or payload-retention dependency.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
@@ -904,39 +872,13 @@ pub enum ContentState {
     #[serialization(rename = "RETIRED")]
     Retired,
 }
-impl<'de> Deserialize<'de> for ContentState {
-    fn deserialize<D: data_serialization::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Self, D::Error> {
-        // Deriving a unit enum would also accept {"AVAILABLE": null}. Only a
-        // string is valid; borrow its bytes instead of allocating per record.
-        struct ContentStateVisitor;
-        impl data_serialization::de::Visitor<'_> for ContentStateVisitor {
-            type Value = ContentState;
+strict_string_deserialize!(ContentState, "AVAILABLE, PURGED, MIGRATED or RETIRED as a string", {
+    Available => "AVAILABLE",
+    Purged => "PURGED",
+    Migrated => "MIGRATED",
+    Retired => "RETIRED",
+});
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("AVAILABLE, PURGED, MIGRATED or RETIRED as a string")
-            }
-
-            fn visit_str<E: data_serialization::de::Error>(
-                self,
-                token: &str,
-            ) -> Result<Self::Value, E> {
-                match token {
-                    "AVAILABLE" => Ok(ContentState::Available),
-                    "PURGED" => Ok(ContentState::Purged),
-                    "MIGRATED" => Ok(ContentState::Migrated),
-                    "RETIRED" => Ok(ContentState::Retired),
-                    _ => Err(E::unknown_variant(
-                        token,
-                        &["AVAILABLE", "PURGED", "MIGRATED", "RETIRED"],
-                    )),
-                }
-            }
-        }
-        deserializer.deserialize_str(ContentStateVisitor)
-    }
-}
 impl ContentState {
     /// The canonical stored token, also used to compare raw proof-page values.
     pub const fn as_str(&self) -> &'static str {
@@ -1001,42 +943,13 @@ pub enum CurrentHealth {
     Recovering,
 }
 
-impl<'de> Deserialize<'de> for CurrentHealth {
-    fn deserialize<D: data_serialization::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Self, D::Error> {
-        struct HealthVisitor;
-        impl data_serialization::de::Visitor<'_> for HealthVisitor {
-            type Value = CurrentHealth;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a current health string")
-            }
-            fn visit_str<E: data_serialization::de::Error>(
-                self,
-                token: &str,
-            ) -> Result<Self::Value, E> {
-                match token {
-                    "HEALTHY" => Ok(CurrentHealth::Healthy),
-                    "DEGRADED" => Ok(CurrentHealth::Degraded),
-                    "UNAVAILABLE" => Ok(CurrentHealth::Unavailable),
-                    "UNKNOWN" => Ok(CurrentHealth::Unknown),
-                    "RECOVERING" => Ok(CurrentHealth::Recovering),
-                    _ => Err(E::unknown_variant(
-                        token,
-                        &[
-                            "HEALTHY",
-                            "DEGRADED",
-                            "UNAVAILABLE",
-                            "UNKNOWN",
-                            "RECOVERING",
-                        ],
-                    )),
-                }
-            }
-        }
-        deserializer.deserialize_str(HealthVisitor)
-    }
-}
+strict_string_deserialize!(CurrentHealth, "a current health string", {
+    Healthy => "HEALTHY",
+    Degraded => "DEGRADED",
+    Unavailable => "UNAVAILABLE",
+    Unknown => "UNKNOWN",
+    Recovering => "RECOVERING",
+});
 
 impl CurrentHealth {
     pub const fn as_str(self) -> &'static str {
