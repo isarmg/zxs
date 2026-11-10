@@ -91,59 +91,84 @@ fn entries(fixture: &Fixture, repo: &Repository) -> Vec<Entry> {
 
 #[test]
 fn public_smb_directory_git_rename_staged_file_moves_directly_and_survives_restart() {
-    let mut fixture = Fixture::new();
-    let client = fixture.connect();
-    save(&client, "p/box/file", b"source", true);
-    let repo = fixture.repository();
-    initialize(&fixture, &repo, false);
-    let source = fixture.entry(&repo.main_branch_id, "box/file");
-    let (reader, _fd) = open(&client, "p/box/file", false, false, false);
-    for (source, target) in [("p/box/file", "p/outside"), ("p/outside", "p/box/returned")] {
-        client
-            .call(Request::Namespace {
-                kind: NamespaceOperation::Rename,
-                path: source.into(),
-                destination: Some(target.into()),
-                replace: false,
-                operation_id: OperationId::generate().unwrap(),
-            })
-            .unwrap();
+    for named in [false, true] {
+        let mut fixture = Fixture::new();
+        let client = fixture.connect();
+        save(&client, "p/box/file", b"source", true);
+        let repo = fixture.repository();
+        initialize(&fixture, &repo, false);
+        let client = if named {
+            drop(client);
+            Client::connect(
+                &fixture.root.path().join("run/bridge.sock"),
+                "alice",
+                &repo.repository_id,
+            )
+            .unwrap()
+        } else {
+            client
+        };
+        let path = |relative: &str| {
+            if named {
+                relative.to_owned()
+            } else {
+                format!("p/{relative}")
+            }
+        };
+        let source = fixture.entry(&repo.main_branch_id, "box/file");
+        let (reader, _fd) = open(&client, &path("box/file"), false, false, false);
+        for (source, target) in [("box/file", "outside"), ("outside", "box/returned")] {
+            client
+                .call(Request::Namespace {
+                    kind: NamespaceOperation::Rename,
+                    path: path(source),
+                    destination: Some(path(target)),
+                    replace: false,
+                    operation_id: OperationId::generate().unwrap(),
+                })
+                .unwrap();
+        }
+        let moved = fixture.entry(&repo.main_branch_id, "box/returned");
+        assert_eq!(moved.file_id, source.file_id);
+        assert_eq!(moved.entry_id, source.entry_id);
+        assert_eq!(moved.version_id, source.version_id);
+        let mut old_bytes = [0; 6];
+        assert_eq!(client.read(reader.handle, 0, &mut old_bytes).unwrap(), 6);
+        assert_eq!(&old_bytes, b"source");
+        close(&client, reader.handle);
+        assert_eq!(read(&client, &path("box/returned")).1, b"source");
+        drop(client);
+        let (root, engine) = fixture.cold_open();
+        assert_eq!(
+            engine
+                .namespace_tree(&repo.main_branch_id)
+                .unwrap()
+                .get("box/returned"),
+            Some(&moved)
+        );
+        assert!(
+            engine
+                .namespace_tree(&repo.main_branch_id)
+                .unwrap()
+                .get("box/file")
+                .is_none()
+        );
+        assert_eq!(
+            exported(&engine, root.path(), &source.version_id),
+            b"source"
+        );
+        assert_eq!(engine.file_history(&source.file_id).unwrap().len(), 1);
     }
-    let moved = fixture.entry(&repo.main_branch_id, "box/returned");
-    assert_eq!(moved.file_id, source.file_id);
-    assert_eq!(moved.entry_id, source.entry_id);
-    assert_eq!(moved.version_id, source.version_id);
-    let mut old_bytes = [0; 6];
-    assert_eq!(client.read(reader.handle, 0, &mut old_bytes).unwrap(), 6);
-    assert_eq!(&old_bytes, b"source");
-    close(&client, reader.handle);
-    assert_eq!(read(&client, "p/box/returned").1, b"source");
-    drop(client);
-    let (root, engine) = fixture.cold_open();
-    assert_eq!(
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .get("box/returned"),
-        Some(&moved)
-    );
-    assert!(
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .get("box/file")
-            .is_none()
-    );
-    assert_eq!(
-        exported(&engine, root.path(), &source.version_id),
-        b"source"
-    );
-    assert_eq!(engine.file_history(&source.file_id).unwrap().len(), 1);
 }
 
 #[test]
 fn public_smb_directory_git_rename_committed_export_preserves_source_target_and_receipt_identity() {
-    for (target_path, replace) in [("missing", false), ("target", true)] {
+    for (named, target_path, replace) in [
+        (false, "missing", false),
+        (false, "target", true),
+        (true, "missing", false),
+        (true, "target", true),
+    ] {
         let mut fixture = Fixture::new();
         let client = fixture.connect();
         save(&client, "p/box/file", b"first source", true);
@@ -152,6 +177,24 @@ fn public_smb_directory_git_rename_committed_export_preserves_source_target_and_
         save(&client, "p/box/file", b"source", false);
         save(&client, "p/target", b"target", true);
         initialize(&fixture, &repo, true);
+        let client = if named {
+            drop(client);
+            Client::connect(
+                &fixture.root.path().join("run/bridge.sock"),
+                "alice",
+                &repo.repository_id,
+            )
+            .unwrap()
+        } else {
+            client
+        };
+        let path = |relative: &str| {
+            if named {
+                relative.to_owned()
+            } else {
+                format!("p/{relative}")
+            }
+        };
         let source = fixture.entry(&repo.main_branch_id, "box/file");
         let target = fixture.entry(&repo.main_branch_id, "target");
         let before = entries(&fixture, &repo);
@@ -169,12 +212,12 @@ fn public_smb_directory_git_rename_committed_export_preserves_source_target_and_
         };
         let committed = status();
         let head = committed.head_tree_id.clone().unwrap();
-        let (reader, _fd) = open(&client, "p/box/file", false, false, false);
+        let (reader, _fd) = open(&client, &path("box/file"), false, false, false);
         let operation_id = OperationId::generate().unwrap();
         let request = || Request::Namespace {
             kind: NamespaceOperation::Rename,
-            path: "p/box/file".into(),
-            destination: Some(format!("p/{target_path}")),
+            path: path("box/file"),
+            destination: Some(path(target_path)),
             replace,
             operation_id,
         };
@@ -239,10 +282,10 @@ fn public_smb_directory_git_rename_committed_export_preserves_source_target_and_
         assert_eq!(working.head_tree_id, committed.head_tree_id);
         assert_eq!(working.index_generation, committed.index_generation);
         assert!(working.unstaged);
-        assert_eq!(read(&client, &format!("p/{target_path}")).1, b"source");
+        assert_eq!(read(&client, &path(target_path)).1, b"source");
         if !replace {
             assert_eq!(fixture.entry(&repo.main_branch_id, "target"), target);
-            assert_eq!(read(&client, "p/target").1, b"target");
+            assert_eq!(read(&client, &path("target")).1, b"target");
         }
         let mut pinned = [0; 6];
         assert_eq!(
@@ -275,7 +318,16 @@ fn public_smb_directory_git_rename_committed_export_preserves_source_target_and_
         expected.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
         assert_eq!(after, expected);
         drop(client);
-        let client = fixture.connect();
+        let client = if named {
+            Client::connect(
+                &fixture.root.path().join("run/bridge.sock"),
+                "alice",
+                &repo.repository_id,
+            )
+            .unwrap()
+        } else {
+            fixture.connect()
+        };
         let error = client.call(request()).unwrap_err();
         let remote = error
             .get_ref()

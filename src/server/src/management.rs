@@ -1417,24 +1417,6 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.soft_delete_file(identity, command)
     }
-    fn prepare_directory_file_export(
-        &self,
-        identity: &crate::auth::Identity,
-        command: crate::PrepareDirectoryFileExport,
-    ) -> Result<Option<crate::DirectoryFileExport>, crate::ApiError> {
-        self.inner
-            .backend()?
-            .prepare_directory_file_export(identity, command)
-    }
-    fn export_directory_file(
-        &self,
-        identity: &crate::auth::Identity,
-        command: crate::ExportDirectoryFile,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.inner
-            .backend()?
-            .export_directory_file(identity, command)
-    }
     fn move_current_file(
         &self,
         identity: &crate::auth::Identity,

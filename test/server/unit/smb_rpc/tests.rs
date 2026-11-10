@@ -38,6 +38,8 @@ mod directory_tests;
 mod history_move_tests;
 #[path = "mtime_tests.rs"]
 mod mtime_tests;
+#[path = "named_move_tests.rs"]
+mod named_move_tests;
 #[path = "namespace_tests.rs"]
 mod namespace_tests;
 #[path = "../published_reconciliation_failure.rs"]
@@ -1039,6 +1041,24 @@ fn session(shared: Arc<Shared>, branch: &str) -> Session {
         read_cache: None,
     }
 }
+fn named_session(shared: Arc<Shared>, branch: &str) -> Session {
+    let repository = shared
+        .backend
+        .repositories_snapshot(&identity(&shared))
+        .unwrap()
+        .into_iter()
+        .find(|repository| repository.main_branch_id == branch)
+        .unwrap();
+    assert!(repository.smb_enabled);
+    let mut session = session(shared, branch);
+    session.identity.smb_binding = Some(crate::auth::SmbBinding {
+        repository_id: repository.repository_id,
+        branch_id: repository.main_branch_id,
+        generation: repository.smb_binding_generation,
+    });
+    session
+}
+
 fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
     let (result, fd) = session
         .open("report.txt".into(), writable, false, false, false, false)
@@ -1267,7 +1287,7 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
 #[test]
 fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle() {
     let (_temp, shared, backend, branch) = fixture();
-    let mut client = session(shared.clone(), &branch);
+    let mut client = named_session(shared.clone(), &branch);
     for (path, bytes) in [
         ("a/report.txt", b"source".as_slice()),
         ("b/stay.txt", b"sibling".as_slice()),
@@ -1331,7 +1351,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .unwrap();
     let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let _reader = File::from(fd.unwrap());
-    client
+    let (reply, _) = client
         .dispatch(Request::Namespace {
             operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
@@ -1350,8 +1370,17 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .find(&name_policy::LookupPath::parse("b/report.txt").unwrap())
         .unwrap()
         .unwrap();
-    assert_eq!(moved.file_id, source.file_id);
-    assert_eq!(moved.version_id, source.version_id);
+    assert_ne!(moved.file_id, source.file_id);
+    assert_ne!(moved.version_id, source.version_id);
+    let receipt = json_reply(reply);
+    assert_eq!(
+        receipt["operation_kind"],
+        storage_contract::file_relocation::OBJECT_MOVE_KIND
+    );
+    assert_eq!(
+        receipt["result"]["version_mapping"][&source.version_id],
+        moved.version_id
+    );
     let m1 = scope(&a_m);
     let l1 = scope(&b_l);
     assert_ne!(m1.head_tree_id, m0.head_tree_id);
@@ -1945,8 +1974,8 @@ fn namespace_path_owner_releases_both_scopes_during_unwind() {
 #[test]
 fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_entry() {
     let (_temp, shared, _backend, branch) = fixture();
-    let mut one = session(shared.clone(), &branch);
-    let mut two = session(shared, &branch);
+    let mut one = named_session(shared.clone(), &branch);
+    let mut two = named_session(shared, &branch);
     let before = one
         .find(&name_policy::LookupPath::parse("report.txt").unwrap())
         .unwrap()
@@ -2902,7 +2931,7 @@ fn smb_flush_preserves_the_clients_shared_descriptor_cursor() {
 #[test]
 fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let (_temp, shared, _backend, branch) = fixture();
-    let mut session = session(shared, &branch);
+    let mut session = named_session(shared, &branch);
     session
         .namespace(
             smb_protocol::protocol::NamespaceOperation::Rename,

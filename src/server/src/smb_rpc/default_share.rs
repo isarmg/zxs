@@ -17,6 +17,16 @@ struct SessionKey {
     generation: u64,
 }
 
+impl From<&SessionKey> for crate::auth::SmbBinding {
+    fn from(key: &SessionKey) -> Self {
+        Self {
+            repository_id: key.repository.clone(),
+            branch_id: key.branch.clone(),
+            generation: key.generation,
+        }
+    }
+}
+
 pub(super) struct DefaultShare {
     shared: Arc<Shared>,
     identity: Identity,
@@ -183,11 +193,7 @@ impl DefaultShare {
 
     fn bound_identity(&self, key: &SessionKey) -> Identity {
         let mut identity = self.identity.clone();
-        identity.smb_binding = Some(crate::auth::SmbBinding {
-            repository_id: key.repository.clone(),
-            branch_id: key.branch.clone(),
-            generation: key.generation,
-        });
+        identity.smb_binding = Some(key.into());
         identity
     }
 

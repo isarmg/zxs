@@ -225,7 +225,10 @@ fn target_scope(
     if let Some(actual) = displaced {
         if actual.kind != source.kind {
             return Err(Error::new(
-                ErrorCode::InvalidMove,
+                match actual.kind {
+                    NamespaceEntryKind::Directory => ErrorCode::IsDirectory,
+                    NamespaceEntryKind::File => ErrorCode::NotDirectory,
+                },
                 "replacement requires the same file or directory kind",
             ));
         }

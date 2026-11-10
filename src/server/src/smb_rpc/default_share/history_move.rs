@@ -1,93 +1,149 @@
-//! Captured object moves and their exact publication receipts.
+//! Display routing for the shared captured native move operation.
 use super::*;
-use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::PathReservation};
+use crate::smb_rpc::namespace::NamespaceAdmission;
+use crate::smb_rpc::object_move::{MoveContext, MoveSource, MoveTarget, RetainedMove, changed};
 
-mod object;
-
-/// The protocol reply binds to the same captured command as the durable intent.
-/// This proves a result; it never resolves a new path or submits another move.
-struct MoveReceipt {
-    operation_id: OperationId,
-    movement: storage_contract::file_relocation::ObjectMoveRequest,
-    source_file_id: Option<storage_contract::history_window::HistoryFileId>,
-    displaced_target_file_id: Option<storage_contract::history_window::HistoryFileId>,
-}
-
-impl MoveReceipt {
-    fn object(request: &crate::MoveCurrentObject) -> Result<Self, ApiError> {
-        let same_entry = request.movement.target_repository_id.as_ref()
-            == Some(&request.movement.source_repository_id)
-            && request.movement.target_entry_id.as_ref() == Some(&request.movement.source_entry_id)
-            && request.movement.target_path.key() == request.movement.source_path.key();
-        if same_entry
-            && request
-                .expected_target_file_id
-                .as_ref()
-                .is_some_and(|target| request.expected_source_file_id.as_ref() != Some(target))
-        {
-            return Err(receipt_changed());
-        }
-        Ok(Self {
-            operation_id: request.operation_id,
-            movement: request.movement.clone(),
-            source_file_id: request.expected_source_file_id.clone(),
-            displaced_target_file_id: if same_entry {
-                None
-            } else {
-                request.expected_target_file_id.clone()
-            },
-        })
-    }
-
-    fn published_object_reply(
-        self,
-        result: storage_contract::OperationResult,
-        principal: &str,
+impl DefaultShare {
+    pub(super) fn move_object(
+        &mut self,
+        source: SmbPathLocation,
+        destination: &str,
+        admission: NamespaceAdmission,
+        replace: bool,
     ) -> Result<Value, ApiError> {
-        if result.operation_id != self.operation_id
-            || result.kind != storage_contract::file_relocation::OBJECT_MOVE_KIND
-        {
-            return Err(receipt_changed());
-        }
-        let versions = result
-            .result
-            .get("version_mapping")
-            .and_then(Value::as_object)
-            .ok_or_else(receipt_changed)?;
-        let protection = if versions.is_empty() {
-            storage_contract::ProtectionAtPublish::NotApplicable
-        } else {
-            storage_contract::ProtectionAtPublish::TargetMet
+        let SmbRelativePath::Entry(source_path) = source.relative_path else {
+            return Err(ApiError::unsupported());
         };
-        if result.commit_state != storage_contract::CommitState::Published
-            || result.protection_at_publish != protection
-            || result.current_health != storage_contract::CurrentHealth::Healthy
+        let Location::Path {
+            slot: target_slot,
+            path: destination_path,
+        } = self.locate(destination)?
+        else {
+            return Err(ApiError::unsupported());
+        };
+        let source_slot_id = source.repository.primary_slot_id.clone();
+        let source_slot = self
+            .shared
+            .backend
+            .topology_snapshot(&self.identity)?
+            .slots
+            .into_iter()
+            .find(|slot| slot.slot_id == source_slot_id)
+            .ok_or_else(changed)?;
+        let source = self.pin_binding(source.repository)?;
+        let (target, target_path) = match self.resolve_at(
+            &target_slot,
+            destination_path.clone(),
+            SmbPathIntent::Lookup,
+        ) {
+            Ok(location) => {
+                let SmbRelativePath::Entry(path) = location.relative_path else {
+                    return Err(ApiError::unsupported());
+                };
+                let target_path =
+                    name_policy::PortablePath::try_from(path).map_err(ApiError::invalid_source)?;
+                let key = self.pin_binding(location.repository)?;
+                (Some(key), target_path)
+            }
+            Err(error)
+                if error.code == storage_contract::ErrorCode::DirectoryNotFound
+                    && !destination_path.as_str().contains('/') =>
+            {
+                let target_path = name_policy::PortablePath::try_from(destination_path)
+                    .map_err(ApiError::invalid_source)?;
+                (None, target_path)
+            }
+            Err(error) => return Err(error),
+        };
+        self.move_context().capture(
+            MoveSource {
+                binding: (&source).into(),
+                slot: source_slot,
+                path: source_path,
+            },
+            MoveTarget {
+                binding: target.as_ref().map(Into::into),
+                slot: target_slot,
+                path: target_path,
+            },
+            replace,
+            admission,
+        )
+    }
+
+    pub(super) fn resume_object_move(
+        &mut self,
+        source: &str,
+        target: &str,
+        replace: bool,
+        operation: OperationId,
+    ) -> Result<Option<Value>, ApiError> {
+        let Some(retained) = RetainedMove::read(&self.move_context(), operation)? else {
+            return Ok(None);
+        };
+        let intent = &retained.intent;
+        let Location::Path {
+            slot: source_slot,
+            path: source_path,
+        } = self.locate(source)?
+        else {
+            return Err(changed());
+        };
+        let Location::Path {
+            slot: target_slot,
+            path: target_path,
+        } = self.locate(target)?
+        else {
+            return Err(changed());
+        };
+        if intent.replace_requested != replace
+            || source_slot.slot_id != intent.source_slot_id
+            || target_slot.slot_id != intent.movement.target_slot_id
+            || !intent.source_disk.matches(&source_slot)
+            || !intent.target_disk.matches(&target_slot)
         {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "native move has no complete publication result; query the original operation",
-            ));
+            return Err(changed());
         }
-        let reply = crate::operation_wire::operation_wire(result.into())?;
-        let fact = &reply["result"]["movement"];
-        if !self.movement.matches_receipt(principal, &reply)
-            || fact["source_file_id"] != json!(self.source_file_id)
-            || fact["displaced_target_file_id"] != json!(self.displaced_target_file_id)
+        // Resolve only the displayed repository binding. A completed move can
+        // remove the source occurrence; it must never capture new members here.
+        let source = self.resolve_at(&source_slot, source_path, SmbPathIntent::Lookup)?;
+        let SmbRelativePath::Entry(source_path) = source.relative_path else {
+            return Err(changed());
+        };
+        if !intent
+            .source_binding
+            .matches(&(&self.pin_binding(source.repository)?).into())
+            || source_path.key() != intent.movement.source_path.key()
         {
-            return Err(receipt_changed());
+            return Err(changed());
         }
-        Ok(reply)
+        match &intent.target_binding {
+            Some(binding) => {
+                let target = self.resolve_at(&target_slot, target_path, SmbPathIntent::Lookup)?;
+                let SmbRelativePath::Entry(path) = target.relative_path else {
+                    return Err(changed());
+                };
+                if !binding.matches(&(&self.pin_binding(target.repository)?).into())
+                    || path.as_str() != intent.movement.target_path.as_str()
+                {
+                    return Err(changed());
+                }
+            }
+            // An originally empty disk may now own the published root. Keep
+            // the captured None intent rather than resolving it as a new target.
+            None if target_path.as_str() != intent.movement.target_path.as_str() => {
+                return Err(changed());
+            }
+            None => {}
+        }
+        retained.submit(&self.move_context()).map(Some)
+    }
+
+    fn move_context(&self) -> MoveContext<'_> {
+        MoveContext {
+            shared: &self.shared,
+            identity: &self.identity,
+            account_generation: self.account_generation,
+        }
     }
 }
-
-fn receipt_changed() -> ApiError {
-    ApiError::new(
-        http::StatusCode::INTERNAL_SERVER_ERROR,
-        storage_contract::ErrorCode::StateInvalid,
-        "native move returned a different operation receipt",
-    )
-}
-
-#[cfg(test)]
-#[path = "../../../../../test/server/unit/smb_rpc/history_move_reply_tests.rs"]
-mod tests;

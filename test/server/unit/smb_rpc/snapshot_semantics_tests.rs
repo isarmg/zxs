@@ -6,6 +6,7 @@ enum ConcurrentNamespace {
     FileToDirectory,
     RemoveChild,
     CreateMissing,
+    ReplaceTarget,
 }
 
 fn publish_namespace(
@@ -80,6 +81,23 @@ impl Backend for NamespaceAfterWorkspace {
         self.inner
             .require_native_workspace_commit_completion(identity, command)
     }
+    fn move_current_object(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentObject,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        if self.enabled.swap(false, Ordering::SeqCst) {
+            assert!(matches!(self.change, ConcurrentNamespace::ReplaceTarget));
+            publish_namespace(
+                self.inner.as_ref(),
+                identity,
+                &command.source_binding.branch_id,
+                &[("delete", "target"), ("mkdir", "target")],
+            )?;
+        }
+        self.inner.move_current_object(identity, command)
+    }
+
     fn commit_workspace(
         &self,
         identity: &Identity,
@@ -137,6 +155,7 @@ impl Backend for NamespaceAfterWorkspace {
                 }
                 ConcurrentNamespace::RemoveChild => &[("delete", "target/child")],
                 ConcurrentNamespace::CreateMissing => &[("mkdir", "missing")],
+                ConcurrentNamespace::ReplaceTarget => &[("delete", "target"), ("mkdir", "target")],
             };
             publish_namespace(self.inner.as_ref(), identity, &workspace.branch_id, changes)?;
             *self.captured.lock().unwrap() = Some(workspace);
@@ -730,28 +749,21 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             ConcurrentNamespace::FileToDirectory,
             NamespaceOperation::Rmdir,
             "report.txt",
-            None,
+            None::<&str>,
             storage_contract::ErrorCode::NotDirectory,
         ),
         (
             ConcurrentNamespace::RemoveChild,
             NamespaceOperation::Rmdir,
             "target",
-            None,
-            storage_contract::ErrorCode::DirectoryNotEmpty,
-        ),
-        (
-            ConcurrentNamespace::RemoveChild,
-            NamespaceOperation::Rename,
-            "source",
-            Some("target"),
+            None::<&str>,
             storage_contract::ErrorCode::DirectoryNotEmpty,
         ),
         (
             ConcurrentNamespace::CreateMissing,
             NamespaceOperation::Rmdir,
             "missing",
-            None,
+            None::<&str>,
             storage_contract::ErrorCode::NotFound,
         ),
     ] {
@@ -815,6 +827,7 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             ConcurrentNamespace::CreateMissing => {
                 assert!(current.iter().any(|entry| entry.path() == "missing"));
             }
+            ConcurrentNamespace::ReplaceTarget => unreachable!("native move has its own fixture"),
         }
         let aborted = backend
             .inner
@@ -945,4 +958,81 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
             .all(|handle| !matches!(handle, Handle::Write(..)))
     );
     assert!(session.shared.file_writers.lock().unwrap().is_empty());
+}
+
+#[test]
+fn native_rename_rejects_replaced_target_identity_after_capture_and_on_retry() {
+    let (_fixture, original, _backend, branch) = fixture();
+    publish_namespace(
+        original.backend.as_ref(),
+        &identity(&original),
+        &branch,
+        &[("mkdir", "source"), ("mkdir", "target")],
+    )
+    .unwrap();
+    let before = session(original.clone(), &branch)
+        .find(&name_policy::LookupPath::parse("target").unwrap())
+        .unwrap()
+        .unwrap();
+    let backend = Arc::new(NamespaceAfterWorkspace {
+        inner: original.backend.clone(),
+        change: ConcurrentNamespace::ReplaceTarget,
+        enabled: AtomicBool::new(true),
+        captured: Mutex::new(None),
+    });
+    let shared = Arc::new(Shared {
+        backend: backend.clone(),
+        account: original.account.clone(),
+        auth: original.auth.clone(),
+        spool: original.spool.clone(),
+        budget: original.budget.clone(),
+        max_file_bytes: original.max_file_bytes,
+        authenticated_sessions: tokio::sync::Semaphore::new(MAX_AUTHENTICATED_SESSIONS),
+        file_writers: Mutex::new(BTreeSet::new()),
+        namespace_operations: Mutex::new(BTreeSet::new()),
+    });
+    let mut client = named_session(shared.clone(), &branch);
+    let operation = OperationId::generate().unwrap();
+    let request = || Request::Namespace {
+        operation_id: operation.to_string(),
+        kind: NamespaceOperation::Rename,
+        path: "source".into(),
+        destination: Some("target".into()),
+        replace: true,
+    };
+    assert_eq!(
+        client.dispatch(request()).unwrap_err().code,
+        storage_contract::ErrorCode::WorkspaceChanged
+    );
+    let record = shared.spool.join(format!("{operation}.namespace.json"));
+    let bytes = fs::read(&record).unwrap();
+    let intent: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(intent["movement"]["target_entry_id"], before.entry_id);
+    let after = client
+        .find(&name_policy::LookupPath::parse("target").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_ne!(after.entry_id, before.entry_id);
+    assert_eq!(
+        client.dispatch(request()).unwrap_err().code,
+        storage_contract::ErrorCode::WorkspaceChanged
+    );
+    assert_eq!(fs::read(&record).unwrap(), bytes);
+    assert_eq!(
+        client
+            .find(&name_policy::LookupPath::parse("target").unwrap())
+            .unwrap(),
+        Some(after)
+    );
+    assert!(
+        client
+            .find(&name_policy::LookupPath::parse("source").unwrap())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        backend.captured.lock().unwrap().is_none(),
+        "native move must not create a workspace"
+    );
+    assert!(shared.file_writers.lock().unwrap().is_empty());
 }

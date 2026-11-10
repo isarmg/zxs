@@ -14,7 +14,12 @@ impl EngineBackend {
             .lock()
             .expect("invariant: service state lock poisoned");
         let mut current = current_protected_identity(&engine, identity)?;
-        if current.smb_binding.is_some() {
+        // A named share retains exactly its original repository binding. Only
+        // the default share may route between separately captured namespaces.
+        if let Some(bound) = &current.smb_binding
+            && (bound != &command.source_binding
+                || !matches!(&command.target, crate::MoveObjectTarget::Repository { binding, .. } if binding == bound))
+        {
             return Err(ApiError::forbidden());
         }
         require_move_binding(&engine, &mut current, &command.source_binding)?;

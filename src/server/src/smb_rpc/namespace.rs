@@ -1,8 +1,6 @@
 //! Namespace type checks, workspace staging and recoverable commit submission.
 use super::*;
 use smb_protocol::protocol::NamespaceOperation;
-mod directory_export;
-pub(super) use directory_export::RetainedExport;
 
 // Only namespace admission uses this registry. It spans the operation lookup,
 // record lifetime and workspace submission without holding a mutex across I/O.
@@ -108,16 +106,18 @@ impl NamespaceAdmission {
         self.reservation.operation_id
     }
 
-    pub(super) fn record_intent(&self, value: &Value) -> Result<(), ApiError> {
-        write_namespace_record(&self.record, value)
+    pub(super) fn record_intent(&self, value: &impl Serialize) -> Result<Vec<u8>, ApiError> {
+        let bytes = json_codec::to_vec(value).map_err(ApiError::invalid_source)?;
+        write_namespace_bytes(&self.record, &bytes)?;
+        Ok(bytes)
     }
 
     pub(super) fn finish_published(&self) {
         cleanup_namespace_record(&self.record);
     }
 
-    /// Native move and retaining directory-export adapters consume these
-    /// records. Generic namespace/workspace operations remain non-replayable.
+    /// Native moves consume these records. Other namespace/workspace
+    /// operations remain non-replayable.
     pub(super) fn retain_move(
         shared: &Arc<Shared>,
         identity: &Identity,
@@ -232,12 +232,66 @@ impl Session {
         let input = NamespaceInput::parse(kind, path, destination, replace)?;
         if input.kind == NamespaceOperation::Rename
             && let Some(retained) =
-                RetainedExport::read(&self.shared, &self.identity, operation_id)?
+                object_move::RetainedMove::read(&self.move_context(), operation_id)?
         {
-            return self.retry_directory_export(&input, retained);
+            return self.resume_native_move(&input, retained);
         }
         let admission = NamespaceAdmission::acquire(&self.shared, &self.identity, operation_id)?;
         self.namespace_admitted(input, admission)
+    }
+
+    fn move_context(&self) -> object_move::MoveContext<'_> {
+        object_move::MoveContext {
+            shared: &self.shared,
+            identity: &self.identity,
+            account_generation: self.account_generation,
+        }
+    }
+
+    fn move_location(&self) -> Result<(crate::auth::SmbBinding, crate::TopologySlot), ApiError> {
+        let binding = self
+            .identity
+            .smb_binding
+            .as_ref()
+            .ok_or_else(ApiError::forbidden)?;
+        let repository = self
+            .shared
+            .backend
+            .repository_snapshot(&self.identity, &binding.repository_id)?;
+        let slot = self
+            .shared
+            .backend
+            .topology_snapshot(&self.identity)?
+            .slots
+            .into_iter()
+            .find(|slot| slot.slot_id == repository.primary_slot_id)
+            .ok_or_else(object_move::changed)?;
+        Ok((binding.clone(), slot))
+    }
+
+    fn resume_native_move(
+        &self,
+        input: &NamespaceInput,
+        retained: object_move::RetainedMove,
+    ) -> Result<Value, ApiError> {
+        let (binding, slot) = self.move_location()?;
+        let intent = &retained.intent;
+        if input.replace != intent.replace_requested
+            || input.change.key() != intent.movement.source_path.key()
+            || input.change.destination() != Some(&intent.movement.target_path)
+            || !intent.source_binding.matches(&binding)
+            || !intent
+                .target_binding
+                .as_ref()
+                .is_some_and(|target| target.matches(&binding))
+            || intent.source_slot_id != slot.slot_id
+            || intent.movement.target_slot_id != slot.slot_id
+            || !intent.source_disk.matches(&slot)
+            || !intent.target_disk.matches(&slot)
+        {
+            return Err(object_move::changed());
+        }
+        retained.submit(&self.move_context())
     }
 
     fn soft_delete_unlink(
@@ -362,6 +416,27 @@ impl Session {
             replace,
             change,
         } = input;
+        if let storage_contract::NamespaceOperation::Rename {
+            source,
+            destination,
+        } = change
+        {
+            let (binding, slot) = self.move_location()?;
+            return self.move_context().capture(
+                object_move::MoveSource {
+                    binding: binding.clone(),
+                    slot: slot.clone(),
+                    path: source,
+                },
+                object_move::MoveTarget {
+                    binding: Some(binding),
+                    slot,
+                    path: destination,
+                },
+                replace,
+                admission,
+            );
+        }
         let operation_id = admission.reservation.operation_id;
         let record = &admission.record;
         let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
@@ -385,18 +460,6 @@ impl Session {
                     .map(|target| (self.branch.as_str(), target.key())),
             ),
         )?;
-        if let storage_contract::NamespaceOperation::Rename {
-            source,
-            destination,
-        } = &change
-        {
-            match self.try_directory_file_export(source, destination, replace, &admission) {
-                Ok(None) => {}
-                result => {
-                    return result.map(|reply| reply.expect("invariant: None was handled"));
-                }
-            }
-        }
         if let storage_contract::NamespaceOperation::Delete { path } = &change {
             if soft_delete_directory {
                 match self.soft_delete_rmdir(path, operation_id, record) {
@@ -501,52 +564,6 @@ impl Session {
                     ));
                 }
             }
-            if kind == NamespaceOperation::Rename
-                && replace
-                && let Some(target) = change.destination()
-                && let Some(target_entry) = find(target.key())
-            {
-                let source = find(change.key()).ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::NotFound,
-                        "rename source missing",
-                    )
-                })?;
-                if source.kind != target_entry.kind {
-                    let code = match target_entry.kind {
-                        storage_contract::NamespaceEntryKind::Directory => {
-                            storage_contract::ErrorCode::IsDirectory
-                        }
-                        storage_contract::NamespaceEntryKind::File => {
-                            storage_contract::ErrorCode::NotDirectory
-                        }
-                    };
-                    return Err(ApiError::conflict(
-                        code,
-                        "rename replacement requires matching entry kinds",
-                    ));
-                }
-                // A case-only rename addresses the same stable entry.
-                if source.entry_id != target_entry.entry_id {
-                    if nonempty(target_entry) {
-                        return Err(ApiError::new(
-                            ::http::StatusCode::CONFLICT,
-                            storage_contract::ErrorCode::DirectoryNotEmpty,
-                            "rename replacement directory is not empty",
-                        ));
-                    }
-                    self.shared.backend.stage_namespace(
-                        &self.identity,
-                        crate::StageNamespace {
-                            workspace_id: workspace.workspace_id.clone(),
-                            change: storage_contract::NamespaceOperation::Delete {
-                                path: name_policy::LookupPath::from(target),
-                            },
-                        },
-                    )?;
-                }
-            }
             self.shared.backend.stage_namespace(
                 &self.identity,
                 crate::StageNamespace {
@@ -606,6 +623,11 @@ fn sync_namespace_record(file: &File, _directory: bool) -> Result<(), ApiError> 
 }
 
 fn write_namespace_record(path: &Path, value: &Value) -> Result<(), ApiError> {
+    let bytes = json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds");
+    write_namespace_bytes(path, &bytes)
+}
+
+fn write_namespace_bytes(path: &Path, bytes: &[u8]) -> Result<(), ApiError> {
     let parent = path
         .parent()
         .ok_or_else(|| ApiError::invalid("namespace record parent missing"))?;
@@ -613,11 +635,7 @@ fn write_namespace_record(path: &Path, value: &Value) -> Result<(), ApiError> {
         .prefix(".smb-namespace-")
         .tempfile_in(parent)
         .map_err(ApiError::io)?;
-    temporary
-        .write_all(
-            &json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds"),
-        )
-        .map_err(ApiError::io)?;
+    temporary.write_all(bytes).map_err(ApiError::io)?;
     // Keep the complete intent available even if either sync fails. No core
     // commit may begin until both the file and its directory are durable.
     // A collision never replaces or removes another request's evidence.

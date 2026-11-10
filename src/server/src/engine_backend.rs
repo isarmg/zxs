@@ -16,7 +16,6 @@ mod backup_transaction;
 mod branch;
 mod content;
 mod directory_deletion;
-mod directory_export;
 mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
@@ -1416,20 +1415,6 @@ impl Backend for EngineBackend {
         command: crate::DeleteFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.soft_delete_file_admitted(identity, command)
-    }
-    fn prepare_directory_file_export(
-        &self,
-        identity: &Identity,
-        command: crate::PrepareDirectoryFileExport,
-    ) -> Result<Option<crate::DirectoryFileExport>, ApiError> {
-        self.prepare_directory_file_export_admitted(identity, command)
-    }
-    fn export_directory_file(
-        &self,
-        identity: &Identity,
-        command: crate::ExportDirectoryFile,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.export_directory_file_admitted(identity, command)
     }
     fn move_current_file(
         &self,

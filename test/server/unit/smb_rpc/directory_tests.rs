@@ -105,7 +105,7 @@ fn directory_pages_recheck_current_binding_and_handle_ownership() {
 #[test]
 fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
     let (_temp, shared, _backend, branch) = fixture();
-    let mut session = session(shared, &branch);
+    let mut session = named_session(shared, &branch);
     session
         .namespace(
             smb_protocol::protocol::NamespaceOperation::Mkdir,

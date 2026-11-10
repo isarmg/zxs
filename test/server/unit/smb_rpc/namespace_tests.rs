@@ -157,9 +157,9 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
     let operation = storage_contract::OperationId::generate().unwrap();
     let request = || Request::Namespace {
         operation_id: operation.to_string(),
-        kind: smb_protocol::protocol::NamespaceOperation::Rename,
-        path: "report.txt".into(),
-        destination: Some("renamed.txt".into()),
+        kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
+        path: "created".into(),
+        destination: None,
         replace: false,
     };
     let crate::Readiness::Engine(before) = backend.ready().unwrap() else {
@@ -208,9 +208,9 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
             code: storage_contract::ErrorCode::IndexRebuildFailed,
         }
     );
-    let entries = session(shared.clone(), &branch).entries().unwrap();
-    assert!(entries.iter().any(|entry| entry.path == "renamed.txt"));
-    assert!(!entries.iter().any(|entry| entry.path == "report.txt"));
+    let entries = named_session(shared.clone(), &branch).entries().unwrap();
+    assert!(entries.iter().any(|entry| entry.path == "created"));
+    assert!(entries.iter().any(|entry| entry.path == "report.txt"));
     drop(wire);
     worker.join().unwrap();
 }
@@ -268,7 +268,7 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
 #[test]
 fn rename_replacement_preserves_both_entries_and_reports_target_kind() {
     let (_temp, shared, _backend, branch) = fixture();
-    let mut session = session(shared, &branch);
+    let mut session = named_session(shared, &branch);
     session
         .dispatch(Request::Namespace {
             operation_id: new_id("op").unwrap(),
@@ -309,7 +309,7 @@ fn rename_replacement_preserves_both_entries_and_reports_target_kind() {
                 .all(|handle| !matches!(handle, Handle::Write(..)))
         );
         assert!(session.shared.file_writers.lock().unwrap().is_empty());
-        assert!(!fs::read_dir(&session.shared.spool).unwrap().any(|entry| {
+        assert!(fs::read_dir(&session.shared.spool).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .path()
@@ -349,6 +349,33 @@ impl Backend for NamespaceFailure {
         self.inner
             .require_native_workspace_commit_completion(identity, command)
     }
+    fn move_current_object(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentObject,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let input = json!({"operation_id":command.operation_id,"movement":command.movement});
+        let path = self
+            .spool
+            .join(format!("{}.namespace.json", command.operation_id));
+        let record: Value =
+            json_codec::from_slice(&fs::read(&path).expect("native intent precedes submission"))
+                .unwrap();
+        assert_eq!(record["format"], "smb-object-move");
+        assert_eq!(record["operation_id"], input["operation_id"]);
+        assert_eq!(record["movement"], input["movement"]);
+        assert_eq!(fs::metadata(path).unwrap().mode() & 0o7777, 0o600);
+        self.commits.lock().unwrap().push(input);
+        if self.publish {
+            self.inner.move_current_object(identity, command)?;
+        }
+        Err(ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::InjectedFailure,
+            "injected uncertain native move outcome",
+        ))
+    }
+
     fn commit_workspace(
         &self,
         identity: &Identity,
@@ -1067,11 +1094,11 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
             .collect::<Vec<_>>();
         assert_eq!(records.len(), 1);
         let record: Value = json_codec::from_slice(&fs::read(&records[0]).unwrap()).unwrap();
-        assert_eq!(record["commit_request"], commit);
+        assert_eq!(record["movement"], commit["movement"]);
         assert_eq!(record["principal"], "alice");
-        assert_eq!(record["branch_id"], branch);
-        assert_eq!(record["path"], "report.txt");
-        assert_eq!(record["destination"], "renamed.txt");
+        assert_eq!(record["source_binding"]["branch_id"], branch);
+        assert_eq!(record["movement"]["source_path"], "report.txt");
+        assert_eq!(record["movement"]["target_path"], "renamed.txt");
         assert!(shared.file_writers.lock().unwrap().is_empty());
         let original_exists = call(
             &mut client,
@@ -1119,13 +1146,13 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
             file_writers: Mutex::new(BTreeSet::new()),
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
-        let mut session = session(shared, &branch);
+        let mut session = named_session(shared, &branch);
         let error = session
             .dispatch(Request::Namespace {
                 operation_id: new_id("op").unwrap(),
-                kind: smb_protocol::protocol::NamespaceOperation::Rename,
-                path: "report.txt".into(),
-                destination: Some("renamed.txt".into()),
+                kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
+                path: "created".into(),
+                destination: None,
                 replace: false,
             })
             .unwrap_err();
@@ -1141,8 +1168,8 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         ));
         let record: Value = json_codec::from_slice(&fs::read(record_path).unwrap()).unwrap();
         assert_eq!(record["commit_request"], commit);
-        assert_eq!(record["path"], "report.txt");
-        assert_eq!(record["destination"], "renamed.txt");
+        assert_eq!(record["path"], "created");
+        assert!(record["destination"].is_null());
         assert_eq!(record["principal"], "alice");
         assert_eq!(record["branch_id"], branch);
         assert!(
@@ -1153,7 +1180,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         );
         assert_eq!(
             session
-                .find(&name_policy::LookupPath::parse("renamed.txt").unwrap())
+                .find(&name_policy::LookupPath::parse("created").unwrap())
                 .unwrap()
                 .is_some(),
             publish
@@ -1352,7 +1379,7 @@ fn named_initialized_unlink_retains_history_and_can_be_restored() {
 #[test]
 fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
     let (_temp, shared, backend, branch) = fixture();
-    let mut session = session(shared, &branch);
+    let mut session = named_session(shared, &branch);
     backend
         .change_before_workspace
         .store(true, Ordering::SeqCst);
