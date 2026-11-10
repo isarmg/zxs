@@ -4,11 +4,10 @@
 //! Ready predecessor; it gains no namespace, payload or cleanup authority.
 use super::*;
 use crate::{
-    CommitState, CurrentHealth, Event, OperationId, OperationResult, Plan, PlanState,
-    ProtectionAtPublish,
+    CommitState, CurrentHealth, Event, OperationResult, Plan, PlanState, ProtectionAtPublish,
 };
 use json_codec::{Value, json};
-use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
+use storage_contract::{MapChanges, TrackedMap};
 
 const KIND: &str = "plan.cancel";
 
@@ -26,7 +25,9 @@ impl CurrentNamespaces {
         next: &State,
         result: &OperationResult,
     ) -> Result<()> {
-        let receipt = new_cancellation_receipt(previous, next)?.ok_or_else(invalid)?;
+        let receipt =
+            publication_delta::receipt(previous, next, |receipt| receipt.kind == KIND, invalid)?
+                .ok_or_else(invalid)?;
         if receipt != result {
             return Err(invalid());
         }
@@ -34,7 +35,7 @@ impl CurrentNamespaces {
     }
 
     pub(super) fn verify_plan_cancellations(&self, previous: &State, next: &State) -> Result<()> {
-        match new_cancellation_receipt(previous, next)? {
+        match publication_delta::receipt(previous, next, |receipt| receipt.kind == KIND, invalid)? {
             Some(receipt) => self.verify_plan_cancellation(previous, next, receipt),
             None if plan_changed(&previous.plans, &next.plans) => Err(invalid()),
             None => Ok(()),
@@ -79,13 +80,13 @@ impl CurrentNamespaces {
             || next.sequence <= previous.sequence
             || previous.business_generation.checked_add(1) != Some(next.business_generation)
             || !one_cancelled_plan(&previous.plans, &next.plans, id, cancelled)
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operations,
                 &next.operations,
                 receipt.operation_id,
                 receipt,
             )
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operation_principals,
                 &next.operation_principals,
                 receipt.operation_id,
@@ -134,67 +135,6 @@ fn decimal_field(value: &Value, key: &str) -> Result<u64> {
     Ok(storage_contract::parse_u64_decimal(value)?)
 }
 
-fn new_cancellation_receipt<'a>(
-    previous: &State,
-    next: &'a State,
-) -> Result<Option<&'a OperationResult>> {
-    let mut receipt = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before.is_some_and(|before| before.kind == KIND) {
-            if before != after
-                || previous.operation_principals.get(id) != next.operation_principals.get(id)
-            {
-                return Err(invalid());
-            }
-        } else if let Some(after) = after.filter(|after| after.kind == KIND)
-            && (before.is_some() || after.operation_id != *id || receipt.replace(after).is_some())
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        MapChanges::Keys(keys) => {
-            for id in keys.iter() {
-                inspect(id)?;
-            }
-        }
-        MapChanges::All => {
-            for id in previous.operations.keys() {
-                inspect(id)?;
-            }
-            for id in next
-                .operations
-                .keys()
-                .filter(|id| !previous.operations.contains_key(*id))
-            {
-                inspect(id)?;
-            }
-        }
-    }
-    // A principal-only mutation does not dirty the operations map.
-    let owner_changed = |id: &OperationId| {
-        previous
-            .operations
-            .get(id)
-            .is_some_and(|operation| operation.kind == KIND)
-            && previous.operation_principals.get(id) != next.operation_principals.get(id)
-    };
-    let changed = match next
-        .operation_principals
-        .changes_since(&previous.operation_principals)
-    {
-        MapChanges::Keys(keys) => keys.iter().any(owner_changed),
-        MapChanges::All => previous.operations.keys().any(owner_changed),
-    };
-    if changed {
-        return Err(invalid());
-    }
-    Ok(receipt)
-}
-
 // No other currently admitted operation publishes a Plan transition. Checking
 // every changed plan also rejects a forged kind paired with a Ready/Completed
 // record, rather than letting it evade detection by dropping the Cancelled tag.
@@ -236,43 +176,14 @@ fn one_cancelled_plan(
     }
 }
 
-fn only_added<T: PartialEq>(
-    before: &TrackedOperations<T>,
-    after: &TrackedOperations<T>,
-    id: OperationId,
-    expected: &T,
-) -> bool {
-    if before.contains_key(&id)
-        || before.len().checked_add(1) != Some(after.len())
-        || after.get(&id) != Some(expected)
-    {
-        return false;
-    }
-    match after.changes_since(before) {
-        MapChanges::Keys(keys) => keys
-            .iter()
-            .all(|key| *key == id || after.get(key) == before.get(key)),
-        MapChanges::All => before
-            .iter()
-            .all(|(key, value)| after.get(key) == Some(value)),
-    }
-}
-
 fn one_cancellation_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
-    if previous.events.len().checked_add(1) != Some(next.events.len()) {
-        return false;
-    }
     let expected = Event {
         sequence: next.sequence,
         operation_id: receipt.operation_id,
         kind: KIND.into(),
         object_id: receipt.operation_id.to_string(),
     };
-    next.events.last() == Some(&expected)
-        && match next.events.changes_since(&previous.events) {
-            SequenceChanges::Append { start } => start == previous.events.len(),
-            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
-        }
+    publication_delta::one_event(previous, next, &expected)
 }
 
 // An exhaustive State pattern forces new fields to choose their cancellation

@@ -6,7 +6,7 @@ use crate::business::{
     directory_staging::{CommitInput, apply_commit},
 };
 use crate::{
-    CommitState, ContentState, CurrentHealth, DirectoryTree, Event, OperationId, OperationResult,
+    CommitState, ContentState, CurrentHealth, DirectoryTree, Event, OperationResult,
     ProtectionAtPublish,
 };
 use json_codec::json;
@@ -61,7 +61,9 @@ impl CurrentNamespaces {
         next: &State,
         result: &OperationResult,
     ) -> Result<()> {
-        let receipt = new_receipt(previous, next)?.ok_or_else(invalid)?;
+        let receipt =
+            publication_delta::receipt(previous, next, |receipt| accepts(&receipt.kind), invalid)?
+                .ok_or_else(invalid)?;
         if receipt != result {
             return Err(invalid());
         }
@@ -69,7 +71,8 @@ impl CurrentNamespaces {
     }
 
     pub(super) fn verify_directory_commits(&self, previous: &State, next: &State) -> Result<()> {
-        match new_receipt(previous, next)? {
+        match publication_delta::receipt(previous, next, |receipt| accepts(&receipt.kind), invalid)?
+        {
             Some(receipt) => self.verify_directory_commit(previous, next, receipt),
             None if marked_history_changed(previous, next)
                 || previous.directory_git_repositories != next.directory_git_repositories =>
@@ -183,58 +186,6 @@ impl CurrentNamespaces {
         }
         Ok(())
     }
-}
-
-fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
-    let mut receipt = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before.is_some_and(|operation| accepts(&operation.kind)) {
-            if before != after
-                || previous.operation_principals.get(id) != next.operation_principals.get(id)
-            {
-                return Err(invalid());
-            }
-        } else if let Some(after) = after.filter(|operation| accepts(&operation.kind))
-            && (before.is_some() || after.operation_id != *id || receipt.replace(after).is_some())
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        MapChanges::Keys(keys) => keys.iter().try_for_each(&mut inspect)?,
-        MapChanges::All => {
-            for id in previous.operations.keys() {
-                inspect(id)?;
-            }
-            for id in next
-                .operations
-                .keys()
-                .filter(|id| !previous.operations.contains_key(*id))
-            {
-                inspect(id)?;
-            }
-        }
-    }
-    let owner_changed = |id: &OperationId| {
-        previous
-            .operations
-            .get(id)
-            .is_some_and(|operation| accepts(&operation.kind))
-            && previous.operation_principals.get(id) != next.operation_principals.get(id)
-    };
-    if match next
-        .operation_principals
-        .changes_since(&previous.operation_principals)
-    {
-        MapChanges::Keys(keys) => keys.iter().any(owner_changed),
-        MapChanges::All => previous.operations.keys().any(owner_changed),
-    } {
-        return Err(invalid());
-    }
-    Ok(receipt)
 }
 
 fn marked_history_changed(previous: &State, next: &State) -> bool {

@@ -5,13 +5,13 @@ use crate::engine::{Prepared, ReadSource};
 use crate::journal::Candidate;
 use crate::protection::RecursiveBackupMode;
 use crate::{
-    CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationId,
-    OperationResult, Placement, ProtectionAtPublish, RecursiveBackupCapture,
-    RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
+    CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationResult,
+    Placement, ProtectionAtPublish, RecursiveBackupCapture, RecursiveBackupConfigurationRequest,
+    ScopedBackupConfigurationRequest,
 };
 use data_serialization::Deserialize;
 use json_codec::{Value, json};
-use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
+use storage_contract::{MapChanges, TrackedMap};
 
 const KIND: &str = "backup.configure";
 fn native_backup_kind(kind: &str) -> bool {
@@ -494,13 +494,13 @@ impl CurrentNamespaces {
                 &plan.paths,
             )
             || !exact_upserts(&previous.placements, &next.placements, &plan.placements)
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operations,
                 &next.operations,
                 receipt.operation_id,
                 receipt,
             )
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operation_principals,
                 &next.operation_principals,
                 receipt.operation_id,
@@ -516,59 +516,22 @@ impl CurrentNamespaces {
 }
 
 fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
-    let mut ids = BTreeSet::new();
-    for changes in [
-        next.operations.changes_since(&previous.operations),
-        next.operation_principals
-            .changes_since(&previous.operation_principals),
-    ] {
-        match changes {
-            MapChanges::Keys(keys) => ids.extend(keys.iter().copied()),
-            MapChanges::All => {
-                ids.extend(previous.operations.keys().copied());
-                ids.extend(next.operations.keys().copied());
-            }
-        }
+    let receipt = publication_delta::receipt(
+        previous,
+        next,
+        CurrentNamespaces::is_backup_configuration,
+        invalid,
+    )?;
+    if receipt.is_some_and(|receipt| !native_backup_kind(&receipt.kind)) {
+        return Err(invalid());
     }
-    let mut receipt = None;
-    for id in ids {
-        let before = previous.operations.get(&id);
-        let after = next.operations.get(&id);
-        if before.is_some_and(CurrentNamespaces::is_backup_configuration) {
-            if before != after
-                || previous.operation_principals.get(&id) != next.operation_principals.get(&id)
-            {
-                return Err(invalid());
-            }
-        } else if let Some(after) =
-            after.filter(|operation| CurrentNamespaces::is_backup_configuration(operation))
-            && (before.is_some()
-                || !native_backup_kind(&after.kind)
-                || after.operation_id != id
-                || receipt.replace(after).is_some())
-        {
-            return Err(invalid());
-        }
-    }
-    let start = match next.events.changes_since(&previous.events) {
-        SequenceChanges::Append { start } => start,
-        SequenceChanges::All => 0,
-    };
-    for index in start..previous.events.len().max(next.events.len()) {
-        let before = previous.events.get(index);
-        let after = next.events.get(index);
-        if before != after
-            && (before.is_some_and(|event| native_backup_kind(&event.kind))
-                || after.is_some_and(|event| {
-                    native_backup_kind(&event.kind)
-                        && (before.is_some()
-                            || Some(event.operation_id)
-                                != receipt.map(|receipt| receipt.operation_id))
-                }))
-        {
-            return Err(invalid());
-        }
-    }
+    publication_delta::events(
+        previous,
+        next,
+        receipt.map(|receipt| receipt.operation_id),
+        native_backup_kind,
+        invalid,
+    )?;
     Ok(receipt)
 }
 
@@ -665,28 +628,8 @@ fn unchanged_except<T: PartialEq>(
         MapChanges::All => before.keys().chain(after.keys()).all(equal),
     }
 }
-pub(super) fn only_added<T: PartialEq>(
-    before: &TrackedOperations<T>,
-    after: &TrackedOperations<T>,
-    key: OperationId,
-    expected: &T,
-) -> bool {
-    if before.contains_key(&key)
-        || before.len().checked_add(1) != Some(after.len())
-        || after.get(&key) != Some(expected)
-    {
-        return false;
-    }
-    let equal = |id: &OperationId| *id == key || after.get(id) == before.get(id);
-    match after.changes_since(before) {
-        MapChanges::Keys(keys) => keys.iter().all(equal),
-        MapChanges::All => before.keys().all(equal),
-    }
-}
+
 fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
-    if previous.events.len().checked_add(1) != Some(next.events.len()) {
-        return false;
-    }
     let expected = Event {
         sequence: next.sequence,
         operation_id: receipt.operation_id,
@@ -696,11 +639,7 @@ fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool 
             .clone()
             .expect("invariant: verified backup receipt has its history"),
     };
-    next.events.last() == Some(&expected)
-        && match next.events.changes_since(&previous.events) {
-            SequenceChanges::Append { start } => start == previous.events.len(),
-            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
-        }
+    publication_delta::one_event(previous, next, &expected)
 }
 
 // Every State field must be classified. In particular physical file_names and

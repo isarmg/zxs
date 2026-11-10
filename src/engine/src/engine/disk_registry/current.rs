@@ -28,6 +28,7 @@ mod merge_links;
 mod new_scope;
 mod path_notes;
 mod plan_cancellation;
+mod publication_delta;
 mod recursive_follow;
 mod relocation;
 mod smb_bindings;

@@ -9,7 +9,7 @@ use crate::protection::{
 use crate::{OperationId, OperationResult, ProtectionPolicy, RecursiveBackupCapture};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
-use storage_contract::{MapChanges, SequenceChanges, TrackedMap};
+use storage_contract::{MapChanges, TrackedMap};
 
 pub(crate) const FILE_KIND: &str = "file.namespace.recursive";
 pub(crate) const BATCH_KIND: &str = "directory.namespace.batch.recursive";
@@ -113,12 +113,7 @@ fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool 
             .or_else(|| receipt.history_tree_id.clone())
             .unwrap_or_else(|| receipt.operation_id.to_string()),
     };
-    previous.events.len().checked_add(1) == Some(next.events.len())
-        && next.events.last() == Some(&expected)
-        && match next.events.changes_since(&previous.events) {
-            SequenceChanges::Append { start } => start == previous.events.len(),
-            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
-        }
+    publication_delta::one_event(previous, next, &expected)
 }
 
 impl PolicyIndex {
@@ -590,25 +585,13 @@ impl CurrentNamespaces {
                 return Err(invalid());
             }
         }
-        let start = match next.events.changes_since(&previous.events) {
-            SequenceChanges::Append { start } => start,
-            SequenceChanges::All => 0,
-        };
-        for index in start..previous.events.len().max(next.events.len()) {
-            let before = previous.events.get(index);
-            let after = next.events.get(index);
-            if before != after
-                && (before.is_some_and(|event| is_kind(&event.kind))
-                    || after.is_some_and(|event| {
-                        is_kind(&event.kind)
-                            && (before.is_some()
-                                || Some(event.operation_id)
-                                    != found.map(|receipt| receipt.operation_id))
-                    }))
-            {
-                return Err(invalid());
-            }
-        }
+        publication_delta::events(
+            previous,
+            next,
+            found.map(|receipt| receipt.operation_id),
+            is_kind,
+            invalid,
+        )?;
         let Some(receipt) = found else {
             return Ok(None);
         };
@@ -652,13 +635,13 @@ impl CurrentNamespaces {
                 principal,
                 &receipt.result["namespace_request"],
             )? != receipt.request_digest
-            || !super::backup_configuration::only_added(
+            || !publication_delta::only_added(
                 &previous.operations,
                 &next.operations,
                 receipt.operation_id,
                 receipt,
             )
-            || !super::backup_configuration::only_added(
+            || !publication_delta::only_added(
                 &previous.operation_principals,
                 &next.operation_principals,
                 receipt.operation_id,

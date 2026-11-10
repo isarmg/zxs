@@ -179,42 +179,19 @@ impl CurrentNamespaces {
                 }
             }
         }
-        verify_note_events(previous, next, note.map(|receipt| receipt.operation_id))?;
+        publication_delta::events(
+            previous,
+            next,
+            note.map(|receipt| receipt.operation_id),
+            |kind| kind == KIND,
+            invalid,
+        )?;
         match note {
             Some(receipt) => NoteRequest::from_receipt(receipt)?.verify(previous, next, receipt),
             None if notes_unchanged_except(previous, next, None) => Ok(()),
             None => Err(invalid()),
         }
     }
-}
-
-/// A no-change annotation still has a permanent receipt and event. Looking
-/// only at changed note values would miss a removed or relabeled receipt, and
-/// unchanged branch heads must not conceal changes to earlier note events.
-fn verify_note_events(
-    previous: &State,
-    next: &State,
-    operation: Option<OperationId>,
-) -> Result<()> {
-    let start = match next.events.changes_since(&previous.events) {
-        SequenceChanges::Append { start } => start,
-        SequenceChanges::All => 0,
-    };
-    for index in start..previous.events.len().max(next.events.len()) {
-        let before = previous.events.get(index);
-        let after = next.events.get(index);
-        if before == after {
-            continue;
-        }
-        if before.is_some_and(|event| event.kind == KIND)
-            || after.is_some_and(|event| {
-                event.kind == KIND && (before.is_some() || Some(event.operation_id) != operation)
-            })
-        {
-            return Err(invalid());
-        }
-    }
-    Ok(())
 }
 
 fn notes_unchanged_except(previous: &State, next: &State, node: Option<&str>) -> bool {

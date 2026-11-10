@@ -3,11 +3,10 @@
 //! the unchanged-namespace fast path, including replay without change tracking.
 use super::*;
 use crate::{
-    Branch, CommitState, CurrentHealth, Event, OperationId, OperationResult, ProtectionAtPublish,
-    Repository,
+    Branch, CommitState, CurrentHealth, Event, OperationResult, ProtectionAtPublish, Repository,
 };
 use json_codec::{Value, json};
-use storage_contract::{MapChanges, SequenceChanges, TrackedMap, TrackedOperations};
+use storage_contract::{MapChanges, TrackedMap};
 
 const KIND: &str = "smb.binding.update";
 
@@ -63,7 +62,9 @@ impl CurrentNamespaces {
         next: &State,
         result: &OperationResult,
     ) -> Result<()> {
-        let receipt = new_binding_receipt(previous, next)?.ok_or_else(invalid)?;
+        let receipt =
+            publication_delta::receipt(previous, next, |receipt| receipt.kind == KIND, invalid)?
+                .ok_or_else(invalid)?;
         if receipt != result {
             return Err(invalid());
         }
@@ -71,7 +72,8 @@ impl CurrentNamespaces {
     }
 
     pub(super) fn verify_smb_bindings(&self, previous: &State, next: &State) -> Result<()> {
-        let receipt = new_binding_receipt(previous, next)?;
+        let receipt =
+            publication_delta::receipt(previous, next, |receipt| receipt.kind == KIND, invalid)?;
         let Some(receipt) = receipt else {
             // A forged kind or missing receipt cannot evade the proof by taking
             // the namespace fast path. Other admitted operations do not rebind
@@ -171,13 +173,13 @@ impl CurrentNamespaces {
                 &history.history_tree_id,
                 &expected_history,
             )
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operations,
                 &next.operations,
                 receipt.operation_id,
                 receipt,
             )
-            || !only_added(
+            || !publication_delta::only_added(
                 &previous.operation_principals,
                 &next.operation_principals,
                 receipt.operation_id,
@@ -195,69 +197,6 @@ impl CurrentNamespaces {
 fn decimal_field(value: &Value, key: &str) -> Result<u64> {
     let value = value[key].as_str().ok_or_else(invalid)?;
     Ok(storage_contract::parse_u64_decimal(value)?)
-}
-
-/// Visit only tracked keys for live publication; reconstructed States require
-/// the full comparison rather than treating missing provenance as an empty diff.
-fn new_binding_receipt<'a>(
-    previous: &State,
-    next: &'a State,
-) -> Result<Option<&'a OperationResult>> {
-    let mut receipt = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let old = previous.operations.get(id);
-        let current = next.operations.get(id);
-        if old.is_some_and(|old| old.kind == KIND) {
-            if old != current
-                || previous.operation_principals.get(id) != next.operation_principals.get(id)
-            {
-                return Err(invalid());
-            }
-        } else if let Some(current) = current.filter(|current| current.kind == KIND)
-            && (old.is_some() || current.operation_id != *id || receipt.replace(current).is_some())
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        MapChanges::Keys(keys) => {
-            for id in keys.iter() {
-                inspect(id)?;
-            }
-        }
-        MapChanges::All => {
-            for id in previous.operations.keys() {
-                inspect(id)?;
-            }
-            for id in next
-                .operations
-                .keys()
-                .filter(|id| !previous.operations.contains_key(*id))
-            {
-                inspect(id)?;
-            }
-        }
-    }
-    // A principal-only rewrite has no operations-map delta. Inspect that
-    // independent write set as well, even when no new binding is published.
-    let preserved_owner = |id: &OperationId| {
-        previous.operations.get(id).is_none_or(|old| {
-            old.kind != KIND
-                || previous.operation_principals.get(id) == next.operation_principals.get(id)
-        })
-    };
-    let owners_unchanged = match next
-        .operation_principals
-        .changes_since(&previous.operation_principals)
-    {
-        MapChanges::Keys(keys) => keys.iter().all(preserved_owner),
-        MapChanges::All => previous.operations.keys().all(preserved_owner),
-    };
-    if !owners_unchanged {
-        return Err(invalid());
-    }
-    Ok(receipt)
 }
 
 fn binding_changed(previous: &State, next: &State) -> bool {
@@ -308,43 +247,14 @@ fn only_changed<T: PartialEq>(
     }
 }
 
-fn only_added<T: PartialEq>(
-    before: &TrackedOperations<T>,
-    after: &TrackedOperations<T>,
-    key: OperationId,
-    expected: &T,
-) -> bool {
-    if before.contains_key(&key)
-        || before.len().checked_add(1) != Some(after.len())
-        || after.get(&key) != Some(expected)
-    {
-        return false;
-    }
-    match after.changes_since(before) {
-        MapChanges::Keys(keys) => keys
-            .iter()
-            .all(|id| *id == key || after.get(id) == before.get(id)),
-        MapChanges::All => before
-            .iter()
-            .all(|(id, value)| after.get(id) == Some(value)),
-    }
-}
-
 fn one_binding_event(previous: &State, next: &State, receipt: &OperationResult) -> bool {
-    if previous.events.len().checked_add(1) != Some(next.events.len()) {
-        return false;
-    }
     let expected = Event {
         sequence: next.sequence,
         operation_id: receipt.operation_id,
         kind: KIND.into(),
         object_id: receipt.operation_id.to_string(),
     };
-    next.events.last() == Some(&expected)
-        && match next.events.changes_since(&previous.events) {
-            SequenceChanges::Append { start } => start == previous.events.len(),
-            SequenceChanges::All => next.events[..previous.events.len()] == previous.events[..],
-        }
+    publication_delta::one_event(previous, next, &expected)
 }
 
 // One exhaustive State pattern owns the closed write set. Adding a field to

@@ -255,71 +255,14 @@ fn decimal_field(value: &Value, key: &str) -> Result<u64> {
 /// Tracking is only an optimization. Persisted States compare the complete
 /// relevant maps, and independent owner/event deltas cannot hide behind HEAD.
 fn new_tag_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
-    let mut receipt = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before.is_some_and(is_tag) {
-            if before != after {
-                return Err(invalid());
-            }
-        } else if let Some(after) = after.filter(|after| is_tag(after))
-            && (before.is_some() || after.operation_id != *id || receipt.replace(after).is_some())
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        MapChanges::Keys(ids) => ids.iter().try_for_each(&mut inspect)?,
-        MapChanges::All => {
-            for id in previous.operations.keys() {
-                inspect(id)?;
-            }
-            for id in next
-                .operations
-                .keys()
-                .filter(|id| !previous.operations.contains_key(*id))
-            {
-                inspect(id)?;
-            }
-        }
-    }
-    let preserved_owner = |id: &OperationId| {
-        previous.operations.get(id).is_none_or(|old| {
-            !is_tag(old)
-                || previous.operation_principals.get(id) == next.operation_principals.get(id)
-        })
-    };
-    let owners_unchanged = match next
-        .operation_principals
-        .changes_since(&previous.operation_principals)
-    {
-        MapChanges::Keys(ids) => ids.iter().all(preserved_owner),
-        MapChanges::All => previous.operations.keys().all(preserved_owner),
-    };
-    if !owners_unchanged {
-        return Err(invalid());
-    }
-    let start = match next.events.changes_since(&previous.events) {
-        SequenceChanges::Append { start } => start,
-        SequenceChanges::All => 0,
-    };
-    for index in start..previous.events.len().max(next.events.len()) {
-        let before = previous.events.get(index);
-        let after = next.events.get(index);
-        if before != after
-            && (before.is_some_and(|event| event.kind == KIND)
-                || after.is_some_and(|event| {
-                    event.kind == KIND
-                        && (before.is_some()
-                            || Some(event.operation_id)
-                                != receipt.map(|receipt| receipt.operation_id))
-                }))
-        {
-            return Err(invalid());
-        }
-    }
+    let receipt = publication_delta::receipt(previous, next, is_tag, invalid)?;
+    publication_delta::events(
+        previous,
+        next,
+        receipt.map(|receipt| receipt.operation_id),
+        |kind| kind == KIND,
+        invalid,
+    )?;
     Ok(receipt)
 }
 
