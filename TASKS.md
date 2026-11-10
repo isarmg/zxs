@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`2ff562f9`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`d5f4694f75ea46acf0774700c618e285801b248f`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Backup 首槽缺父目录修复
+
+- 已定位 CI #1104 的三条 transaction_serving 共同 ENOENT：Genesis 没有 metadata/membership-generations，首槽 inspect 在 prepare 建目录之前直接探测其子目录，而 optional_metadata 只接纳叶节点缺失。
+- inspect 先只读探测固定父目录，再探测已选 authority 目录；仅合法缺父目录返回尚未开始，metadata 缺失、父文件/链接和其他 I/O 错误仍传播。未提前创建目录，原全部成员预检、候选安装、ACCEPT/FINALIZE/Publication 与 fsync 顺序保持。
+- 现有根集成夹具增加首次 registry 决定前所有原盘 generation 祖先缺失断言，保留完整准备、后继写入、冷恢复、缺 selector/lock 拒绝等原断言。
+- 验证：对齐 d5f4694f；固定 Rust 1.99 rustfmt、精确差异与独立静审通过。按要求未本地编译/执行测试，行为由本提交 CI 验证；本项不表示其余 #1104 失败已修复。
 
 ## 本轮 Current 移动目录观察夹具
 

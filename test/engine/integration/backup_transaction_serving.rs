@@ -92,6 +92,12 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
             .phase,
         BackupPreparationPhase::TargetEntitiesPrepared
     );
+    // Genesis has no generation directory before the first native vote.
+    // Inspecting the original slots must admit that missing ancestor without
+    // creating it before every original member has passed preflight.
+    for disk in &engine.config().disks {
+        assert!(!disk.root.join("metadata/membership-generations").exists());
+    }
     engine
         .start_backup_registry_placement_decision(operation, "admin")
         .unwrap();

@@ -187,7 +187,12 @@ impl<'a> BackupFirstJournal<'a> {
         candidate: &'a PreparedBackupFirstCandidate,
     ) -> Result<Option<Self>> {
         let directory = activation::generation_directory(disk, candidate.authority_hash());
-        if root.optional_metadata(&directory)?.is_none() {
+        let generations = directory
+            .parent()
+            .expect("invariant: generation directory has a parent");
+        if root.optional_metadata(generations)?.is_none()
+            || root.optional_metadata(&directory)?.is_none()
+        {
             return Ok(None);
         }
         Self::open(root, disk, candidate).map(Some)
