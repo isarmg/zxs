@@ -254,14 +254,14 @@ fn frozen_batch_read_only_parent_scope_does_not_block_child_copy() {
 }
 
 #[test]
-fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_source() {
-    let mut pool = Pool::new();
+fn selected_batch_deduplicates_aliases_into_one_d_and_rejects_duplicate_source() {
+    let mut pool = Pool::disk_root();
     pool.save("a/report.txt", b"source");
     pool.save("b/stay.txt", b"untouched");
-    let first_source = pool.register("a", "first");
-    let second_source = pool.register("a", "second");
-    let retained_source = pool.register("a", "retained");
-    let target = pool.register("b", "target");
+    let first_source = pool.register("", "first");
+    let second_source = pool.register("", "second");
+    let retained_source = pool.register("", "retained");
+    let target = pool.register("", "target");
     let original = pool.entry(&first_source, "a/report.txt");
     for (source, destination) in [
         (&first_source, "b/first.txt"),
@@ -270,7 +270,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         let item = pool.mapping(source, "a/report.txt", &target, destination);
         pool.batch(storage_contract::DirectoryBatchKind::Move, vec![item]);
     }
-    pool.select("b", "target");
+    pool.select("", "target");
     assert_eq!(
         pool.current_entry("b/first.txt").entry_id,
         original.entry_id
@@ -287,7 +287,8 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         source: pool.source(&target, "b/second.txt"),
         target: None,
     };
-    let before = storage_engine::canonical_json(pool.engine.state()).unwrap();
+    let original_state = pool.engine.state().clone();
+    let before = storage_engine::canonical_json(&original_state).unwrap();
     let duplicate = DirectoryNamespaceBatch {
         kind: storage_contract::DirectoryBatchKind::Delete,
         items: vec![first.clone(), first.clone()],
@@ -324,9 +325,37 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
             .result,
         receipt.result
     );
-    let target_after = pool.branch(&target);
-    assert_eq!(target_after.entries.len(), 1);
-    assert_eq!(target_after.entries[0].path, "b/stay.txt");
+    assert_eq!(pool.engine.state().commits, original_state.commits);
+    assert_eq!(
+        pool.engine.state().directory_branches,
+        original_state.directory_branches
+    );
+    assert_eq!(
+        pool.engine.state().file_contexts,
+        original_state.file_contexts
+    );
+    assert_eq!(receipt.kind, "file.delete.batch");
+    assert_eq!(
+        receipt.result["deletion_nodes"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(pool.engine.state().file_deletions.len(), 1);
+    assert_eq!(
+        pool.engine
+            .file_deletion(&original.file_id)
+            .unwrap()
+            .operation_id,
+        operation
+    );
+    let visible = pool
+        .engine
+        .namespace_tree(&pool.repo.main_branch_id)
+        .unwrap();
+    for path in ["a/report.txt", "b/first.txt", "b/second.txt"] {
+        assert!(visible.get(path).is_none());
+        assert_eq!(pool.entry(&target, path).file_id, original.file_id);
+    }
+    assert!(visible.get("b/stay.txt").is_some());
     assert_eq!(
         pool.entry(&retained_source, "a/report.txt").file_id,
         original.file_id

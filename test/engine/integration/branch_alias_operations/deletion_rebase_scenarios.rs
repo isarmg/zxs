@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
-    let mut pool = Pool::new();
+fn active_frozen_batch_deletion_records_one_d_at_the_live_rebased_path() {
+    let mut pool = Pool::disk_root();
     pool.save("Straße/report.txt", b"retained historical content");
     let frozen = pool.register("Straße", "frozen");
     let original = pool.entry(&frozen, "Straße/report.txt");
@@ -55,6 +55,7 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
         branch.head_tree_id
     );
 
+    let before = pool.engine.state().clone();
     let operation = pool.batch(
         storage_contract::DirectoryBatchKind::Delete,
         vec![DirectoryNamespaceItem {
@@ -64,28 +65,22 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
     );
     let main_branch = pool.repo.main_branch_id.clone();
     let inspect = |engine: &Engine| {
-        let owners = engine
-            .state()
-            .commits
-            .values()
-            .filter(|commit| commit.operation_id == operation.operation_id)
-            .filter(|commit| commit.namespace_deletions.is_some())
-            .collect::<Vec<_>>();
-        assert_eq!(owners.len(), 1);
-        assert_eq!(Some(&owners[0].commit_id), operation.commit_id.as_ref());
-        let facts = owners[0].namespace_deletions.as_ref().unwrap();
-        assert_eq!(facts.paths.len(), 1);
-        assert_eq!(facts.paths[0].path, "renamed/report.txt");
-        assert_eq!(
-            facts.paths[0].kind,
-            storage_engine::NamespaceEntryKind::File
-        );
+        assert_eq!(operation.kind, "file.delete.batch");
+        let nodes = operation.result["deletion_nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        let node = engine.file_deletion(&original.file_id).unwrap();
+        assert_eq!(node.operation_id, operation.operation_id);
+        assert_eq!(node.path, "renamed/report.txt");
+        assert_eq!(json_codec::to_value(node).unwrap(), nodes[0]);
+        assert_eq!(engine.state().commits, before.commits);
+        assert_eq!(engine.state().directory_branches, before.directory_branches);
+        assert_eq!(engine.state().file_contexts, before.file_contexts);
         assert!(
-            !engine
-                .list_tree(&main_branch)
+            engine
+                .namespace_tree(&main_branch)
                 .unwrap()
-                .iter()
-                .any(|entry| entry.path == "renamed/report.txt")
+                .get("renamed/report.txt")
+                .is_none()
         );
     };
     inspect(&pool.engine);

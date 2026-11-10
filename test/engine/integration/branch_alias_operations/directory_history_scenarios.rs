@@ -237,7 +237,7 @@ fn directory_history_pages_real_edges_and_pending_branches_share_a_real_head() {
     );
 }
 #[test]
-fn directory_history_stable_identity_survives_rename_delete_and_path_recreation() {
+fn directory_history_retains_identity_after_rejected_deletion_and_old_path_reuse() {
     let mut p = Pool::new();
     p.save("docs/a.txt", b"one");
     commit_path(&mut p, "docs");
@@ -285,20 +285,42 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
     let dirty_branch = p.engine.state().directory_git_repositories[&directory]
         .current_branch_id
         .clone();
+    let before = p.engine.state().clone();
+    assert_eq!(
+        p.engine
+            .file_namespace(
+                &p.repo.repository_id,
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::DeleteTree,
+                    "archive",
+                    None,
+                )
+                .unwrap(),
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(p.engine.state(), &before);
+    assert_eq!(p.current_entry("archive").entry_id, directory);
     p.engine
         .file_namespace(
             &p.repo.repository_id,
             NamespaceOperation::parse(
-                storage_contract::NamespaceOperationKind::DeleteTree,
+                storage_contract::NamespaceOperationKind::Rename,
                 "archive",
-                None,
+                Some("retained"),
             )
             .unwrap(),
             "admin",
             OperationId::generate().unwrap(),
         )
         .unwrap();
-    let deleted = page(
+    assert_eq!(p.current_entry("retained").entry_id, directory);
+    let original = p.current_entry("retained/a.txt");
+    let retained = page(
         &p,
         request(
             &p,
@@ -307,9 +329,12 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
             BTreeMap::new(),
         ),
     );
-    assert_eq!(deleted.current.directory_branch_id, None);
-    assert!(!deleted.nodes.is_empty());
-    let deleted_branches = page(
+    assert_eq!(
+        retained.current.directory_branch_id.as_ref(),
+        Some(&dirty_branch)
+    );
+    assert!(!retained.nodes.is_empty());
+    let retained_branches = page(
         &p,
         request(
             &p,
@@ -318,13 +343,16 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
             BTreeMap::new(),
         ),
     );
-    assert_eq!(deleted_branches.current.directory_branch_id, None);
-    let retained_dirty = deleted_branches
+    assert_eq!(
+        retained_branches.current.directory_branch_id.as_ref(),
+        Some(&dirty_branch)
+    );
+    let retained_dirty = retained_branches
         .branches
         .iter()
         .find(|branch| branch.directory_branch_id == dirty_branch)
         .unwrap();
-    assert!(!retained_dirty.current && retained_dirty.staged);
+    assert!(retained_dirty.current && retained_dirty.staged);
     p.save("archive/new.txt", b"new identity");
     commit_path(&mut p, "archive");
     let replacement = p.current_entry("archive").entry_id;
@@ -341,7 +369,7 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
     assert!(
         new.nodes
             .iter()
-            .all(|n| !deleted.nodes.iter().any(|old| old.tree_id == n.tree_id))
+            .all(|n| !retained.nodes.iter().any(|old| old.tree_id == n.tree_id))
     );
     let old_again = page(
         &p,
@@ -352,7 +380,7 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
             BTreeMap::new(),
         ),
     );
-    assert_eq!(old_again.nodes, deleted.nodes);
+    assert_eq!(old_again.nodes, retained.nodes);
     let old_branches = page(
         &p,
         request(
@@ -362,8 +390,11 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
             BTreeMap::new(),
         ),
     );
-    assert_eq!(old_branches.current.directory_branch_id, None);
-    assert_eq!(old_branches.branches, deleted_branches.branches);
+    assert_eq!(
+        old_branches.current.directory_branch_id.as_ref(),
+        Some(&dirty_branch)
+    );
+    assert_eq!(old_branches.branches, retained_branches.branches);
     let foreign = storage_contract::new_id("entry").unwrap();
     assert_eq!(
         p.engine
@@ -381,7 +412,30 @@ fn directory_history_stable_identity_survives_rename_delete_and_path_recreation(
             .code(),
         ErrorCode::DirectoryNotFound
     );
+    assert_eq!(p.current_entry("retained/a.txt"), original);
+    assert_eq!(
+        p.bytes(&original.version_id),
+        b"uncommitted directory changes"
+    );
+    let retained_request = request(
+        &p,
+        &directory,
+        DirectoryHistoryCollection::Nodes,
+        BTreeMap::new(),
+    );
+    p.reopen(|engine| {
+        let read = engine
+            .capture_directory_history(retained_request, HistoryWindowCancellation::new())
+            .unwrap();
+        let page = read.page().unwrap();
+        assert_eq!(page.nodes, retained.nodes);
+        assert_eq!(
+            page.current.directory_branch_id.as_ref(),
+            Some(&dirty_branch)
+        );
+    });
 }
+
 #[test]
 fn directory_history_rejects_root_drift_cross_scope_anchor_and_cancellation() {
     let mut p = Pool::new();

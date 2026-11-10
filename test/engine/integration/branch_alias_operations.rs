@@ -32,6 +32,12 @@ struct Pool {
 }
 impl Pool {
     fn new() -> Self {
+        Self::with_disk_root(false)
+    }
+    fn disk_root() -> Self {
+        Self::with_disk_root(true)
+    }
+    fn with_disk_root(file_manager_root: bool) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
         let config = Config::development([
@@ -41,15 +47,20 @@ impl Pool {
         ])
         .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
-        let repo = engine
-            .create_repository(
-                &storage_contract::RepositoryName::parse("Alias fixtures").unwrap(),
-                "P01",
-                3,
-                "admin",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        let operation = storage_contract::OperationId::generate().unwrap();
+        let repo = if file_manager_root {
+            engine.create_disk_root("P01", "admin", operation).unwrap()
+        } else {
+            engine
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("Alias fixtures").unwrap(),
+                    "P01",
+                    3,
+                    "admin",
+                    operation,
+                )
+                .unwrap()
+        };
         Self {
             _temporary: temporary,
             root,
@@ -304,11 +315,11 @@ fn batch_alias_rename_keeps_one_canonical_owner_and_no_op_has_no_subtree() {
     let mut p = Pool::new();
     p.save("a/report.txt", b"original");
     p.save("b/stay.txt", b"sibling");
-    let m = p.register("a", "m");
-    let n = p.register("a", "n");
-    let retained = p.register("a", "retained");
-    let l = p.register("b", "l");
-    let target_p = p.register("b", "p");
+    let m = p.register("", "m");
+    let n = p.register("", "n");
+    let retained = p.register("", "retained");
+    let l = p.register("", "l");
+    let target_p = p.register("", "p");
     let original = p.entry(&m, "a/report.txt");
     p.batch(
         storage_contract::DirectoryBatchKind::Move,
@@ -355,40 +366,37 @@ fn batch_alias_rename_keeps_one_canonical_owner_and_no_op_has_no_subtree() {
     });
 }
 
+// Stable aliases share one initialized root owner. Keep a separate frozen
+// branch so tests distinguish retained history from the selected working view.
 fn selected_aliases(p: &mut Pool) -> (String, String, Entry) {
     p.save("a/report.txt", b"original");
     p.save("b/stay.txt", b"sibling");
-    let m = p.register("a", "m");
-    let n = p.register("a", "n");
-    let l = p.register("b", "l");
-    let original = p.entry(&m, "a/report.txt");
-    p.batch(
-        storage_contract::DirectoryBatchKind::Move,
-        vec![p.mapping(&m, "a/report.txt", &l, "b/report.txt")],
-    );
-    p.select("a", "n");
-    p.select("b", "l");
-    select_alias_draft(p, &original);
-    (n, l, original)
-}
-
-// Both occurrences remain owned by one root Git repository. The child-scope
-// fixture above deliberately initializes independent a/b repositories instead.
-fn selected_root_aliases(p: &mut Pool) -> Entry {
-    p.save("a/report.txt", b"original");
-    p.save("b/stay.txt", b"sibling");
     let source = p.register("", "source");
-    let target = p.register("", "aliases");
+    let frozen = p.register("", "retained");
+    let selected = p.register("", "aliases");
     let original = p.entry(&source, "a/report.txt");
     p.batch(
         storage_contract::DirectoryBatchKind::Move,
-        vec![p.mapping(&source, "a/report.txt", &target, "b/report.txt")],
+        vec![p.mapping(&source, "a/report.txt", &selected, "b/report.txt")],
     );
     p.select("", "aliases");
+    assert_ne!(frozen, selected);
+    assert_eq!(
+        p.branch(&frozen).directory_id,
+        p.branch(&selected).directory_id
+    );
     assert_eq!(p.current_entry("a/report.txt").file_id, original.file_id);
     assert_eq!(p.current_entry("b/report.txt").file_id, original.file_id);
+    assert_eq!(
+        p.entry(&frozen, "a/report.txt").version_id,
+        original.version_id
+    );
     select_alias_draft(p, &original);
-    original
+    (frozen, selected, original)
+}
+
+fn selected_root_aliases(p: &mut Pool) -> Entry {
+    selected_aliases(p).2
 }
 
 fn select_alias_draft(p: &mut Pool, original: &Entry) {
@@ -565,7 +573,8 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
     }
     assert_eq!(p.current_entry("a/renamed.txt").file_id, original.file_id);
     assert_eq!(p.current_entry("b/renamed.txt").file_id, original.file_id);
-    assert_ne!(p.branch(&n).head_tree_id, a_head);
+    assert_eq!(p.branch(&n).head_tree_id, a_head);
+    assert_eq!(p.entry(&n, "a/report.txt").version_id, original.version_id);
     assert_ne!(p.branch(&l).head_tree_id, b_head);
     assert_eq!(
         p.engine.state().file_locations[&original.file_id],
@@ -585,46 +594,33 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
 }
 
 #[test]
-fn deleting_one_inactive_root_alias_preserves_the_other_alias_and_its_context() {
-    let mut p = Pool::new();
+fn deleting_an_inactive_root_alias_is_rejected_without_changing_any_context() {
+    let mut p = Pool::disk_root();
     let original = selected_root_aliases(&mut p);
     let root = p.register("", "archive");
-    let before = p.branch(&root);
-    let b_context = before.file_contexts["b/report.txt"].clone();
-    let selected_before = p.engine.list_tree(&p.repo.main_branch_id).unwrap();
-    let item = DirectoryNamespaceItem {
-        source: p.source(&root, "a/report.txt"),
-        target: None,
+    let before = p.engine.state().clone();
+    let request = DirectoryNamespaceBatch {
+        kind: storage_contract::DirectoryBatchKind::Delete,
+        items: vec![DirectoryNamespaceItem {
+            source: p.source(&root, "a/report.txt"),
+            target: None,
+        }],
     };
-    p.batch(storage_contract::DirectoryBatchKind::Delete, vec![item]);
-    let after = p.branch(&root);
-    assert!(
-        after
-            .entries
-            .iter()
-            .all(|entry| entry.path != "a/report.txt")
-    );
+    let operation = storage_contract::OperationId::generate().unwrap();
     assert_eq!(
-        p.entry(&root, "b/report.txt").version_id,
-        original.version_id
+        p.engine
+            .directory_namespace_batch(&p.repo.repository_id, &request, "admin", operation)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::DirectoryBranchConflict
     );
-    assert_eq!(after.file_contexts["b/report.txt"], b_context);
-    assert!(!after.file_contexts.contains_key("a/report.txt"));
-    assert!(
-        after.file_branches.contains_key(&original.file_id),
-        "legacy file index still covers retained alias"
-    );
-    assert_eq!(
-        json_codec::to_value(p.engine.list_tree(&p.repo.main_branch_id).unwrap()).unwrap(),
-        json_codec::to_value(selected_before).unwrap()
-    );
+    assert_eq!(p.engine.state(), &before);
+    assert_eq!(p.entry(&root, "a/report.txt").file_id, original.file_id);
+    assert_eq!(p.entry(&root, "b/report.txt").file_id, original.file_id);
+    assert_eq!(p.current_entry("a/report.txt").file_id, original.file_id);
+    assert_eq!(p.current_entry("b/report.txt").file_id, original.file_id);
     assert_eq!(p.bytes(&original.version_id), b"original");
-    p.reopen(|recovered| {
-        assert_eq!(
-            recovered.state().directory_branches[&root].file_contexts["b/report.txt"],
-            b_context
-        )
-    });
+    p.reopen(|recovered| assert_eq!(recovered.state(), &before));
 }
 
 #[test]
@@ -929,7 +925,7 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
 }
 
 #[test]
-fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
+fn workspace_delete_then_replace_in_initialized_repository_is_atomic_rejection() {
     let mut p = Pool::new();
     p.save("a.txt", b"retired");
     p.save("b.txt", b"surviving");
@@ -963,28 +959,37 @@ fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
             .namespace_operation(&workspace.workspace_id, change)
             .unwrap();
     }
-    p.commit(workspace);
-    assert_eq!(p.current_entry("a.txt").file_id, survivor.file_id);
+    let before = p.engine.state().clone();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    assert_eq!(
+        p.engine
+            .commit_workspace(CommitRequest {
+                workspace_id: workspace.workspace_id.clone(),
+                operation_id: operation,
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "Reject raw deletion inside initialized owner".into(),
+                request_digest: None,
+            })
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(p.engine.state(), &before);
+    p.engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    assert_eq!(p.current_entry("a.txt").file_id, retired.file_id);
+    assert_eq!(p.current_entry("b.txt").file_id, survivor.file_id);
     let updated = p
         .engine
-        .file_context(&p.repo.repository_id, "a.txt")
+        .file_context(&p.repo.repository_id, "b.txt")
         .unwrap();
-    assert_eq!(updated.branch_id, context.branch_id);
-    assert_eq!(updated.inherited_from, context.inherited_from);
-    assert!(
-        p.engine
-            .file_context(&p.repo.repository_id, "b.txt")
-            .is_none()
-    );
-    assert!(
-        !p.engine
-            .state()
-            .file_selections
-            .contains_key(&retired.file_id)
-    );
+    assert_eq!(updated, context);
+    assert_eq!(p.bytes(&retired.version_id), b"retired");
     assert_eq!(p.bytes(&survivor.version_id), b"surviving");
-    let repo = p.repo.repository_id.clone();
-    p.reopen(|engine| assert_eq!(engine.file_context(&repo, "a.txt").unwrap(), updated));
+    p.reopen(|engine| assert_eq!(engine.state(), &before));
 }
 
 #[test]
@@ -1046,9 +1051,9 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
         let mut p = Pool::new();
         p.save(&format!("{source}/report.txt"), b"original");
         p.save(&format!("{owner}/stay.txt"), b"sibling");
-        let moved = p.register(source, "moved");
-        p.register(source, "retained");
-        let target = p.register(owner, "target");
+        let moved = p.register("", "moved");
+        p.register("", "retained");
+        let target = p.register("", "target");
         let original = p.current_entry(&format!("{source}/report.txt"));
         p.batch(
             storage_contract::DirectoryBatchKind::Move,
@@ -1059,8 +1064,7 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
                 &format!("{owner}/report.txt"),
             )],
         );
-        p.select(source, "retained");
-        p.select(owner, "target");
+        p.select("", "target");
         let workspace = p
             .engine
             .create_workspace(&p.repo.main_branch_id, "admin")
@@ -1156,43 +1160,66 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
 }
 
 #[test]
-fn batch_deletion_facts_cover_active_and_inactive_alias_scopes_without_move_deletions() {
+fn batch_file_deletion_requires_selected_scope_and_preserves_alias_compositions() {
     for active in [false, true] {
-        let mut p = Pool::new();
+        let mut p = Pool::disk_root();
         let original = selected_root_aliases(&mut p);
-        assert!(
-            p.engine
-                .state()
-                .commits
-                .values()
-                .all(|commit| commit.namespace_deletions.is_none()),
-            "moves and selections must not manufacture deletions"
-        );
         let root = p.register("", "deletion scope");
         if active {
             p.select("", "deletion scope");
         }
-        let operation = p.batch(
-            storage_contract::DirectoryBatchKind::Delete,
-            vec![DirectoryNamespaceItem {
+        let before = p.engine.state().clone();
+        let request = DirectoryNamespaceBatch {
+            kind: storage_contract::DirectoryBatchKind::Delete,
+            items: vec![DirectoryNamespaceItem {
                 source: p.source(&root, "a/report.txt"),
                 target: None,
             }],
-        );
-        let facts = p
-            .engine
-            .state()
-            .commits
-            .values()
-            .filter(|commit| commit.operation_id == operation.operation_id)
-            .filter_map(|commit| commit.namespace_deletions.as_ref())
-            .flat_map(|facts| &facts.paths)
-            .collect::<Vec<_>>();
-        assert_eq!(facts.len(), 1, "scope active: {active}");
-        assert_eq!(facts[0].path, "a/report.txt");
-        assert_eq!(facts[0].kind, storage_engine::NamespaceEntryKind::File);
+        };
+        let operation = storage_contract::OperationId::generate().unwrap();
+        let result =
+            p.engine
+                .directory_namespace_batch(&p.repo.repository_id, &request, "admin", operation);
+        if active {
+            let receipt = result.unwrap();
+            assert_eq!(receipt.kind, "file.delete.batch");
+            assert_eq!(
+                receipt.result["deletion_nodes"].as_array().unwrap().len(),
+                1
+            );
+            let node = p.engine.file_deletion(&original.file_id).unwrap();
+            assert_eq!(node.operation_id, operation);
+            assert_eq!(node.path, "a/report.txt");
+            assert_eq!(p.engine.state().commits, before.commits);
+            assert_eq!(
+                p.engine.state().directory_branches,
+                before.directory_branches
+            );
+            assert_eq!(p.engine.state().file_contexts, before.file_contexts);
+            assert_eq!(p.engine.state().file_selections, before.file_selections);
+            let visible = p.engine.namespace_tree(&p.repo.main_branch_id).unwrap();
+            assert!(visible.get("a/report.txt").is_none());
+            assert!(visible.get("b/report.txt").is_none());
+            assert!(visible.get("b/stay.txt").is_some());
+            assert_eq!(
+                p.engine
+                    .directory_namespace_batch(&p.repo.repository_id, &request, "admin", operation)
+                    .unwrap()
+                    .result,
+                receipt.result
+            );
+        } else {
+            assert_eq!(
+                result.unwrap_err().code(),
+                storage_contract::ErrorCode::DirectoryBranchConflict
+            );
+            assert_eq!(p.engine.state(), &before);
+        }
+        assert_eq!(p.entry(&root, "a/report.txt").file_id, original.file_id);
         assert_eq!(p.entry(&root, "b/report.txt").file_id, original.file_id);
         assert_eq!(p.bytes(&original.version_id), b"original");
+        let after = p.engine.state().clone();
+        p.reopen(|recovered| assert_eq!(recovered.state(), &after));
     }
 }
 
