@@ -78,6 +78,10 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     on:click=move |_|crate::ui::navigate(state,crate::ui::Page::Files)>{t("查看本目录文件","View this folder’s files")}</button>
                 <button class="zxs-button" data-directory-git-refresh="" disabled=move ||navigation_disabled.get()
                     on:click=move |_|actions::refresh_directory(state)>{t("刷新目录与仓库状态","Refresh folder and repository status")}</button>
+                <Show when=move ||state.with(|s|s.files.directory_preview.is_some())>
+                    <button class="zxs-button" data-open-preview-origin="" disabled=move ||navigation_disabled.get()
+                        on:click=move |_|actions::open_preview_origin(state)>{t("返回原目录详情", "Return to source folder Details")}</button>
+                </Show>
             </div>
             <p class="zxs-row">{move ||state.with(|s|super::super::model::join_path(&s.files.slot,&s.files.directory))}</p>
             <div class="zxs-file-toolbar zxs-flow">
