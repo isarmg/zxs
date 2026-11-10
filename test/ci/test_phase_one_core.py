@@ -135,6 +135,8 @@ class InventoryTests(unittest.TestCase):
                          'engine::membership_transition::readmission::core::tests::'
                          'verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering')
         self.assertNotIn(GATE['READMISSION_TEST'], GATE['MOUNT_TESTS'])
+        self.assertEqual(len(set(GATE['ENGINE_REGRESSION_TESTS'])), 3)
+        self.assertTrue(set(GATE['ENGINE_REGRESSION_TESTS']).isdisjoint((*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST'])))
         self.assertEqual(len(GATE['TARGETS']), 10)
         self.assertEqual(sum('::tcp::' in name for name in GATE['SERVER_TESTS']), 2)
         self.assertEqual(sum('phase1_new_file_tests::' in name for name in GATE['SERVER_TESTS']), 3)
@@ -294,6 +296,12 @@ else:
     passed = len([name for name in chosen if name in names])
     ignored = passed if config.get('ignored') == TARGET else 0
     passed -= ignored
+    if TARGET == 'storage_engine' and chosen[0] in config['engine_regression_tests']:
+        if config.get('engine_regression_exit'):
+            sys.exit(config['engine_regression_exit'])
+        if 'engine_regression_output' in config:
+            print(config['engine_regression_output'])
+            sys.exit(0)
     if TARGET == 'storage_engine' and chosen[0] == config['readmission_test']:
         if config.get('readmission_exit'):
             sys.exit(config['readmission_exit'])
@@ -368,10 +376,12 @@ class OrchestrationTests(unittest.TestCase):
             'calls': str(self.root / 'calls.jsonl'), 'binary': FAKE_BINARY,
             'mount_tests': GATE['MOUNT_TESTS'],
             'readmission_test': GATE['READMISSION_TEST'],
+            'engine_regression_tests': GATE['ENGINE_REGRESSION_TESTS'],
             'targets': {name: [manifest, source, kind, sorted(features)]
                         for name, (manifest, source, kind, features) in GATE['TARGETS'].items()},
             'names': {'storage_server': list(GATE['SERVER_TESTS']) + ['unrelated::test'],
-                      'storage_engine': [*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST'], 'unrelated::test'],
+                      'storage_engine': [*GATE['MOUNT_TESTS'], GATE['READMISSION_TEST'],
+                                         *GATE['ENGINE_REGRESSION_TESTS'], 'unrelated::test'],
                       'phase1_save_tags': GATE['FILE_TESTS'], 'directory_git_index': GATE['DIRECTORY_TESTS'],
                       'directory_git_safety': GATE['DIRECTORY_SAFETY_TESTS'],
                       'directory_git_staged_source': GATE['STAGED_SOURCE_TESTS'],
@@ -397,17 +407,17 @@ class OrchestrationTests(unittest.TestCase):
     def summary(self):
         return json.loads((self.root / 'target/phase-one-core/summary.json').read_text())
 
-    def test_pipeline_builds_once_and_runs_103_unique_cases_without_whole_engine_suite(self):
+    def test_pipeline_builds_once_and_runs_106_unique_cases_without_whole_engine_suite(self):
         gate = self.run_gate()
         self.assertEqual(gate.summary['status'], 'passed')
-        self.assertEqual(gate.summary['passed_count'], 103)
-        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 103)
+        self.assertEqual(gate.summary['passed_count'], 106)
+        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 106)
         calls = self.calls()
         self.assertEqual([x['tool'] for x in calls[:3]], ['cargo', 'cargo', 'cargo'])
         self.assertTrue(all(x['cwd'] == str(self.root) for x in calls))
         first_run = next(i for i, x in enumerate(calls) if '--nocapture' in x['args'])
         self.assertEqual(sum('--list' in x['args'] for x in calls[:first_run]), 11)
-        self.assertEqual(sum('--exact' in x['args'] for x in calls), 33)
+        self.assertEqual(sum('--exact' in x['args'] for x in calls), 36)
         self.assertEqual(sum(x['tool'] == 'cargo' for x in calls), 3)
         self.assertEqual(gate.summary['mount_source_sha256'], GATE['digest'](self.root / GATE['MOUNT_SOURCE']))
         self.assertEqual(gate.summary['readmission_source_sha256'], GATE['digest'](self.root / GATE['READMISSION_SOURCE']))
@@ -421,8 +431,43 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(len(readmission_calls), 1)
         self.assertEqual(readmission_calls[0]['args'], ['--exact', GATE['READMISSION_TEST'],
                                                        '--nocapture', '--test-threads=1'])
+        regression_calls = [x for x in calls if x['tool'] == 'storage_engine'
+                            and any(name in x['args'] for name in GATE['ENGINE_REGRESSION_TESTS'])]
+        self.assertEqual([call['args'] for call in regression_calls],
+                         [['--exact', name, '--nocapture', '--test-threads=1']
+                          for name in GATE['ENGINE_REGRESSION_TESTS']])
         self.assertEqual(gate.summary['commands'][-1]['timeout_seconds'], 300)
         self.assertEqual(gate.environment['TMPDIR'], str(self.root / 'target/phase-one-core/fixtures'))
+
+    def test_missing_or_ignored_engine_regression_fails_before_any_test(self):
+        original = self.config['names']['storage_engine'][:]
+        for name in GATE['ENGINE_REGRESSION_TESTS']:
+            self.config['names']['storage_engine'] = [test for test in original if test != name]
+            with self.subTest(name=name, condition='missing'), self.assertRaises(ValueError):
+                self.run_gate()
+            self.config['names']['storage_engine'] = original[:]
+            with self.subTest(name=name, condition='ignored'), self.assertRaises(ValueError):
+                self.run_gate(mount_ignored_names=[*GATE['MOUNT_TESTS'], name])
+            self.config.pop('mount_ignored_names')
+        self.assertFalse(any('--nocapture' in x['args'] for x in self.calls()))
+
+    def test_engine_regression_requires_one_completed_nonignored_result(self):
+        summary = 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s'
+        for output in ('', summary + '\n' + summary, summary.replace('1 passed', '0 passed'),
+                       summary.replace('0 ignored', '1 ignored'), summary.replace('0 failed', '1 failed')):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                self.run_gate(engine_regression_output=output)
+            self.assertEqual(self.summary()['status'], 'failed')
+            self.assertEqual(len(self.summary()['passed']), 103)
+            self.assertNotIn('passed_count', self.summary())
+
+    def test_engine_regression_failure_replaces_old_success(self):
+        self.run_gate()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_gate(engine_regression_exit=101)
+        self.assertEqual(self.summary()['status'], 'failed')
+        self.assertEqual(len(self.summary()['passed']), 103)
+        self.assertNotIn('passed_count', self.summary())
 
     def test_old_tree_without_readmission_source_fails_before_cargo(self):
         (self.root / GATE['READMISSION_SOURCE']).unlink()

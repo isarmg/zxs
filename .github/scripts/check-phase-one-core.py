@@ -19,6 +19,11 @@ MOUNT_SOURCE = 'test/engine/unit/disk/admission_tests.rs'
 READMISSION_SOURCE = 'test/engine/unit/engine/readmission_core_tests.rs'
 READMISSION_TEST = ('engine::membership_transition::readmission::core::tests::'
                     'verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering')
+ENGINE_REGRESSION_TESTS = (
+    'engine::membership_transition::pending::terminal_resume::tests::terminal_resume_reenters_before_and_after_the_durable_selector',
+    'engine::disk_lifecycle::terminal::retirement::tests::actual_chain_target_decision_preserves_old_seal_and_never_admits_writer',
+    'engine::membership_transition::pending::activation::tests::membership_activation_recovers_partial_markers_seals_and_publications',
+)
 MOUNT_TESTS = (
     'disk::admission_tests::immutable_existing_bind_leaf_is_rejected_before_read_or_sync',
     'disk::admission_tests::cold_directory_admission_keeps_held_identity_after_mount_replacement',
@@ -364,13 +369,13 @@ class Gate:
             for label, flags in (('listed_tests', []), ('ignored_tests', ['--ignored'])):
                 output = self.run('list-' + ENGINE + '-' + label,
                                   [engine['path'], '--list', '--format', 'terse', *flags], 60)
-                expected = MOUNT_TESTS if flags else (*MOUNT_TESTS, READMISSION_TEST)
+                expected = MOUNT_TESTS if flags else (*MOUNT_TESTS, READMISSION_TEST, *ENGINE_REGRESSION_TESTS)
                 engine[label] = listed_tests(output, expected)
                 self.save()
             if not set(engine['ignored_tests']) <= set(engine['listed_tests']):
                 raise ValueError('ignored Engine inventory differs from its complete inventory')
-            if READMISSION_TEST in engine['ignored_tests']:
-                raise ValueError('readmission proposal regression must not be ignored')
+            if set((READMISSION_TEST, *ENGINE_REGRESSION_TESTS)) & set(engine['ignored_tests']):
+                raise ValueError('required Engine regressions must not be ignored')
             for target, expected, whole in suites:
                 binary = artifacts[target]['path']
                 if digest(binary) != artifacts[target]['sha256']:
@@ -399,6 +404,13 @@ class Gate:
             passed_tests(output, 1)
             self.summary['passed'].append({'target': ENGINE, 'name': READMISSION_TEST})
             self.save()
+            for index, name in enumerate(ENGINE_REGRESSION_TESTS):
+                output = self.run(f'run-engine-regression-{index:02}',
+                                  [engine['path'], '--exact', name,
+                                   '--nocapture', '--test-threads=1'], 300)
+                passed_tests(output, 1)
+                self.summary['passed'].append({'target': ENGINE, 'name': name})
+                self.save()
             self.summary['status'] = 'passed'
             self.summary['passed_count'] = len(self.summary['passed'])
         except Exception as error:

@@ -11,10 +11,10 @@ use storage_contract::{
 };
 
 #[derive(Clone, Copy, Debug)]
-enum Route {
-    SameDisk,
-    ExistingDisk,
-    EmptyDisk,
+enum DiskRoute {
+    Same,
+    Existing,
+    Empty,
 }
 
 struct Destination {
@@ -22,12 +22,12 @@ struct Destination {
     repository: Option<Repository>,
 }
 
-fn fixture_for(route: Route) -> (tempfile::TempDir, Engine, Repository, Destination) {
+fn fixture_for(route: DiskRoute) -> (tempfile::TempDir, Engine, Repository, Destination) {
     fixture_with_config(route, |_| {})
 }
 
 fn fixture_with_config(
-    route: Route,
+    route: DiskRoute,
     configure: impl FnOnce(&mut Config),
 ) -> (tempfile::TempDir, Engine, Repository, Destination) {
     let temp = tempfile::tempdir().unwrap();
@@ -41,11 +41,11 @@ fn fixture_with_config(
         .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     let destination = match route {
-        Route::SameDisk => Destination {
+        DiskRoute::Same => Destination {
             slot: "P01",
             repository: Some(source.clone()),
         },
-        Route::ExistingDisk => Destination {
+        DiskRoute::Existing => Destination {
             slot: "B01",
             repository: Some(
                 engine
@@ -53,7 +53,7 @@ fn fixture_with_config(
                     .unwrap(),
             ),
         },
-        Route::EmptyDisk => Destination {
+        DiskRoute::Empty => Destination {
             slot: "B01",
             repository: None,
         },
@@ -153,7 +153,7 @@ fn snapshot_files(engine: &Engine, head: &str) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn hidden_target_directory_rows_count_toward_move_budget() {
     let (_temp, mut engine, source, destination) =
-        fixture_with_config(Route::ExistingDisk, |config| config.max_entries = 2);
+        fixture_with_config(DiskRoute::Existing, |config| config.max_entries = 2);
     let target = destination.repository.as_ref().unwrap();
     engine
         .file_namespace(
@@ -209,7 +209,7 @@ fn hidden_target_directory_rows_count_toward_move_budget() {
 
 #[test]
 fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object() {
-    for route in [Route::SameDisk, Route::ExistingDisk, Route::EmptyDisk] {
+    for route in [DiskRoute::Same, DiskRoute::Existing, DiskRoute::Empty] {
         let (_temp, mut engine, source, destination) = fixture_for(route);
         engine
             .file_namespace(
@@ -223,7 +223,7 @@ fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object()
         let target = move_to(&mut engine, &source, &destination, "empty", "moved");
         let moved = entry(&engine, &target, "moved");
         assert_eq!(moved.kind, NamespaceEntryKind::Directory, "{route:?}");
-        if matches!(route, Route::SameDisk) {
+        if matches!(route, DiskRoute::Same) {
             assert_eq!(moved.entry_id, original.entry_id);
         }
         assert!(engine.state().versions.is_empty(), "{route:?}");
@@ -240,7 +240,7 @@ fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object()
 
 #[test]
 fn unborn_empty_repository_moves_before_its_first_user_commit() {
-    let (temp, mut engine, source, destination) = fixture_for(Route::EmptyDisk);
+    let (temp, mut engine, source, destination) = fixture_for(DiskRoute::Empty);
     engine
         .file_namespace(
             &source.repository_id,
@@ -329,7 +329,7 @@ fn unborn_empty_repository_moves_before_its_first_user_commit() {
 
 #[test]
 fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() {
-    for route in [Route::SameDisk, Route::ExistingDisk, Route::EmptyDisk] {
+    for route in [DiskRoute::Same, DiskRoute::Existing, DiskRoute::Empty] {
         let (_temp, mut engine, source, destination) = fixture_for(route);
         save(&mut engine, &source, "project/owned", b"committed parent");
         save(
@@ -494,7 +494,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
                 .contains("saved-work"),
             "{route:?}"
         );
-        if matches!(route, Route::SameDisk) {
+        if matches!(route, DiskRoute::Same) {
             assert_eq!(after.directory_id, before.directory_id);
             assert_eq!(after.directory_branch_id, before.directory_branch_id);
             assert_eq!(child_after.directory_id, child_before.directory_id);
@@ -572,7 +572,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
 
 #[test]
 fn same_disk_move_refreshes_both_parent_workspaces_without_committing_either() {
-    let (_temp, mut engine, source, destination) = fixture_for(Route::SameDisk);
+    let (_temp, mut engine, source, destination) = fixture_for(DiskRoute::Same);
     for path in ["a", "a/empty", "b"] {
         engine
             .file_namespace(
