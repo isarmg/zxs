@@ -281,7 +281,15 @@ async fn upload_inner(
     let ws = workspace.clone();
     let ownership = admission.clone();
     crate::http_job::HttpBackendJob::new(backend, state.auth.clone(), ownership)
-        .run(move |backend| backend.authorize_upload(&owner, &ws, Some(expected_length)))
+        .run(move |backend| {
+            backend.authorize_workspace_write(
+                &owner,
+                &ws,
+                crate::WorkspaceWrite::Upload {
+                    logical_size: Some(expected_length),
+                },
+            )
+        })
         .await?;
     let spool = state.config.spool_dir.clone();
     let root = spool.clone();

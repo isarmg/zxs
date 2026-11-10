@@ -219,7 +219,7 @@ pub use backend_status::{
 };
 mod backend_workspace;
 pub use backend_workspace::{
-    CreateWorkspace, PublishedUploadState, PublishedUploadStatus, StageNamespace,
+    CreateWorkspace, PublishedUploadState, PublishedUploadStatus, StageNamespace, WorkspaceWrite,
     WorkspaceWriteSession,
 };
 mod http_workspace;
@@ -1173,12 +1173,13 @@ pub trait Backend: Send + Sync {
         workspace: &str,
         item: &str,
     ) -> Result<Option<PublishedUploadStatus>, ApiError>;
-    /// Revalidate ownership, workspace lease and declared file/workspace size limits.
-    fn authorize_upload(
+    /// Admit one write under current authority, retaining the selected file context.
+    /// Uploads and active files also require an open lease and enforce size limits.
+    fn authorize_workspace_write(
         &self,
         identity: &Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError>;
     /// Capture or page a directory after current admission; enforce the page byte budget.
     fn read_directory(
@@ -1186,13 +1187,6 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: crate::ReadDirectory<'_>,
     ) -> Result<crate::DirectorySnapshot, ApiError>;
-    /// Check the captured write destination against current selection and ownership.
-    fn authorize_workspace_selection(
-        &self,
-        identity: &Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), ApiError>;
     /// Revalidate current branch admission without capturing namespace entries.
     fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError>;
     /// Look up one current entry after live identity and branch admission.
@@ -2173,14 +2167,14 @@ impl Backend for AuthorizedBackend {
         self.backend
             .stage_namespace(&self.current(identity)?, command)
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError> {
         self.backend
-            .authorize_upload(&self.current(identity)?, workspace, logical_size)
+            .authorize_workspace_write(&self.current(identity)?, workspace, access)
     }
 
     fn read_directory(
@@ -2190,16 +2184,6 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DirectorySnapshot, ApiError> {
         self.backend
             .read_directory(&self.current(identity)?, request)
-    }
-
-    fn authorize_workspace_selection(
-        &self,
-        identity: &Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), ApiError> {
-        self.backend
-            .authorize_workspace_selection(&self.current(identity)?, workspace, path)
     }
 
     fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {

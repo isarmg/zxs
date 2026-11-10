@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`a5a5c0d1`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`0ccd1155`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮工作区写入单次准入
+
+- HTTP Upload 与 SMB ActiveFile／SavedFile 通过同一 WorkspaceWrite 进入后端；删除旧 authorize_workspace_selection 及独立 authorize_upload 转发链。PrepareWrite／Dirty 每次由原 2–3 次引擎锁与重复主体／工作区读取，收敛为一次锁和一个 workspace view；当前分支、所有者、捕获选择、活动代 Open／租期及 HTTP 声明限额的原顺序保留。发布后仍用原选择检查，再由 Dirty 建立下一代，不放松实际上传和最终发布准入。
+- 核心选择检查借用本次已经取得的工作区，热记录不复制、冷记录仍按真实持久边界读取并校验。AuthStore 复制回调直接复用既有 replicate_auth，删除相同锁内的第二份持久化实现。七个生产文件净删 11 行，主要收益是删除重复调用／锁，而非用行数宣称全面重构。
+- 根测试迁移全部后端转发与核心冷读调用；授权／撤权矩阵覆盖三种写入意图，真实分代测试检查 Active→Saved→Active 的准确工作区与每次准入，原撤权、关闭、过期、同内容切换、丢回执、冷恢复断言保留。固定格式和精确补丁检查通过；未本地编译或执行 Rust，准确提交的运行结果仍待 CI。
 
 ## 本轮 Web 备注目标与动作统一
 

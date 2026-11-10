@@ -3,6 +3,24 @@ use data_serialization::Serialize;
 use std::collections::BTreeMap;
 use storage_contract::{FileContext, NamespaceOperation, WorkspacePurpose, WorkspaceState};
 
+/// The write being admitted against one currently owned workspace view.
+/// File handles retain their original selection after publication; only an
+/// active generation and HTTP uploads require an open, unexpired workspace.
+#[derive(Clone, Copy, Debug)]
+pub enum WorkspaceWrite<'a> {
+    Upload {
+        logical_size: Option<u64>,
+    },
+    ActiveFile {
+        branch: &'a str,
+        path: &'a name_policy::PortablePath,
+    },
+    SavedFile {
+        branch: &'a str,
+        path: &'a name_policy::PortablePath,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct CreateWorkspace {
     pub branch_id: String,

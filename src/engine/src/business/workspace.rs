@@ -305,15 +305,16 @@ pub(crate) struct VersionBuild<'a> {
 impl Engine {
     /// Check a captured destination before SMB reopens a successfully saved
     /// workspace. This also accepts committed workspaces as immutable receipts.
+    /// The caller must retain this engine's workspace view and exclusive owner
+    /// throughout admission; this borrowed view is not a reusable authority grant.
     pub fn validate_workspace_file_selection(
         &self,
-        workspace: &str,
+        workspace: &Workspace,
         path: &name_policy::PortablePath,
     ) -> Result<()> {
         let key = path.key();
-        let workspace = self.workspace_view(workspace)?;
-        validate_directory_selection_key(&self.state, &workspace, key)?;
-        let mut entry = self.workspace_namespace(&workspace)?.get_key(key);
+        validate_directory_selection_key(&self.state, workspace, key)?;
+        let mut entry = self.workspace_namespace(workspace)?.get_key(key);
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
@@ -336,7 +337,7 @@ impl Engine {
             );
         }
         if let Some(entry) = entry {
-            validate_file_context(&self.state, &workspace, &entry.file_id, key)?;
+            validate_file_context(&self.state, workspace, &entry.file_id, key)?;
         }
         Ok(())
     }

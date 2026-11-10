@@ -33,7 +33,7 @@ VFS 的 `pwrite`、`pwrite_send`、`ftruncate` 都经 `write_data`/`truncate` �
 
 ## 决策
 
-1. **PrepareWrite 是每次修改的唯一准入点。** 依次执行 `authorize_current`、`authorize_workspace_selection`、未发布代的 `authorize_upload`，再做字节保留与空间检查，全部在修改 FD 之前完成。撤权、工作区关闭和租约过期在修改前拒绝，而不是修改后才在 Dirty 中发现。
+1. **PrepareWrite 是每次修改的唯一准入点。** `authorize_workspace_write` 在一次引擎锁内依次验证当前分支、捕获选择、未发布代的 Open／租期，再做字节保留与空间检查，全部在修改 FD 之前完成。撤权、工作区关闭和租约过期在修改前拒绝，而不是修改后才在 Dirty 中发现。
 2. **Dirty 只表达代际转换。** 客户端 `smb_protocol::client::WriteSequence` 按句柄维护“当前代已通告”状态：打开后与每次发送 Flush 前清除；成功的非 write-through Dirty 之后置位；Dirty 失败或结果未知时保持清除，下一次修改再次发送。write-through 句柄每次修改都发送 Dirty。服务端 Dirty 的授权、记录、换代和 write-through 保存逻辑不变，重复收到也保持幂等。
 3. **有界额度授予。** 写入末端超过已获准末端时，服务端一次授予 `ceiling = end + slack`：
 
@@ -67,7 +67,7 @@ VFS 的 `pwrite`、`pwrite_send`、`ftruncate` 都经 `write_data`/`truncate` �
 ## 代价
 
 - 每次增长的提前额度为 `min(clamp(end/4, 1 MiB, 64 MiB), max_length − end, 活跃池剩余额度)`。小文件也可能获得 1 MiB（例如末端为 1 字节且其余限制充足时），不能把成本写成至多末端的 25%。额度内写入不降低持久高水位，截短也不回收；崩溃或脱离后仍随记录计费，直到人工核对和清理。
-- PrepareWrite 每次多两次引擎锁内的内存检查。
+- PrepareWrite 的当前分支、捕获选择及活动代 Open／租期规则保留；现由同一次引擎锁内的 `WorkspaceWrite` 准入执行，删除原三次独立锁与同工作区重复读取。Dirty 仍独立再准入一次，发布阶段不合并。
 - 撤权或工作区关闭现在在修改前拒绝。旧实现下修改已经写入 FD、随后 Dirty 才失败；新实现下该次修改不执行。
 - VFS 每个打开记录的 I/O 互斥锁改为保护 `WriteSequence` 状态，不另加锁。
 

@@ -10,7 +10,7 @@
 
 - 普通 backend_slots 63：lib.rs 的 RegisterDisk 拒绝入口及 15 个 typed 读取；file_manager 三处；http_workspace 七处；http_protection 四处；http_plan 三处；backup/default_directory/smb_binding 各两处；archive、comparison、create_branch、create_file_branch、create_repository、directory_scope、directory_scopes、directory_selection、disk_directory、disk_mkdir、disk_write_session、file_merge、file_selection、file_tags、listing、merge_link、namespace_batch、note、operation、read、rename_file_branch、historical_save_plan、purge_plan、split_plan 各一处。
 - management_slots 三处：workspace_capacity、storage_retry_job、setup/recovery dispatch。仅移动现有 backend 与 auth Arc，不取得内部 Engine，不改变锁顺序、stop/drain、授权或恢复逻辑。
-- transfer 六处：upload_status（read+backend 双许可）、authorize_upload、upload_generation（均使用已有 UploadAdmission/claim）、content、workspace_content、checksums（三处 read permit 转入结果）。上传纯 staging worker 保留已有 UploadAdmission，不额外持 auth。
+- transfer 六处：upload_status（read+backend 双许可）、authorize_workspace_write（Upload）、upload_generation（均使用已有 UploadAdmission/claim）、content、workspace_content、checksums（三处 read permit 转入结果）。上传纯 staging worker 保留已有 UploadAdmission，不额外持 auth。
 
 R24 原 12 处手动 auth owner 已删除，统一由 job 保证。普通消费者移动原 Arc；上传授权阶段跨请求继续使用 state，按需 clone 已有 auth Arc，无新 Arc 分配、锁、哈希、序列化、fsync 或配置。
 

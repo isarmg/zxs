@@ -2,6 +2,20 @@
 use super::*;
 
 impl Writer {
+    fn write_access<'a>(&'a self, branch: &'a str) -> crate::WorkspaceWrite<'a> {
+        if self.committed {
+            crate::WorkspaceWrite::SavedFile {
+                branch,
+                path: &self.path,
+            }
+        } else {
+            crate::WorkspaceWrite::ActiveFile {
+                branch,
+                path: &self.path,
+            }
+        }
+    }
+
     /// One canonical request for this save generation, including reconciliation.
     /// A successor workspace and operation are installed together by Dirty.
     fn save_request(&self) -> crate::CommitWorkspace {
@@ -184,23 +198,13 @@ impl Session {
         let Some(Handle::Write(writer, _)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
-        self.shared
-            .backend
-            .authorize_current(&self.identity, &self.branch)?;
-        self.shared.backend.authorize_workspace_selection(
+        // A published generation keeps its captured selection, while Dirty
+        // creates its successor. Active generations also require an open lease.
+        self.shared.backend.authorize_workspace_write(
             &self.identity,
             &writer.workspace.workspace_id,
-            &writer.path,
+            writer.write_access(&self.branch),
         )?;
-        // A published generation has no open workspace to write into; the
-        // following Dirty creates and authorizes its successor.
-        if !writer.committed {
-            self.shared.backend.authorize_upload(
-                &self.identity,
-                &writer.workspace.workspace_id,
-                None,
-            )?;
-        }
         let current = writer.file.metadata().map_err(ApiError::io)?.len();
         writer
             .reservation
@@ -216,15 +220,12 @@ impl Session {
         };
         writer.dirty = true;
         recovery_record(writer, &self.identity.principal, &self.branch)?;
-        self.shared
-            .backend
-            .authorize_current(&self.identity, &self.branch)?;
         // Even an already published handle remains bound to the selection it
         // opened. A same-content default switch must not retarget this FD.
-        self.shared.backend.authorize_workspace_selection(
+        self.shared.backend.authorize_workspace_write(
             &self.identity,
             &writer.workspace.workspace_id,
-            &writer.path,
+            writer.write_access(&self.branch),
         )?;
         if writer.committed {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
@@ -271,12 +272,6 @@ impl Session {
             writer.committed = false;
             writer.operation_id = operation_id;
             recovery_record(writer, &self.identity.principal, &self.branch)?;
-        } else {
-            self.shared.backend.authorize_upload(
-                &self.identity,
-                &writer.workspace.workspace_id,
-                None,
-            )?;
         }
         if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {
             return Err(ApiError::limit("file exceeds SMB byte limit"));

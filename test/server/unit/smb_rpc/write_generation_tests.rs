@@ -128,9 +128,10 @@ fn workspace_id(session: &Session, handle: u64) -> String {
 
 #[test]
 fn one_dirty_per_generation_still_publishes_every_change_at_flush_and_close() {
-    let (_temp, shared, _backend, branch) = fixture();
+    let (_temp, shared, backend, branch) = fixture();
     let mut session = session(shared, &branch);
     let mut vfs = Vfs::open(&mut session, "report.txt", false, false);
+    let original_workspace = workspace_id(&session, vfs.handle);
     for (offset, byte) in [(0, b"n"), (1, b"e"), (2, b"w")] {
         vfs.write(&mut session, offset, byte).unwrap();
     }
@@ -145,6 +146,21 @@ fn one_dirty_per_generation_still_publishes_every_change_at_flush_and_close() {
     vfs.write(&mut session, 3, b"!").unwrap();
     vfs.write(&mut session, 4, b"?").unwrap();
     assert_eq!(vfs.dirty_count(), 2);
+    let successor_workspace = workspace_id(&session, vfs.handle);
+    assert_ne!(original_workspace, successor_workspace);
+    assert_eq!(
+        *backend.write_admissions.lock().unwrap(),
+        [
+            (original_workspace.clone(), false),
+            (original_workspace.clone(), false),
+            (original_workspace.clone(), false),
+            (original_workspace.clone(), false),
+            (original_workspace.clone(), true),
+            (original_workspace, true),
+            (successor_workspace, false),
+        ],
+        "each PrepareWrite/Dirty has one admission; only the published generation uses SavedFile"
+    );
     session.close(vfs.handle, false).unwrap();
     assert_eq!(published(&session, "report.txt"), b"new!?");
 }

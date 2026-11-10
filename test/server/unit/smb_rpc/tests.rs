@@ -61,6 +61,7 @@ const RECONCILIATION_CONTENT: usize = 2;
 pub(super) struct LostCommitReply {
     inner: EngineBackend,
     authorizations: Mutex<Vec<String>>,
+    write_admissions: Mutex<Vec<(String, bool)>>,
     version_authorizations: Mutex<Vec<String>>,
     repository_snapshots: Mutex<Vec<String>>,
     repository_authorizations: Mutex<Vec<String>>,
@@ -226,16 +227,6 @@ impl Backend for LostCommitReply {
         request: crate::ReadDirectory<'_>,
     ) -> Result<crate::DirectorySnapshot, crate::ApiError> {
         self.inner.read_directory(identity, request)
-    }
-
-    fn authorize_workspace_selection(
-        &self,
-        identity: &crate::auth::Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        self.inner
-            .authorize_workspace_selection(identity, workspace, path)
     }
 
     fn create_workspace(
@@ -827,14 +818,29 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         self.inner.stage_namespace(identity, command)
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &crate::auth::Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
+        let file = match access {
+            crate::WorkspaceWrite::Upload { .. } => None,
+            crate::WorkspaceWrite::ActiveFile { branch, .. } => Some((branch, false)),
+            crate::WorkspaceWrite::SavedFile { branch, .. } => Some((branch, true)),
+        };
+        if let Some((branch, published)) = file {
+            self.authorizations.lock().unwrap().push(branch.to_owned());
+            self.write_admissions
+                .lock()
+                .unwrap()
+                .push((workspace.into(), published));
+            if self.revoked.load(Ordering::SeqCst) {
+                return Err(ApiError::forbidden());
+            }
+        }
         self.inner
-            .authorize_upload(identity, workspace, logical_size)
+            .authorize_workspace_write(identity, workspace, access)
     }
 
     fn lookup_current(
@@ -978,6 +984,7 @@ fn fixture_backend(
     let backend = Arc::new(LostCommitReply {
         inner: EngineBackend::new(engine),
         authorizations: Mutex::new(Vec::new()),
+        write_admissions: Mutex::new(Vec::new()),
         version_authorizations: Mutex::new(Vec::new()),
         repository_snapshots: Mutex::new(Vec::new()),
         repository_authorizations: Mutex::new(Vec::new()),

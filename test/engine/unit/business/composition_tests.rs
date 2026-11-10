@@ -519,20 +519,20 @@ fn first_lazy_save_receipt_allows_the_same_writer_to_continue_but_fences_later_s
     })
     .unwrap();
     e.validate_workspace_file_selection(
-        &w.workspace_id,
+        &e.workspace_view(&w.workspace_id).unwrap(),
         &name_policy::PortablePath::parse("a/f.txt").unwrap(),
     )
     .unwrap();
     save(&mut e, &r, "a/f.txt", b"own2");
     e.validate_workspace_file_selection(
-        &w.workspace_id,
+        &e.workspace_view(&w.workspace_id).unwrap(),
         &name_policy::PortablePath::parse("a/f.txt").unwrap(),
     )
     .unwrap();
     select(&mut e, &r, "a", "main");
     assert_eq!(
         e.validate_workspace_file_selection(
-            &w.workspace_id,
+            &e.workspace_view(&w.workspace_id).unwrap(),
             &name_policy::PortablePath::parse("a/f.txt").unwrap()
         )
         .unwrap_err()

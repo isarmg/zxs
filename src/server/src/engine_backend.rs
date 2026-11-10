@@ -176,17 +176,7 @@ impl EngineBackend {
     ) -> Result<crate::auth::AuthStore, ApiError> {
         let backend = self.clone();
         auth.attach_backup(std::sync::Arc::new(move |snapshot| {
-            let mut engine = backend.engine.lock().expect("service state lock poisoned");
-            if engine.auth_state_ref() == Some(&snapshot) {
-                return Ok(());
-            }
-            engine
-                .persist_auth_state(
-                    snapshot,
-                    "system_auth",
-                    storage_contract::OperationId::generate().map_err(ApiError::contract_input)?,
-                )
-                .map_err(error)
+            backend.replicate_auth(snapshot)
         }))?;
         Ok(auth)
     }
@@ -2271,15 +2261,33 @@ impl Backend for EngineBackend {
         Application::new(&mut engine, &current).stage_namespace(command)
     }
 
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
+        let file = match access {
+            crate::WorkspaceWrite::Upload { .. } => None,
+            crate::WorkspaceWrite::ActiveFile { branch, path }
+            | crate::WorkspaceWrite::SavedFile { branch, path } => {
+                read_projection::authorize_current(engine.state(), branch)?;
+                Some(path)
+            }
+        };
         let workspace = workspace_authorize(&engine, &current, workspace)?;
+        if let Some(path) = file {
+            engine
+                .validate_workspace_file_selection(&workspace, path)
+                .map_err(error)?;
+        }
+        let logical_size = match access {
+            crate::WorkspaceWrite::Upload { logical_size } => logical_size,
+            crate::WorkspaceWrite::ActiveFile { .. } => None,
+            crate::WorkspaceWrite::SavedFile { .. } => return Ok(()),
+        };
         if workspace.state != storage_contract::WorkspaceState::Open {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::WorkspaceClosed,
@@ -2313,20 +2321,6 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         crate::DirectorySnapshot::capture(&engine, request)
-    }
-
-    fn authorize_workspace_selection(
-        &self,
-        identity: &Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        let current = current_protected_identity(&engine, identity)?;
-        workspace_authorize(&engine, &current, workspace)?;
-        engine
-            .validate_workspace_file_selection(workspace, path)
-            .map_err(error)
     }
 
     fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {

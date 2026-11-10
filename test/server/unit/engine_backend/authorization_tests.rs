@@ -164,6 +164,12 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
         &*engine.workspace_view(&workspace.workspace_id).unwrap()
     ));
     assert_eq!(borrowed.files.len(), 1);
+    engine
+        .validate_workspace_file_selection(
+            &borrowed,
+            &name_policy::PortablePath::parse("file.txt").unwrap(),
+        )
+        .unwrap();
     let snapshot = engine.workspace(&workspace.workspace_id).unwrap();
     assert!(!std::ptr::eq(&snapshot, &*borrowed));
     assert_eq!(snapshot.files.len(), borrowed.files.len());
@@ -250,24 +256,48 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
         .unwrap();
     }
     let backend = EngineBackend::new(Engine::open(&system).unwrap());
-    let maximum = Some(u64::MAX);
+    let maximum = crate::WorkspaceWrite::Upload {
+        logical_size: Some(u64::MAX),
+    };
+    let path = name_policy::PortablePath::parse("file.txt").unwrap();
+    let active = crate::WorkspaceWrite::ActiveFile {
+        branch: &repository.main_branch_id,
+        path: &path,
+    };
     assert_eq!(
         backend
-            .authorize_upload(&owner, "missing", maximum)
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::WorkspaceNotFound
-    );
-    assert_eq!(
-        backend
-            .authorize_upload(&owner, &foreign.workspace_id, maximum)
+            .authorize_workspace_write(&owner, &foreign.workspace_id, active)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Forbidden
     );
     assert_eq!(
         backend
-            .authorize_upload(&owner, &expired.workspace_id, maximum)
+            .authorize_workspace_write(&owner, &expired.workspace_id, active)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::LeaseExpired
+    );
+    backend
+        .authorize_workspace_write(&owner, &fresh.workspace_id, active)
+        .unwrap();
+    assert_eq!(
+        backend
+            .authorize_workspace_write(&owner, "missing", maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::WorkspaceNotFound
+    );
+    assert_eq!(
+        backend
+            .authorize_workspace_write(&owner, &foreign.workspace_id, maximum)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .authorize_workspace_write(&owner, &expired.workspace_id, maximum)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::LeaseExpired
@@ -277,23 +307,33 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
         .unwrap();
     assert_eq!(
         backend
-            .authorize_upload(&owner, &expired.workspace_id, maximum)
+            .authorize_workspace_write(&owner, &expired.workspace_id, maximum)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::WorkspaceClosed
     );
     assert_eq!(
         backend
-            .authorize_upload(&owner, &fresh.workspace_id, maximum)
+            .authorize_workspace_write(&owner, &fresh.workspace_id, maximum)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::ResourceLimitExceeded
     );
     backend
-        .authorize_upload(&owner, &fresh.workspace_id, None)
+        .authorize_workspace_write(
+            &owner,
+            &fresh.workspace_id,
+            crate::WorkspaceWrite::Upload { logical_size: None },
+        )
         .unwrap();
     backend
-        .authorize_upload(&owner, &fresh.workspace_id, Some(0))
+        .authorize_workspace_write(
+            &owner,
+            &fresh.workspace_id,
+            crate::WorkspaceWrite::Upload {
+                logical_size: Some(0),
+            },
+        )
         .unwrap();
 }
 

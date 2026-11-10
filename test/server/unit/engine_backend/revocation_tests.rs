@@ -87,17 +87,6 @@ impl Backend for PausedBackend {
         self.inner.read_directory(identity, request)
     }
 
-    fn authorize_workspace_selection(
-        &self,
-        identity: &crate::auth::Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        self.enter();
-        self.inner
-            .authorize_workspace_selection(identity, workspace, path)
-    }
-
     fn create_workspace(
         &self,
         identity: &crate::auth::Identity,
@@ -638,15 +627,15 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.stage_namespace(identity, command)
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &crate::auth::Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
         self.enter();
         self.inner
-            .authorize_upload(identity, workspace, logical_size)
+            .authorize_workspace_write(identity, workspace, access)
     }
 
     fn lookup_current(
@@ -840,6 +829,7 @@ enum Request {
     CurrentLookup,
     DirectoryRead,
     WorkspaceSelection,
+    SavedWorkspaceSelection,
     WorkspaceCreate,
     WriteSession,
     WorkspaceAbort,
@@ -1339,9 +1329,13 @@ impl Request {
                     .commit_workspace_public(identity, envelope)
                     .map(|_| ())
             }
-            Self::UploadAdmission => {
-                backend.authorize_upload(identity, &fixture.workspace.workspace_id, Some(42))
-            }
+            Self::UploadAdmission => backend.authorize_workspace_write(
+                identity,
+                &fixture.workspace.workspace_id,
+                crate::WorkspaceWrite::Upload {
+                    logical_size: Some(42),
+                },
+            ),
             Self::WriteSession => backend
                 .create_write_session(identity, &fixture.repo.main_branch_id)
                 .map(|_| ()),
@@ -1357,11 +1351,22 @@ impl Request {
             Self::WorkspaceAbort => {
                 backend.abort_workspace(identity, &fixture.workspace.workspace_id)
             }
-            Self::WorkspaceSelection => backend.authorize_workspace_selection(
-                identity,
-                &fixture.workspace.workspace_id,
-                &name_policy::PortablePath::parse("file.txt").unwrap(),
-            ),
+            Self::WorkspaceSelection | Self::SavedWorkspaceSelection => {
+                let path = name_policy::PortablePath::parse("file.txt").unwrap();
+                let branch = fixture.repo.main_branch_id.as_str();
+                let access = if matches!(self, Self::SavedWorkspaceSelection) {
+                    crate::WorkspaceWrite::SavedFile {
+                        branch,
+                        path: &path,
+                    }
+                } else {
+                    crate::WorkspaceWrite::ActiveFile {
+                        branch,
+                        path: &path,
+                    }
+                };
+                backend.authorize_workspace_write(identity, &fixture.workspace.workspace_id, access)
+            }
             Self::DirectoryRead => backend
                 .read_directory(
                     identity,
@@ -1772,6 +1777,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CurrentLookup,
                 Request::DirectoryRead,
                 Request::WorkspaceSelection,
+                Request::SavedWorkspaceSelection,
                 Request::WorkspaceCreate,
                 Request::WriteSession,
                 Request::WorkspaceAbort,
@@ -2018,6 +2024,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::CurrentLookup,
         Request::DirectoryRead,
         Request::WorkspaceSelection,
+        Request::SavedWorkspaceSelection,
         Request::WorkspaceCreate,
         Request::WriteSession,
         Request::WorkspaceAbort,

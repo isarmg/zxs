@@ -445,20 +445,6 @@ impl Backend for RecordingBackend {
         })
     }
 
-    fn authorize_workspace_selection(
-        &self,
-        identity: &crate::auth::Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        self.record(
-            "authorize_workspace_selection",
-            Some(identity),
-            json!({"workspace":workspace,"path":path.as_str(),"key":path.key()}),
-        )
-        .map(|_| ())
-    }
-
     fn create_workspace(
         &self,
         identity: &Identity,
@@ -1463,18 +1449,31 @@ impl Backend for RecordingBackend {
             state: storage_contract::WorkspaceState::Open,
         })
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &crate::auth::Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
-        self.record(
-            "authorize_upload",
-            Some(identity),
-            json!({"workspace":workspace,"logical_size":logical_size}),
-        )
-        .map(|_| ())
+        let arguments = match access {
+            crate::WorkspaceWrite::Upload { logical_size } => {
+                json!({"workspace":workspace,"logical_size":logical_size})
+            }
+            crate::WorkspaceWrite::ActiveFile { branch, path } => {
+                json!({
+                    "workspace": workspace, "branch": branch,
+                    "path": path.as_str(), "key": path.key(), "published": false,
+                })
+            }
+            crate::WorkspaceWrite::SavedFile { branch, path } => {
+                json!({
+                    "workspace": workspace, "branch": branch,
+                    "path": path.as_str(), "key": path.key(), "published": true,
+                })
+            }
+        };
+        self.record("authorize_workspace_write", Some(identity), arguments)
+            .map(|_| ())
     }
 
     fn lookup_current(
@@ -2243,10 +2242,16 @@ impl Fixture {
                     }),
             ),
             (
-                "authorize_upload",
+                "authorize_workspace_write",
                 backend
-                    .authorize_upload(identity, "workspace", Some(42))
-                    .map(|()| json!({"returned_by":"authorize_upload"})),
+                    .authorize_workspace_write(
+                        identity,
+                        "workspace",
+                        crate::WorkspaceWrite::Upload {
+                            logical_size: Some(42),
+                        },
+                    )
+                    .map(|()| json!({"returned_by":"authorize_workspace_write"})),
             ),
             (
                 "create_workspace",
@@ -2270,14 +2275,30 @@ impl Fixture {
                     .map(|()| json!({"returned_by":"abort_workspace"})),
             ),
             (
-                "authorize_workspace_selection",
+                "authorize_workspace_write",
                 backend
-                    .authorize_workspace_selection(
+                    .authorize_workspace_write(
                         identity,
                         "workspace",
-                        &name_policy::PortablePath::parse("File.txt").unwrap(),
+                        crate::WorkspaceWrite::ActiveFile {
+                            branch: "branch",
+                            path: &name_policy::PortablePath::parse("File.txt").unwrap(),
+                        },
                     )
-                    .map(|()| json!({"returned_by":"authorize_workspace_selection"})),
+                    .map(|()| json!({"returned_by":"authorize_workspace_write"})),
+            ),
+            (
+                "authorize_workspace_write",
+                backend
+                    .authorize_workspace_write(
+                        identity,
+                        "workspace",
+                        crate::WorkspaceWrite::SavedFile {
+                            branch: "branch",
+                            path: &name_policy::PortablePath::parse("File.txt").unwrap(),
+                        },
+                    )
+                    .map(|()| json!({"returned_by":"authorize_workspace_write"})),
             ),
             (
                 "authorize_current",
@@ -2540,7 +2561,8 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"workspace":"workspace","logical_size":42}),
         json!({"branch_id":"branch","source_commit_id":"source"}),
         json!({"workspace_id":"workspace"}),
-        json!({"workspace":"workspace","path":"File.txt","key":"file.txt"}),
+        json!({"workspace":"workspace","branch":"branch","path":"File.txt","key":"file.txt","published":false}),
+        json!({"workspace":"workspace","branch":"branch","path":"File.txt","key":"file.txt","published":true}),
         json!({"branch":"branch"}),
         json!({"branch":"branch","entry_id":"branch"}),
         json!({"branch":"branch","path":"File.txt","key":"file.txt"}),

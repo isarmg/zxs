@@ -67,7 +67,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
         }
         engine
             .validate_workspace_file_selection(
-                &workspace.workspace_id,
+                &engine.workspace_view(&workspace.workspace_id).unwrap(),
                 &name_policy::PortablePath::parse("fresh.txt").unwrap(),
             )
             .unwrap();
@@ -114,7 +114,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
         assert_eq!(
             engine
                 .validate_workspace_file_selection(
-                    &workspace.workspace_id,
+                    &engine.workspace_view(&workspace.workspace_id).unwrap(),
                     &name_policy::PortablePath::parse("fresh.txt").unwrap()
                 )
                 .unwrap_err()
@@ -137,7 +137,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
     let first = save(&mut engine, &repo.main_branch_id, b"old");
     engine
         .validate_workspace_file_selection(
-            &first.workspace_id,
+            &engine.workspace_view(&first.workspace_id).unwrap(),
             &name_policy::PortablePath::parse("fresh.txt").unwrap(),
         )
         .unwrap();
@@ -177,7 +177,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
         );
         engine
             .validate_workspace_file_selection(
-                &completed.workspace_id,
+                &engine.workspace_view(&completed.workspace_id).unwrap(),
                 &name_policy::PortablePath::parse("fresh.txt").unwrap(),
             )
             .unwrap();
@@ -226,7 +226,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
     assert_eq!(
         engine
             .validate_workspace_file_selection(
-                &completed.workspace_id,
+                &engine.workspace_view(&completed.workspace_id).unwrap(),
                 &name_policy::PortablePath::parse("fresh.txt").unwrap()
             )
             .unwrap_err()
@@ -311,7 +311,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         );
         engine
             .validate_workspace_file_selection(
-                &workspace.workspace_id,
+                &engine.workspace_view(&workspace.workspace_id).unwrap(),
                 &name_policy::PortablePath::parse("fresh.txt").unwrap(),
             )
             .unwrap();
@@ -358,7 +358,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         assert_eq!(
             engine
                 .validate_workspace_file_selection(
-                    &workspace.workspace_id,
+                    &engine.workspace_view(&workspace.workspace_id).unwrap(),
                     &name_policy::PortablePath::parse("fresh.txt").unwrap()
                 )
                 .unwrap_err()

@@ -34,7 +34,9 @@ SMB Stat/Open 的当前条目查询通过 `Backend::lookup_current(&Identity, br
 
 ## 写选择准入的接续迁移
 
-SMB PrepareWrite / Dirty 进一步使用 `Backend::authorize_workspace_selection`，直接借用写句柄已经验证的 `PortablePath`，返回 `Result<()>`；`WorkspaceSelectionAuthorize` 的 JSON action 已删除。引擎同一锁内仍刷新当前身份、绑定、工作区所有者和分支，再检查当前目录／文件选择是否与工作区捕获的目标一致，包括已成功发布的工作区收据。`Engine::validate_workspace_file_selection` 接收类型化路径并复用其 key，通过 `workspace_view` 借用驻留记录；冷存空中止记录受限点读为 owned 视图，而非缓存全部清单；不改变选择代次、首次发布后的目标判断、失败时保留脏数据或永久幂等行为。
+SMB PrepareWrite / Dirty 使用 `Backend::authorize_workspace_write(identity, workspace, WorkspaceWrite)`。`ActiveFile` 与 `SavedFile` 借用本句柄的分支／PortablePath，HTTP 使用仅含声明长度的 `Upload`；旧 `authorize_workspace_selection` 和 `authorize_upload` 分离入口已删除。每次文件准入只获取一次引擎锁，依次刷新当前主体／绑定、核对当前分支、工作区所有者／分支和捕获的目录／文件选择。ActiveFile 继续检查 Open 与租期；SavedFile 仍只验证原选择，随后 Dirty 按原路径建立新工作区，不把已发布回执当成仍可上传的工作区。
+
+`workspace_authorize` 返回当前引擎的一个 borrowed／受限冷读 owned 视图，`Engine::validate_workspace_file_selection` 直接借用它和已解析路径，不再次读取同一记录。视图只在本次引擎所有者锁内使用，不缓存授权，不开放给 RPC 调用方选择准入模式。当前分支／选择／Open／租期检查的先后顺序保留；撤权在单次准入前完成仍拒绝，已准入操作可以结束。PrepareWrite 与 Dirty 仍分别执行准入，FD 修改与恢复记录之间的必要边界不合并。
 
 ## HTTP / SMB 工作区创建与销毁
 
@@ -50,7 +52,7 @@ SMB PrepareWrite / Dirty 进一步使用 `Backend::authorize_workspace_selection
 
 ## HTTP / SMB 上传准入
 
-HTTP 流式上传与 SMB Dirty 改为 `Backend::authorize_upload(identity, workspace, Option<u64>) -> Result<()>`；`UploadAuthorize` action 及 JSON 分派已删除。HTTP 直接传入已经解析的长度，不再格式化十进制字符串后在后端重解析；SMB 没有声明长度时传 `None`。授权包装器显式转发，引擎在原准入锁内刷新身份与绑定，再依次检查工作区存在／所有权、Open 状态、租期和声明大小，保留原有错误优先级。后续实际发布仍执行自己的当前准入与容量检查，这不是可长期复用的授权票据。
+HTTP 流式上传使用同一 `Backend::authorize_workspace_write` 的 `WorkspaceWrite::Upload { logical_size }`，直接传入已经解析的长度，不重新格式化或解析；SMB ActiveFile 共用其 Open／租期规则。`UploadAuthorize` JSON action 和后来的独立 `authorize_upload` 入口均已删除。HTTP 原身份／绑定、工作区存在／所有权、Open、租期和声明大小的错误优先级保持，不强加 SMB 文件选择规则。实际上传准备和发布仍各自执行当前准入与容量检查，早期准入不充当可长期复用的授权票据。
 
 原 `item_id` 在该 action 中只做格式验证，没有参与领域对象查找或授权，所以不保留为无消费者的 typed 参数。HTTP 在原路径、长度／generation／hash 头校验之后验证 entry ID，且在读取 body、创建 spool 或调用后端之前拒绝非法值。外层身份认证、上传预算槽和逐 item claim 仍在上述解析之前；因此资源忙错误仍先于格式错误，而非法 entry ID 现在先于工作区领域错误。SMB writer 的 item ID 来自核心创建的记录，不重复解析自己的值。`UploadAdmission` 仍随阻塞授权任务持有，取消 HTTP future 不提前释放槽位或 claim；上传重试、永久操作收据和 canonical 编码没有改变。
 

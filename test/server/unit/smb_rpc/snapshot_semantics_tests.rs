@@ -131,16 +131,6 @@ impl Backend for NamespaceAfterWorkspace {
         self.inner.read_directory(identity, request)
     }
 
-    fn authorize_workspace_selection(
-        &self,
-        identity: &crate::auth::Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        self.inner
-            .authorize_workspace_selection(identity, workspace, path)
-    }
-
     fn create_workspace(
         &self,
         identity: &crate::auth::Identity,
@@ -678,14 +668,14 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         self.inner.stage_namespace(identity, command)
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &crate::auth::Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
         self.inner
-            .authorize_upload(identity, workspace, logical_size)
+            .authorize_workspace_write(identity, workspace, access)
     }
 
     fn lookup_current(

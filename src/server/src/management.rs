@@ -1906,15 +1906,15 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         self.inner.backend()?.stage_namespace(identity, command)
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         identity: &Identity,
         workspace: &str,
-        logical_size: Option<u64>,
+        access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), ApiError> {
         self.inner
             .backend()?
-            .authorize_upload(identity, workspace, logical_size)
+            .authorize_workspace_write(identity, workspace, access)
     }
 
     fn read_directory(
@@ -1923,17 +1923,6 @@ impl Backend for ManagementBackend {
         request: crate::ReadDirectory<'_>,
     ) -> Result<crate::DirectorySnapshot, ApiError> {
         self.inner.backend()?.read_directory(identity, request)
-    }
-
-    fn authorize_workspace_selection(
-        &self,
-        identity: &Identity,
-        workspace: &str,
-        path: &name_policy::PortablePath,
-    ) -> Result<(), ApiError> {
-        self.inner
-            .backend()?
-            .authorize_workspace_selection(identity, workspace, path)
     }
 
     fn authorize_current(&self, identity: &Identity, branch: &str) -> Result<(), ApiError> {

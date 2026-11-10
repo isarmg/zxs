@@ -67,15 +67,6 @@ impl Backend for Probe {
         Err(crate::ApiError::unsupported())
     }
 
-    fn authorize_workspace_selection(
-        &self,
-        _identity: &crate::auth::Identity,
-        _workspace: &str,
-        _path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-
     fn create_workspace(
         &self,
         _identity: &crate::auth::Identity,
@@ -547,11 +538,11 @@ impl Backend for Probe {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         _identity: &crate::auth::Identity,
         _workspace: &str,
-        _logical_size: Option<u64>,
+        _access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

@@ -14,7 +14,7 @@ fn cold_full_manifest_keeps_opened_file_selection_context_and_fencing() {
     let id = expected.workspace_id.clone();
     let path = name_policy::PortablePath::parse("file").unwrap();
     engine
-        .validate_workspace_file_selection(&id, &path)
+        .validate_workspace_file_selection(&engine.workspace_view(&id).unwrap(), &path)
         .unwrap();
     engine.abort_workspace(&id, "admin").unwrap();
     expected.state = WorkspaceState::Aborted;
@@ -25,7 +25,7 @@ fn cold_full_manifest_keeps_opened_file_selection_context_and_fencing() {
         canonical
     );
     engine
-        .validate_workspace_file_selection(&id, &path)
+        .validate_workspace_file_selection(&engine.workspace_view(&id).unwrap(), &path)
         .unwrap();
     drop(engine);
     let mut engine = Engine::open(&f.root).unwrap();
@@ -34,7 +34,7 @@ fn cold_full_manifest_keeps_opened_file_selection_context_and_fencing() {
         canonical
     );
     engine
-        .validate_workspace_file_selection(&id, &path)
+        .validate_workspace_file_selection(&engine.workspace_view(&id).unwrap(), &path)
         .unwrap();
     let source = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     let draft = engine
@@ -58,7 +58,7 @@ fn cold_full_manifest_keeps_opened_file_selection_context_and_fencing() {
         .unwrap();
     assert_eq!(
         engine
-            .validate_workspace_file_selection(&id, &path)
+            .validate_workspace_file_selection(&engine.workspace_view(&id).unwrap(), &path)
             .unwrap_err()
             .code(),
         ErrorCode::FileBranchConflict

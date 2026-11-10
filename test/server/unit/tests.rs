@@ -93,15 +93,6 @@ impl Backend for TestBackend {
         Err(crate::ApiError::unsupported())
     }
 
-    fn authorize_workspace_selection(
-        &self,
-        _identity: &crate::auth::Identity,
-        _workspace: &str,
-        _path: &name_policy::PortablePath,
-    ) -> Result<(), crate::ApiError> {
-        Err(crate::ApiError::unsupported())
-    }
-
     fn create_workspace(
         &self,
         _identity: &crate::auth::Identity,
@@ -617,11 +608,11 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::Workspace, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn authorize_upload(
+    fn authorize_workspace_write(
         &self,
         _identity: &crate::auth::Identity,
         _workspace: &str,
-        _logical_size: Option<u64>,
+        _access: crate::WorkspaceWrite<'_>,
     ) -> Result<(), crate::ApiError> {
         Ok(())
     }
@@ -1379,15 +1370,6 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             Err(crate::ApiError::unsupported())
         }
 
-        fn authorize_workspace_selection(
-            &self,
-            _identity: &crate::auth::Identity,
-            _workspace: &str,
-            _path: &name_policy::PortablePath,
-        ) -> Result<(), crate::ApiError> {
-            Err(crate::ApiError::unsupported())
-        }
-
         fn create_workspace(
             &self,
             _identity: &crate::auth::Identity,
@@ -1863,14 +1845,14 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::Workspace, crate::ApiError> {
             self.delegate.stage_namespace(identity, command)
         }
-        fn authorize_upload(
+        fn authorize_workspace_write(
             &self,
             identity: &crate::auth::Identity,
             workspace: &str,
-            logical_size: Option<u64>,
+            access: crate::WorkspaceWrite<'_>,
         ) -> Result<(), crate::ApiError> {
             self.delegate
-                .authorize_upload(identity, workspace, logical_size)
+                .authorize_workspace_write(identity, workspace, access)
         }
 
         fn lookup_current(
