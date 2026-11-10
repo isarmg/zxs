@@ -31,11 +31,13 @@ fn receipt(request: &ObjectMoveRequest) -> Value {
     json!({
         "operation_kind": OBJECT_MOVE_KIND,
         "request_digest": request.digest("alice").unwrap(),
-        "result": ObjectMoveFact {
-            request: request.clone(),
-            principal: "alice".into(),
-            target_repository_id: repository(2),
-            target_entry_id: entry(2),
+        "result": {
+            "movement": ObjectMoveFact {
+                request: request.clone(),
+                principal: "alice".into(),
+                target_repository_id: repository(2),
+                target_entry_id: entry(2),
+            },
         },
     })
 }
@@ -143,9 +145,12 @@ fn request_digest_alone_cannot_substitute_another_fact_or_legacy_move_receipt() 
         ("request", Value::Null),
     ] {
         let mut wrong = published.clone();
-        wrong["result"][field] = changed;
+        wrong["result"]["movement"][field] = changed;
         assert!(!original.matches_receipt("alice", &wrong), "{field}");
     }
+    let mut unwrapped = published.clone();
+    unwrapped["result"] = published["result"]["movement"].clone();
+    assert!(!original.matches_receipt("alice", &unwrapped));
     let mut wrong_digest = published;
     wrong_digest["request_digest"] = original.digest("bob").unwrap().into();
     assert!(!original.matches_receipt("alice", &wrong_digest));
