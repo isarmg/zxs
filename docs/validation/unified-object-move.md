@@ -24,6 +24,7 @@
 - 既有 Engine 成功路径要求新 object.move 和公共 move-completion 归档；原 file intent／决定后恢复先用同一 capture/project/save 夹具准备真实历史材料，继续要求原 file.history.move。成员退出进行中保持写围栏，明确激活后的合法 Current 允许新搬运；这两阶段在同一用例复用，不把终态当作过渡态拒绝。
 - 泛化 SMB 接纳夹具已转发真实 MoveCurrentObject，原文件桥接只负责已有请求身份与旧 intent 续作；完成屏障直接走新对象入口。空盘 framed RPC 保留原 target_repository_id／target_binding 为 None，并要求同一操作完成根与搬运。
 - 泛化 command 必须携带原源 slot/disk/generation 和原目标 disk/generation；真实 backend 回执重放仍核两端磁盘。object 回执须显式提供 version_mapping，空 map 对应 NotApplicable、非空对应 TargetMet，缺失不默认为空。
+- 已发表回执的两端 SMB 绑定检查直接覆盖 `MoveCurrentObject`：撤销后拒绝，重新启用同一仓库也不能让旧代数的原捕获句柄恢复权限；拒绝不改原回执或 State。
 - 目录／目录仓库正常流程由公共 Engine 测试覆盖，不在协议层复制成员和故障矩阵。协议层只补目录显式 None 身份、same-entry 不产生 displaced file，以及新 object spool 不接受旧 file kind。
 - PortablePath 父路径与允许覆盖但目标缺失均由接纳测试转交核心；脚本化成功只证明输入映射，不证明缺失父目录能发布。目标父目录存在性和完整成员保留留在业务测试。
 
