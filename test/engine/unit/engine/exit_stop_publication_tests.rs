@@ -2,6 +2,7 @@
 //! Source regressions only; these are not physical power-loss acceptance results.
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::store::{WriteFault, inject_next};
+use crate::engine::membership_transition::pending::activation::plan_store::PLAN;
 use std::{fs, os::unix::fs::PermissionsExt};
 
 const FAULTS: [WriteFault; 4] = [

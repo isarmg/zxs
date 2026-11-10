@@ -2,7 +2,9 @@
 //! SYSTEM retains the exact authority and immutable publication plan before the
 //! first locator record. Neither that plan nor a locator vote replaces the real
 //! joint certificates, fixed new quorum, complete archives or held identities.
+use super::plan_store::Plan;
 use super::*;
+type PlanStore = super::plan_store::PlanStore<AddPlan>;
 use crate::engine::disk_lifecycle::bootstrap::{
     RootObservation,
     runtime::{management_error, observe, open_store},
@@ -10,9 +12,6 @@ use crate::engine::disk_lifecycle::bootstrap::{
 };
 
 const DIRECTORY: &str = "membership-root-extensions";
-const HEAD: &str = "head.json";
-const PLAN: &str = "plan.json";
-const COMPLETE: &str = "complete.json";
 const PLAN_KIND: &str = "membership-add-root-extension";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +38,15 @@ struct Head {
     plan_hash: String,
 }
 
-impl AddPlan {
+impl Plan for AddPlan {
+    type Head = Head;
+    const DIRECTORY: &'static str = DIRECTORY;
+    const LABEL: &'static str = "Add extension";
+
+    fn operation_id(head: &Head) -> OperationId {
+        head.operation_id
+    }
+
     fn head(&self) -> Result<Head> {
         // This explicitly excludes Abort, Exit and future readmission authority.
         // Merely having a generation or an old locator is not Add permission.
@@ -59,147 +66,6 @@ impl AddPlan {
             plan_hash: object_hash(PLAN_KIND, self)?,
         })
     }
-}
-
-struct PlanStore {
-    system: DiskRoot,
-    directory: DiskRoot,
-    operation: DiskRoot,
-    head: Head,
-}
-
-impl PlanStore {
-    fn open(root: &Path) -> Result<Option<(Self, AddPlan)>> {
-        let system = DiskRoot::open(root)?;
-        let path = system.path().join(DIRECTORY);
-        if system.optional_metadata(&path)?.is_none() {
-            return Ok(None);
-        }
-        let directory = system.private_child(&path)?;
-        verify_inventory(&directory, true)?;
-        let Some(head) = optional::<Head>(&directory, HEAD)? else {
-            // A pre-head write has not been allowed to publish any locator.
-            return Ok(None);
-        };
-        let operation =
-            directory.private_child(&directory.path().join(head.operation_id.to_string()))?;
-        verify_inventory(&operation, false)?;
-        let plan: AddPlan =
-            decode_strict(&operation.read_bytes(&operation.path().join(PLAN), MAX_METADATA)?)?;
-        if plan.head()? != head {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "Add extension plan differs from its protected head",
-            ));
-        }
-        Ok(Some((
-            Self {
-                system,
-                directory,
-                operation,
-                head,
-            },
-            plan,
-        )))
-    }
-
-    fn completed(&self) -> Result<bool> {
-        match optional::<Head>(&self.operation, COMPLETE)? {
-            None => Ok(false),
-            Some(complete) if complete == self.head => Ok(true),
-            Some(_) => Err(Error::new(
-                ErrorCode::LogFork,
-                "Add extension completion differs from its plan",
-            )),
-        }
-    }
-
-    fn prepare(engine: &Engine, plan: &AddPlan) -> Result<Self> {
-        let system = DiskRoot::open(&engine.root)?;
-        verify_system_writer(&system, engine)?;
-        system.private_dir(&system.path().join(DIRECTORY))?;
-        let directory = system.private_child(&system.path().join(DIRECTORY))?;
-        verify_inventory(&directory, true)?;
-        let head = plan.head()?;
-        let operation_path = directory.path().join(head.operation_id.to_string());
-        directory.private_dir(&operation_path)?;
-        let operation = directory.private_child(&operation_path)?;
-        verify_inventory(&operation, false)?;
-        // Immutable bytes first. An interrupted old operation cannot be silently
-        // replaced by a different authority or a new observation of its roots.
-        operation.write_json(&operation.path().join(PLAN), plan, false)?;
-        directory.write_json(&directory.path().join(HEAD), &head, true)?;
-        Ok(Self {
-            system,
-            directory,
-            operation,
-            head,
-        })
-    }
-
-    fn verify_current(&self, engine: &Engine) -> Result<()> {
-        verify_system_writer(&self.system, engine)?;
-        verify_inventory(&self.directory, true)?;
-        verify_inventory(&self.operation, false)?;
-        let current: Head = decode_strict(
-            &self
-                .directory
-                .read_bytes(&self.directory.path().join(HEAD), MAX_METADATA)?,
-        )?;
-        let plan: AddPlan = decode_strict(
-            &self
-                .operation
-                .read_bytes(&self.operation.path().join(PLAN), MAX_METADATA)?,
-        )?;
-        if current != self.head || plan.head()? != self.head {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "Add extension changed before its publication barrier",
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn verify_system_writer(system: &DiskRoot, engine: &Engine) -> Result<()> {
-    let named = system.open_regular(&system.path().join("writer.lock"))?;
-    if FileIdentity::from_fd(&named)? != engine._locks.system_identity()? {
-        return Err(Error::new(
-            ErrorCode::DiskIdentityMismatch,
-            "Add extension lost its protected system writer",
-        ));
-    }
-    Ok(())
-}
-
-fn optional<T: for<'de> Deserialize<'de>>(root: &DiskRoot, name: &str) -> Result<Option<T>> {
-    root.open_optional_read_regular(&root.path().join(name))?
-        .map(|file| Ok(decode_strict(&read_file_bytes(file, MAX_METADATA)?)?))
-        .transpose()
-}
-
-fn verify_inventory(root: &DiskRoot, top: bool) -> Result<()> {
-    for entry in root.entries(root.path())? {
-        let entry = entry.map_err(crate::disk::fs_error)?;
-        let name = entry.as_os_str().to_str().ok_or_else(|| {
-            Error::new(
-                ErrorCode::RecoveryRequired,
-                "non-UTF-8 Add extension control entry",
-            )
-        })?;
-        let permitted = if top {
-            name == HEAD || name.parse::<OperationId>().is_ok()
-        } else {
-            matches!(name, PLAN | COMPLETE)
-        };
-        if !permitted {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "unknown or unfinished Add extension control write",
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Called only with a verified pending source/Joint generation and all of its
@@ -396,7 +262,5 @@ pub(super) fn complete(engine: &Engine) -> Result<()> {
         ));
     }
     saved.verify_current(engine)?;
-    saved
-        .operation
-        .write_json(&saved.operation.path().join(COMPLETE), &saved.head, false)
+    saved.complete()
 }

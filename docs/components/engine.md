@@ -4,6 +4,8 @@
 
 membership 的 Exit、登记续作、readmission、terminal/resume 与 retirement 信封共用 `disk_registry::objects` 的持久图对象表示，JSON 仍是摘要到 `{kind,value}` 的有序映射。合并已准备图时保留冲突分类并直接移动解码树；信封读取只解析对象地址与种类，实际 registry/mask loader 统一限制字节、校验引用域摘要及完整业务图，避免在相邻读取层重复编码哈希。磁盘信封入口、归档认证、当前身份与提交屏障保持各自职责。
 
+Add root-extension 与 Exit stop-plan 共用私有 `activation::plan_store` 持有 SYSTEM、操作目录和选中 head，原生计划／head 的严格格式与领域验证继续归各流程负责。冷读、目录清单、writer 身份和完成记录只有一个存储实现；Exit 的发布前 PLAN／HEAD 同步保留为显式调用，Add 保持原只读核对，不改写入屏障。
+
 | 目录 / 模块 | 职责 |
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |

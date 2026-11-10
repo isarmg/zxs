@@ -1,6 +1,8 @@
 //! The exact retained Exit authority owns a durable SYSTEM stop plan. Neither a
 //! request digest, local locator, nor a saved plan can replace retained new-Q.
+use super::super::plan_store::Plan;
 use super::*;
+type PlanStore = super::super::plan_store::PlanStore<ExitStopPlan>;
 use crate::engine::disk_lifecycle::bootstrap::{
     IntentDigest, LoadedLocator, RootObservation,
     runtime::{management_error, observe, open_store},
@@ -8,9 +10,6 @@ use crate::engine::disk_lifecycle::bootstrap::{
 };
 
 const DIRECTORY: &str = "membership-exit-stops";
-const HEAD: &str = "head.json";
-const PLAN: &str = "plan.json";
-const COMPLETE: &str = "complete.json";
 const PLAN_KIND: &str = "membership-exit-stop-plan";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,7 +33,15 @@ struct Head {
     authority_hash: String,
     plan_hash: String,
 }
-impl ExitStopPlan {
+impl Plan for ExitStopPlan {
+    type Head = Head;
+    const DIRECTORY: &'static str = DIRECTORY;
+    const LABEL: &'static str = "Exit stop";
+
+    fn operation_id(head: &Head) -> OperationId {
+        head.operation_id
+    }
+
     fn head(&self) -> Result<Head> {
         if !self.authority.is_exit() {
             return Err(Error::new(
@@ -269,145 +276,6 @@ fn verify_retained_source(
     Ok(observations)
 }
 
-struct PlanStore {
-    system: DiskRoot,
-    directory: DiskRoot,
-    operation: DiskRoot,
-    head: Head,
-}
-impl PlanStore {
-    fn open(root: &Path) -> Result<Option<(Self, ExitStopPlan)>> {
-        let system = DiskRoot::open(root)?;
-        let path = system.path().join(DIRECTORY);
-        if system.optional_metadata(&path)?.is_none() {
-            return Ok(None);
-        }
-        let directory = system.private_child(&path)?;
-        inventory(&directory, true)?;
-        let Some(head) = optional::<Head>(&directory, HEAD)? else {
-            return Ok(None);
-        };
-        let operation =
-            directory.private_child(&directory.path().join(head.operation_id.to_string()))?;
-        inventory(&operation, false)?;
-        let plan: ExitStopPlan =
-            decode_strict(&operation.read_bytes(&operation.path().join(PLAN), MAX_METADATA)?)?;
-        if plan.head()? != head {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "Exit stop plan differs from its protected head",
-            ));
-        }
-        Ok(Some((
-            Self {
-                system,
-                directory,
-                operation,
-                head,
-            },
-            plan,
-        )))
-    }
-    fn prepare(engine: &Engine, plan: &ExitStopPlan) -> Result<Self> {
-        let system = DiskRoot::open(&engine.root)?;
-        verify_writer(&system, engine)?;
-        system.private_dir(&system.path().join(DIRECTORY))?;
-        let directory = system.private_child(&system.path().join(DIRECTORY))?;
-        inventory(&directory, true)?;
-        let head = plan.head()?;
-        let path = directory.path().join(head.operation_id.to_string());
-        directory.private_dir(&path)?;
-        let operation = directory.private_child(&path)?;
-        inventory(&operation, false)?;
-        operation.write_json(&operation.path().join(PLAN), plan, false)?;
-        directory.write_json(&directory.path().join(HEAD), &head, true)?;
-        Ok(Self {
-            system,
-            directory,
-            operation,
-            head,
-        })
-    }
-    fn verify_current(&self, engine: &Engine) -> Result<()> {
-        verify_writer(&self.system, engine)?;
-        inventory(&self.directory, true)?;
-        inventory(&self.operation, false)?;
-        let current: Head = decode_strict(
-            &self
-                .directory
-                .read_bytes(&self.directory.path().join(HEAD), MAX_METADATA)?,
-        )?;
-        let plan: ExitStopPlan = decode_strict(
-            &self
-                .operation
-                .read_bytes(&self.operation.path().join(PLAN), MAX_METADATA)?,
-        )?;
-        if current != self.head || plan.head()? != self.head {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "Exit stop plan changed before publication",
-            ));
-        }
-        // Existing exact bytes still require today's file and directory barriers.
-        self.operation
-            .write_json(&self.operation.path().join(PLAN), &plan, false)?;
-        self.directory
-            .write_json(&self.directory.path().join(HEAD), &self.head, false)
-    }
-    fn completed(&self) -> Result<bool> {
-        match optional::<Head>(&self.operation, COMPLETE)? {
-            None => Ok(false),
-            Some(head) if head == self.head => Ok(true),
-            Some(_) => Err(Error::new(
-                ErrorCode::LogFork,
-                "Exit stop completion differs from its exact plan",
-            )),
-        }
-    }
-    fn complete(&self) -> Result<()> {
-        self.operation
-            .write_json(&self.operation.path().join(COMPLETE), &self.head, false)
-    }
-}
-fn verify_writer(system: &DiskRoot, engine: &Engine) -> Result<()> {
-    let named = system.open_regular(&system.path().join("writer.lock"))?;
-    if FileIdentity::from_fd(&named)? != engine._locks.system_identity()? {
-        return Err(Error::new(
-            ErrorCode::DiskIdentityMismatch,
-            "Exit stop lost the protected system writer",
-        ));
-    }
-    Ok(())
-}
-fn optional<T: for<'de> Deserialize<'de>>(root: &DiskRoot, name: &str) -> Result<Option<T>> {
-    root.open_optional_read_regular(&root.path().join(name))?
-        .map(|file| Ok(decode_strict(&read_file_bytes(file, MAX_METADATA)?)?))
-        .transpose()
-}
-fn inventory(root: &DiskRoot, top: bool) -> Result<()> {
-    for entry in root.entries(root.path())? {
-        let entry = entry.map_err(crate::disk::fs_error)?;
-        let name = entry.as_os_str().to_str().ok_or_else(|| {
-            Error::new(
-                ErrorCode::RecoveryRequired,
-                "non-UTF-8 Exit stop control entry",
-            )
-        })?;
-        let permitted = if top {
-            name == HEAD || name.parse::<OperationId>().is_ok()
-        } else {
-            matches!(name, PLAN | COMPLETE)
-        };
-        if !permitted {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "unknown or unfinished Exit stop control write",
-            ));
-        }
-    }
-    Ok(())
-}
-
 pub(in crate::engine) fn synchronize(
     engine: &Engine,
     store: &mut BootstrapStore,
@@ -478,7 +346,7 @@ pub(in crate::engine) fn synchronize(
     let admitted = store
         .admit_exit_stop(&plan.stop, &source)
         .map_err(management_error)?;
-    saved.verify_current(engine)?;
+    saved.synchronize(engine)?;
     let locator = match store.publish_stop(admitted).map_err(management_error) {
         Ok(locator) => locator,
         Err(error) => {
@@ -582,7 +450,7 @@ impl PreparedResume {
         mut self,
         engine: &Engine,
     ) -> Result<()> {
-        self.saved.verify_current(engine)?;
+        self.saved.synchronize(engine)?;
         let generation = engine.config.generation().cloned().ok_or_else(|| {
             Error::new(ErrorCode::RecoveryRequired, "resumed Exit has no authority")
         })?;
