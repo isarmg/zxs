@@ -13,7 +13,7 @@ use std::{
     collections::BTreeSet,
     fs::File,
     os::unix::fs::MetadataExt,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 pub(crate) const STATE: &str = "/zxs/data/state";
@@ -182,6 +182,48 @@ impl Layout {
                 "all selected disk roots must already exist; no missing directory is created"
                     .into(),
             );
+        }
+        self.recheck()
+    }
+
+    /// Exact Add inventory after authenticated current registration has been
+    /// read. Historical stopped names may be absent and are never opened.
+    /// Every live/current or new root remains mandatory; unknown names reject.
+    pub(crate) fn inventory_addition(&self, paths: &[String], stopped: &[PathBuf]) -> Result<()> {
+        let mut missing = all_names(paths)?;
+        let stopped_paths = stopped
+            .iter()
+            .map(|path| {
+                path.to_str()
+                    .map(str::to_owned)
+                    .ok_or("stopped registration path is not UTF-8")
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let stopped_names = all_names(&stopped_paths)?;
+        if !stopped_names.is_subset(&missing) {
+            return Err("stopped registration is outside the exact current addition root set".into());
+        }
+        missing.retain(|name| !stopped_names.contains(name));
+        for name in self.disks.entries()? {
+            let name = name?;
+            let text = name
+                .as_os_str()
+                .to_str()
+                .ok_or("non-UTF-8 discovery material was preserved")?;
+            if stopped_names.contains(text) {
+                continue;
+            }
+            if !missing.remove(text) {
+                return Err("unselected discovery material was preserved; only authenticated historical roots and the exact new batch are allowed".into());
+            }
+            let path = format!("{DISKS}/{text}");
+            let file = storage_server::storage_directories::open_unstopped_root_within(
+                DISKS, &path, stopped,
+            )?;
+            owner(&file, self.account.owner())?;
+        }
+        if !missing.is_empty() {
+            return Err("all enabled and selected new roots must exist; missing roots were not recreated".into());
         }
         self.recheck()
     }

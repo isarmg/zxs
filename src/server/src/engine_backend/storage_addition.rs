@@ -36,18 +36,7 @@ impl EngineBackend {
     ) -> Result<(storage_contract::Config, Vec<std::path::PathBuf>), ApiError> {
         let engine = crate::lock(&self.engine);
         current_protected_identity(&engine, identity)?;
-        let enabled: std::collections::BTreeSet<_> = engine
-            .registered_disks()
-            .filter(|disk| disk.registration_mode == storage_engine::RegistrationMode::Enabled)
-            .map(|disk| disk.disk_id)
-            .collect();
-        let stopped = engine
-            .config()
-            .disks
-            .iter()
-            .filter(|disk| !enabled.contains(disk.disk_id.as_str()))
-            .map(|disk| disk.root.clone())
-            .collect();
+        let stopped = stopped_roots(&engine);
         Ok((engine.config().clone(), stopped))
     }
 
@@ -103,7 +92,7 @@ impl EngineBackend {
         }
         let directories = match held_directories {
             Some(directories) => directories,
-            None => reopen_directories(intent)?,
+            None => reopen_directories(&engine, intent)?,
         };
         progress(AdditionPhase::Fencing, None)?;
         engine
@@ -139,7 +128,7 @@ impl EngineBackend {
         if engine.pending_membership_status().is_some() {
             engine.resume_pending_members().map_err(error)?;
         } else {
-            let directories = reopen_directories(intent)?;
+            let directories = reopen_directories(&engine, intent)?;
             engine
                 .enroll_pending_members(&archive.archive_path, &archive.root_hash, directories)
                 .map_err(error)?;
@@ -288,8 +277,10 @@ fn exact_result(
 }
 
 fn reopen_directories(
+    engine: &Engine,
     intent: &StoredAddition,
 ) -> Result<Vec<storage_engine::PendingMemberDirectory>, ApiError> {
+    let stopped = stopped_roots(engine);
     intent
         .status
         .preview
@@ -305,8 +296,26 @@ fn reopen_directories(
                 .expect("invariant: admitted target contains every addition");
             Ok(storage_engine::PendingMemberDirectory {
                 disk_id: disk.disk_id.clone(),
-                directory: crate::storage_directories::reopen_addition(&addition.selection)?,
+                directory: crate::storage_directories::reopen_fresh_addition(
+                    &addition.selection,
+                    &stopped,
+                )?,
             })
         })
+        .collect()
+}
+
+fn stopped_roots(engine: &Engine) -> Vec<std::path::PathBuf> {
+    let enabled: std::collections::BTreeSet<_> = engine
+        .registered_disks()
+        .filter(|disk| disk.registration_mode == storage_engine::RegistrationMode::Enabled)
+        .map(|disk| disk.disk_id)
+        .collect();
+    engine
+        .config()
+        .disks
+        .iter()
+        .filter(|disk| !enabled.contains(disk.disk_id.as_str()))
+        .map(|disk| disk.root.clone())
         .collect()
 }

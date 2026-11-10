@@ -1238,6 +1238,59 @@ pub fn inspect_fresh_within(
     Ok(inspect_held(request, excluded_roots, discovery_root, true, stopped_roots)?.selected)
 }
 
+/// Inspect an explicitly selected new child without first browsing it. Resolve
+/// its mount only after excluding historical paths and aliases without I/O.
+pub fn inspect_fresh_path_within(
+    discovery_root: &str,
+    root_path: &str,
+    excluded_roots: &[PathBuf],
+    stopped_roots: &[PathBuf],
+) -> Result<CandidateSelection> {
+    let inventory = mounts()?;
+    let (observed, scope) =
+        observe_unstopped_child(discovery_root, root_path, stopped_roots, &inventory)?;
+    validate_empty_directory(&observed, excluded_roots, &inventory)?;
+    verify_current(&scope.observed)?;
+    StoppedRoots::new(stopped_roots, &inventory)?.unchanged()?;
+    Ok(selection(&observed, &scope))
+}
+
+/// Open one caller-selected current or pending root for metadata inspection.
+/// The caller must supply the authenticated stopped set and retain its owner.
+/// This neither accepts a new member nor probes an excluded historical path.
+pub fn open_unstopped_root_within(
+    discovery_root: &str,
+    root_path: &str,
+    stopped_roots: &[PathBuf],
+) -> Result<File> {
+    let inventory = mounts()?;
+    let (observed, _) =
+        observe_unstopped_child(discovery_root, root_path, stopped_roots, &inventory)?;
+    Ok(observed.storage.into_directory())
+}
+
+fn observe_unstopped_child(
+    discovery_root: &str,
+    root_path: &str,
+    stopped_roots: &[PathBuf],
+    inventory: &[Mount],
+) -> Result<(Observed, DiscoveryScope)> {
+    let path = absolute(root_path)?;
+    let stopped = StoppedRoots::new(stopped_roots, inventory)?;
+    stopped.check(&absolute(discovery_root)?, false)?;
+    stopped.check(&path, true)?;
+    stopped.unchanged()?;
+    let scope = DiscoveryScope::open(discovery_root, inventory)?;
+    let observed = observe_opened(&path, scope.open_descendant(&path, true)?, inventory)?;
+    // observe_opened also opens the containing mount. Its path is an ancestor
+    // of this admitted child; the child exclusion already rejects a stopped
+    // mount or any alias inside it before either descriptor is opened.
+    verify_current(&observed)?;
+    verify_current(&scope.observed)?;
+    stopped.unchanged()?;
+    Ok((observed, scope))
+}
+
 pub fn revalidate_fresh_within(
     discovery_root: &str,
     selected: &CandidateSelection,
@@ -1319,25 +1372,6 @@ pub(crate) fn reopen_fresh_addition(
     verify_current(&scope.observed)?;
     stopped.unchanged()?;
     Ok(observed.storage.into_directory())
-}
-
-/// Resume only the same named directory after enrollment has changed its ctime.
-/// The engine additionally verifies its reservation, exact configuration and seal.
-#[cfg(feature = "core")]
-pub(crate) fn reopen_addition(
-    selected: &CandidateSelection,
-) -> std::result::Result<File, crate::ApiError> {
-    let root = absolute(&selected.root_path)?;
-    let observed = observe(&root, &mounts()?)?;
-    if observed.root_identity.device != selected.root_identity.device
-        || observed.root_identity.inode != selected.root_identity.inode
-    {
-        return Err(Error::Changed.into());
-    }
-    let directory = observed.storage.into_directory();
-    fs_safety::PrivateDirectory::from_directory(directory.try_clone().map_err(Error::from)?, root)
-        .map_err(Error::from)?;
-    Ok(directory)
 }
 
 #[cfg(test)]
