@@ -4,12 +4,11 @@ mod paths;
 mod samba;
 mod units;
 
-use super::{model, render};
+use super::{context::Context, render};
 use crate::{
     Result,
-    account::{LocalAccount, LocalGroup},
-    installation::InstalledProgram,
-    private_io::{ConfigurationFiles, SYSTEMD_PATH},
+    account::LocalAccount,
+    private_io::SYSTEMD_PATH,
     system_program::{Executable, Program},
 };
 use data_serialization::{Deserialize, Serialize};
@@ -39,12 +38,8 @@ pub(crate) struct Observation {
 
 struct Prepared {
     input: Input,
-    account: LocalAccount,
-    group: LocalGroup,
-    smb_account: Option<LocalAccount>,
-    program: InstalledProgram,
+    context: Context,
     paths: paths::Paths,
-    configuration: ConfigurationFiles,
     unit: render::ConfigurationFile,
     smb_configuration: Option<render::ConfigurationFile>,
     systemctl: Executable,
@@ -59,104 +54,52 @@ impl Prepared {
                 "service activation requires the manually run real/effective root helper".into(),
             );
         }
-        let settings = model::Settings::try_from(input.deployment.clone())?;
-        let account = LocalAccount::resolve(settings.user.clone())?;
-        let group = LocalGroup::resolve(settings.group.clone())?;
-        if group.gid() != account.owner().1 {
-            return Err("selected service group is not the account's primary group".into());
-        }
-        let smb_account = settings
-            .smb
-            .as_ref()
-            .map(|smb| LocalAccount::resolve(smb.account.clone()))
-            .transpose()?;
-        if smb_account
-            .as_ref()
-            .is_some_and(|smb| smb.owner().0 == account.owner().0)
-        {
-            return Err(
-                "Samba authentication and private service accounts must be distinct".into(),
-            );
-        }
-        let program = InstalledProgram::open()?;
-        let paths = paths::Paths::open(account.owner(), settings.smb.is_some())?;
-        let configuration = ConfigurationFiles::open(settings.smb.is_some())?;
-        let (unit, smb_configuration) = render::files(&settings);
-        if configuration
-            .inspect(
-                unit.content.as_bytes(),
-                smb_configuration
-                    .as_ref()
-                    .map(|value| value.content.as_bytes()),
-            )?
-            .iter()
-            .any(|exists| !exists)
-        {
-            return Err("install the exact existing deployment configuration first; activation does not replace or repair it".into());
-        }
+        let (context, unit, smb_configuration) = Context::open(&input.deployment)?;
+        let paths = paths::Paths::open(context.account.owner(), smb_configuration.is_some())?;
+        context.require_existing(&unit, smb_configuration.as_ref())?;
         let systemctl = Executable::open(Program::Systemctl)?;
         let analyzer = Executable::open(Program::SystemdAnalyze)?;
-        let samba = match (&settings.smb, &smb_account) {
-            (Some(settings), Some(account)) => {
-                Some(samba::Samba::open(account, settings.peer_uid)?)
-            }
-            (None, None) => None,
-            _ => return Err("Samba activation context is incomplete".into()),
-        };
+        let samba = input
+            .deployment
+            .smb
+            .as_ref()
+            .map(|settings| {
+                let account = context
+                    .samba_account
+                    .as_ref()
+                    .expect("invariant: configured Samba has an admitted local account");
+                samba::Samba::open(account, settings.peer_uid)
+            })
+            .transpose()?;
         // Current runtime state is intentionally not in the digest. Start and
         // enable are separately observable, idempotent service-manager actions.
         let plan = json!({"format":"zxs-explicit-service-activation","revision":2,
             "input":input,"host_device":paths.identity().device.to_string(),
-            "host_inode":paths.identity().inode.to_string(),"payload":program.metadata(),
-            "service_account":account.snapshot(),"service_group":group.snapshot(),
-            "samba_account":smb_account.as_ref().map(LocalAccount::snapshot),
-            "configuration_parents":configuration.parents(),"unit":unit,
+            "host_inode":paths.identity().inode.to_string(),"payload":context.program.metadata(),
+            "service_account":context.account.snapshot(),"service_group":context.group.snapshot(),
+            "samba_account":context.samba_account.as_ref().map(LocalAccount::snapshot),
+            "configuration_parents":context.configuration.parents(),"unit":unit,
             "samba_configuration":smb_configuration,"samba_unit":samba.as_ref().map(|_| units::SMB_BYTES),
             "directories":paths.snapshot(),"systemctl":systemctl.snapshot(),
             "systemd_analyze":analyzer.snapshot(),"samba":samba.as_ref().map(samba::Samba::snapshot)});
         let digest = platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(&plan)?));
-        let result = Self {
+        Ok(Self {
             input,
-            account,
-            group,
-            smb_account,
-            program,
+            context,
             paths,
-            configuration,
             unit,
             smb_configuration,
             systemctl,
             analyzer,
             samba,
             digest,
-        };
-        result.recheck()?;
-        Ok(result)
+        })
     }
     fn recheck(&self) -> Result<()> {
-        self.account.recheck()?;
-        self.group.recheck()?;
-        self.program.recheck()?;
+        self.context.recheck()?;
         self.paths.recheck()?;
-        self.configuration.recheck()?;
-        if let Some(account) = &self.smb_account {
-            account.recheck()?;
-        }
-        if self
-            .configuration
-            .inspect(
-                self.unit.content.as_bytes(),
-                self.smb_configuration
-                    .as_ref()
-                    .map(|value| value.content.as_bytes()),
-            )?
-            .iter()
-            .any(|exists| !exists)
-        {
-            return Err(
-                "the exact installed configuration disappeared; it was not recreated".into(),
-            );
-        }
+        self.context
+            .require_existing(&self.unit, self.smb_configuration.as_ref())?;
         self.systemctl.recheck()?;
         self.analyzer.recheck()?;
         if let Some(samba) = &self.samba {
@@ -244,6 +187,7 @@ pub(crate) fn preview(input: Input) -> Result<Value> {
     let smb_unit_present = if prepared.samba.is_some() {
         Some(
             prepared
+                .context
                 .configuration
                 .inspect_smb_unit(units::SMB_BYTES.as_bytes())?,
         )
@@ -292,6 +236,7 @@ pub(crate) fn activate(input: Commit) -> Result<(Value, Handoff)> {
     ))
 }
 fn prepare_start(prepared: &Prepared) -> Result<()> {
+    prepared.recheck()?;
     units::read(&prepared.systemctl, units::ZXS)?.require_stopped()?;
     units::read(&prepared.systemctl, units::SMB)?.require_stopped()?;
     if prepared.samba.is_some() {
@@ -304,6 +249,7 @@ fn prepare_start(prepared: &Prepared) -> Result<()> {
             units::conflict(&prepared.systemctl, name)?;
         }
         prepared
+            .context
             .configuration
             .install_smb_unit(units::SMB_BYTES.as_bytes())?;
     }

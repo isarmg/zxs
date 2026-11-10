@@ -31,14 +31,16 @@ fn typed_configuration_rejects_injection_and_private_service_account_sharing() {
     ] {
         let mut value = input();
         value.service_user = account.into();
-        assert!(model::Settings::try_from(value).is_err(), "{account:?}");
+        let expected = model::Settings::try_from(value.clone()).err().unwrap();
+        let actual = context::Context::open(&value).err().unwrap();
+        assert_eq!(actual.to_string(), expected.to_string(), "{account:?}");
     }
     let mut same = input();
     same.smb.as_mut().unwrap().account = "zxs".into();
-    assert!(model::Settings::try_from(same).is_err());
+    assert!(context::Context::open(&same).is_err());
     let mut zero = input();
     zero.listen.set_port(0);
-    assert!(model::Settings::try_from(zero).is_err());
+    assert!(context::Context::open(&zero).is_err());
 }
 #[test]
 fn generated_unit_and_samba_share_exact_socket_and_account_without_secrets() {
@@ -242,4 +244,27 @@ fn protected_single_record_can_resume_a_complete_pending_file_without_extra_mate
         fs::read(temp.path().join("operation/unexpected")).unwrap(),
         b"keep"
     );
+}
+
+#[test]
+fn activation_confirmation_refuses_before_shared_deployment_admission() {
+    for (confirmation, external_administration_stopped) in [
+        ("start-installed-zxs-services", true),
+        ("exit-helper-and-start-installed-zxs-services", false),
+    ] {
+        let result = activation::activate(activation::Commit {
+            input: activation::Input {
+                deployment: input(),
+                enable_on_boot: false,
+            },
+            request_digest: "unreviewed".into(),
+            confirmation: confirmation.into(),
+            external_administration_stopped,
+        });
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("unconfirmed handoff was admitted"),
+        };
+        assert!(error.to_string().contains("confirm helper exit"));
+    }
 }

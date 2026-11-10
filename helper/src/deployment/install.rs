@@ -1,11 +1,11 @@
 //! Confirmed, no-overwrite installation of fixed configuration files.
 pub(crate) mod recovery;
-use super::{Input, model, render};
+use super::{Input, context::Context, render};
 use crate::{
     Result,
-    account::{GroupSnapshot, LocalAccount, LocalGroup, Snapshot},
-    installation::{InstalledProgram, PayloadMetadata},
-    private_io::{BundleDestination, ConfigurationFiles, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH},
+    account::{GroupSnapshot, LocalAccount, Snapshot},
+    installation::PayloadMetadata,
+    private_io::{BundleDestination, ParentSnapshot, SAMBA_PATH, SYSTEMD_PATH},
 };
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
@@ -60,41 +60,18 @@ const REQUIREMENTS: &[&str] = &[
 pub(super) struct Prepared {
     host: BundleDestination,
     original_input: Input,
-    program: InstalledProgram,
-    account: LocalAccount,
-    group: LocalGroup,
-    samba_account: Option<LocalAccount>,
-    destinations: ConfigurationFiles,
+    context: Context,
     preview: Preview,
 }
 impl Prepared {
     fn recheck(&self) -> Result<()> {
         self.host.recheck()?;
-        self.program.recheck()?;
-        self.account.recheck()?;
-        self.group.recheck()?;
-        if let Some(account) = &self.samba_account {
-            account.recheck()?;
-        }
-        self.destinations.recheck()
+        self.context.recheck()
     }
-}
-impl Prepared {
     pub(super) fn require_existing(&self) -> Result<()> {
         self.recheck()?;
-        let plan = &self.preview.plan;
-        if self
-            .destinations
-            .inspect(
-                plan.unit.content.as_bytes(),
-                plan.samba.as_ref().map(|item| item.content.as_bytes()),
-            )?
-            .iter()
-            .any(|present| !present)
-        {
-            return Err("exact installed configuration is required; missing files are not installed by this operation".into());
-        }
-        Ok(())
+        self.context
+            .require_existing(&self.preview.plan.unit, self.preview.plan.samba.as_ref())
     }
     pub(super) fn context_digest(&self) -> &str {
         &self.preview.request_digest
@@ -103,7 +80,8 @@ impl Prepared {
         &self.host
     }
     pub(super) fn samba_account(&self) -> Result<&LocalAccount> {
-        self.samba_account
+        self.context
+            .samba_account
             .as_ref()
             .ok_or_else(|| "an explicitly configured independent Samba account is required".into())
     }
@@ -129,29 +107,8 @@ fn build(input: Input) -> Result<Prepared> {
     build_at(input, host)
 }
 fn build_at(input: Input, host: BundleDestination) -> Result<Prepared> {
-    let settings = model::Settings::try_from(input.clone())?;
-    let account = LocalAccount::resolve(settings.user.clone())?;
-    let group = LocalGroup::resolve(settings.group.clone())?;
-    if group.gid() != account.owner().1 {
-        return Err("service group must resolve to the selected account's primary GID; supplementary or mismatched group overrides are not supported".into());
-    }
-    let samba_account = match &settings.smb {
-        Some(smb) => {
-            let resolved = LocalAccount::resolve(smb.account.clone())?;
-            if resolved.owner().0 == account.owner().0 {
-                return Err(
-                    "Samba authentication UID must be distinct from the private ZXS service UID"
-                        .into(),
-                );
-            }
-            Some(resolved)
-        }
-        None => None,
-    };
-    let program = InstalledProgram::open()?;
-    let destinations = ConfigurationFiles::open(settings.smb.is_some())?;
-    let (unit, samba) = render::files(&settings);
-    let present = destinations.inspect(
+    let (context, unit, samba) = Context::open(&input)?;
+    let present = context.configuration.inspect(
         unit.content.as_bytes(),
         samba.as_ref().map(|file| file.content.as_bytes()),
     )?;
@@ -161,11 +118,11 @@ fn build_at(input: Input, host: BundleDestination) -> Result<Prepared> {
         revision: 2,
         host_device: identity.device.to_string(),
         host_inode: identity.inode.to_string(),
-        configuration_parents: destinations.parents(),
-        payload: program.metadata(),
-        service_account: account.snapshot(),
-        service_group: group.snapshot(),
-        samba_account: samba_account.as_ref().map(LocalAccount::snapshot),
+        configuration_parents: context.configuration.parents(),
+        payload: context.program.metadata(),
+        service_account: context.account.snapshot(),
+        service_group: context.group.snapshot(),
+        samba_account: context.samba_account.as_ref().map(LocalAccount::snapshot),
         unit_destination: SYSTEMD_PATH,
         samba_destination: samba.as_ref().map(|_| SAMBA_PATH),
         mode: "0644",
@@ -185,21 +142,17 @@ fn build_at(input: Input, host: BundleDestination) -> Result<Prepared> {
         all_external_writers_excluded: false,
         required_before_start: REQUIREMENTS,
     };
-    let result = Prepared {
+    Ok(Prepared {
         host,
         original_input: input,
-        program,
-        account,
-        group,
-        samba_account,
-        destinations,
+        context,
         preview,
-    };
-    result.recheck()?;
-    Ok(result)
+    })
 }
 pub(crate) fn preview(input: Input) -> Result<Preview> {
-    Ok(build(input)?.preview)
+    let prepared = build(input)?;
+    prepared.recheck()?;
+    Ok(prepared.preview)
 }
 
 /// A durable intent retains the original request and published files so the
@@ -248,7 +201,6 @@ fn publish_pending(prepared: &Prepared) -> Result<json_codec::Value> {
 fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
     let plan = &prepared.preview.plan;
     let digest = &prepared.preview.request_digest;
-    prepared.recheck()?;
     recovery::check_records(prepared)?;
     let original = recovery::record_bytes(prepared)?;
     prepared.host.publish(
@@ -269,19 +221,21 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         .publish(&format!(".zxs-helper-config-intent-{digest}"), &files)?;
     prepared.recheck()?;
     let unit_created = prepared
-        .destinations
+        .context
+        .configuration
         .install_unit(plan.unit.content.as_bytes())?;
     prepared.recheck()?;
     let samba_created = match &plan.samba {
         Some(file) => Some(
             prepared
-                .destinations
+                .context
+                .configuration
                 .install_samba(file.content.as_bytes())?,
         ),
         None => None,
     };
     prepared.recheck()?;
-    let presence = prepared.destinations.inspect(
+    let presence = prepared.context.configuration.inspect(
         plan.unit.content.as_bytes(),
         plan.samba.as_ref().map(|file| file.content.as_bytes()),
     )?;
@@ -297,7 +251,7 @@ fn publish(prepared: &Prepared) -> Result<json_codec::Value> {
         &[("receipt.json", bytes.as_slice())],
     )?;
     prepared.recheck()?;
-    let final_presence = prepared.destinations.inspect(
+    let final_presence = prepared.context.configuration.inspect(
         plan.unit.content.as_bytes(),
         plan.samba.as_ref().map(|file| file.content.as_bytes()),
     )?;

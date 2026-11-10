@@ -149,7 +149,7 @@ pub(super) fn check_records(prepared: &Prepared) -> Result<RecoveryState> {
         &format!(".zxs-helper-config-installed-{digest}"),
         &[("receipt.json", receipt.as_slice())],
     )?;
-    let present = prepared.destinations.inspect(
+    let present = prepared.context.configuration.inspect(
         plan.unit.content.as_bytes(),
         plan.samba.as_ref().map(|file| file.content.as_bytes()),
     )?;
