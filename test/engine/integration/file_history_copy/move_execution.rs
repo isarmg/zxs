@@ -68,7 +68,7 @@ fn assert_visible(
     for disk in engine.registered_disks() {
         assert_eq!(
             engine
-                .disk_catalog_observation(&disk.slot_id)
+                .disk_catalog_observation(disk.slot_id)
                 .unwrap()
                 .snapshot
                 .source_sequence,
@@ -76,7 +76,7 @@ fn assert_visible(
         );
         assert_eq!(
             engine
-                .disk_history_observation(&disk.slot_id)
+                .disk_history_observation(disk.slot_id)
                 .unwrap()
                 .snapshot
                 .header

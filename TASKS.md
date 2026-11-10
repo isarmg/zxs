@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`5793f430`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`b64e714c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Current 移动观察借用修复
+
+- CI #1112 quality 报出 move_execution 的两处 needless_borrow：registered_disks 的 slot_id 已为借用值，目录与历史观察调用直接传入该值，删除额外的 &。
+- 仅改两处测试调用与本清单，不加 lint 豁免，保留当前登记盘枚举、精确发布序列及全部行为断言。
+- 对齐 b64e714c，固定 Rust 1.99 格式及严格补丁检查通过；未本地编译、运行 Clippy 或 Rust 测试，实际门禁结果待 CI。
 
 ## 本轮目录选择配额夹具
 
