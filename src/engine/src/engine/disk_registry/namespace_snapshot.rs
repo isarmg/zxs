@@ -57,6 +57,8 @@ impl DirectoryNamespaceView {
 /// One current namespace captured without retaining unrelated State/history.
 #[derive(Clone)]
 pub struct NamespaceSnapshot {
+    repository: String,
+    directory_repositories: storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
     file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
@@ -64,6 +66,14 @@ pub struct NamespaceSnapshot {
     registry: Option<Weak<VerifiedDiskRegistry>>,
 }
 impl NamespaceSnapshot {
+    pub(crate) fn repository_id(&self) -> &str {
+        &self.repository
+    }
+    pub(crate) fn directory_repositories(
+        &self,
+    ) -> &storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository> {
+        &self.directory_repositories
+    }
     pub(crate) fn file_deletions(&self) -> &storage_contract::TrackedMap<crate::FileDeletionNode> {
         &self.file_deletions
     }
@@ -83,6 +93,7 @@ impl NamespaceSnapshot {
     }
     pub fn witness(&self) -> NamespaceSnapshotWitness {
         NamespaceSnapshotWitness {
+            directory_repositories: self.directory_repositories.clone(),
             file_deletions: self.file_deletions.clone(),
             branch: self.branch.clone(),
             head: self.head.clone(),
@@ -105,10 +116,11 @@ enum NamespaceWitnessEntries {
     Projected(Weak<Vec<Entry>>),
 }
 /// This witness owns no entries, immutable commit, registry graph or State.
-/// It shares only the deletion table so metadata-only visibility changes also
+/// It shares only the file-deletion and directory-owner tables so visibility changes also
 /// invalidate a detached scan. This is never user authorization.
 #[derive(Clone)]
 pub struct NamespaceSnapshotWitness {
+    directory_repositories: storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
     file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
@@ -171,6 +183,8 @@ impl Engine {
             ),
         };
         Ok(NamespaceSnapshot {
+            repository: self.state.histories[&branch.history_tree_id].repository_id.clone(),
+            directory_repositories: self.state.directory_git_repositories.clone(),
             file_deletions: self.state.file_deletions.clone(),
             branch: branch_id.into(),
             head: branch.head_commit_id.clone(),
@@ -188,6 +202,8 @@ impl Engine {
         };
         if branch.state == BranchState::Migrated
             || branch.head_commit_id != witness.head
+            || !self.state.directory_git_repositories
+                .changes_since(&witness.directory_repositories).is_empty()
             || !self
                 .state
                 .file_deletions

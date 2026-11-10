@@ -10,6 +10,8 @@ fn is_lifecycle(kind: &str) -> bool {
             | "file.delete.undo"
             | crate::business::FILE_HISTORY_MOVE_KIND
             | crate::file_deletion::batch::KIND
+            | crate::file_deletion::directory::DELETE
+            | crate::file_deletion::directory::UNDO
     )
 }
 
@@ -51,7 +53,52 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     }
     let mut active = BTreeMap::new();
     let mut created = BTreeSet::new();
+    let mut directories = BTreeMap::<String, storage_contract::directory_git::DirectoryDeletionNode>::new();
+    let mut created_directories = BTreeSet::new();
     for (_, receipt) in receipts.values() {
+        if crate::file_deletion::directory::is_kind(&receipt.kind) {
+            let group = crate::file_deletion::directory::admit(state, receipt)?;
+            if group.undo {
+                if directories.remove(&group.node.directory_id).as_ref() != Some(&group.node) {
+                    return Err(invalid());
+                }
+                for (file, member) in &group.node.files {
+                    if active.get(file).map(|node: &FileDeletionNode| &node.node_id)
+                        != Some(&member.deletion_node_id)
+                    {
+                        return Err(invalid());
+                    }
+                }
+                for node in group.files {
+                    if directories.values().any(|directory| directory.files.contains_key(&node.file_id))
+                        || active.remove(&node.file_id).as_ref() != Some(&node) {
+                        return Err(invalid());
+                    }
+                }
+            } else {
+                if !created_directories.insert(group.node.node_id.clone())
+                    || directories.contains_key(&group.node.directory_id)
+                {
+                    return Err(invalid());
+                }
+                for node in group.files {
+                    if !created.insert(node.node_id.clone())
+                        || active.insert(node.file_id.clone(), node).is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+                for (file, member) in &group.node.files {
+                    if active.get(file).map(|node: &FileDeletionNode| &node.node_id)
+                        != Some(&member.deletion_node_id)
+                    {
+                        return Err(invalid());
+                    }
+                }
+                directories.insert(group.node.directory_id.clone(), group.node);
+            }
+            continue;
+        }
         if receipt.kind == crate::file_deletion::batch::KIND {
             for node in crate::file_deletion::batch::admit(state, receipt)?.nodes {
                 if !created.insert(node.node_id.clone())
@@ -75,7 +122,9 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
         let undo = receipt.kind == "file.delete.undo";
         let node = admit_receipt(state, receipt, undo)?;
         if undo {
-            if active.remove(&node.file_id).as_ref() != Some(&node) {
+            if directories.values().any(|directory| directory.files.contains_key(&node.file_id))
+                || active.remove(&node.file_id).as_ref() != Some(&node)
+            {
                 return Err(invalid());
             }
         } else if !created.insert(node.node_id.clone())
@@ -84,7 +133,20 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
             return Err(invalid());
         }
     }
-    if active.iter().ne(state.file_deletions.iter()) {
+    let mut retained = BTreeMap::new();
+    for git in state.directory_git_repositories.values() {
+        for (id, node) in &git.deletions {
+            if id != &node.directory_id || node.owner_directory_id != git.directory_id
+                || node.repository_id != git.repository_id
+                || retained.insert(id, node).is_some()
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    if directories.iter().ne(retained.into_iter())
+        || active.iter().ne(state.file_deletions.iter())
+    {
         return Err(invalid());
     }
     Ok(())

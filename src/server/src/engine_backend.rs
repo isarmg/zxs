@@ -20,6 +20,7 @@ mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
 mod error_registry;
+mod directory_deletion;
 mod file_deletion;
 mod file_history_move;
 mod file_manager;
@@ -1445,6 +1446,46 @@ impl Backend for EngineBackend {
         command: crate::DeleteCurrentFile,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.delete_current_file_admitted(identity, command)
+    }
+    fn prepare_current_directory_deletion(
+        &self,
+        identity: &Identity,
+        command: crate::PrepareCurrentDirectoryDeletion,
+    ) -> Result<Option<crate::CurrentDirectoryDeletion>, ApiError> {
+        self.prepare_current_directory_deletion_admitted(identity, command)
+    }
+    fn delete_current_directory(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteCurrentDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.delete_current_directory_admitted(identity, command)
+    }
+    fn directory_deletions(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        owner: &str,
+        request: crate::ReadDirectoryDeletions,
+    ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, ApiError> {
+        self.directory_deletions_admitted(identity, repository, owner, request)
+    }
+    fn current_directory_deletion(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        owner: &str,
+        directory: &str,
+    ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, ApiError> {
+        self.current_directory_deletion_admitted(identity, repository, owner, directory)
+    }
+    fn restore_deleted_directory(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.restore_deleted_directory_admitted(identity, repository, request)
     }
     fn current_file_deletion(
         &self,

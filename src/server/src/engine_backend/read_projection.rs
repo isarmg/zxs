@@ -183,7 +183,7 @@ impl DirectorySnapshot {
             path,
             selection,
         } = request;
-        repo_for_branch(engine, branch)?;
+        let repository = repo_for_branch(engine, branch)?;
         let snapshot = match &selection {
             crate::DirectorySelection::Page {
                 snapshot: Some(snapshot),
@@ -211,6 +211,10 @@ impl DirectorySnapshot {
             if directory.is_none_or(|entry| {
                 entry.kind != storage_contract::NamespaceEntryKind::Directory
                     || entry.entry_id != entry_id
+                    || !storage_contract::directory_git::current_entry_visible(
+                        &engine.state().directory_git_repositories,
+                        &repository.repository_id, entries, entry,
+                    )
             }) {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::SmbRebindRequired,
@@ -226,6 +230,7 @@ impl DirectorySnapshot {
             },
             crate::DirectorySelection::Page { after, .. } => DirectoryPageProjection::page(
                 engine.state(),
+                &repository.repository_id,
                 &snapshot.commit_id,
                 entries,
                 key,
@@ -250,6 +255,7 @@ struct DirectoryPageProjection {
 impl DirectoryPageProjection {
     fn page(
         state: &storage_contract::State,
+        repository: &str,
         commit_id: &str,
         entries: &[storage_contract::Entry],
         key: &str,
@@ -289,6 +295,9 @@ impl DirectoryPageProjection {
                 || rest.contains('/')
                 || (entry.kind == storage_contract::NamespaceEntryKind::File
                     && state.file_deletions.contains_key(&entry.file_id))
+                || !storage_contract::directory_git::current_entry_visible(
+                    &state.directory_git_repositories, repository, entries, entry,
+                )
             {
                 continue;
             }

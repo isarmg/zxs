@@ -129,6 +129,17 @@ pub(super) fn records(state: &State, directory: &str) -> Result<Vec<Record>> {
         Ok(())
     }
     let mut local_git: DirectoryGitRepository = git.clone();
+    for node in local_git.deletions.values_mut() {
+        let scope = if node.owner_directory_id == node.repository_id {
+            ""
+        } else {
+            state.commits[&node.namespace_head].entries.iter().find(|entry| {
+                entry.entry_id == node.owner_directory_id
+                    && entry.kind == NamespaceEntryKind::Directory
+            }).ok_or_else(|| invalid("directory deletion owner is missing from its native namespace"))?.path()
+        };
+        node.path = name_policy::PortablePath::parse(&local(node.path.as_str(), scope)?)?;
+    }
     for branch in local_git.branches.values_mut() {
         let scope = &state.directory_trees[&branch.index_tree_id].path;
         for path in branch.index_boundaries.values_mut() {

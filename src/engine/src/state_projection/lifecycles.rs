@@ -35,15 +35,23 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
             _ => DeletionOwner::Malformed,
         };
     }
-    if receipt.kind == crate::file_deletion::batch::KIND {
+    if receipt.kind == crate::file_deletion::batch::KIND
+        || crate::file_deletion::directory::is_kind(&receipt.kind)
+    {
         let Some(nodes) = receipt
             .result
-            .get("deletion_nodes")
+            .get(if receipt.kind == crate::file_deletion::directory::UNDO {
+                "removed_deletion_nodes"
+            } else {
+                "deletion_nodes"
+            })
             .and_then(json_codec::Value::as_array)
         else {
             return DeletionOwner::Malformed;
         };
-        if nodes.is_empty() || nodes.len() > crate::file_deletion::batch::MAX_FILES {
+        if (nodes.is_empty() && receipt.kind == crate::file_deletion::batch::KIND)
+            || nodes.len() > crate::file_deletion::batch::MAX_FILES
+        {
             return DeletionOwner::Malformed;
         }
         let mut files = std::collections::BTreeSet::new();

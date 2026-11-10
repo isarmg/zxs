@@ -120,6 +120,7 @@ fn populated_state() -> State {
         "repository_id": "repository", "directory_id": "directory",
         "initialized_sequence": "18446744073709551615", "main_branch_id": "directory-main",
         "current_branch_id": "directory-branch",
+        "deletions": {},
         "branches": {"directory-branch": {
             "head_tree_id": null, "index_tree_id": "index-tree", "index_generation": "9007199254740992",
             "index_boundaries": {"child": "child-branch"},

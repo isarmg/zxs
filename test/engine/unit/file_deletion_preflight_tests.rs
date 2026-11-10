@@ -204,6 +204,7 @@ impl Fixture {
         self.state.directory_git_repositories.insert(
             directory.clone(),
             storage_contract::directory_git::DirectoryGitRepository {
+                deletions: std::collections::BTreeMap::new(),
                 repository_id: self.repository_id.as_str().into(),
                 directory_id: directory,
                 initialized_sequence: 1,

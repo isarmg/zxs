@@ -13,6 +13,10 @@ use super::*;
 pub struct NamespaceTree<'a> {
     entries: &'a [Entry],
     deletions: Option<&'a storage_contract::TrackedMap<crate::FileDeletionNode>>,
+    directories: Option<(
+        &'a storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
+        &'a str,
+    )>,
 }
 
 impl<'a> NamespaceTree<'a> {
@@ -24,12 +28,18 @@ impl<'a> NamespaceTree<'a> {
         Self {
             entries,
             deletions: None,
+            directories: None,
         }
     }
 
     /// Borrow the canonical order, without allocating or copying entries.
     pub fn entries(self) -> &'a [Entry] {
         self.entries
+    }
+
+    /// Read one current visible row without losing its retained namespace index.
+    pub fn visible_entry(self, index: usize) -> Option<&'a Entry> {
+        self.entries.get(index).filter(|entry| self.visible(entry))
     }
 
     /// Enumerate the current visible namespace without copying retained rows.
@@ -39,10 +49,13 @@ impl<'a> NamespaceTree<'a> {
     }
 
     fn visible(self, entry: &Entry) -> bool {
-        entry.kind != NamespaceEntryKind::File
-            || self
-                .deletions
-                .is_none_or(|deletions| !deletions.contains_key(&entry.file_id))
+        (entry.kind != NamespaceEntryKind::File
+            || self.deletions.is_none_or(|deletions| !deletions.contains_key(&entry.file_id)))
+            && self.directories.is_none_or(|(directories, repository)| {
+                crate::file_deletion::directory::visibility::visible(
+                    directories, repository, self.entries, entry,
+                )
+            })
     }
 
     /// Resolve an equivalent spelling, including case-folded and NFD queries.
@@ -72,6 +85,7 @@ impl crate::NamespaceSnapshot {
         NamespaceTree {
             entries: self.entries(),
             deletions: Some(self.file_deletions()),
+            directories: Some((self.directory_repositories(), self.repository_id())),
         }
     }
 }
@@ -88,6 +102,10 @@ impl Engine {
         self.list_tree_ref(branch_id).map(|entries| NamespaceTree {
             entries,
             deletions: Some(&self.state().file_deletions),
+            directories: Some((
+                &self.state().directory_git_repositories,
+                &self.state().histories[&self.state().branches[branch_id].history_tree_id].repository_id,
+            )),
         })
     }
 
@@ -125,6 +143,10 @@ impl MetadataView {
         Ok(NamespaceTree {
             entries,
             deletions: Some(&state.file_deletions),
+            directories: Some((
+                &state.directory_git_repositories,
+                &state.histories[&branch.history_tree_id].repository_id,
+            )),
         })
     }
 }

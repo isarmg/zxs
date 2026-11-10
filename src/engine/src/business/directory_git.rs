@@ -526,6 +526,7 @@ pub(crate) fn apply_command(
                     main_branch_id: branch.clone(),
                     current_branch_id: branch.clone(),
                     branches: BTreeMap::from([(branch.clone(), index)]),
+                    deletions: BTreeMap::new(),
                 },
             );
             // The old staged parent subtree may no longer cross this ownership

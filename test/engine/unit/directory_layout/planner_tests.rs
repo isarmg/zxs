@@ -155,6 +155,7 @@ fn branch(
         state.directory_git_repositories.insert(
             owner.into(),
             DirectoryGitRepository {
+                deletions: std::collections::BTreeMap::new(),
                 repository_id: root(),
                 directory_id: owner.into(),
                 initialized_sequence: 1,

@@ -1243,14 +1243,25 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        if request.kind == DirectoryBatchKind::Delete
-            && self
-                .state()
-                .operations
-                .get(&operation)
-                .is_none_or(|receipt| receipt.kind == crate::file_deletion::batch::KIND)
-        {
-            return self.soft_delete_directory_files(repository, request, principal, operation);
+        if request.kind == DirectoryBatchKind::Delete {
+            match self.state().operations.get(&operation).map(|receipt| receipt.kind.as_str()) {
+                Some(crate::file_deletion::directory::DELETE) => {
+                    return self.soft_delete_directory(repository, request, principal, operation);
+                }
+                Some(crate::file_deletion::batch::KIND) => {
+                    return self.soft_delete_directory_files(repository, request, principal, operation);
+                }
+                None => {
+                    return if crate::file_deletion::directory::requested(
+                        self.state(), self.admitted_current_namespaces()?, request,
+                    )? {
+                        self.soft_delete_directory(repository, request, principal, operation)
+                    } else {
+                        self.soft_delete_directory_files(repository, request, principal, operation)
+                    };
+                }
+                Some(_) => {}
+            }
         }
         // An already retained legacy operation keeps its own exact receipt.
         // New deletes never reach the destructive composition editor below.

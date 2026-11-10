@@ -409,7 +409,14 @@ impl Remap<'_> {
             current_branch_id,
             branches,
             initialized_sequence: _,
+            deletions,
         } = value;
+        if !deletions.is_empty() {
+            return Err(Error::new(
+                ErrorCode::UnsupportedOperation,
+                "foreign directory lifecycle has not been remapped; retain the original graph",
+            ));
+        }
         self.replace(Domain::Repository, repository_id)?;
         *directory_id = self.directory(directory_id)?;
         self.replace(Domain::DirectoryBranch, main_branch_id)?;

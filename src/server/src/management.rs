@@ -1460,6 +1460,48 @@ impl Backend for ManagementBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.backend()?.delete_current_file(identity, command)
     }
+    fn prepare_current_directory_deletion(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::PrepareCurrentDirectoryDeletion,
+    ) -> Result<Option<crate::CurrentDirectoryDeletion>, crate::ApiError> {
+        self.inner.backend()?.prepare_current_directory_deletion(identity, command)
+    }
+    fn delete_current_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        command: crate::DeleteCurrentDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.delete_current_directory(identity, command)
+    }
+    fn directory_deletions(
+        &self,
+        identity: &crate::auth::Identity,
+        repository: &str,
+        owner: &str,
+        request: crate::ReadDirectoryDeletions,
+    ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, crate::ApiError> {
+        self.inner.backend()?.directory_deletions(identity, repository, owner, request)
+    }
+    fn current_directory_deletion(
+        &self,
+        identity: &crate::auth::Identity,
+        repository: &str,
+        owner: &str,
+        directory: &str,
+    ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, crate::ApiError> {
+        self.inner.backend()?.current_directory_deletion(
+            identity, repository, owner, directory,
+        )
+    }
+    fn restore_deleted_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        repository: &str,
+        request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.backend()?.restore_deleted_directory(identity, repository, request)
+    }
     fn current_file_deletion(
         &self,
         identity: &crate::auth::Identity,

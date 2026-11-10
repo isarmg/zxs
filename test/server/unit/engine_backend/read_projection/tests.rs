@@ -681,7 +681,9 @@ fn directory_mtime_uses_the_page_version_even_when_another_version_has_the_same_
     state.versions.get_mut(&new.version_id).unwrap().created_at = "2001-01-01T00:00:00Z".into();
     for (entry, seconds) in [(old, 946_684_800), (new, 978_307_200)] {
         let version = entry.version_id.clone();
-        let page = DirectoryPageProjection::page(&state, "frozen", &[entry], "", None).unwrap();
+        let page = DirectoryPageProjection::page(
+            &state, state.repositories.keys().next().unwrap(), "frozen", &[entry], "", None,
+        ).unwrap();
         assert_eq!(page.entries[0].entry.version_id, version);
         assert_eq!(
             page.entries[0].mtime,
@@ -716,6 +718,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     loop {
         let page = DirectoryPageProjection::page(
             &state,
+            state.repositories.keys().next().unwrap(),
             "commit_00000000000000000000000000000000",
             &entries,
             "",
@@ -761,8 +764,10 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     for entry in &entries {
         name_policy::validate_path(&entry.path).unwrap();
     }
+    let state = directory_page_state(&entries);
     let page = DirectoryPageProjection::page(
-        &directory_page_state(&entries),
+        &state,
+        state.repositories.keys().next().unwrap(),
         "commit_00000000000000000000000000000000",
         &entries,
         &parent,

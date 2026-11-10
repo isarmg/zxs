@@ -136,6 +136,7 @@ impl Engine {
                         )
                     })?
                     .clone();
+                directory::require_individual_undo(engine.state(), file_id.as_str())?;
                 let repository = engine.repository_for_history(&deletion.history_tree_id)?;
                 require_writable(engine, repository)?;
                 if let Some(evidence) = occurrence::original(engine.state(), &deletion)? {

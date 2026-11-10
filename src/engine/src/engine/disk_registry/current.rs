@@ -227,6 +227,7 @@ impl CurrentNamespaces {
             || kind == "directory.import.stop"
             || kind == "file.delete"
             || kind == crate::file_deletion::batch::KIND
+            || crate::file_deletion::directory::is_kind(kind)
             || kind == "file.delete.undo"
             || kind == "file.namespace"
             || recursive_follow::is_kind(kind)
@@ -523,6 +524,9 @@ impl CurrentNamespaces {
         }
         if let Some(view) = self.advance_file_restore(previous, next)? {
             return Ok(view);
+        }
+        if crate::file_deletion::directory::verify_publication(previous, next, Some(self))? {
+            return Ok(self.clone());
         }
         if let Some(view) = self.advance_history_copy(previous, next)? {
             return Ok(view);

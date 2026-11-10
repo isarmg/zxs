@@ -19,6 +19,9 @@ pub(crate) fn verify(
     next: &State,
     current: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<()> {
+    if super::directory::verify_publication(previous, next, current)? {
+        return Ok(());
+    }
     if super::occurrence::verify_publication(previous, next, current)?.is_some() {
         return Ok(());
     }
@@ -112,6 +115,9 @@ pub(crate) fn verify(
         }
     {
         return Err(invalid());
+    }
+    if undo {
+        super::directory::require_individual_undo(previous, &node.file_id)?;
     }
     verify_receipt(previous, next, node, receipt, undo)?;
     if !undo {

@@ -82,6 +82,7 @@ impl HistoryManifest {
                     "directory repository identity or initialization differs",
                 ));
             }
+            self.validate_directory_deletions(git, &namespace.entries)?;
             // Saves compose through directory_selections, while Git status and
             // commit use current_branch_id. Live repositories must agree on the
             // owner; retained deleted directories need no live selection.
@@ -120,6 +121,86 @@ impl HistoryManifest {
             self.validate_git_commit(tree)?;
         }
         self.validate_git_tree_cycles()
+    }
+
+
+    fn validate_directory_deletions(
+        &self,
+        git: &DirectoryGitRepository,
+        current: &[Entry],
+    ) -> Result<()> {
+        let within = |path: &str, root: &str| {
+            path == root || path.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+        };
+        for (id, node) in &git.deletions {
+            crate::file_deletion::directory::admit_node_shape(node)?;
+            if id != &node.directory_id
+                || node.repository_id != git.repository_id
+                || node.history_tree_id != self.history.history_tree_id
+                || node.owner_directory_id != git.directory_id
+                || node.directory_id == git.directory_id
+                || node.sequence <= git.initialized_sequence
+                || !git.branches.contains_key(&node.directory_branch_id)
+            {
+                return Err(invalid("directory deletion owner or native identity differs"));
+            }
+            let original = self.commits.get(&node.namespace_head)
+                .ok_or_else(|| invalid("directory deletion has no retained namespace"))?;
+            let source = self.git_scoped_tree(
+                &git.directory_id, &node.directory_branch_id, &node.source_tree_id,
+            )?;
+            let root = original.entries.iter().find(|entry| {
+                entry.entry_id == node.directory_id && entry.path == node.path
+                    && entry.kind == NamespaceEntryKind::Directory
+            }).ok_or_else(|| invalid("deleted directory is absent from its original namespace"))?;
+            if original.sequence >= node.sequence || source.sequence >= node.sequence {
+                return Err(invalid("directory deletion source is not an earlier retained tree"));
+            }
+            let before = original.entries.iter()
+                .filter(|entry| within(entry.lookup_key(), root.lookup_key())).collect::<Vec<_>>();
+            let after = current.iter()
+                .filter(|entry| within(entry.lookup_key(), root.lookup_key())).collect::<Vec<_>>();
+            let source_rows = crate::file_deletion::directory::retained_entries(node, original, source)?;
+            if before != after || before != source_rows.iter().collect::<Vec<_>>() {
+                return Err(invalid("deleted directory raw contents or ownership changed"));
+            }
+            let mut key = root.lookup_key();
+            while let Some((parent, _)) = key.rsplit_once('/') {
+                let before = original.entries.iter().find(|entry| entry.lookup_key() == parent);
+                let after = current.iter().find(|entry| entry.lookup_key() == parent);
+                if before != after {
+                    return Err(invalid("deleted directory's original parent identity changed"));
+                }
+                key = parent;
+            }
+            let mut files = BTreeSet::new();
+            for entry in before {
+                if entry.kind == NamespaceEntryKind::Directory {
+                    if self.directory_git_repositories.contains_key(&entry.entry_id) {
+                        return Err(invalid("directory deletion crosses an initialized child repository"));
+                    }
+                } else {
+                    files.insert(entry.file_id.as_str());
+                }
+            }
+            if files.into_iter().ne(node.files.keys().map(String::as_str)) {
+                return Err(invalid("directory deletion member set differs"));
+            }
+            for (file, member) in &node.files {
+                let deletion = self.file_deletions.get(file)
+                    .ok_or_else(|| invalid("directory deletion member lacks its current file D"))?;
+                if deletion.node_id != member.deletion_node_id
+                    || (member.created_by_directory
+                        && (deletion.operation_id != node.operation_id
+                            || deletion.sequence != node.sequence
+                            || deletion.author != node.author))
+                    || (!member.created_by_directory && deletion.sequence >= node.sequence)
+                {
+                    return Err(invalid("directory deletion member's original lifecycle differs"));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn directory_git_paths(&self) -> BTreeMap<&str, BTreeSet<&str>> {

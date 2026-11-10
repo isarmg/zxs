@@ -91,6 +91,7 @@ fn directory_git_index_boundaries_children_and_generations_remap_without_flatten
     let old = |prefix: &str| format!("{prefix}_{:032x}", 1);
     let new = |prefix: &str| format!("{prefix}_{:032x}", 2);
     let mut value = DirectoryGitRepository {
+        deletions: std::collections::BTreeMap::new(),
         repository_id: old("repo"),
         directory_id: old("entry"),
         initialized_sequence: 10,

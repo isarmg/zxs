@@ -267,6 +267,49 @@ impl Client {
         )
         .await
     }
+    /// Read the exact active directory marker before an explicit restore.
+    pub async fn directory_deletions(
+        &self,
+        repository: &str,
+        owner: &str,
+        continuation: Option<(&str, &str)>,
+    ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, Error> {
+        let mut path = format!("/api/repositories/{}/directory-deletions/{}",
+            segment(repository), segment(owner));
+        if let Some((after, snapshot)) = continuation {
+            path.push_str(&format!("?after={}&snapshot={}", segment(after), segment(snapshot)));
+        }
+        Ok(json_codec::from_value(self.request("GET", &path, None).await?)?)
+    }
+
+    pub async fn directory_deletion(
+        &self,
+        repository: &str,
+        owner: &str,
+        directory: &str,
+    ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, Error> {
+        Ok(json_codec::from_value(self.request(
+            "GET",
+            &format!("/api/repositories/{}/directory-deletions/{}/{}",
+                segment(repository), segment(owner), segment(directory)),
+            None,
+        ).await?)?)
+    }
+
+    /// Restore one exact directory D as one operation. Preserve this full body
+    /// and operation ID after an unknown response; do not issue per-file undos.
+    pub async fn undo_directory_deletion(
+        &self,
+        repository: &str,
+        request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/api/repositories/{}/directory-deletions/undo", segment(repository)),
+            Some(&json_codec::to_value(request)?),
+        ).await
+    }
+
     /// Rename a public file branch label without changing content or selection.
     pub async fn rename_file_branch(
         &self,

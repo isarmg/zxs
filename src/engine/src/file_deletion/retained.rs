@@ -61,13 +61,16 @@ fn invalid() -> Error {
 fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let receipt = &state.operations[&id];
     let (action, key) = match receipt.kind.as_str() {
-        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND | super::batch::KIND => {
+        "file.delete" | crate::business::FILE_HISTORY_MOVE_KIND | super::batch::KIND
+        | super::directory::DELETE => {
             (DeletionAction::Delete, "deletion_node")
         }
-        "file.delete.undo" => (DeletionAction::Undo, "removed_deletion_node"),
+        "file.delete.undo" | super::directory::UNDO => (DeletionAction::Undo, "removed_deletion_node"),
         _ => return Err(invalid()),
     };
-    let source: crate::FileDeletionNode = if receipt.kind == super::batch::KIND {
+    let source: crate::FileDeletionNode = if super::directory::is_kind(&receipt.kind) {
+        super::directory::node_for(state, receipt, file)?
+    } else if receipt.kind == super::batch::KIND {
         super::batch::node_for(receipt, file)?
     } else if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::retained_file_history_move_deletion(receipt, file)?

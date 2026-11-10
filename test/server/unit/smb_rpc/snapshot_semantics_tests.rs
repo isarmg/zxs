@@ -442,6 +442,20 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<(), crate::ApiError> {
         self.inner.authorize_listing_snapshot(identity, snapshot)
     }
+    fn prepare_current_directory_deletion(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PrepareCurrentDirectoryDeletion,
+    ) -> Result<Option<crate::CurrentDirectoryDeletion>, crate::ApiError> {
+        self.inner.prepare_current_directory_deletion(identity, request)
+    }
+    fn delete_current_directory(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::DeleteCurrentDirectory,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.delete_current_directory(identity, request)
+    }
     fn delete_current_file(
         &self,
         identity: &crate::auth::Identity,

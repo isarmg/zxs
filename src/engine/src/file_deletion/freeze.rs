@@ -167,6 +167,7 @@ fn verify_notes(previous: &State, next: &State) -> Result<()> {
 }
 
 pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
+    super::directory::verify_frozen(previous, next)?;
     if previous.file_deletions.is_empty() {
         return Ok(());
     }

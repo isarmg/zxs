@@ -279,9 +279,12 @@ impl PrimaryListing {
                     preview.branch().entries.as_slice()
                 });
             for (index, entry) in entries.iter().enumerate() {
-                if entry.kind == storage_contract::NamespaceEntryKind::File
-                    && state.file_deletions.contains_key(&entry.file_id)
-                {
+                let visible = match &directory.preview {
+                    None => directory.namespace.tree().visible_entry(index).is_some(),
+                    Some(_) => entry.kind != storage_contract::NamespaceEntryKind::File
+                        || !state.file_deletions.contains_key(&entry.file_id),
+                };
+                if !visible {
                     continue;
                 }
                 let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {

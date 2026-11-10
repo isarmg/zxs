@@ -123,7 +123,7 @@ pub(crate) async fn undo(
     .await
 }
 
-async fn mutate(
+pub(crate) async fn mutate(
     state: AppState,
     work: impl FnOnce(&dyn crate::Backend) -> Result<storage_contract::OperationResult, ApiError>
     + Send

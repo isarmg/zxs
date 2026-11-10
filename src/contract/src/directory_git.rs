@@ -3,6 +3,9 @@
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod visibility;
+pub use visibility::current_entry_visible;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryGitChildReference {
@@ -36,6 +39,65 @@ pub struct DirectoryGitRepository {
     pub main_branch_id: String,
     pub current_branch_id: String,
     pub branches: BTreeMap<String, DirectoryGitBranch>,
+    /// Active reversible directory containers owned by this repository.
+    pub deletions: BTreeMap<String, DirectoryDeletionNode>,
+}
+
+/// A file already deleted before the directory remains deleted after restoring
+/// the directory. Only members created by this exact directory operation undo.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryDeletionMember {
+    pub deletion_node_id: String,
+    pub created_by_directory: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryDeletionNode {
+    pub node_id: String,
+    pub repository_id: String,
+    pub history_tree_id: String,
+    pub owner_directory_id: String,
+    pub directory_id: String,
+    pub path: name_policy::PortablePath,
+    pub namespace_head: String,
+    pub directory_branch_id: String,
+    pub source_tree_id: String,
+    pub operation_id: crate::OperationId,
+    pub author: String,
+    #[serialization(with = "crate::u64_string")]
+    pub sequence: u64,
+    #[serialization(with = "crate::u64_string")]
+    pub created_at: u64,
+    pub files: BTreeMap<String, DirectoryDeletionMember>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryDeletionSummary {
+    pub directory_id: String,
+    pub deletion_node_id: String,
+    pub path: name_policy::PortablePath,
+    pub operation_id: crate::OperationId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryDeletionsPage {
+    pub snapshot: String,
+    pub entries: Vec<DirectoryDeletionSummary>,
+    #[serialization(deserialize_with = "required_nullable")]
+    pub next_after: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct UndoDirectoryDeletionBody {
+    pub owner_directory_id: String,
+    pub directory_id: String,
+    pub deletion_node_id: String,
+    pub operation_id: crate::OperationId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

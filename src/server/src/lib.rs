@@ -54,7 +54,13 @@ mod backend_file_history_move;
 pub use backend_file_history_move::{
     MoveCurrentFile, MoveCurrentFileToEmptyDisk, MoveTargetName, ReplaceCurrentFile,
 };
+mod backend_directory_deletion;
+pub use backend_directory_deletion::{
+    CurrentDirectoryDeletion, DeleteCurrentDirectory, PrepareCurrentDirectoryDeletion,
+    ReadDirectoryDeletions,
+};
 mod backend_file_deletion;
+mod http_directory_deletion;
 mod http_file_deletion;
 pub use backend_file_deletion::{
     DeleteCurrentFile, DeleteFile, FileDeletionSummary, FileDeletionsPage, ReadFileDeletions,
@@ -846,6 +852,46 @@ pub trait Backend: Send + Sync {
         &self,
         _identity: &Identity,
         _command: crate::DeleteCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn prepare_current_directory_deletion(
+        &self,
+        _identity: &Identity,
+        _command: crate::PrepareCurrentDirectoryDeletion,
+    ) -> Result<Option<crate::CurrentDirectoryDeletion>, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn delete_current_directory(
+        &self,
+        _identity: &Identity,
+        _command: crate::DeleteCurrentDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn directory_deletions(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _owner: &str,
+        _request: crate::ReadDirectoryDeletions,
+    ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn current_directory_deletion(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _owner: &str,
+        _directory: &str,
+    ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn restore_deleted_directory(
+        &self,
+        _identity: &Identity,
+        _repository: &str,
+        _request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -1717,6 +1763,48 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .delete_current_file(&self.current(identity)?, command)
+    }
+    fn prepare_current_directory_deletion(
+        &self,
+        identity: &Identity,
+        command: crate::PrepareCurrentDirectoryDeletion,
+    ) -> Result<Option<crate::CurrentDirectoryDeletion>, ApiError> {
+        self.backend.prepare_current_directory_deletion(&self.current(identity)?, command)
+    }
+    fn delete_current_directory(
+        &self,
+        identity: &Identity,
+        command: crate::DeleteCurrentDirectory,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.delete_current_directory(&self.current(identity)?, command)
+    }
+    fn directory_deletions(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        owner: &str,
+        request: crate::ReadDirectoryDeletions,
+    ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, ApiError> {
+        self.backend.directory_deletions(&self.current(identity)?, repository, owner, request)
+    }
+    fn current_directory_deletion(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        owner: &str,
+        directory: &str,
+    ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, ApiError> {
+        self.backend.current_directory_deletion(
+            &self.current(identity)?, repository, owner, directory,
+        )
+    }
+    fn restore_deleted_directory(
+        &self,
+        identity: &Identity,
+        repository: &str,
+        request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.restore_deleted_directory(&self.current(identity)?, repository, request)
     }
     fn current_file_deletion(
         &self,
@@ -2695,6 +2783,18 @@ fn router_shared(
         .route(
             "/api/files/{file}/deletion/undo",
             post(http_file_deletion::undo),
+        )
+        .route(
+            "/api/repositories/{repository}/directory-deletions/{owner}",
+            get(http_directory_deletion::list),
+        )
+        .route(
+            "/api/repositories/{repository}/directory-deletions/{owner}/{directory}",
+            get(http_directory_deletion::read),
+        )
+        .route(
+            "/api/repositories/{repository}/directory-deletions/undo",
+            post(http_directory_deletion::undo),
         )
         .route(
             "/api/files/{file}/history",

@@ -4,6 +4,7 @@ use storage_contract::history_window::{
     HistoryFileId, HistoryRepositoryId, HistoryWindowCancellation,
 };
 
+pub(crate) mod directory;
 pub(crate) mod freeze;
 pub(crate) mod lifecycle;
 pub(crate) mod occurrence;
