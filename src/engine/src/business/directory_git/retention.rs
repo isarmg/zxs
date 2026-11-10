@@ -1,4 +1,5 @@
 //! Body retention for explicit Git HEADs, staged owned files and pinned children.
+use super::ChildBoundaries;
 use crate::{DirectoryTree, Entry, NamespaceEntryKind, State};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,26 +10,9 @@ pub(crate) fn staged_owned_files<'a>(
     tree: &'a DirectoryTree,
     boundaries: &BTreeMap<String, String>,
 ) -> impl Iterator<Item = &'a Entry> {
-    let blocked = tree
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory && boundaries.contains_key(&entry.entry_id)
-        })
-        .map(Entry::lookup_key)
-        .collect::<BTreeSet<_>>();
+    let children = ChildBoundaries::new(&tree.entries, |id| boundaries.contains_key(id));
     tree.entries.iter().filter(move |entry| {
-        if entry.kind != NamespaceEntryKind::File {
-            return false;
-        }
-        let mut key = entry.lookup_key();
-        while let Some((parent, _)) = key.rsplit_once('/') {
-            if blocked.contains(parent) {
-                return false;
-            }
-            key = parent;
-        }
-        true
+        entry.kind == NamespaceEntryKind::File && !children.contains(entry.lookup_key())
     })
 }
 

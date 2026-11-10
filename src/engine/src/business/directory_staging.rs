@@ -244,7 +244,7 @@ pub(crate) fn apply_commit(
         &working.path,
         entries,
     );
-    if !directory_git::reviewed_working_tree(state, &input.expected_tree_id, working, &direct)?
+    if !directory_git::reviewed_working_tree(state, &input.expected_tree_id, working, &direct)
         || index.index_generation != input.expected_index_generation
     {
         return Err(directory_git::conflict(

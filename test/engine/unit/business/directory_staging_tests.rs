@@ -428,6 +428,7 @@ fn parent_branch_checkout_preserves_dirty_independent_child_and_its_head() {
     stage_child(&mut engine, &repo, "", "child");
     commit(&mut engine, &repo, "");
     let main = status(&engine, &repo, "").directory_branch_id.unwrap();
+    let main_context = engine.file_context(&repo.repository_id, "own").unwrap();
     let child_branch = status(&engine, &repo, "child").directory_branch_id.unwrap();
     let topic = engine
         .create_directory_branches(
@@ -465,6 +466,10 @@ fn parent_branch_checkout_preserves_dirty_independent_child_and_its_head() {
         )
         .unwrap();
     assert_eq!(bytes(&engine, &repo, "own"), b"main");
+    assert_eq!(
+        engine.file_context(&repo.repository_id, "own"),
+        Some(main_context.clone())
+    );
     assert_eq!(bytes(&engine, &repo, "child/file"), b"dirty child");
     let child = status(&engine, &repo, "child");
     assert_eq!(child.head_tree_id.as_deref(), Some(child_head.as_str()));
@@ -480,6 +485,10 @@ fn parent_branch_checkout_preserves_dirty_independent_child_and_its_head() {
     assert!(!status(&engine, &repo, "").staged);
     drop(engine);
     let engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine.file_context(&repo.repository_id, "own"),
+        Some(main_context)
+    );
     assert_eq!(bytes(&engine, &repo, "child/file"), b"dirty child");
     assert!(!status(&engine, &repo, "").staged);
 }
@@ -886,7 +895,7 @@ fn explicit_snapshot_read_uses_pinned_bytes_not_the_live_working_composition() {
 
 #[test]
 fn reviewed_parent_commit_commutes_with_child_only_working_updates() {
-    let (_temp, mut engine, repo) = fixture();
+    let (temp, mut engine, repo) = fixture();
     save(&mut engine, &repo, "child/file", b"one");
     initialize(&mut engine, &repo, "child");
     let child = commit(&mut engine, &repo, "child");
@@ -901,16 +910,22 @@ fn reviewed_parent_commit_commutes_with_child_only_working_updates() {
         status(&engine, &repo, "").working_tree_id,
         reviewed.working_tree_id
     );
-    let result = commit_reviewed(
-        &mut engine,
-        &repo,
-        &reviewed,
-        OperationId::generate().unwrap(),
-    )
-    .unwrap();
+    let operation = OperationId::generate().unwrap();
+    let result = commit_reviewed(&mut engine, &repo, &reviewed, operation).unwrap();
     let tree = &engine.state.directory_trees[result.result["head_tree_id"].as_str().unwrap()];
     let id = status(&engine, &repo, "child").directory_id;
     assert_eq!(tree.directory_refs[&id].tree_id, child);
+    assert_eq!(bytes(&engine, &repo, "child/file"), b"concurrent child");
+    assert_eq!(
+        commit_reviewed(&mut engine, &repo, &reviewed, operation).unwrap(),
+        result
+    );
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        commit_reviewed(&mut engine, &repo, &reviewed, operation).unwrap(),
+        result
+    );
     assert_eq!(bytes(&engine, &repo, "child/file"), b"concurrent child");
 }
 

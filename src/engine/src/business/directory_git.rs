@@ -4,10 +4,12 @@ use super::directory_staging::Ids;
 use super::*;
 mod branches;
 pub(crate) mod export;
+mod ownership;
 mod rename;
 mod retention;
 mod status;
 use json_codec::{Value, json};
+use ownership::{ChildBoundaries, OwnedEntry};
 pub(crate) use rename::{RenameOwnership, committed_files};
 pub(crate) use retention::{protected_git_versions, staged_owned_files};
 pub use status::DirectoryGitStatusRead;
@@ -217,53 +219,26 @@ pub(super) fn active_git<'a>(
     ))
 }
 
-#[derive(PartialEq)]
-struct OwnedEntry {
-    entry: Entry,
-    node: Option<String>,
-    branch: Option<String>,
-}
-fn owned(
-    tree: &DirectoryTree,
+fn owned<'a>(
+    tree: &'a DirectoryTree,
     boundaries: &BTreeSet<&str>,
-) -> Result<BTreeMap<String, OwnedEntry>> {
-    let blocked = tree
-        .entries
+) -> BTreeMap<&'a str, OwnedEntry<'a>> {
+    let children = ChildBoundaries::new(&tree.entries, |id| boundaries.contains(id));
+    let depth = if tree.path.is_empty() {
+        0
+    } else {
+        tree.path.split('/').count()
+    };
+    tree.entries
         .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && boundaries.contains(entry.entry_id.as_str())
+        .filter(|entry| !children.contains(entry.lookup_key()))
+        .map(|entry| {
+            (
+                ownership::relative(entry.lookup_key(), depth),
+                OwnedEntry::new(entry, depth, tree.file_contexts.get(entry.lookup_key())),
+            )
         })
-        .map(|entry| entry.lookup_key())
-        .collect::<Vec<_>>();
-    let mut result = BTreeMap::new();
-    for entry in &tree.entries {
-        if blocked.iter().any(|path| {
-            entry.lookup_key() == *path || namespace::is_descendant(entry.lookup_key(), path)
-        }) {
-            continue;
-        }
-        let node = tree
-            .file_contexts
-            .get(entry.lookup_key())
-            .and_then(|context| context.node_id.clone());
-        let branch = tree
-            .file_contexts
-            .get(entry.lookup_key())
-            .map(|context| context.branch_id.clone());
-        let mut entry = entry.clone();
-        let relative = directory::rebase_path(entry.path(), &tree.path, "")?;
-        entry.relocate(name_policy::PortablePath::parse(&relative)?);
-        result.insert(
-            entry.lookup_key().to_owned(),
-            OwnedEntry {
-                entry,
-                node,
-                branch,
-            },
-        );
-    }
-    Ok(result)
+        .collect()
 }
 /// A child-only working update is not a change to the parent's reviewed index.
 /// Accept an older token only through proven ancestry and exact owned contents.
@@ -272,25 +247,27 @@ pub(super) fn reviewed_working_tree(
     expected: &str,
     current: &DirectoryTree,
     direct: &BTreeMap<String, String>,
-) -> Result<bool> {
+) -> bool {
     if expected == current.tree_id {
-        return Ok(true);
+        return true;
     }
     let Some(reviewed) = state.directory_trees.get(expected) else {
-        return Ok(false);
+        return false;
     };
     if reviewed.path != current.path {
-        return Ok(false);
+        return false;
     }
     let mut ancestor = current.parent_tree_id.as_deref();
     while let Some(id) = ancestor {
         if id == expected {
             let ids = direct.keys().map(String::as_str).collect();
-            return Ok(owned(reviewed, &ids)? == owned(current, &ids)?);
+            // Admission proves strict descendants and unique normalized paths.
+            // Compare relative borrowed fields without copying or reparsing them.
+            return owned(reviewed, &ids) == owned(current, &ids);
         }
         ancestor = state.directory_trees[id].parent_tree_id.as_deref();
     }
-    Ok(false)
+    false
 }
 
 fn head_child<'a>(
@@ -803,3 +780,7 @@ pub(crate) fn apply_command(
         .apply(state, view, &mut ids)
         .map(|outcome| outcome.receipt(input))
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/directory_git_ownership_tests.rs"]
+mod ownership_tests;

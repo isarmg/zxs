@@ -117,15 +117,6 @@ fn require_reviewed_source(
     Ok(())
 }
 
-fn within(entry: &Entry, path: &str) -> bool {
-    path.is_empty() || namespace::is_descendant(entry.lookup_key(), &name_policy::path_key(path))
-}
-fn child_entry(entry: &Entry, direct: &BTreeMap<String, String>) -> bool {
-    direct
-        .values()
-        .any(|path| entry.lookup_key() == name_policy::path_key(path) || within(entry, path))
-}
-
 fn require_source(state: &State, source: &DirectoryBranch) -> Result<()> {
     let missing = |message| Error::new(ErrorCode::StateInvalid, message);
     state
@@ -146,17 +137,9 @@ fn require_source(state: &State, source: &DirectoryBranch) -> Result<()> {
             .get(&reference.tree_id)
             .ok_or_else(|| missing("snapshot directory tree missing"))?;
     }
-    let independent = source
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && state
-                    .directory_git_repositories
-                    .contains_key(&entry.entry_id)
-        })
-        .map(|entry| (entry.entry_id.clone(), entry.path().to_owned()))
-        .collect::<BTreeMap<_, _>>();
+    let independent = ChildBoundaries::new(&source.entries, |id| {
+        state.directory_git_repositories.contains_key(id)
+    });
     for entry in &source.entries {
         if entry.kind != NamespaceEntryKind::File {
             continue;
@@ -171,7 +154,7 @@ fn require_source(state: &State, source: &DirectoryBranch) -> Result<()> {
             .ok_or_else(|| missing("snapshot file path context missing"))?;
         // Child contents are retained historical proof, never reactivated by
         // this parent. Their branch may have been archived independently.
-        let owned = !child_entry(entry, &independent);
+        let owned = !independent.contains(entry.lookup_key());
         for branch in [owner, &context.branch_id] {
             if !state.branches.get(branch).is_some_and(|branch| {
                 branch.file_id.as_deref() == Some(entry.file_id.as_str())
@@ -185,6 +168,11 @@ fn require_source(state: &State, source: &DirectoryBranch) -> Result<()> {
         }
     }
     Ok(())
+}
+
+struct RestoredContext<'a> {
+    file_id: &'a str,
+    context: FileContext,
 }
 
 pub(super) fn checkout(
@@ -254,6 +242,7 @@ pub(super) fn checkout(
     let path = path_for(&entries, repository, &selected.directory_id)
         .ok_or_else(|| Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists"))?
         .to_owned();
+    let key = name_policy::path_key(&path);
     let status = status_for(state, view, repository, &path)?;
     let repo = state.repositories[repository].clone();
     let main = state.branches[&repo.main_branch_id].clone();
@@ -277,6 +266,7 @@ pub(super) fn checkout(
         ));
     }
     let direct = boundaries(state, repository, &selected.directory_id, &path, &entries);
+    let children = ChildBoundaries::new(&entries, |id| direct.contains_key(id));
     let source = match view {
         Some(view) => {
             view.require_directory_branch_write(state, selected_id)?;
@@ -303,25 +293,16 @@ pub(super) fn checkout(
         .iter()
         .filter(|entry| {
             entry.kind == NamespaceEntryKind::Directory
-                && within(entry, &path)
-                && direct.values().any(|child| {
-                    namespace::is_descendant(&name_policy::path_key(child), entry.lookup_key())
-                })
+                && descendant(entry.lookup_key(), &key)
+                && children.has_descendant(entry.lookup_key())
         })
         .map(|entry| (entry.lookup_key(), entry))
         .collect::<BTreeMap<_, _>>();
-    let historical_boundaries = source
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory && direct.contains_key(&entry.entry_id)
-        })
-        .map(|entry| (entry.entry_id.clone(), entry.path().to_owned()))
-        .collect::<BTreeMap<_, _>>();
+    let historical_children = ChildBoundaries::new(&source.entries, |id| direct.contains_key(id));
     let mut restored = Vec::new();
     let mut contexts = BTreeMap::new();
     for entry in &source.entries {
-        if child_entry(entry, &historical_boundaries) {
+        if historical_children.contains(entry.lookup_key()) {
             continue;
         }
         if entry.kind == NamespaceEntryKind::Directory
@@ -339,7 +320,7 @@ pub(super) fn checkout(
             &source.path,
             &path,
         )?)?);
-        if child_entry(&target, &direct) {
+        if children.contains(target.lookup_key()) {
             continue;
         }
         if let Some(ancestor) = ancestors.get(target.lookup_key()) {
@@ -361,7 +342,10 @@ pub(super) fn checkout(
             }
             contexts.insert(
                 directory::context_key_from_key(repository, target.lookup_key()),
-                context,
+                RestoredContext {
+                    file_id: &entry.file_id,
+                    context,
+                },
             );
         }
         restored.push(target);
@@ -372,22 +356,22 @@ pub(super) fn checkout(
         entries
             .iter()
             .filter(|entry| {
-                child_entry(entry, &direct) || ancestors.contains_key(entry.lookup_key())
+                children.contains(entry.lookup_key()) || ancestors.contains_key(entry.lookup_key())
             })
             .cloned(),
     );
     let old_owned = entries
         .iter()
         .filter(|entry| {
-            within(entry, &path)
-                && !child_entry(entry, &direct)
+            descendant(entry.lookup_key(), &key)
+                && !children.contains(entry.lookup_key())
                 && !ancestors.contains_key(entry.lookup_key())
         })
         .cloned()
         .collect::<Vec<_>>();
     let mut next_entries = entries
         .iter()
-        .filter(|entry| !within(entry, &path))
+        .filter(|entry| !descendant(entry.lookup_key(), &key))
         .cloned()
         .collect::<Vec<_>>();
     next_entries.extend(restored);
@@ -406,25 +390,21 @@ pub(super) fn checkout(
             state.directory_tree_selections.remove(&entry.entry_id);
         }
     }
-    for (key, context) in &contexts {
-        let entry = next_entries
-            .iter()
-            .find(|entry| directory::context_key_from_key(repository, entry.lookup_key()) == *key)
-            .expect("invariant: restored context has its exact occurrence");
+    for (key, RestoredContext { file_id, context }) in contexts {
         state
             .file_selections
-            .insert(entry.file_id.clone(), context.branch_id.clone());
+            .insert(file_id.to_owned(), context.branch_id.clone());
         match &context.inherited_from {
             Some(origin) => {
                 state
                     .file_write_origins
-                    .insert(entry.file_id.clone(), origin.clone());
+                    .insert(file_id.to_owned(), origin.clone());
             }
             None => {
-                state.file_write_origins.remove(&entry.file_id);
+                state.file_write_origins.remove(file_id);
             }
         }
-        state.file_contexts.insert(key.clone(), context.clone());
+        state.file_contexts.insert(key, context);
     }
     let commit_id = ids.next("commit")?;
     let mut commit = state.commits[&main.head_commit_id].clone();

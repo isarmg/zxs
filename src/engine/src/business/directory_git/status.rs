@@ -2,6 +2,7 @@
 //! One ownership index replaces repeated repository-by-namespace scans. No full
 //! directory projection or descendant-tree clone is needed for this read.
 use super::*;
+use ownership::relative;
 
 const MAX_STATUS_WORK: usize = 1_000_000;
 const MAX_STATUS_TEXT_BYTES: usize = 16 * 1024 * 1024;
@@ -150,34 +151,16 @@ impl<'a> Ownership<'a> {
     }
 }
 
-/// Borrow all occurrence values. Only the bounded map nodes are allocated, not
-/// namespace entries, path strings, file contexts, or nested immutable trees.
-#[derive(PartialEq)]
-struct Occurrence<'a> {
-    entry_id: &'a str,
-    path: &'a str,
-    kind: NamespaceEntryKind,
-    file_id: &'a str,
-    version_id: &'a str,
-    size: u64,
-    node: Option<&'a str>,
-    branch: Option<&'a str>,
-}
 struct Contents<'a> {
     entries: &'a [Entry],
     contexts: &'a BTreeMap<String, FileContext>,
     path: &'a str,
 }
-fn relative(path: &str, depth: usize) -> &str {
-    path.splitn(depth + 1, '/')
-        .nth(depth)
-        .expect("invariant: directory entries are strict descendants of their root")
-}
 fn owned<'a>(
     contents: Contents<'a>,
     boundaries: &BTreeSet<&str>,
     budget: &mut Budget<'_>,
-) -> Result<BTreeMap<&'a str, Occurrence<'a>>> {
+) -> Result<BTreeMap<&'a str, OwnedEntry<'a>>> {
     let depth = if contents.path.is_empty() {
         0
     } else {
@@ -210,15 +193,7 @@ fn owned<'a>(
         if excluded {
             continue;
         }
-        let Entry {
-            entry_id,
-            path,
-            kind,
-            file_id,
-            version_id,
-            size,
-        } = entry;
-        let context = if *kind == NamespaceEntryKind::File {
+        let context = if entry.kind == NamespaceEntryKind::File {
             Some(contents.contexts.get(entry.lookup_key()).ok_or_else(|| {
                 Error::new(
                     ErrorCode::StateInvalid,
@@ -230,16 +205,7 @@ fn owned<'a>(
         };
         result.insert(
             relative(entry.lookup_key(), depth),
-            Occurrence {
-                entry_id,
-                path: relative(path.as_str(), depth),
-                kind: *kind,
-                file_id,
-                version_id,
-                size: *size,
-                node: context.and_then(|context| context.node_id.as_deref()),
-                branch: context.map(|context| context.branch_id.as_str()),
-            },
+            OwnedEntry::new(entry, depth, context),
         );
     }
     Ok(result)

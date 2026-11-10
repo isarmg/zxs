@@ -80,29 +80,13 @@ fn owned_files<'a>(
     tree: &'a DirectoryTree,
     files: &'a BTreeSet<&str>,
 ) -> impl Iterator<Item = &'a str> {
-    let children = tree
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && tree.directory_refs.contains_key(&entry.entry_id)
-        })
-        .map(Entry::lookup_key)
-        .collect::<BTreeSet<_>>();
+    let children = ChildBoundaries::new(&tree.entries, |id| tree.directory_refs.contains_key(id));
     tree.entries
         .iter()
         .filter(move |entry| {
-            if entry.kind != NamespaceEntryKind::File || !files.contains(entry.file_id.as_str()) {
-                return false;
-            }
-            let mut key = entry.lookup_key();
-            while let Some((parent, _)) = key.rsplit_once('/') {
-                if children.contains(parent) {
-                    return false;
-                }
-                key = parent;
-            }
-            true
+            entry.kind == NamespaceEntryKind::File
+                && files.contains(entry.file_id.as_str())
+                && !children.contains(entry.lookup_key())
         })
         .map(|entry| entry.file_id.as_str())
 }
