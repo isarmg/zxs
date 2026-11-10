@@ -397,3 +397,113 @@ fn original_checkout_completion_only_clears_its_own_displayed_preview() {
     state.files.directory_preview = None;
     assert!(!default_completion_applies(&state, &operation));
 }
+
+#[test]
+fn first_empty_disk_cleanup_retry_requests_a_fresh_scan_before_new_writes() {
+    let mut state = state();
+    state.files.directory.clear();
+    state.files.repository_path.clear();
+    state.files.repository_id.clear();
+    let record = Arc::new(Record::capture(&state, id("op", 3).parse().unwrap(), "first").unwrap());
+    assert!(!record.can_lookup());
+    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
+    state.files.mkdir.records.push(Retained {
+        record: Arc::clone(&record),
+        phase: Phase::Settled,
+    });
+    let mut error = failure("local cleanup failed");
+    error.request_id = Some("cleanup-source".into());
+    assert!(!complete_cleanup(
+        &mut state.files.mkdir,
+        &record,
+        Err(error)
+    ));
+    assert!(blocks_writes(&state));
+    assert_eq!(state.files.mkdir.records.len(), 1);
+    assert!(matches!(state.files.mkdir.records[0].phase, Phase::Settled));
+    assert!(retry_record(&state, state.session_epoch, record.operation()).is_none());
+
+    assert!(complete_cleanup(&mut state.files.mkdir, &record, Ok(())));
+    assert!(state.files.mkdir.records.is_empty());
+    assert!(
+        blocks_writes(&state),
+        "only the fresh scan may clear the prior error"
+    );
+    assert_eq!(
+        state
+            .files
+            .mkdir
+            .error
+            .as_ref()
+            .unwrap()
+            .request_id
+            .as_deref(),
+        Some("cleanup-source")
+    );
+    assert!(
+        state.files.operations.is_empty(),
+        "local cleanup never resends a mutation"
+    );
+    state.files.mkdir.restore_records(Ok(Vec::new()));
+    assert!(!blocks_writes(&state));
+    assert!(state.files.mkdir.ready(&state));
+}
+
+#[test]
+fn ordinary_cleanup_needs_no_extra_scan_and_preserves_other_originals() {
+    let record = Arc::new(create());
+    let pending = Arc::new(checkout());
+    let mut state = state();
+    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
+    state.files.mkdir.records = vec![
+        Retained {
+            record: Arc::clone(&record),
+            phase: Phase::Settled,
+        },
+        Retained {
+            record: Arc::clone(&pending),
+            phase: Phase::Pending,
+        },
+    ];
+    assert!(!complete_cleanup(&mut state.files.mkdir, &record, Ok(())));
+    assert_eq!(state.files.mkdir.records.len(), 1);
+    assert!(Arc::ptr_eq(&state.files.mkdir.records[0].record, &pending));
+    assert!(matches!(state.files.mkdir.records[0].phase, Phase::Pending));
+    assert!(blocks_writes(&state));
+    settle(
+        &mut state.files.mkdir,
+        &pending.operation().to_string(),
+        SaveStatus::Published,
+    );
+    assert!(!complete_cleanup(&mut state.files.mkdir, &pending, Ok(())));
+    assert!(!blocks_writes(&state));
+    assert!(state.files.mkdir.ready(&state));
+}
+
+#[test]
+fn cleanup_of_one_record_cannot_erase_an_unrelated_recovery_failure() {
+    let record = Arc::new(create());
+    let mut model = Model::default();
+    model.records.push(Retained {
+        record: Arc::clone(&record),
+        phase: Phase::Settled,
+    });
+    model.error = Some(failure("another original record changed"));
+    assert!(complete_cleanup(&mut model, &record, Ok(())));
+    assert_eq!(
+        model.error.as_ref().unwrap().message,
+        "another original record changed"
+    );
+    assert!(model.records.is_empty());
+    model.restore_records(Err(failure("another original record is still invalid")));
+    assert_eq!(
+        model.error.as_ref().unwrap().message,
+        "another original record is still invalid"
+    );
+    let pending = Arc::new(checkout());
+    model.restore_records(Ok(vec![Arc::clone(&pending)]));
+    assert!(model.error.is_none());
+    assert_eq!(model.records.len(), 1);
+    assert!(Arc::ptr_eq(&model.records[0].record, &pending));
+    assert!(matches!(model.records[0].phase, Phase::Pending));
+}

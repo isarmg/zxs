@@ -47,6 +47,9 @@ impl Model {
     fn ready(&self, state: &State) -> bool {
         self.owns(state) && self.records.is_empty() && self.error.is_none()
     }
+    fn restore_records(&mut self, loaded: Result<Vec<Arc<Record>>, api::Error>) {
+        self.error = loaded.and_then(|records| self.merge(records)).err();
+    }
     fn merge(&mut self, records: Vec<Arc<Record>>) -> Result<(), api::Error> {
         let mut next = self.records.clone();
         for record in records {
@@ -132,14 +135,14 @@ pub(super) fn start_relocation(
     let operation = crate::ui::file_operation_id(state)?
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
-    let record =
-        match state.with_untracked(|s| Record::capture_relocation(s, operation, movement)) {
-            Ok(record) => Arc::new(record),
-            Err(error) => {
-                fail(state, error);
-                return None;
-            }
-        };
+    let record = match state.with_untracked(|s| Record::capture_relocation(s, operation, movement))
+    {
+        Ok(record) => Arc::new(record),
+        Err(error) => {
+            fail(state, error);
+            return None;
+        }
+    };
     retain(state, record)
 }
 
@@ -376,14 +379,29 @@ pub(crate) fn finish(state: RwSignal<State>, id: &str) {
     let Some(record) = record else {
         return;
     };
-    match storage::remove(&record) {
-        Ok(()) => state.update(|s| {
-            s.files
-                .mkdir
+    let result = storage::remove(&record);
+    if state.try_update(|s| complete_cleanup(&mut s.files.mkdir, &record, result)) == Some(true) {
+        // Removing one key cannot clear an unrelated scan or binding error.
+        // Reuse the bounded original-record read before admitting new writes.
+        restore(state);
+    }
+}
+fn complete_cleanup(
+    model: &mut Model,
+    record: &Arc<Record>,
+    result: Result<(), api::Error>,
+) -> bool {
+    match result {
+        Ok(()) => {
+            model
                 .records
-                .retain(|retained| !Arc::ptr_eq(&retained.record, &record));
-        }),
-        Err(error) => state.update(|s| s.files.mkdir.error = Some(error)),
+                .retain(|retained| !Arc::ptr_eq(&retained.record, record));
+            model.error.is_some()
+        }
+        Err(error) => {
+            model.error = Some(error);
+            false
+        }
     }
 }
 /// Authentication hydrates before new writes. Reloading local hints and polling
@@ -408,10 +426,7 @@ pub(crate) fn restore(state: RwSignal<State>) {
                 adopt_owner(s, &current);
             }
             let model = &mut s.files.mkdir;
-            match loaded.and_then(|records| model.merge(records)) {
-                Ok(()) => model.error = None,
-                Err(error) => model.error = Some(error),
-            }
+            model.restore_records(loaded);
             let operations = model
                 .records
                 .iter()

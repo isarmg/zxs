@@ -37,8 +37,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                                 </Show>
                                 <Show when=move ||state.with(|s|s.files.mkdir.records.iter().any(|retained|retained.record.operation()==operation&&retained.phase==Phase::Settled))>
                                     <p>{t("原操作已有明确结果；仅本机记录清理未完成，不会再次提交。", "The original outcome is confirmed. Only local record cleanup remains; it never resubmits.")}</p>
-                                    <button class="zxs-button" on:click=move |_| {
-                                        if current_session(state,epoch) {
+                                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending) on:click=move |_| {
+                                        if current_session(state,epoch) && !state.with_untracked(|s|s.files.mutation_pending) {
                                             finish(state,&operation.to_string());
                                         }
                                     }>{t("重试本机记录清理", "Retry local record cleanup")}</button>
