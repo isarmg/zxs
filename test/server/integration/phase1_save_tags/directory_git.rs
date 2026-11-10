@@ -53,6 +53,23 @@ fn stage_body(current: &Value) -> Value {
     })
 }
 
+fn branch_body(current: &Value, namespace: &Value, name: &str) -> Value {
+    json!({
+        "path":current["path"],
+        "name":name,
+        "operation_id":new_id("op").unwrap(),
+        "source":{
+            "repository_id":current["repository_id"],
+            "directory_id":current["directory_id"],
+            "directory_branch_id":current["directory_branch_id"],
+            "working_tree_id":current["working_tree_id"],
+            "head_tree_id":current["head_tree_id"],
+            "index_generation":current["index_generation"],
+            "namespace_head":namespace["context"]["base_head"]
+        }
+    })
+}
+
 async fn stage(fixture: &Fixture, repository: &str, current: &Value) -> Value {
     fixture
         .json(
@@ -273,15 +290,12 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
     initialize(&fixture, repository, "docs").await;
     let original = checkpoint(&fixture, repository, "docs").await;
     let branch_route = "/api/file-manager/disks/D01/directory-branches";
+    let current = listing(&fixture, "docs").await;
+    let request = branch_body(&original, &current, "frozen");
     let created = fixture
-        .json(
-            "POST",
-            branch_route,
-            Some(json!({
-                "path":"docs","name":"frozen","operation_id":new_id("op").unwrap()
-            })),
-        )
+        .json("POST", branch_route, Some(request.clone()))
         .await;
+    assert_eq!(created["result"]["input"]["source"], request["source"]);
     let branch = created["result"]["directory_branch_id"].as_str().unwrap();
     let scopes = fixture
         .json(
@@ -297,6 +311,7 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
         .find(|scope| scope["directory_branch_id"] == branch)
         .unwrap();
     let frozen_tree = frozen["head_tree_id"].as_str().unwrap();
+    assert_eq!(frozen_tree, original["head_tree_id"].as_str().unwrap());
     fixture.save("D01", "docs/file.txt", b"unstaged").await;
     let dirty = status(&fixture, repository, "docs").await;
     assert_eq!(dirty["staged"], false);
@@ -307,19 +322,17 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
         no_change["result"]["head_tree_id"],
         original["head_tree_id"]
     );
+    let current = listing(&fixture, "docs").await;
     let denied = reject(
         &fixture,
         "POST",
         branch_route,
-        json!({
-            "path":"docs","name":"must not exist","operation_id":new_id("op").unwrap()
-        }),
+        branch_body(&dirty, &current, "must not exist"),
         StatusCode::CONFLICT,
     )
     .await;
     assert_eq!(denied["error"]["code"], "DIRECTORY_BRANCH_CONFLICT");
     let checkout_route = format!("/api/repositories/{repository}/default-branch");
-    let current = listing(&fixture, "docs").await;
     let denied = reject(
         &fixture,
         "PUT",
