@@ -311,7 +311,9 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
         .find(|scope| scope["directory_branch_id"] == branch)
         .unwrap();
     let frozen_tree = frozen["head_tree_id"].as_str().unwrap();
-    assert_eq!(frozen_tree, original["head_tree_id"].as_str().unwrap());
+    // Branch scopes expose the working composition; Git status exposes the committed HEAD.
+    assert_eq!(frozen_tree, original["working_tree_id"].as_str().unwrap());
+    assert_eq!(created["result"]["head_tree_id"], frozen["head_tree_id"]);
     fixture.save("D01", "docs/file.txt", b"unstaged").await;
     let dirty = status(&fixture, repository, "docs").await;
     assert_eq!(dirty["staged"], false);
@@ -347,6 +349,17 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
     assert_eq!(denied["error"]["code"], "DIRECTORY_BRANCH_CONFLICT");
     assert_eq!(status(&fixture, repository, "docs").await, dirty);
     let snapshot = preview(&fixture, "docs", branch, frozen_tree).await;
+    let committed = preview(
+        &fixture,
+        "docs",
+        original["directory_branch_id"].as_str().unwrap(),
+        original["head_tree_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(
+        entry(&snapshot, "file.txt")["version_id"],
+        entry(&committed, "file.txt")["version_id"]
+    );
     assert_eq!(
         fixture
             .body(entry(&snapshot, "file.txt")["version_id"].as_str().unwrap())
@@ -372,6 +385,7 @@ async fn dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout
     assert_eq!(outcome["operation_kind"], "directory.git.checkout");
     let checked_out = status(&fixture, repository, "docs").await;
     assert_eq!(checked_out["directory_branch_id"], branch);
+    assert_eq!(checked_out["head_tree_id"], original["head_tree_id"]);
     assert_eq!(checked_out["staged"], false);
     assert_eq!(checked_out["unstaged"], false);
     let fixture = fixture.reopen().await;

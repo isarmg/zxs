@@ -18,10 +18,10 @@
 - 文件 D 以同仓完整独立分支 frontier 准入，不再以仓库显示类型筛选；selected owner 写权限、当前 entry/file 身份、branch binding、完整 frontier 预算、永久收据、冷恢复和准确撤销保持。SMB 在引擎锁内区分初始化 owner 与 legacy namespace，只有明确未发布的 legacy 返回 `None` 进入原 workspace 删除，错误继续保留恢复记录。
 - 新增命名根／嵌套目录的真实 RPC 删除、正文保留与撤销测试，以及引擎删后冷开、原请求重放、撤销后冷开测试；更新适配器返回类型与原 scope 用例。rustfmt 与补丁检查通过；遵照用户要求未本地编译或执行 Rust 测试，实际通过情况待准确提交的 CI，尚不宣称完整系统 Samba 验收成功。
 
-## 本轮一期目录分支 HTTP 用例更新
+## 本轮一期目录分支树身份回归修正
 
-- CI #1016 的 dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout 仍发送缺少 source 的旧目录分支请求。两处请求改为从实际目录状态与最新 listing 捕获完整七字段来源，分别覆盖正常创建与脏工作区拒绝；正常 Web 已使用该契约，服务端及引擎业务不改。
-- 增加原请求来源回显与冻结树等于已提交 HEAD 的断言，保留原 200/409、checkout、重放、冷开与正文断言。rustfmt、精确基线补丁检查和源码字段集合核对通过；遵照用户指令未本地编译或执行 Rust 测试，待统一 CI 核实结果。
+- CI #1023 在准确提交 ddcbf9e 上确认缺少 source 的 400 已消除；随后新增断言误将分支工作组合树与显式提交 HEAD 当作同一 ID。分支创建继承源工作组合及 Git HEAD，显式 commit 另建冻结树，两个字段语义不同。
+- HTTP 用例分别验证分支工作树等于审核来源、创建回执与分支读取一致、冻结文件版本等于原提交预览，以及 checkout 后继承原 Git HEAD；原脏工作区拒绝、无改动提交、正文、重放与冷开断言保留。rustfmt、精确补丁和源码接线检查通过；遵照用户要求未本地编译或执行 Rust 测试，运行结果仍待统一 CI。
 
 ## 本轮辅助工具注释误删修正
 
