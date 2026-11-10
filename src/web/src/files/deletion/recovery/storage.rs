@@ -1,5 +1,6 @@
 //! Bounded immutable local recovery hints.
 use super::*;
+use crate::files::recovery_storage::Store;
 use data_serialization::{
     Deserialize, Deserializer, Serialize,
     de::{MapAccess, Visitor, value::MapAccessDeserializer},
@@ -11,7 +12,6 @@ pub(super) const MAX_RECORDS: usize = 32;
 pub(super) const MAX_QUEUE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECORD_BYTES: usize =
     storage_contract::client_protocol::MAX_FILE_DELETION_RESPONSE_BYTES + 16 * 1024;
-const MAX_STORAGE_KEYS: u32 = 4096;
 
 #[derive(Serialize, Deserialize)]
 enum Format {
@@ -185,34 +185,10 @@ impl Record {
         })
     }
 }
-fn storage() -> Result<web_sys::Storage, api::Error> {
-    web_sys::window()
-        .ok_or_else(|| failure("Browser storage is unavailable; no deletion request was sent."))?
-        .local_storage()
-        .map_err(api::js_error)?
-        .ok_or_else(|| failure("Browser storage is unavailable; no deletion request was sent."))
-}
 pub(super) fn load(principal: &str) -> Result<Vec<Retained>, api::Error> {
-    let storage = storage()?;
-    let count = storage.length().map_err(api::js_error)?;
-    if count > MAX_STORAGE_KEYS {
-        return Err(limit(
-            "Browser storage exceeds the deletion recovery scan budget; nothing was removed.",
-        ));
-    }
-    let prefix = prefix(principal);
     let mut records = Vec::new();
     let mut size = 0;
-    for index in 0..count {
-        let Some(key) = storage.key(index).map_err(api::js_error)? else {
-            continue;
-        };
-        if !key.starts_with(&prefix) {
-            continue;
-        }
-        let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? else {
-            continue;
-        };
+    Store::open()?.scan(&prefix(principal), |key, bytes| {
         // The platform returns one value at a time. Bound it before JSON parsing
         // and bound the entire queue before retaining another decoded frontier.
         if records.len() == MAX_RECORDS || bytes.len() > MAX_QUEUE_BYTES - size {
@@ -221,9 +197,10 @@ pub(super) fn load(principal: &str) -> Result<Vec<Retained>, api::Error> {
             ));
         }
         size += bytes.len();
-        let record = Record::decode(&key, principal, &bytes)?;
+        let record = Record::decode(key, principal, bytes)?;
         records.push(Retained::unknown(record));
-    }
+        Ok(())
+    })?;
     Ok(records)
 }
 pub(super) fn save(attempt: &request::Attempt) -> Result<Record, api::Error> {
@@ -233,45 +210,14 @@ pub(super) fn save(attempt: &request::Attempt) -> Result<Record, api::Error> {
         ));
     }
     let record = Record::from_attempt(attempt)?;
-    let storage = storage()?;
-    let key = record.key();
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure(
-            "The deletion operation key is occupied; no original record was overwritten.",
-        ));
-    }
-    storage
-        .set_item(&key, &record.bytes)
-        .map_err(api::js_error)?;
-    verify_with(&storage, &record)?;
+    Store::open()?.save(&record.key(), &record.bytes, |bytes| {
+        Ok(bytes == record.bytes.as_ref())
+    })?;
     Ok(record)
 }
-fn verify_with(storage: &web_sys::Storage, record: &Record) -> Result<(), api::Error> {
-    match storage.get_item(&record.key()).map_err(api::js_error)? {
-        Some(bytes) if bytes == record.bytes.as_ref() => Ok(()),
-        _ => Err(failure(
-            "The original deletion recovery record is missing or changed; no request was sent.",
-        )),
-    }
-}
 pub(super) fn verify(record: &Record) -> Result<(), api::Error> {
-    verify_with(&storage()?, record)
+    Store::open()?.verify(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }
 pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
-    let storage = storage()?;
-    let key = record.key();
-    if let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? {
-        if bytes != record.bytes.as_ref() {
-            return Err(failure(
-                "Deletion recovery changed; the saved record was not removed.",
-            ));
-        }
-        storage.remove_item(&key).map_err(api::js_error)?;
-    }
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure(
-            "Local deletion recovery removal was not confirmed; the original record is retained.",
-        ));
-    }
-    Ok(())
+    Store::open()?.remove(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }

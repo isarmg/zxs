@@ -38,11 +38,31 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     super::directory_git::initialize_and_commit(browser)?;
     browser.script(r#"
         const original = window.fetch;
-        window.__zxsNaming = {writes:[], restore:()=>window.fetch=original};
+        const unrelatedKey='zxs:browser-smoke:recovery-unrelated',unrelatedValue='keep this unrelated record';
+        if(localStorage.getItem(unrelatedKey)!==null)throw new Error('Recovery probe key is already occupied');
+        localStorage.setItem(unrelatedKey,unrelatedValue);
+        window.__zxsNaming = {writes:[], recovery:[], unrelatedKey, unrelatedValue, restore:()=>{
+            window.fetch=original;
+            if(localStorage.getItem(unrelatedKey)!==unrelatedValue)throw new Error('Unrelated recovery record changed');
+            localStorage.removeItem(unrelatedKey);
+        }};
         window.fetch = async function(...args) {
             const request=args[0], url=new URL(request.url,location.href);
             if(request.method==='POST' && /^\/api\/file-manager\/disks\/[^/]+\/(namespace|namespace-batch|directory-branches)$/.test(url.pathname)) {
-                window.__zxsNaming.writes.push({path:url.pathname,body:await request.clone().json()});
+                const body=await request.clone().json();
+                if(!url.pathname.endsWith('/namespace-batch')){
+                    const keys=[];
+                    for(let index=0;index<localStorage.length;index++){
+                        const key=localStorage.key(index);
+                        if(key?.startsWith('zxs:folder-create:')&&key.endsWith(':'+body.operation_id))keys.push(key);
+                    }
+                    if(keys.length!==1)throw new Error('Expected one retained original before naming POST');
+                    const bytes=localStorage.getItem(keys[0]),retained=JSON.parse(bytes);
+                    if(retained.operation!==body.operation_id||typeof retained.principal!=='string'||!retained.principal)
+                        throw new Error('Retained naming identity does not match the POST');
+                    window.__zxsNaming.recovery.push({key:keys[0],bytes,operation:body.operation_id});
+                }
+                window.__zxsNaming.writes.push({path:url.pathname,body});
                 return new Response(JSON.stringify({error:{code:'NAME_COLLISION',message:'Synthetic naming rejection',retryable:false}}), {status:409,headers:{'Content-Type':'application/json'}});
             }
             return original.apply(this,args);
@@ -169,8 +189,22 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 if browser.script("return window.__zxsNaming.writes.length===4&&window.__zxsNaming.writes[3].body.name==='é'&&!document.querySelector('.zxs-branch-name').disabled")? == true { Ok(()) } else { Err("branch confirmation request missing".into()) }
             })?;
             browser.keys(&branch, "\u{e00c}")?;
+            wait_for(
+                "rejected originals cleaned without touching unrelated browser storage",
+                || {
+                    let recovery = browser.script("const p=window.__zxsNaming;return {retained:p.recovery.length,remaining:p.recovery.filter(r=>localStorage.getItem(r.key)!==null).length,unrelated:localStorage.getItem(p.unrelatedKey)===p.unrelatedValue}")?;
+                    if recovery["retained"] == 4
+                        && recovery["remaining"] == 0
+                        && recovery["unrelated"] == true
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("original recovery cleanup was not exact: {recovery}").into())
+                    }
+                },
+            )?;
             println!(
-                "PASS inline NFC/Hangul focus, cancellation and explicit folder/branch confirmation"
+                "PASS inline NFC/Hangul focus, cancellation, explicit folder/branch confirmation and retained-original cleanup"
             );
             let checkbox=browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
             browser.click(&checkbox)?;

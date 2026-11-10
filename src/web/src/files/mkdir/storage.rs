@@ -1,5 +1,6 @@
 //! Immutable browser hints.
 use super::*;
+use crate::files::recovery_storage::Store;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::history_window::HistoryRepositoryId;
 
@@ -9,7 +10,6 @@ use directory::DirectoryRequest;
 const PREFIX: &str = "zxs:folder-create:";
 pub(super) const MAX_RECORDS: usize = 32;
 const MAX_RECORD_BYTES: usize = 32 * 1024;
-const MAX_STORAGE_KEYS: u32 = 4096;
 
 #[derive(Serialize, Deserialize)]
 enum Format {
@@ -429,40 +429,17 @@ fn decode_error(source: storage_contract::Error) -> api::Error {
 fn prefix(principal: &str) -> String {
     format!("{PREFIX}{}:", api::segment(principal))
 }
-fn storage() -> Result<web_sys::Storage, api::Error> {
-    web_sys::window()
-        .ok_or_else(|| failure("Browser storage is unavailable; no folder request was sent."))?
-        .local_storage()
-        .map_err(api::js_error)?
-        .ok_or_else(|| failure("Browser storage is unavailable; no folder request was sent."))
-}
 pub(super) fn load(principal: &str) -> Result<Vec<Arc<Record>>, api::Error> {
-    let storage = storage()?;
-    let count = storage.length().map_err(api::js_error)?;
-    if count > MAX_STORAGE_KEYS {
-        return Err(limit(
-            "Folder recovery exceeds the local storage scan budget.",
-        ));
-    }
-    let prefix = prefix(principal);
     let mut records = Vec::new();
-    for index in 0..count {
-        let Some(key) = storage.key(index).map_err(api::js_error)? else {
-            continue;
-        };
-        if !key.starts_with(&prefix) {
-            continue;
-        }
-        let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? else {
-            continue;
-        };
+    Store::open()?.scan(&prefix(principal), |key, bytes| {
         if records.len() == MAX_RECORDS {
             return Err(limit(
                 "Folder recovery exceeds 32 operations; nothing was removed.",
             ));
         }
-        records.push(Arc::new(Record::decode(&key, principal, &bytes)?));
-    }
+        records.push(Arc::new(Record::decode(key, principal, bytes)?));
+        Ok(())
+    })?;
     records.sort_by_key(|record| record.operation());
     Ok(records)
 }
@@ -472,44 +449,15 @@ pub(super) fn save(record: &Record) -> Result<(), api::Error> {
             "Resolve the original folder creation before starting another.",
         ));
     }
-    let storage = storage()?;
-    let key = record.key();
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure(
-            "The folder operation key is occupied; it was not overwritten.",
-        ));
-    }
-    storage
-        .set_item(&key, &record.bytes)
-        .map_err(api::js_error)?;
-    verify_with(&storage, record)
-}
-fn verify_with(storage: &web_sys::Storage, record: &Record) -> Result<(), api::Error> {
-    match storage.get_item(&record.key()).map_err(api::js_error)? {
-        Some(bytes) if bytes == record.bytes.as_ref() => Ok(()),
-        _ => Err(failure(
-            "The original folder record is missing or changed; no request was sent.",
-        )),
-    }
+    Store::open()?.save(&record.key(), &record.bytes, |bytes| {
+        Ok(bytes == record.bytes.as_ref())
+    })
 }
 pub(super) fn verify(record: &Record) -> Result<(), api::Error> {
-    verify_with(&storage()?, record)
+    Store::open()?.verify(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }
 pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
-    let storage = storage()?;
-    let key = record.key();
-    if let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? {
-        if bytes != record.bytes.as_ref() {
-            return Err(failure(
-                "The folder recovery record changed; it was not removed.",
-            ));
-        }
-        storage.remove_item(&key).map_err(api::js_error)?;
-    }
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure("Local folder recovery cleanup was not confirmed."));
-    }
-    Ok(())
+    Store::open()?.remove(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }
 
 // Unlike an optional field, the root path must be explicitly present as null.

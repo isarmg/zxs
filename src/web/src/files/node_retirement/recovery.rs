@@ -1,6 +1,7 @@
 //! Browser records retain original recovery inputs.
 //! Each operation owns an immutable key for independent tabs.
 use super::*;
+use crate::files::recovery_storage::Store;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{ErrorCode, OperationId};
 mod receipt_lookup;
@@ -8,7 +9,6 @@ mod request_text;
 
 const PREFIX: &str = "zxs:node-retirement:";
 const MAX_RECORDS: usize = 32;
-const MAX_STORAGE_KEYS: u32 = 4096;
 const MAX_LABEL_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,39 +159,10 @@ impl Record {
     }
 }
 
-fn storage() -> Result<web_sys::Storage, api::Error> {
-    let window = web_sys::window().ok_or_else(|| {
-        failure("Browser storage is unavailable; permanent submission was not sent.")
-    })?;
-    window
-        .local_storage()
-        .map_err(api::js_error)?
-        .ok_or_else(|| {
-            failure("Browser storage is unavailable; permanent submission was not sent.")
-        })
-}
 fn load(principal: &str) -> Result<Vec<Record>, api::Error> {
-    let storage = storage()?;
-    let count = storage.length().map_err(api::js_error)?;
-    if count > MAX_STORAGE_KEYS {
-        return Err(api::error(
-            ErrorCode::ResourceLimit,
-            "Browser storage exceeds the retirement recovery scan budget; no records were deleted.",
-        ));
-    }
-    let prefix = prefix(principal);
     let mut records = BTreeMap::new();
-    for index in 0..count {
-        let Some(key) = storage.key(index).map_err(api::js_error)? else {
-            continue;
-        };
-        if !key.starts_with(&prefix) {
-            continue;
-        }
-        let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? else {
-            continue;
-        };
-        let record = Record::decode(&key, principal, &bytes)?;
+    Store::open()?.scan(&prefix(principal), |key, bytes| {
+        let record = Record::decode(key, principal, bytes)?;
         records.insert(record.operation, record);
         if records.len() > MAX_RECORDS {
             return Err(api::error(
@@ -199,7 +170,8 @@ fn load(principal: &str) -> Result<Vec<Record>, api::Error> {
                 "Retirement recovery queue exceeds 32 operations; no records were deleted.",
             ));
         }
-    }
+        Ok(())
+    })?;
     Ok(records.into_values().collect())
 }
 
@@ -218,26 +190,10 @@ pub(super) fn save(attempt: &Attempt) -> Result<Record, api::Error> {
 }
 fn persist(record: &Record) -> Result<(), api::Error> {
     let bytes = record.encode()?;
-    let storage = storage()?;
     let key = record.key();
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure(
-            "Retirement recovery operation key is occupied; the original record was not replaced.",
-        ));
-    }
-    storage.set_item(&key, &bytes).map_err(api::js_error)?;
-    let saved = storage
-        .get_item(&key)
-        .map_err(api::js_error)?
-        .ok_or_else(|| {
-            failure("Retirement recovery write was not confirmed; no permanent request was sent.")
-        })?;
-    if Record::decode(&key, &record.principal, &saved)? != *record {
-        return Err(failure(
-            "Retirement recovery read-back changed; no permanent request was sent.",
-        ));
-    }
-    Ok(())
+    Store::open()?.save(&key, &bytes, |saved| {
+        Ok(Record::decode(&key, &record.principal, saved)? == *record)
+    })
 }
 fn retain_original(record: &Record) -> Result<Record, api::Error> {
     let records = load(&record.principal)?;
@@ -360,22 +316,10 @@ fn open(state: RwSignal<State>, operation: OperationId, epoch: u64) {
 /// Cleanup observations are never written to or restored from browser storage.
 pub(super) fn remove(attempt: &Attempt) -> Result<(), api::Error> {
     let expected = Record::from_attempt(attempt);
-    let storage = storage()?;
     let key = expected.key();
-    if let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? {
-        if Record::decode(&key, &attempt.principal, &bytes)? != expected {
-            return Err(failure(
-                "Retirement recovery changed; the saved record was not removed.",
-            ));
-        }
-        storage.remove_item(&key).map_err(api::js_error)?;
-    }
-    if storage.get_item(&key).map_err(api::js_error)?.is_some() {
-        return Err(failure(
-            "Retirement recovery removal was not confirmed; the original operation is retained.",
-        ));
-    }
-    Ok(())
+    Store::open()?.remove(&key, |bytes| {
+        Ok(Record::decode(&key, &attempt.principal, bytes)? == expected)
+    })
 }
 pub(super) fn removed(model: &mut Model, operation: &str) {
     model

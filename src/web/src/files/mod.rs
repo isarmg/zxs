@@ -18,6 +18,7 @@ mod node_card;
 mod node_retirement;
 mod page;
 mod placement;
+mod recovery_storage;
 mod relocation;
 mod review;
 mod rows;
