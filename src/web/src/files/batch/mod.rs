@@ -134,10 +134,11 @@ pub(crate) fn path_edit_available(state: &State, entry: Option<&Entry>) -> bool 
     if !file_actions::write_allowed(state) {
         return false;
     }
-    if !state.files.directory_branches_supported {
-        return super::relocation::available(state, entry);
+    if super::relocation::available(state, entry) {
+        return true;
     }
-    entry.map_or_else(|| available(&state.files), |entry| !entry.read_only())
+    state.files.directory_branches_supported
+        && entry.map_or_else(|| available(&state.files), |entry| !entry.read_only())
 }
 
 fn separable_entry(entry: &Entry) -> bool {

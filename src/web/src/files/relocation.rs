@@ -1,11 +1,21 @@
-//! Review one ordinary file against its exact listing before retaining the request.
+//! Review one current object and its destination through the shared move request.
 use super::{actions, model::entry_key, page::Entry};
-use crate::ui::State;
-use storage_contract::{
-    file_relocation::{FileRelocation, NamespaceEntryId},
-    history_window::{HistoryCommitId, HistoryFileId, HistoryRepositoryId},
+use crate::{
+    api,
+    ui::{State, accept_read_response},
 };
-use web_interface::{i18n::t, prelude::*};
+use storage_contract::{
+    file_relocation::{NamespaceEntryId, ObjectMoveRequest},
+    history_window::HistoryRepositoryId,
+};
+use web_interface::{
+    components::{ErrorState, Select, SelectOption},
+    i18n::t,
+    prelude::*,
+    tasks::spawn_local,
+};
+
+mod target;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Basis {
@@ -17,13 +27,14 @@ struct Basis {
     repository: String,
     head: String,
     entry: String,
-    file: String,
     source: String,
+    display_path: String,
 }
 #[derive(Clone)]
 struct Review {
     basis: Basis,
-    request: FileRelocation,
+    destination: String,
+    request: ObjectMoveRequest,
 }
 fn selected(state: &State) -> Option<&Entry> {
     let entries = &state.files.entries;
@@ -44,13 +55,11 @@ fn selected(state: &State) -> Option<&Entry> {
 fn eligible(state: &State, entry: &Entry) -> bool {
     actions::write_allowed(state)
         && state.files.loaded
-        && !state.files.directory_branches_supported
-        && !entry.file_id().is_empty()
         && !entry.read_only()
         && !entry.backup()
         && !entry.retained_history()
-        && !entry.inherited()
-        && entry.repository_id() == Some(state.files.repository_id.as_str())
+        && entry.repository_path().is_some_and(|path| !path.is_empty())
+        && entry.repository_id().is_some()
 }
 pub(super) fn available(state: &State, entry: Option<&Entry>) -> bool {
     match entry {
@@ -70,39 +79,50 @@ fn basis(state: &State) -> Option<Basis> {
         generation: state.files.generation,
         slot: state.files.slot.clone(),
         directory: state.files.directory.clone(),
-        repository: state.files.repository_id.clone(),
+        repository: entry.repository_id()?.to_owned(),
         head: state.files.namespace_head.clone(),
         entry: entry.entry_id().to_owned(),
-        file: entry.file_id().to_owned(),
         source: entry.repository_path()?.to_owned(),
-    })
-}
-fn request(basis: &Basis, destination: &str) -> storage_contract::Result<FileRelocation> {
-    Ok(FileRelocation {
-        repository_id: HistoryRepositoryId::parse(&basis.repository)?,
-        expected_head: HistoryCommitId::parse(&basis.head)?,
-        entry_id: NamespaceEntryId::parse(&basis.entry)?,
-        file_id: HistoryFileId::parse(&basis.file)?,
-        source: name_policy::PortablePath::parse(&basis.source)?,
-        destination: name_policy::PortablePath::parse(destination)?,
+        display_path: entry.path().to_owned(),
     })
 }
 
 #[derive(Clone, Copy)]
 struct Editor {
     draft: RwSignal<Option<Basis>>,
+    target_slot: RwSignal<String>,
     destination: RwSignal<String>,
     review: RwSignal<Option<Review>>,
-    error: RwSignal<Option<String>>,
+    error: RwSignal<Option<api::Error>>,
+    reading: RwSignal<bool>,
+    generation: RwSignal<u64>,
+    cancellation: RwSignal<Option<api::ReadCancellation>>,
+}
+
+impl Editor {
+    fn clear_review(self) {
+        if let Some(cancellation) = self.cancellation.get_untracked() {
+            cancellation.abort();
+        }
+        self.cancellation.set(None);
+        self.generation.update(|generation| *generation += 1);
+        self.reading.set(false);
+        self.review.set(None);
+        self.error.set(None);
+    }
 }
 
 /// Files and Details open the same editor; only its existing submit path writes.
 pub(crate) fn provide(state: RwSignal<State>) {
     let editor = Editor {
         draft: RwSignal::new(None),
+        target_slot: RwSignal::new(String::new()),
         destination: RwSignal::new(String::new()),
         review: RwSignal::new(None),
         error: RwSignal::new(None),
+        reading: RwSignal::new(false),
+        generation: RwSignal::new(0),
+        cancellation: RwSignal::new(None),
     };
     provide_context(editor);
     Effect::new(move |_| {
@@ -112,8 +132,12 @@ pub(crate) fn provide(state: RwSignal<State>) {
             .with_untracked(|draft| draft.is_some() && draft.as_ref() != current.as_ref())
         {
             editor.draft.set(None);
-            editor.review.set(None);
-            editor.error.set(None);
+            editor.clear_review();
+        }
+    });
+    on_cleanup(move || {
+        if let Some(cancellation) = editor.cancellation.try_with_untracked(Clone::clone).flatten() {
+            cancellation.abort();
         }
     });
 }
@@ -140,89 +164,143 @@ pub(super) fn start(state: RwSignal<State>, entry: Option<Entry>) {
     });
     let captured = state
         .with_untracked(basis)
-        .expect("invariant: opening a move selects its admitted ordinary file");
+        .expect("invariant: opening a move selects its admitted current object");
     let editor = expect_context::<Editor>();
-    editor.destination.set(captured.source.clone());
+    editor.clear_review();
+    editor.target_slot.set(captured.slot.clone());
+    editor.destination.set(captured.display_path.clone());
     editor.draft.set(Some(captured));
-    editor.review.set(None);
-    editor.error.set(None);
+}
+
+fn review_destination(state: RwSignal<State>, editor: Editor) {
+    let Some(captured) = editor.draft.get_untracked() else {
+        return;
+    };
+    if state.with_untracked(basis).as_ref() != Some(&captured) {
+        return;
+    }
+    let slot = editor.target_slot.get_untracked();
+    if !state.with_untracked(|state| {
+        state
+            .files
+            .disks
+            .iter()
+            .any(|disk| disk.slot_id == slot && disk.online && disk.writable)
+    }) {
+        editor.error.set(Some(api::error(
+            storage_contract::ErrorCode::InvalidRequest,
+            t("请选择在线可写的目标磁盘。", "Choose an online writable destination disk."),
+        )));
+        return;
+    }
+    editor.clear_review();
+    let destination = match name_policy::PortablePath::parse(&editor.destination.get_untracked()) {
+        Ok(path) => path,
+        Err(source) => {
+            editor.error.set(Some(target::input_error(source.into())));
+            return;
+        }
+    };
+    let cancellation = match api::ReadCancellation::new() {
+        Ok(cancellation) => cancellation,
+        Err(error) => {
+            editor.error.set(Some(error));
+            return;
+        }
+    };
+    editor.reading.set(true);
+    editor.cancellation.set(Some(cancellation.clone()));
+    let generation = editor.generation.get_untracked();
+    let epoch = captured.epoch;
+    spawn_local(async move {
+        let result = target::review(captured, slot, destination, cancellation).await;
+        if !accept_read_response(state, epoch, &result)
+            || editor.generation.try_with_untracked(|generation| *generation) != Some(generation)
+        {
+            return;
+        }
+        editor.reading.set(false);
+        editor.cancellation.set(None);
+        match result {
+            Ok(review) => editor.review.set(Some(review)),
+            Err(error) => editor.error.set(Some(error)),
+        }
+    });
 }
 
 pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
-    let Editor {
-        draft,
-        destination,
-        review,
-        error,
-    } = expect_context::<Editor>();
+    let editor = expect_context::<Editor>();
+    let slots = Signal::derive(move || {
+        state.with(|state| {
+            state.files.disks.iter().filter(|disk| disk.online && disk.writable)
+                .map(|disk| SelectOption::new(disk.slot_id.clone(), disk.name.clone()))
+                .collect::<Vec<_>>()
+        })
+    });
+    let selected_slot = Signal::derive(move || editor.target_slot.get());
+    let disabled = Signal::derive(move || !state.with(actions::write_allowed));
     view! {
-        <Show when=move ||state.with(|s|s.files.loaded&&!s.files.directory_branches_supported)>
-            <div class="zxs-stack">
-                <Show when=move ||draft.with(|draft|draft.is_some())>
-                    <section class="zxs-surface zxs-stack" data-zxs-ordinary-file-relocation="">
-                        <p>{move ||draft.with(|draft|draft.as_ref().map(|draft|format!(
-                            "{} · {} · {}", draft.source, draft.file, draft.slot,
-                        )))}</p>
-                        <p>{t(
-                            "目标是当前仓库内的完整相对文件路径。父目录须已存在，不覆盖其他文件，不创建或初始化目录仓库。修改路径后先审阅，再确认发送。",
-                            "Enter the complete destination file path relative to this repository. Its parent must exist. No overwrite or folder-repository initialization. Review the changed path before confirming.",
-                        )}</p>
-                        <input class="zxs-input" type="text" autocomplete="off" spellcheck="false"
-                            aria-label=t("目标完整相对路径", "Complete relative destination path")
-                            prop:value=move ||destination.get()
-                            on:input=move |event| {
-                                destination.set(event_target_value(&event));
-                                review.set(None);
-                                error.set(None);
-                            }/>
-                        <button class="zxs-button" on:click=move |_| {
-                            let captured = draft.get_untracked();
-                            if captured.as_ref() != state.with_untracked(basis).as_ref() {
-                                draft.set(None);
-                                review.set(None);
-                                return;
-                            }
-                            if let Some(captured) = captured {
-                                match request(&captured, &destination.get_untracked()) {
-                                    Ok(request) if request.source != request.destination => {
-                                        review.set(Some(Review { basis: captured, request }));
-                                        error.set(None);
-                                    }
-                                    Ok(_) => error.set(Some(t("目标路径未改变。", "The destination is unchanged."))),
-                                    Err(source) => error.set(Some(source.to_string())),
-                                }
-                            }
-                        }>{t("审阅原文件与目标", "Review original file and destination")}</button>
-                        {move ||review.get().map(|captured| {
-                            let label = format!("{} → {}", captured.request.source.as_str(), captured.request.destination.as_str());
-                            let captured = StoredValue::new(captured);
-                            view! {
-                                <p>{label}</p>
-                                <button class="zxs-button" on:click=move |_| {
-                                    let captured = captured.get_value();
-                                    if state.with_untracked(basis).as_ref() != Some(&captured.basis)
-                                        || destination.get_untracked() != captured.request.destination.as_str()
-                                    {
-                                        review.set(None);
-                                        error.set(Some(t("依据已变，请重新审阅。", "The basis changed. Review again.")));
-                                        return;
-                                    }
-                                    if super::mkdir::start_relocation(state, captured.request).is_some() {
-                                        draft.set(None);
-                                        review.set(None);
-                                    }
-                                }>{t("确认移动这个原文件", "Confirm moving this original file")}</button>
-                            }
-                        })}
-                        <button class="zxs-button" on:click=move |_| {
-                            draft.set(None);
-                            review.set(None);
-                            error.set(None);
-                        }>{t("取消", "Cancel")}</button>
-                        {move ||error.get().map(|error|view!{<p role="alert">{error}</p>})}
-                    </section>
+        <Show when=move ||editor.draft.with(|draft|draft.is_some())>
+            <section class="zxs-surface zxs-stack" data-zxs-object-move="">
+                <p>{move ||editor.draft.with(|draft|draft.as_ref().map(|draft|format!(
+                    "{} / {} · {}", draft.slot, draft.display_path, draft.entry,
+                )))}</p>
+                <p>{t(
+                    "移动所选的一个文件或整个目录，保留原身份及历史。选择目标磁盘，填写相对磁盘根的完整目标路径；目标父目录须已存在且可写，不覆盖已有条目，也不自动初始化目录仓库。",
+                    "Move the selected file or whole folder while preserving its identity and history. Choose a disk and enter the complete destination path relative to its root. Its parent must exist and be writable. Existing entries are not replaced, and folder repositories are not initialized automatically.",
+                )}</p>
+                <Select label=t("目标磁盘", "Destination disk") options=slots value=selected_slot disabled=disabled
+                    placeholder=t("选择目标磁盘", "Choose destination disk")
+                    on_change=Callback::new(move |slot:String| {
+                        editor.clear_review();
+                        editor.target_slot.set(slot);
+                    })/>
+                <input class="zxs-input" type="text" autocomplete="off" spellcheck="false"
+                    aria-label=t("目标完整磁盘相对路径", "Complete disk-relative destination path")
+                    prop:value=move ||editor.destination.get() disabled=move ||disabled.get()
+                    on:input=move |event| {
+                        editor.clear_review();
+                        editor.destination.set(event_target_value(&event));
+                    }/>
+                <button class="zxs-button" disabled=move ||disabled.get()||editor.reading.get()
+                    on:click=move |_|review_destination(state,editor)>{t("读取目标并审阅移动", "Read destination and review move")}</button>
+                <Show when=move ||editor.reading.get()>
+                    <p role="status">{t("正在读取目标父目录…", "Reading destination parent folder…")}</p>
                 </Show>
-            </div>
+                {move ||editor.review.get().map(|captured| {
+                    let label = format!("{} / {} → {} / {}", captured.basis.slot,
+                        captured.basis.display_path, captured.request.target_slot_id, captured.destination);
+                    let captured = StoredValue::new(captured);
+                    view! {
+                        <p>{label}</p>
+                        <button class="zxs-button" disabled=move ||disabled.get()
+                            on:click=move |_| {
+                                let captured = captured.get_value();
+                                if state.with_untracked(basis).as_ref() != Some(&captured.basis)
+                                    || editor.target_slot.get_untracked() != captured.request.target_slot_id
+                                    || editor.destination.get_untracked() != captured.destination
+                                {
+                                    editor.clear_review();
+                                    editor.error.set(Some(api::error(storage_contract::ErrorCode::InvalidRequest,
+                                        t("依据已变，请重新审阅。", "The basis changed. Review again."))));
+                                    return;
+                                }
+                                if super::mkdir::start_relocation(state, captured.request).is_some() {
+                                    editor.draft.set(None);
+                                    editor.clear_review();
+                                }
+                            }>{t("确认移动所选对象", "Confirm moving the selected object")}</button>
+                    }
+                })}
+                <button class="zxs-button" on:click=move |_| {
+                    editor.draft.set(None);
+                    editor.clear_review();
+                }>{t("取消", "Cancel")}</button>
+                {move ||editor.error.get().map(|error| {
+                    let feedback=crate::ui::feedback(&error);
+                    view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}
+                })}
+            </section>
         </Show>
     }
 }
