@@ -72,6 +72,11 @@
 - 对齐 `2820cbd3`，仅将 libsqlite3-sys 0.39.1 的登记默认 feature 从 min_sqlite_version_3_34_1 更新为当前源码定义的 min_sqlite_version_3_45_3，测试名单不变。新增静态回归，要求所有 root unit suite 的登记 feature 都属于当前本地 manifest 或其可选依赖。
 - [全量 #997](https://github.com/isarmg/zxs/actions/runs/42806334653/artifacts/13761026456) 的已校验 SHA-256 证据包确认唯一 error_new 测试被实际列出并通过；当前全部 unit 图元数据仅有上述一处差异，期间 Cargo／foundation 来源未改。18 项 Python 回归通过。没有本地编译或重新执行 Rust 测试，不以更新清单代替本提交的自动 CI 验证。
 
+## 本轮分片格式修复
+
+- 基于 `b291973e` 的固定候选，以 Rust 1.99 rustfmt 统一 77 个维护源码／根测试文件。本片 1/8 累计纳入 10 个文件，余 67 个；仅格式，不修改业务逻辑、基础来源、工作流或门禁。
+- 本地最终合成候选的全部 20 个维护包 cargo fmt --check 与 git diff --check 已通过；中间分片不代表全仓格式或 CI 通过。不进行本地编译或 Rust 测试，最终一次推进 main，由自动全量 CI 验证准确提交。
+
 ## 本轮 main push 自动全量 CI
 
 - 用户最新明确要求“跑自动ci”。基于 `2ec85f7e` 启用 main 分支 push 自动执行既有完整 CI，保留人工入口；PR、schedule、标签与 Release 发布仍暂停。全 13 套、WASM、Chrome、SDK、一期 core、预算、依赖和不复用策略保持。

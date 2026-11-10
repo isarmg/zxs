@@ -124,7 +124,9 @@ fn frozen_tree(
     index: &storage_contract::directory_git::DirectoryGitBranch,
     direct: &BTreeMap<String, String>,
 ) -> Result<DirectoryTree> {
-    let boundaries = direct.values().map(|path| name_policy::path_key(path))
+    let boundaries = direct
+        .values()
+        .map(|path| name_policy::path_key(path))
         .collect::<std::collections::BTreeSet<_>>();
     let mut mounts = BTreeMap::new();
     let mut entries = Vec::new();
@@ -135,12 +137,16 @@ fn frozen_tree(
         }
         if namespace::closest_directory_repository(entry.lookup_key(), |key| {
             boundaries.get(key).map(String::as_str)
-        }).is_none() {
+        })
+        .is_none()
+        {
             owned_paths.insert(entry.lookup_key());
             entries.push(entry.clone());
         }
     }
-    let file_contexts = working.file_contexts.iter()
+    let file_contexts = working
+        .file_contexts
+        .iter()
         .filter(|(key, _)| owned_paths.contains(key.as_str()))
         .map(|(key, context)| (key.clone(), context.clone()))
         .collect();
@@ -167,13 +173,12 @@ fn frozen_tree(
             continue;
         };
         let child = &state.directory_trees[tree_id];
-        let mount = mounts.get(directory.as_str()).copied()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorCode::StateInvalid,
-                    "independent child mount is absent from its working tree",
-                )
-            })?;
+        let mount = mounts.get(directory.as_str()).copied().ok_or_else(|| {
+            Error::new(
+                ErrorCode::StateInvalid,
+                "independent child mount is absent from its working tree",
+            )
+        })?;
         frozen.entries.push(mount.clone());
         let rebased = directory::rebase_entries(&child.entries, &child.path, path)?;
         for (original, entry) in child.entries.iter().zip(&rebased) {
@@ -246,9 +251,8 @@ pub(crate) fn apply_commit(
             "directory working tree or index changed; review before committing",
         ));
     }
-    let status = directory_git::staged_changes(
-        state, view, git, &input.directory_branch_id, &direct,
-    )?;
+    let status =
+        directory_git::staged_changes(state, view, git, &input.directory_branch_id, &direct)?;
     if status.needs_restage {
         return Err(directory_git::conflict(
             "independent child ownership changed; stage this repository again before committing",

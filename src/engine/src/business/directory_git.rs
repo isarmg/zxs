@@ -92,7 +92,9 @@ pub(super) fn boundaries(
     for entry in entries {
         if entry.kind != NamespaceEntryKind::Directory
             || entry.entry_id == directory
-            || !state.directory_git_repositories.get(&entry.entry_id)
+            || !state
+                .directory_git_repositories
+                .get(&entry.entry_id)
                 .is_some_and(|git| git.repository_id == repository)
             || !descendant(entry.lookup_key(), &key)
             || entry.lookup_key() == key
@@ -101,7 +103,9 @@ pub(super) fn boundaries(
         }
         if namespace::closest_directory_repository(entry.lookup_key(), |key| {
             selected.get(key).copied()
-        }).is_some() {
+        })
+        .is_some()
+        {
             continue;
         }
         direct.insert(entry.entry_id.clone(), entry.path().to_owned());
@@ -320,8 +324,8 @@ pub(crate) fn status_for(
         &HistoryWindowCancellation::new(),
     )
 }
-pub(crate) use status::{BranchStatuses, current_changes};
 pub(super) use status::staged_changes;
+pub(crate) use status::{BranchStatuses, current_changes};
 
 impl Engine {
     pub(super) fn directory_git_checkout(
@@ -400,12 +404,21 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         let input = command.body();
-        self.mutate(command.kind(), principal, operation, input.clone(), |engine, state, _| {
-            let mut ids = Ids { operation, ordinal: 0 };
-            command
-                .apply(state, engine.admitted_current_namespaces()?, &mut ids)
-                .map(|outcome| outcome.receipt(&input))
-        })
+        self.mutate(
+            command.kind(),
+            principal,
+            operation,
+            input.clone(),
+            |engine, state, _| {
+                let mut ids = Ids {
+                    operation,
+                    ordinal: 0,
+                };
+                command
+                    .apply(state, engine.admitted_current_namespaces()?, &mut ids)
+                    .map(|outcome| outcome.receipt(&input))
+            },
+        )
     }
 
     pub fn initialize_directory_git(
@@ -457,7 +470,9 @@ impl Engine {
                 directory: &body.directory_id,
                 branch: &body.directory_branch_id,
                 expected_generation: body.expected_index_generation,
-                selection: IndexSelection::Owned { expected_tree: &body.expected_tree_id },
+                selection: IndexSelection::Owned {
+                    expected_tree: &body.expected_tree_id,
+                },
             },
             principal,
             body.operation_id,
@@ -475,8 +490,13 @@ fn text<'a>(input: &'a Value, key: &str) -> Result<&'a str> {
 }
 #[derive(Clone, Copy)]
 enum IndexSelection<'a> {
-    Owned { expected_tree: &'a str },
-    Child { directory: &'a str, expected_head: &'a str },
+    Owned {
+        expected_tree: &'a str,
+    },
+    Child {
+        directory: &'a str,
+        expected_head: &'a str,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -496,8 +516,15 @@ enum GitCommand<'a> {
 }
 
 enum GitOutcome {
-    Initialized { directory: String, branch: String },
-    Staged { directory: String, branch: String, generation: u64 },
+    Initialized {
+        directory: String,
+        branch: String,
+    },
+    Staged {
+        directory: String,
+        branch: String,
+        generation: u64,
+    },
 }
 impl GitOutcome {
     fn receipt(self, input: &Value) -> Value {
@@ -505,7 +532,11 @@ impl GitOutcome {
             Self::Initialized { directory, branch } => {
                 json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"initialized":true})
             }
-            Self::Staged { directory, branch, generation } => {
+            Self::Staged {
+                directory,
+                branch,
+                generation,
+            } => {
                 json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"index_generation":generation.to_string()})
             }
         }
@@ -515,20 +546,39 @@ impl GitCommand<'_> {
     fn kind(self) -> &'static str {
         match self {
             Self::Initialize { .. } => "directory.git.initialize",
-            Self::Stage { selection: IndexSelection::Owned { .. }, .. } => "directory.git.stage-owned",
-            Self::Stage { selection: IndexSelection::Child { .. }, .. } => "directory.git.stage-child",
+            Self::Stage {
+                selection: IndexSelection::Owned { .. },
+                ..
+            } => "directory.git.stage-owned",
+            Self::Stage {
+                selection: IndexSelection::Child { .. },
+                ..
+            } => "directory.git.stage-child",
         }
     }
     fn body(self) -> Value {
         match self {
-            Self::Initialize { repository, path, expected_namespace_head } => {
+            Self::Initialize {
+                repository,
+                path,
+                expected_namespace_head,
+            } => {
                 json!({"repository_id":repository,"path":path,"expected_namespace_head":expected_namespace_head})
             }
-            Self::Stage { repository, directory, branch, expected_generation, selection } => match selection {
+            Self::Stage {
+                repository,
+                directory,
+                branch,
+                expected_generation,
+                selection,
+            } => match selection {
                 IndexSelection::Owned { expected_tree } => {
                     json!({"repository_id":repository,"directory_id":directory,"directory_branch_id":branch,"expected_tree_id":expected_tree,"expected_index_generation":expected_generation.to_string()})
                 }
-                IndexSelection::Child { directory: child, expected_head } => {
+                IndexSelection::Child {
+                    directory: child,
+                    expected_head,
+                } => {
                     json!({"repository_id":repository,"directory_id":directory,"directory_branch_id":branch,"expected_index_generation":expected_generation.to_string(),"child_directory_id":child,"expected_child_head_tree_id":expected_head})
                 }
             },
@@ -541,7 +591,11 @@ impl GitCommand<'_> {
         ids: &mut Ids,
     ) -> Result<GitOutcome> {
         match self {
-            Self::Initialize { repository, path, expected_namespace_head } => {
+            Self::Initialize {
+                repository,
+                path,
+                expected_namespace_head,
+            } => {
                 let entries = current_entries(state, view, repository)?.to_vec();
                 let (directory, path) = locate(&entries, repository, path)?;
                 let repo = &state.repositories[repository];
@@ -552,7 +606,11 @@ impl GitCommand<'_> {
                     return Err(conflict("directory repository is already initialized"));
                 }
                 let branch = directory::initialize_git_working_scope(
-                    state, repository, &path, view, &mut |prefix| ids.next(prefix),
+                    state,
+                    repository,
+                    &path,
+                    view,
+                    &mut |prefix| ids.next(prefix),
                 )?;
                 let tree = state.directory_branches[&branch].head_tree_id.clone();
                 let index = DirectoryGitBranch {
@@ -581,7 +639,10 @@ impl GitCommand<'_> {
                         continue;
                     }
                     if let Some(parent_path) = path_for(&entries, repository, parent_id)
-                        && descendant(&name_policy::path_key(&path), &name_policy::path_key(parent_path))
+                        && descendant(
+                            &name_policy::path_key(&path),
+                            &name_policy::path_key(parent_path),
+                        )
                     {
                         for index in parent.branches.values_mut() {
                             index.index_generation = increment(index.index_generation)?;
@@ -590,7 +651,13 @@ impl GitCommand<'_> {
                 }
                 Ok(GitOutcome::Initialized { directory, branch })
             }
-            Self::Stage { repository, directory, branch, expected_generation, selection } => {
+            Self::Stage {
+                repository,
+                directory,
+                branch,
+                expected_generation,
+                selection,
+            } => {
                 let (git, index) = active_git(state, repository, branch)?;
                 if git.directory_id != directory {
                     return Err(conflict("index belongs to another directory"));
@@ -604,27 +671,44 @@ impl GitCommand<'_> {
                 let working = working_tree(state, git, branch)?.tree_id.clone();
                 let entries = current_entries(state, view, repository)?;
                 let path = path_for(entries, repository, directory)
-                    .ok_or_else(|| Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists"))?
+                    .ok_or_else(|| {
+                        Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists")
+                    })?
                     .to_owned();
                 let direct = boundaries(state, repository, directory, &path, entries);
                 match selection {
-                    IndexSelection::Child { directory: child, expected_head } => {
+                    IndexSelection::Child {
+                        directory: child,
+                        expected_head,
+                    } => {
                         if !direct.contains_key(child) {
-                            return Err(conflict("only a direct independent child repository can be staged"));
+                            return Err(conflict(
+                                "only a direct independent child repository can be staged",
+                            ));
                         }
                         let child_git = &state.directory_git_repositories[child];
-                        let head = child_git.branches[&child_git.current_branch_id].head_tree_id.as_ref()
-                            .ok_or_else(|| conflict("commit the child repository before staging its reference"))?;
+                        let head = child_git.branches[&child_git.current_branch_id]
+                            .head_tree_id
+                            .as_ref()
+                            .ok_or_else(|| {
+                                conflict("commit the child repository before staging its reference")
+                            })?;
                         if head != expected_head {
                             return Err(conflict("child HEAD changed before staging"));
                         }
                         let reference = DirectoryGitChildReference {
-                            directory_branch_id: state.directory_trees[head].directory_branch_id.clone(),
+                            directory_branch_id: state.directory_trees[head]
+                                .directory_branch_id
+                                .clone(),
                             tree_id: Some(head.clone()),
                         };
-                        let index = state.directory_git_repositories
-                            .get_mut(directory).expect("invariant: staging a validated parent repository")
-                            .branches.get_mut(branch).expect("invariant: staging its current branch");
+                        let index = state
+                            .directory_git_repositories
+                            .get_mut(directory)
+                            .expect("invariant: staging a validated parent repository")
+                            .branches
+                            .get_mut(branch)
+                            .expect("invariant: staging its current branch");
                         index.index_children.insert(child.into(), reference);
                         index.index_generation = increment(index.index_generation)?;
                     }
@@ -633,12 +717,20 @@ impl GitCommand<'_> {
                             return Err(conflict("working directory changed before staging"));
                         }
                         directory::initialize_git_working_scope(
-                            state, repository, &path, view, &mut |prefix| ids.next(prefix),
+                            state,
+                            repository,
+                            &path,
+                            view,
+                            &mut |prefix| ids.next(prefix),
                         )?;
                         let working = state.directory_branches[branch].head_tree_id.clone();
-                        let index = state.directory_git_repositories
-                            .get_mut(directory).expect("invariant: staging an initialized repository")
-                            .branches.get_mut(branch).expect("invariant: staging its active index");
+                        let index = state
+                            .directory_git_repositories
+                            .get_mut(directory)
+                            .expect("invariant: staging an initialized repository")
+                            .branches
+                            .get_mut(branch)
+                            .expect("invariant: staging its active index");
                         index.index_children.retain(|id, _| direct.contains_key(id));
                         index.index_boundaries = direct;
                         index.index_tree_id = working;
@@ -648,7 +740,8 @@ impl GitCommand<'_> {
                 Ok(GitOutcome::Staged {
                     directory: directory.into(),
                     branch: branch.into(),
-                    generation: state.directory_git_repositories[directory].branches[branch].index_generation,
+                    generation: state.directory_git_repositories[directory].branches[branch]
+                        .index_generation,
                 })
             }
         }
@@ -666,7 +759,10 @@ pub(crate) fn apply_command(
     operation: OperationId,
 ) -> Result<Value> {
     let repository = text(input, "repository_id")?;
-    let mut ids = Ids { operation, ordinal: 0 };
+    let mut ids = Ids {
+        operation,
+        ordinal: 0,
+    };
     let command = match kind {
         "directory.git.initialize" => GitCommand::Initialize {
             repository,
@@ -677,19 +773,33 @@ pub(crate) fn apply_command(
             repository,
             directory: text(input, "directory_id")?,
             branch: text(input, "directory_branch_id")?,
-            expected_generation: storage_contract::parse_u64_decimal(text(input, "expected_index_generation")?)?,
+            expected_generation: storage_contract::parse_u64_decimal(text(
+                input,
+                "expected_index_generation",
+            )?)?,
             selection: if kind == "directory.git.stage-child" {
                 IndexSelection::Child {
                     directory: text(input, "child_directory_id")?,
                     expected_head: text(input, "expected_child_head_tree_id")?,
                 }
             } else {
-                IndexSelection::Owned { expected_tree: text(input, "expected_tree_id")? }
+                IndexSelection::Owned {
+                    expected_tree: text(input, "expected_tree_id")?,
+                }
             },
         },
         "directory.git.branch-create" => return branches::create(state, view, input, &mut ids),
-        "directory.git.checkout" => return branches::checkout(state, view, input, principal, operation, &mut ids),
-        _ => return Err(Error::new(ErrorCode::InvalidRequest, "unknown directory Git operation")),
+        "directory.git.checkout" => {
+            return branches::checkout(state, view, input, principal, operation, &mut ids);
+        }
+        _ => {
+            return Err(Error::new(
+                ErrorCode::InvalidRequest,
+                "unknown directory Git operation",
+            ));
+        }
     };
-    command.apply(state, view, &mut ids).map(|outcome| outcome.receipt(input))
+    command
+        .apply(state, view, &mut ids)
+        .map(|outcome| outcome.receipt(input))
 }

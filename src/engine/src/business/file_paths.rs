@@ -22,8 +22,17 @@ pub(crate) fn rename_node(
     principal: &str,
     operation: OperationId,
 ) -> Result<FileContext> {
-    rename_node_with_ids(state,repository,old,new,context,principal,operation,now()?,
-        &mut |prefix| Ok(new_id(prefix)?))
+    rename_node_with_ids(
+        state,
+        repository,
+        old,
+        new,
+        context,
+        principal,
+        operation,
+        now()?,
+        &mut |prefix| Ok(new_id(prefix)?),
+    )
 }
 
 pub(super) fn rename_node_with_ids(

@@ -13,8 +13,15 @@ pub(crate) fn advance_branch_node(
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
-    advance_branch_node_with_ids(state,branch,node,materialize,principal,operation,
-        &mut |prefix| Ok(new_id(prefix)?))
+    advance_branch_node_with_ids(
+        state,
+        branch,
+        node,
+        materialize,
+        principal,
+        operation,
+        &mut |prefix| Ok(new_id(prefix)?),
+    )
 }
 
 pub(super) fn advance_branch_node_with_ids(

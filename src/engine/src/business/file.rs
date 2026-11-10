@@ -50,8 +50,14 @@ pub(crate) fn relocate_namespace_file_branch(
     file: &Entry,
     operation: OperationId,
 ) -> Result<()> {
-    relocate_namespace_file_branch_with_ids(state,context,entries,file,operation,
-        &mut |prefix| Ok(new_id(prefix)?))
+    relocate_namespace_file_branch_with_ids(
+        state,
+        context,
+        entries,
+        file,
+        operation,
+        &mut |prefix| Ok(new_id(prefix)?),
+    )
 }
 
 pub(super) fn relocate_namespace_file_branch_with_ids(
