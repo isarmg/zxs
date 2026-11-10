@@ -38,9 +38,17 @@ enum StoredIntent {
         #[serialization(deserialize_with = "batch::stored")]
         request: batch::Stored,
     },
+    DeleteDirectory {
+        #[serialization(deserialize_with = "directory::stored")]
+        request: directory::Stored,
+    },
     Undo {
         #[serialization(deserialize_with = "stored_node")]
         deletion_node: storage_contract::FileDeletionNode,
+    },
+    UndoDirectory {
+        #[serialization(deserialize_with = "directory::wire::stored_node")]
+        deletion_node: storage_contract::directory_git::DirectoryDeletionNode,
     },
 }
 fn stored_node<'de, D: Deserializer<'de>>(
@@ -101,6 +109,9 @@ impl Record {
             StoredIntent::DeleteBatch { request } => {
                 request::Intent::DeleteBatch(Arc::new(request.admit()?))
             }
+            StoredIntent::DeleteDirectory { request } => {
+                request::Intent::DeleteDirectory(Arc::new(request.admit()?))
+            }
             StoredIntent::Undo { deletion_node } => {
                 wire::validate_node(&deletion_node).map_err(|mut error| {
                     error.status = 0;
@@ -109,6 +120,9 @@ impl Record {
                     error
                 })?;
                 request::Intent::Undo(Arc::new(deletion_node))
+            }
+            StoredIntent::UndoDirectory { deletion_node } => {
+                request::Intent::UndoDirectory(Arc::new(deletion_node))
             }
         };
         let record = Self {
@@ -135,7 +149,13 @@ impl Record {
             request::Intent::DeleteBatch(request) => StoredIntent::DeleteBatch {
                 request: request.stored(),
             },
+            request::Intent::DeleteDirectory(request) => StoredIntent::DeleteDirectory {
+                request: request.stored(),
+            },
             request::Intent::Undo(node) => StoredIntent::Undo {
+                deletion_node: node.as_ref().clone(),
+            },
+            request::Intent::UndoDirectory(node) => StoredIntent::UndoDirectory {
                 deletion_node: node.as_ref().clone(),
             },
         };
@@ -255,3 +275,4 @@ pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
     }
     Ok(())
 }
+

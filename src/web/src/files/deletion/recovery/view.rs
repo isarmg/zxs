@@ -16,6 +16,12 @@ fn description(record: &Record) -> String {
             request.label(),
             record.operation,
         ),
+        request::Intent::DeleteDirectory(request) => format!(
+            "{} · {} · {}",
+            t("软删除整个普通目录", "Soft-delete whole ordinary folder"),
+            request.label(),
+            record.operation,
+        ),
         request::Intent::Undo(node) => format!(
             "{} · {} · {} · {} · {}",
             t("撤销准确删除节点", "Undo exact deletion node"),
@@ -24,13 +30,59 @@ fn description(record: &Record) -> String {
             node.node_id,
             record.operation
         ),
+        request::Intent::UndoDirectory(node) => format!(
+            "{} · {} · {} · {} · {}",
+            t("恢复准确目录删除节点", "Restore exact folder deletion"),
+            node.path.as_str(),
+            node.directory_id,
+            node.node_id,
+            record.operation,
+        ),
     }
 }
 fn batch_details(record: &Record) -> impl IntoView + use<> {
     match &record.intent {
         request::Intent::DeleteBatch(request) => Some(batch::retained_view(request)),
-        request::Intent::Delete(_) | request::Intent::Undo(_) => None,
+        request::Intent::Delete(_)
+        | request::Intent::DeleteDirectory(_)
+        | request::Intent::Undo(_)
+        | request::Intent::UndoDirectory(_) => None,
     }
+}
+
+fn directory_details(record: &Record) -> impl IntoView + use<> {
+    let details = match &record.intent {
+        request::Intent::DeleteDirectory(request) => Some((
+            format!(
+                "{} · {} · {} · {} · {}",
+                request.slot(), request.repository(), request.owner(), request.branch(), request.tree(),
+            ),
+            vec![format!("{} · {}", request.path().as_str(), request.directory())],
+        )),
+        request::Intent::UndoDirectory(node) => Some((
+            format!(
+                "{} · {} · {} · {} · {} · {}",
+                node.repository_id, node.owner_directory_id, node.directory_branch_id,
+                node.source_tree_id, node.namespace_head, node.operation_id,
+            ),
+            node.files.iter().map(|(file, member)| format!(
+                "{} · {} · {}", file, member.deletion_node_id,
+                if member.created_by_directory {
+                    t("随目录恢复", "Restored with the folder")
+                } else {
+                    t("此前已删除，继续保留删除状态", "Previously deleted, remains deleted")
+                },
+            )).collect(),
+        )),
+        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) => None,
+    };
+    details.map(|(scope, entries)| view! {
+        <details class="zxs-stack">
+            <summary>{t("核对原目录身份、所有者与恢复范围", "Inspect original folder identity, owner and restoration scope")}</summary>
+            <p><code>{scope}</code></p>
+            <ul>{entries.into_iter().map(|label| view! {<li><code>{label}</code></li>}).collect_view()}</ul>
+        </details>
+    })
 }
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
@@ -59,6 +111,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         <section class="zxs-stack">
                             <p><code>{description(&record)}</code></p>
                             {batch_details(&record)}
+                            {directory_details(&record)}
                             <Show when=move ||state.with(|s|s.files.deletion.recovery.records.iter().any(|r|r.record.operation==operation&&r.settled.is_none()))>
                                 <p>{t("结果尚未确认。查询返回找不到或重试遭到拒绝，都不证明原操作未发布。", "The outcome is unconfirmed. A missing lookup or rejected retry does not prove the original operation never published.")}</p>
                                 {
@@ -84,7 +137,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             <h3>{t("确认续发同一原请求", "Confirm the same original request")}</h3>
                             <p><code>{description(&review.record)}</code></p>
                             {batch_details(&review.record)}
-                            <p>{t("仅使用原账号、文件、路径或准确删除节点以及原 operation ID；多选保持完整原批次、目录分支和依据树，不重读当前选择替换任何项。若原请求尚未发布，这会实际执行原删除或撤销；若已发布，只取回原收据。当前权限与状态仍由服务端决定。本机材料不是授权。", "Only the original account, file, path or exact deletion node and original operation ID are used. A multi-file request keeps the complete original batch, folder branch and baseline tree; today's selection never replaces any item. If it never published, this can perform the original deletion or restoration; otherwise it retrieves the original receipt. The server checks current permission and state. Local material grants no authority.")}</p>
+                            {directory_details(&review.record)}
+                            <p>{t("仅使用原账号、文件或目录身份、路径、准确删除节点以及原 operation ID；批次与目录保留原所有者、分支和依据树，不重读当前选择替换任何项。恢复目录只移除该次真正创建的文件 D，此前已删除的文件保持删除。若原请求尚未发布，这会实际执行原删除或撤销；若已发布，只取回原收据。当前权限与状态仍由服务端决定，本机材料不是授权。", "Only the original account, file or folder identity, path, exact deletion node and operation ID are used. Batches and folders retain their original owner, branch and baseline; today's selection never replaces any item. Folder restoration removes only the file D nodes created by that directory operation; previously deleted files remain deleted. If it never published, this can perform the original deletion or restoration; otherwise it retrieves the original receipt. The server checks current permission and state; local material grants no authority.")}</p>
                             <button class="zxs-button" data-zxs-confirm-deletion-retry="" disabled=move ||state.with(|s|reviewed(s,epoch,generation).is_none()) on:click=move |_|retry(state,epoch,generation)>{t("确认续发原操作，不生成新 ID", "Retry original operation, without a new ID")}</button>
                             <button class="zxs-button" on:click=move |_|state.update(|s| {
                                 if s.session_epoch==epoch && s.files.deletion.recovery.review.as_ref().is_some_and(|r|r.generation==generation) {
@@ -99,3 +153,4 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         </Show>
     }
 }
+

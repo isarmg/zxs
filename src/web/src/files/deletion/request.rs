@@ -1,4 +1,4 @@
-//! One explicit whole-file request. Navigation cancels only an unsubmitted
+//! One explicit file or directory request. Navigation cancels only an unsubmitted
 //! review; the original in-flight/unknown attempt is owned by the session ledger.
 use super::*;
 use crate::files::{FileOperation, SaveStatus, model::entry_key, page::Entry};
@@ -27,7 +27,9 @@ pub(super) struct Review {
 pub(super) enum Intent {
     Delete(Target),
     DeleteBatch(Arc<batch::Request>),
+    DeleteDirectory(Arc<directory::Request>),
     Undo(Arc<storage_contract::FileDeletionNode>),
+    UndoDirectory(Arc<storage_contract::directory_git::DirectoryDeletionNode>),
 }
 #[derive(Clone)]
 pub(super) struct Attempt {
@@ -126,8 +128,7 @@ pub(crate) fn start(state: RwSignal<State>, entry: Option<Entry>) {
     }
     match state.with_untracked(|s| capture(s, entry.as_ref())) {
         Ok(Some(review)) => state.update(|s| {
-            s.files.deletion.restore_review = None;
-            s.files.deletion.batch_review = None;
+            s.files.deletion.cancel_review();
             s.files.deletion.review_generation = review.generation;
             s.files.deletion.review = Some(review);
         }),
@@ -196,9 +197,17 @@ impl Intent {
                 json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
             ),
             Self::DeleteBatch(request) => request.request(operation),
+            Self::DeleteDirectory(request) => request.request(operation),
             Self::Undo(node) => (
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
                 json!({"deletion_node_id":node.node_id,"operation_id":operation}),
+            ),
+            Self::UndoDirectory(node) => (
+                format!(
+                    "/api/repositories/{}/directory-deletions/undo",
+                    api::segment(&node.repository_id)
+                ),
+                json!({"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id,"operation_id":operation}),
             ),
         }
     }
@@ -211,11 +220,16 @@ impl Intent {
                 }),
             ),
             Self::DeleteBatch(request) => ("file.delete.batch", request.input()),
+            Self::DeleteDirectory(request) => ("directory.delete", request.input()),
             Self::Undo(node) => (
                 "file.delete.undo",
                 json!({
                     "file_id":node.file_id, "deletion_node_id":node.node_id,
                 }),
+            ),
+            Self::UndoDirectory(node) => (
+                "directory.delete.undo",
+                json!({"repository_id":node.repository_id,"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id}),
             ),
         };
         storage_contract::object_hash(
@@ -252,6 +266,7 @@ impl Intent {
                 matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal && node.sequence == sequence)
             }
             Self::DeleteBatch(request) => request.receipt_matches(id, principal, receipt),
+            Self::DeleteDirectory(request) => request.receipt_matches(id, principal, receipt),
             Self::Undo(node) => {
                 receipt["operation_kind"] == "file.delete.undo"
                     && wire::publication_sequence(
@@ -262,6 +277,7 @@ impl Intent {
                     && receipt["result"]["restored_file_id"] == node.file_id
                     && receipt["result"]["removed_deletion_node"] == json!(node.as_ref())
             }
+            Self::UndoDirectory(node) => directory::wire::undo_receipt_matches(node, receipt),
         }
     }
 }
@@ -421,6 +437,7 @@ pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: S
     model.deletion.cancel_review();
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         model.checked_entries.clear();
+        model.deletion.directory.invalidate();
         // Cached D is not restoration authority after another lifecycle event.
         model.deletion.generation += 1;
         model.deletion.loading = false;
@@ -433,3 +450,4 @@ pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: S
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/deletion/request_tests.rs"]
 mod tests;
+

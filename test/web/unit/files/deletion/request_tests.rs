@@ -40,7 +40,9 @@ fn node(operation: &str) -> storage_contract::FileDeletionNode {
 fn receipt(intent: &Intent, operation: &str) -> Value {
     let (kind, mut result) = match intent {
         Intent::Delete(_) => ("file.delete", json!({"deletion_node":node(operation)})),
-        Intent::DeleteBatch(_) => panic!("single-file fixture does not construct batch receipts"),
+        Intent::DeleteBatch(_) | Intent::DeleteDirectory(_) | Intent::UndoDirectory(_) => {
+            panic!("single-file fixture does not construct group receipts")
+        }
         Intent::Undo(node) => (
             "file.delete.undo",
             json!({"restored_file_id":node.file_id,"removed_deletion_node":node.as_ref()}),
@@ -251,3 +253,4 @@ fn stale_undo_button_and_unknown_attempt_do_not_generate_new_browser_requests() 
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
 }
+

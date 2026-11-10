@@ -1,6 +1,7 @@
 //! Deleted files remain discoverable outside the visible SMB namespace. Reads
 //! belong to a session/generation; undo belongs to the global operation ledger.
 mod batch;
+mod directory;
 mod recovery;
 mod request;
 mod restore;
@@ -15,6 +16,10 @@ pub(crate) use recovery::{
     blocks_writes, finish as finish_recovery, restore as restore_recovery, view as recovery_view,
 };
 pub(crate) use request::{available, in_flight, receipt_matches, settle, start};
+pub(crate) use directory::{
+    available as directory_available, entry_available as directory_entry_available,
+    start as start_directory,
+};
 use std::sync::Arc;
 pub(crate) use view::view;
 use web_interface::{prelude::*, tasks::spawn_local};
@@ -22,6 +27,7 @@ use wire::{Page, Summary};
 
 #[derive(Clone, Default)]
 pub(crate) struct Model {
+    directory: directory::Model,
     review_generation: u64,
     review: Option<request::Review>,
     batch_review: Option<batch::Review>,
@@ -42,6 +48,7 @@ impl Model {
         self.review = None;
         self.batch_review = None;
         self.restore_review = None;
+        self.directory.cancel_review();
     }
 
     fn accepts(&self, generation: u64) -> bool {
@@ -57,6 +64,7 @@ impl Model {
     }
     fn close(&mut self) {
         self.cancel_review();
+        self.directory.close();
         self.open = false;
         self.generation += 1;
         self.loading = false;
