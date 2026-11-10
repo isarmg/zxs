@@ -1,6 +1,9 @@
 //! Descriptor-bound, read-only discovery of existing storage directories.
 //! Callers provide current authorization and server-owned excluded roots. No
 //! method creates directories, writes test files, changes mode, or mounts disks.
+#[cfg(feature = "core")]
+pub use crate::backend_storage_metadata::portable_root_names;
+
 use platform_io::fs_safety::{
     self, RelativePath,
     linux::{MountPolicy, OpenAt2Root},

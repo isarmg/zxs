@@ -146,7 +146,6 @@ fn preview_response(plan: Plan, request_digest: String, recovery: bool) -> Previ
     }
 }
 pub(crate) fn preview(input: Input) -> Result<Preview> {
-    layout::names(&input.roots)?;
     let root = Root::open(input.service_user.clone())?;
     root.layout.inventory(&input.roots)?;
     let context = root.context.clone();

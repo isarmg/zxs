@@ -115,7 +115,7 @@ impl Prepared {
                 "first-storage directory preparation requires the manually run root helper".into(),
             );
         }
-        layout::names(&input.roots)?;
+        layout::first_storage_names(&input.roots)?;
         let root = Root::open(input.service_user.clone())?;
         let (parent, owner) = root.layout.first_storage_directory_parent()?;
         let retained = root

@@ -51,7 +51,7 @@
         <label class="ack"><input id="first-install-autostart" type="checkbox"> 仅在最终正常管理准入完成后启用选定服务的开机启动</label>
         <button type="submit">保留同一输入并开始逐步核对</button>
       </form>
-      <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。此处不提供清除或换输入重做。</p>
+      <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。第 7 步尚未保留空目录请求时可更正目录，已保留的原操作不能清除或换输入重做。</p>
       <label>恢复已导出的原请求 <input id="first-install-import" type="file" accept="application/json,.json"></label>
       <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
       <p id="first-install-progress" role="status"></p>
@@ -61,6 +61,8 @@
       <pre id="first-install-report"></pre>
       <div id="first-install-directory-note" hidden>
         <p>首次管理员已完成。点击“只读核对当前原步骤”：缺少原批次目录时，主按钮会变为“确认创建原批次空目录”；创建成功后会自动读取真实存储计划，仍须确认后才初始化。已有准确空目录直接读取存储计划，无需再执行目录准备。</p>
+        <p class="muted">目录名采用与存储相同的可移植命名规则，不能使用 CON、冒号、非规范 Unicode 或忽略大小写后重名的目录。预览拒绝且尚未保留空目录请求时，可在上方目录栏更正，再点下方按钮保存；之前已完成的安装步骤不变。</p>
+        <button id="first-install-roots-correct" type="button" class="secondary" hidden>保存尚未提交的目录更正</button>
         <div id="first-install-directories-actions">
           <button id="first-install-directories-save" type="button" class="secondary">保存原空目录请求</button>
         </div>

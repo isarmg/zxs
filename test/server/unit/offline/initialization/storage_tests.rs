@@ -1,7 +1,14 @@
 use super::*;
 #[test]
 fn first_storage_names_are_exact_distinct_direct_children() {
-    assert!(layout::names(&["/zxs/data/disks/primary-a".into()]).is_ok());
+    assert!(
+        layout::first_storage_names(&[
+            "/zxs/data/disks/primary-a".into(),
+            "/zxs/data/disks/资料".into(),
+            "/zxs/data/disks/Archive".into(),
+        ])
+        .is_ok()
+    );
     for roots in [
         vec![],
         vec!["/tmp/disk".into()],
@@ -10,9 +17,17 @@ fn first_storage_names_are_exact_distinct_direct_children() {
         vec!["/zxs/data/disks/one/".into()],
         vec!["/zxs/data/disks/one/child".into()],
         vec!["/zxs/data/disks/one".into(), "/zxs/data/disks/one".into()],
+        vec!["/zxs/data/disks/CON".into()],
+        vec!["/zxs/data/disks/a:b".into()],
+        vec!["/zxs/data/disks/cafe\u{301}".into()],
+        vec!["/zxs/data/disks/Disk".into(), "/zxs/data/disks/disk".into()],
+        vec![
+            "/zxs/data/disks/Straße".into(),
+            "/zxs/data/disks/STRASSE".into(),
+        ],
         (0..33).map(|n| format!("/zxs/data/disks/p{n}")).collect(),
     ] {
-        assert!(layout::names(&roots).is_err());
+        assert!(layout::first_storage_names(&roots).is_err(), "{roots:?}");
     }
 }
 fn plan() -> Plan {

@@ -164,6 +164,10 @@
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
     element("directories-save").disabled = locked || directoryOriginal === null;
+    element("roots-correct").hidden = record === null || index() !== 6
+      || record.steps[6] !== undefined || directoryOriginal !== null;
+    element("roots-correct").disabled = locked;
+    if (!element("roots-correct").hidden) element("roots").disabled = locked;
     if (record === null) {
       element("progress").textContent = blocked ? "原请求不可读；未清除记录或发送操作。" : "填一次输入，再逐步核对和确认原生操作。";
       element("commit").hidden = true;
@@ -280,6 +284,24 @@
     } catch (failure) { error(failure.message); }
   });
   element("inspect").addEventListener("click", inspect);
+  element("roots-correct").addEventListener("click", () => {
+    if (busy || stopping || !csrf || blocked || !record) return;
+    try {
+      directoryInput();
+      if (directoryOriginal !== null || sessionStorage.getItem(directoryKey) !== null) {
+        throw new Error("空目录原请求已经保留；只能查询和续作原批次，不能更换目录。");
+      }
+      const next = structuredClone(record);
+      next.input.roots = element("roots").value.split(/\r?\n/).filter(line => line.length > 0);
+      if (!window.confirm("修改尚未保留空目录请求的首批目录？\n" + next.input.roots.join("\n")
+        + "\n保留此前全部安装步骤、账户与配置；下一次只读核对仍由原生接口决定能否接纳。")) return;
+      persist(next);
+      ++epoch; inspected = false; directoryInspected = false; liveReady = false;
+      element("ack").checked = false;
+      show({original_input:record.input, next:"目录已更正，明确点击只读核对；尚未发送系统操作。"});
+      error(""); render();
+    } catch (failure) { error(failure.message); }
+  });
   element("refresh-preview").addEventListener("click", () => {
     if (busy || stopping || !csrf || blocked || !record) return;
     const step = index(), original = record.steps[step];
@@ -355,12 +377,16 @@
     }
     return value;
   }
+  function readDirectoryOriginal(stored, input) {
+    if (stored === null) return null;
+    if (new TextEncoder().encode(stored).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
+    return checkedDirectoryOriginal(JSON.parse(stored), input);
+  }
   async function inspectDirectories(token) {
     const input = directoryInput();
     const stored = sessionStorage.getItem(directoryKey);
     if (stored !== null) {
-      if (new TextEncoder().encode(stored).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
-      directoryOriginal = checkedDirectoryOriginal(JSON.parse(stored), input);
+      directoryOriginal = readDirectoryOriginal(stored, input);
     }
     const value = await (await post("/api/initialization/storage-directories-preview", input)).json();
     if (token !== epoch) return false;
@@ -487,6 +513,9 @@
     if (text !== null) {
       if (new TextEncoder().encode(text).length > maxBytes) throw new Error("保存的首装原请求过大；未清除。");
       record = checked(JSON.parse(text));
+      if (index() === 6 && record.steps[6] === undefined) {
+        directoryOriginal = readDirectoryOriginal(sessionStorage.getItem(directoryKey), directoryInput());
+      }
       show({original_input:record.input, note:"原请求已恢复；只读核对，不自动重放。"});
     }
   } catch (failure) { blocked = true; error(failure.message); }

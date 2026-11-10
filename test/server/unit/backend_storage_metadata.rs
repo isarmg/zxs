@@ -88,6 +88,11 @@ fn disk_directory_names_preserve_order_and_check_backup_roots() {
     .unwrap();
     assert_eq!(config.disks[1].level, 2);
     let names = disk_directory_names(&config.disks).unwrap();
+    let root_names = crate::storage_directories::portable_root_names(
+        config.disks.iter().map(|disk| disk.root.as_path()),
+    )
+    .unwrap();
+    assert_eq!(names, root_names);
     assert_eq!(
         names.iter().map(|name| name.as_str()).collect::<Vec<_>>(),
         ["资料", "Archive"]
@@ -98,6 +103,14 @@ fn disk_directory_names_preserve_order_and_check_backup_roots() {
         disks[1].root = std::path::Path::new("/right").join(second);
         assert_eq!(
             disk_directory_names(&disks).unwrap_err().code,
+            storage_contract::ErrorCode::NameConflict
+        );
+        assert_eq!(
+            crate::storage_directories::portable_root_names(
+                disks.iter().map(|disk| disk.root.as_path()),
+            )
+            .unwrap_err()
+            .code,
             storage_contract::ErrorCode::NameConflict
         );
     }

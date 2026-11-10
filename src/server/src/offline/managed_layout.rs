@@ -159,12 +159,17 @@ impl Layout {
     /// Require every actual direct child to be selected. Unknown, missing,
     /// foreign, extra or inaccessible material cannot become a hidden candidate.
     pub fn inventory(&self, paths: &[String]) -> Result<()> {
-        names(paths)?;
-        self.inventory_all(paths)
+        let names = first_storage_names(paths)?
+            .into_iter()
+            .map(name_policy::PortablePath::into_string)
+            .collect();
+        self.inventory_names(names)
     }
     /// All current roots and the exact new batch, not just the new selections.
     pub fn inventory_all(&self, paths: &[String]) -> Result<()> {
-        let mut missing = all_names(paths)?;
+        self.inventory_names(all_names(paths)?)
+    }
+    fn inventory_names(&self, mut missing: BTreeSet<String>) -> Result<()> {
         for name in self.disks.entries()? {
             let name = name?;
             let text = name
@@ -259,6 +264,12 @@ fn entries(root: &OpenAt2Root, allowed: &[&str]) -> Result<()> {
         }
     }
     Ok(())
+}
+pub(crate) fn first_storage_names(paths: &[String]) -> Result<Vec<name_policy::PortablePath>> {
+    names(paths)?;
+    Ok(storage_server::storage_directories::portable_root_names(
+        paths.iter().map(|path| Path::new(path)),
+    )?)
 }
 pub(crate) fn names(paths: &[String]) -> Result<BTreeSet<String>> {
     if paths.is_empty() || paths.len() > 32 {
