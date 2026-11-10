@@ -255,6 +255,12 @@ fn selected(management: &TerminalManagement) -> Result<Option<Selection>> {
     Ok(Some(selection))
 }
 pub(in crate::engine) fn validate_selection(management: &TerminalManagement) -> Result<()> {
+    // Resume recovery shares this source but does not own a chain request.
+    // Any chain evidence, including unfinished descendants, still requires
+    // the ordinary management gate and complete source validation below.
+    if !management.chain_readmission_selected()? {
+        return Ok(());
+    }
     match selected(management)? {
         Some(selection) => activation::validate_source(management, &selection),
         None => {

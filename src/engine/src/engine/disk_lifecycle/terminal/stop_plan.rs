@@ -134,7 +134,8 @@ impl TerminalStore {
                     | "retirement-complete.json"
                     | "retirement-next.json"
                     | "retirement-operations"
-            ) {
+            ) && !crate::engine::membership_transition::terminal_chain::owns_initial_entry(name)
+            {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
                     "unknown or unfinished terminal stop write",

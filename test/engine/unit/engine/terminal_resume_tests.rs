@@ -323,6 +323,58 @@ fn terminal_resume_reenters_before_and_after_the_durable_selector() {
 }
 
 #[test]
+fn resume_source_without_chain_evidence_keeps_ordinary_management_fenced() {
+    let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
+    let target = fixture.target(1);
+    let pending = fixture.prepare(&target);
+    drop(pending);
+    let recovery = TerminalManagement::metadata_resume_recovery(&fixture.system())
+        .unwrap()
+        .unwrap();
+    let before = files(&fixture.system());
+    assert!(TerminalManagement::open(&fixture.system()).is_err());
+    let owner =
+        TerminalManagement::open_metadata_resume_checked(&fixture.system(), &recovery).unwrap();
+    assert!(!owner.status().writable);
+    assert_eq!(owner.status().operation_id, fixture.terminal);
+    drop(owner);
+    assert!(TerminalManagement::open(&fixture.system()).is_err());
+    assert_eq!(files(&fixture.system()), before);
+    let mut pending =
+        TerminalManagement::reopen_metadata_resume(&fixture.system(), directories(&target))
+            .unwrap();
+    pending.synchronize().unwrap();
+}
+
+#[test]
+fn resume_source_rejects_chain_evidence_without_consuming_the_request() {
+    for name in [
+        "chain-readmission.json",
+        "chain-readmission-target.json",
+        "chain-first-selected.json",
+        "chain-publication-selected.json",
+        "chain-activation-plan.json",
+        "chain-io-decision-request.json",
+        "chain-generation-log-selected.json",
+        "chain-generation-selector-request.json",
+    ] {
+        let mut fixture = Fixture::new(MembershipExitAction::Deregister, 0);
+        let target = fixture.target(1);
+        drop(fixture.prepare(&target));
+        let recovery = TerminalManagement::metadata_resume_recovery(&fixture.system())
+            .unwrap()
+            .unwrap();
+        fs::write(fixture.source_path().join(name), b"{}").unwrap();
+        let before = files(&fixture.system());
+        assert!(
+            TerminalManagement::open_metadata_resume_checked(&fixture.system(), &recovery).is_err(),
+            "resume must reject {name}"
+        );
+        assert_eq!(files(&fixture.system()), before);
+    }
+}
+
+#[test]
 fn terminal_resume_exact_bootstrap_barriers_reenter_without_opening_stopped_roots() {
     for phase in [
         WriteFault::BeforeRecord,

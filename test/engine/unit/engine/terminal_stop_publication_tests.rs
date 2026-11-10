@@ -184,3 +184,36 @@ fn terminal_stop_preparation_failure_keeps_live_target_admission() {
         "unprepared failure must not quiesce the target"
     );
 }
+
+#[test]
+fn terminal_stop_known_chain_names_still_require_their_original_source() {
+    for name in [
+        "chain-readmission.json",
+        "chain-readmission-target.json",
+        "chain-first-selected.json",
+        "chain-publication-selected.json",
+        "chain-activation-plan.json",
+        "chain-io-decision-request.json",
+        "chain-generation-log-selected.json",
+        "chain-generation-selector-request.json",
+    ] {
+        let mut fixture = Fixture::new();
+        let management = fixture.exit.complete(&mut fixture.engine).unwrap();
+        let path = fixture.plan().parent().unwrap().join(name);
+        fs::write(&path, b"{}").unwrap();
+        let system = fixture.system();
+        drop(management);
+        drop(fixture.exit);
+        drop(fixture.engine);
+        let error = TerminalManagement::open(&system)
+            .err()
+            .expect("a known chain filename is not authenticated evidence");
+        assert!(
+            !error
+                .to_string()
+                .contains("unknown or unfinished terminal stop write"),
+            "{name} must reach its protocol validator: {error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"{}");
+    }
+}
