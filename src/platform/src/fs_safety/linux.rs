@@ -2,7 +2,7 @@
 use crate::fs_safety::{EntryName, Error, PrivateDirectory, RelativePath};
 use rustix::{
     fd::AsFd,
-    fs::{Dir, FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2},
+    fs::{AtFlags, Dir, FileType, Mode, OFlags, ResolveFlags, fstat, openat, openat2, statat},
 };
 use std::{
     ffi::OsStr,
@@ -195,6 +195,24 @@ impl OpenAt2Root {
         SingleLinkRequirement::check(&file)?;
         Ok(file)
     }
+    /// Verify a direct name still refers to an already held inode, without following links.
+    /// The caller retains the inode and its ownership/content admission separately.
+    ///
+    /// # Errors
+    /// Preserves the named stat error or reports `IdentityChanged` for a different inode.
+    pub fn verify_entry_identity(
+        &self,
+        name: &EntryName,
+        expected: FileIdentity,
+    ) -> Result<(), Error> {
+        let stat = statat(&self.root, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(io::Error::from)?;
+        if (stat.st_dev, stat.st_ino) != (expected.device, expected.inode) {
+            return Err(Error::IdentityChanged(name.as_path().to_owned()));
+        }
+        Ok(())
+    }
+
     pub fn identity_of(&self, path: &RelativePath) -> Result<FileIdentity, Error> {
         Ok(FileIdentity::from_fd(self.open_file(path, false)?)?)
     }

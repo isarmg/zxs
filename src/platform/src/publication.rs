@@ -6,9 +6,7 @@ use crate::fs_safety::{
     linux::{FileIdentity, OpenAt2Root, SingleLinkRequirement},
 };
 pub use bundle::{BundleDestination, BundlePublication, BundleState};
-use rustix::fs::{
-    AtFlags, Mode, OFlags, RenameFlags, openat, renameat, renameat_with, statat, unlinkat,
-};
+use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, openat, renameat, renameat_with, unlinkat};
 use std::{
     fs::File,
     io::Write,
@@ -54,6 +52,47 @@ impl std::error::Error for PublicationFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.source)
     }
+}
+
+/// Publish an already prepared directory under its final, non-replacing name.
+/// The caller holds the parent and child owners, synchronizes the prepared child,
+/// and validates the staging identity and product policy before calling.
+///
+/// # Errors
+/// A rename failure retains both names with an unknown outcome. Failures after
+/// rename retain the published phase and its identity or durability error.
+/// This function never cleans up, changes ownership, or starts a service.
+pub fn publish_directory(
+    parent: &OpenAt2Root,
+    staging: &EntryName,
+    target: &EntryName,
+    directory: &OpenAt2Root,
+) -> Result<()> {
+    use crate::fs_safety::Error;
+    let failure = |source| PublicationFailure {
+        directory: parent.identity(),
+        staging: staging.as_os_str().to_string_lossy().into_owned(),
+        target: target.as_path().to_owned(),
+        identity: directory.identity(),
+        source,
+    };
+    renameat_with(
+        parent.directory(),
+        staging.as_os_str(),
+        parent.directory(),
+        target.as_os_str(),
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
+    parent
+        .verify_entry_identity(target, directory.identity())
+        .map_err(|error| failure(AtomicCommitError::Published(error)))?;
+    parent.directory().sync_all().map_err(|error| {
+        failure(AtomicCommitError::Published(
+            Error::PublishedDurabilityUnknown(error),
+        ))
+    })?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -181,14 +220,8 @@ pub fn write_atomic_at_mode_receipt(
             source,
         };
         renamed.map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
-        let published = statat(directory, target.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(|error| failure(AtomicCommitError::Published(Error::Io(error.into()))))?;
-        if (published.st_dev, published.st_ino) != (identity.device, identity.inode) {
-            return Err(failure(AtomicCommitError::Published(Error::IdentityChanged(
-                target.as_path().to_owned(),
-            )))
-            .into());
-        }
+        root.verify_entry_identity(target, identity)
+            .map_err(|error| failure(AtomicCommitError::Published(error)))?;
         directory.sync_all().map_err(|error| {
             failure(AtomicCommitError::Published(
                 Error::PublishedDurabilityUnknown(error),

@@ -334,3 +334,42 @@ fn descendant_directory_access_preserves_same_mount_policy() {
     nested.open_directory(&proc).unwrap();
     nested.entries_at(&proc).unwrap();
 }
+
+#[test]
+fn named_identity_uses_the_held_parent_and_never_follows_a_leaf_link() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("parent");
+    fs::create_dir(&path).unwrap();
+    fs::create_dir(path.join("child")).unwrap();
+    let parent = OpenAt2Root::open(&path, MountPolicy::SameMount).unwrap();
+    let name = EntryName::new("child").unwrap();
+    let child = parent.open_directory(&name.as_relative()).unwrap();
+    let identity = FileIdentity::from_fd(&child).unwrap();
+    parent.verify_entry_identity(&name, identity).unwrap();
+
+    let moved = temporary.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    fs::create_dir(&path).unwrap();
+    fs::create_dir(path.join("child")).unwrap();
+    parent.verify_entry_identity(&name, identity).unwrap();
+    fs::rename(moved.join("child"), moved.join("original")).unwrap();
+    symlink("original", moved.join("child")).unwrap();
+    assert!(matches!(
+        parent.verify_entry_identity(&name, identity),
+        Err(Error::IdentityChanged(ref path)) if path == name.as_path()
+    ));
+    fs::remove_file(moved.join("child")).unwrap();
+    fs::create_dir(moved.join("child")).unwrap();
+    assert!(matches!(
+        parent.verify_entry_identity(&name, identity),
+        Err(Error::IdentityChanged(_))
+    ));
+    fs::remove_dir(moved.join("child")).unwrap();
+    assert!(matches!(
+        parent.verify_entry_identity(&name, identity),
+        Err(Error::Io(ref source)) if source.kind() == io::ErrorKind::NotFound
+    ));
+    assert_eq!(FileIdentity::from_fd(&child).unwrap(), identity);
+    assert!(moved.join("original").is_dir());
+    assert!(path.join("child").is_dir());
+}

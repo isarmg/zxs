@@ -2,11 +2,12 @@
 use crate::{Result, private_io::BundleDestination};
 use data_serialization::Serialize;
 use platform_io::fs_safety::{
-    AtomicCommitError, EntryName, Error,
-    linux::{FileIdentity, MountPolicy, OpenAt2Root},
+    EntryName, Error,
+    linux::{MountPolicy, OpenAt2Root},
 };
+use platform_io::publication::publish_directory;
 use rustix::{
-    fs::{AtFlags, Mode, RenameFlags, fchown, mkdirat, renameat_with, statat},
+    fs::{Mode, fchown, mkdirat},
     process::{Gid, Uid},
 };
 use std::{
@@ -229,12 +230,14 @@ impl Directories {
             .into()),
             (Some(directory), None) => {
                 self.check(&directory, spec, false)?;
-                check_named(&self.root, &target, directory.identity())?;
+                self.root
+                    .verify_entry_identity(&target, directory.identity())?;
                 Ok(Entry::Prepared(directory))
             }
             (None, Some(directory)) => {
                 self.check(&directory, spec, true)?;
-                check_named(&self.root, &pending, directory.identity())?;
+                self.root
+                    .verify_entry_identity(&pending, directory.identity())?;
                 Ok(Entry::Pending(directory))
             }
             (None, None) => Ok(Entry::Absent),
@@ -289,11 +292,8 @@ impl Directories {
                 return Err("completed runtime directory disappeared; it was not recreated".into());
             };
             directory.directory().sync_all()?;
-            check_named(
-                &self.root,
-                &EntryName::new(spec.name)?,
-                directory.identity(),
-            )?;
+            self.root
+                .verify_entry_identity(&EntryName::new(spec.name)?, directory.identity())?;
         }
         self.root.directory().sync_all()?;
         self.recheck()
@@ -330,7 +330,8 @@ impl Directories {
                 directory.directory().sync_all()?;
                 self.root.directory().sync_all()?;
                 self.check(&directory, spec, false)?;
-                check_named(&self.root, &target, directory.identity())?;
+                self.root
+                    .verify_entry_identity(&target, directory.identity())?;
                 revalidate()?;
                 return Ok(false);
             }
@@ -348,49 +349,20 @@ impl Directories {
         };
         self.root.directory().sync_all()?;
         self.check(&directory, spec, true)?;
-        check_named(&self.root, &pending, directory.identity())?;
+        self.root
+            .verify_entry_identity(&pending, directory.identity())?;
         revalidate()?;
         let (owner, mode) = self.attributes(spec);
         set_attributes(directory.directory(), owner, mode)?;
         self.check(&directory, spec, false)?;
         directory.directory().sync_all()?;
-        check_named(&self.root, &pending, directory.identity())?;
+        self.root
+            .verify_entry_identity(&pending, directory.identity())?;
         revalidate()?;
-        self.publish_name(spec, &pending, &target, &directory)?;
+        publish_directory(&self.root, &pending, &target, &directory)?;
         self.check(&directory, spec, false)?;
         revalidate()?;
         Ok(true)
-    }
-
-    fn publish_name(
-        &self,
-        spec: &Spec,
-        pending: &EntryName,
-        target: &EntryName,
-        directory: &OpenAt2Root,
-    ) -> Result<()> {
-        let failure = |source| PublicationFailure {
-            destination: spec.path,
-            parent: self.root.identity(),
-            pending: pending.as_os_str().to_string_lossy().into_owned(),
-            source,
-        };
-        renameat_with(
-            self.root.directory(),
-            pending.as_os_str(),
-            self.root.directory(),
-            target.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
-        check_named(&self.root, target, directory.identity())
-            .map_err(|error| failure(AtomicCommitError::Published(error)))?;
-        self.root.directory().sync_all().map_err(|error| {
-            failure(AtomicCommitError::Published(
-                Error::PublishedDurabilityUnknown(error),
-            ))
-        })?;
-        Ok(())
     }
 }
 
@@ -414,45 +386,6 @@ fn set_attributes(file: &File, owner: (u32, u32), mode: u32) -> Result<()> {
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     }
     Ok(())
-}
-
-fn check_named(
-    parent: &OpenAt2Root,
-    name: &EntryName,
-    identity: FileIdentity,
-) -> std::result::Result<(), Error> {
-    let stat = statat(
-        parent.directory(),
-        name.as_os_str(),
-        AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(std::io::Error::from)?;
-    if (stat.st_dev, stat.st_ino) != (identity.device, identity.inode) {
-        return Err(Error::IdentityChanged(name.as_path().to_owned()));
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct PublicationFailure {
-    destination: &'static str,
-    parent: FileIdentity,
-    pending: String,
-    source: AtomicCommitError,
-}
-impl std::fmt::Display for PublicationFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "runtime directory publication to {} below {:?}, pending {}; preserve both names",
-            self.destination, self.parent, self.pending
-        )
-    }
-}
-impl std::error::Error for PublicationFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 #[cfg(test)]

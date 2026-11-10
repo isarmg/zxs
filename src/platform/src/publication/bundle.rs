@@ -1,13 +1,13 @@
 //! Publish one inert configuration directory. The deterministic pending name
 //! is retained on failure; the same exact request can finish missing files.
 use super::Result;
-use super::{PublicationFailure, write_atomic_at};
+use super::{publish_directory, write_atomic_at};
 use crate::fs_safety::{
-    AtomicCommitError, EntryName, Error,
+    EntryName, Error,
     linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
 };
 use crate::service_lease::ServiceLease;
-use rustix::fs::{AtFlags, Mode, RenameFlags, mkdirat, renameat_with, statat};
+use rustix::fs::{Mode, mkdirat};
 use std::{
     fs::File,
     io::Read,
@@ -155,8 +155,9 @@ impl BundleDestination {
         if bytes.len() > maximum || bytes.len() as u64 != metadata.len() {
             return Err("operation record changed length or exceeded its budget".into());
         }
-        check_named(&directory, &entry, identity)?;
-        check_named(&self.parent, &named, directory.identity())?;
+        directory.verify_entry_identity(&entry, identity)?;
+        self.parent
+            .verify_entry_identity(&named, directory.identity())?;
         self.recheck()?;
         Ok(Some(bytes))
     }
@@ -186,7 +187,8 @@ impl BundleDestination {
                 return Err("published bundle is missing a required original file; no material was reconstructed".into());
             }
         }
-        check_named(&self.parent, &named, directory.identity())?;
+        self.parent
+            .verify_entry_identity(&named, directory.identity())?;
         self.recheck()?;
         Ok(state)
     }
@@ -224,7 +226,8 @@ impl BundleDestination {
                     .sync_all()?;
             }
             existing.directory().sync_all()?;
-            check_named(&self.parent, target, existing.identity())?;
+            self.parent
+                .verify_entry_identity(target, existing.identity())?;
             self.parent.directory().sync_all()?;
             self.recheck()?;
             return Ok(BundlePublication::Existing);
@@ -269,30 +272,10 @@ impl BundleDestination {
                 .ok_or("pending bundle lost a required file before publication")?;
         }
         private_directory(pending.directory())?;
-        check_named(&self.parent, staging, pending.identity())?;
+        self.parent
+            .verify_entry_identity(staging, pending.identity())?;
         self.recheck()?;
-        let failure = |source| PublicationFailure {
-            directory: self.identity(),
-            staging: staging.as_os_str().to_string_lossy().into_owned(),
-            target: target.as_path().to_owned(),
-            identity: pending.identity(),
-            source,
-        };
-        renameat_with(
-            self.parent.directory(),
-            staging.as_os_str(),
-            self.parent.directory(),
-            target.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
-        check_named(&self.parent, target, pending.identity())
-            .map_err(|error| failure(AtomicCommitError::Published(error)))?;
-        self.parent.directory().sync_all().map_err(|error| {
-            failure(AtomicCommitError::Published(
-                Error::PublishedDurabilityUnknown(error),
-            ))
-        })?;
+        publish_directory(&self.parent, staging, target, &pending)?;
         self.recheck()?;
         Ok(if resumed {
             BundlePublication::Resumed
@@ -312,22 +295,6 @@ fn private_directory(file: &File) -> Result<()> {
     let metadata = file.metadata()?;
     if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o700 {
         return Err("deployment directory must be owned by this user with exact mode 0700".into());
-    }
-    Ok(())
-}
-fn check_named(
-    parent: &OpenAt2Root,
-    name: &EntryName,
-    expected: FileIdentity,
-) -> std::result::Result<(), Error> {
-    let stat = statat(
-        parent.directory(),
-        name.as_os_str(),
-        AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(std::io::Error::from)?;
-    if (stat.st_dev, stat.st_ino) != (expected.device, expected.inode) {
-        return Err(Error::IdentityChanged(name.as_path().to_owned()));
     }
     Ok(())
 }
@@ -377,6 +344,6 @@ fn verify_file(directory: &OpenAt2Root, name: &str, expected: &[u8]) -> Result<O
         )
         .into());
     }
-    check_named(directory, &name, identity)?;
+    directory.verify_entry_identity(&name, identity)?;
     Ok(Some(file))
 }

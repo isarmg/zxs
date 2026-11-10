@@ -1,13 +1,13 @@
-use super::PublicationFailure;
 use crate::Result;
 use platform_io::{
     fs_safety::{
-        AtomicCommitError, EntryName, Error,
+        EntryName, Error,
         linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root},
     },
+    publication::publish_directory,
     service_lease::{HOST_ROOT, ServiceLease},
 };
-use rustix::fs::{AtFlags, Mode, RenameFlags, mkdirat, renameat_with, statat};
+use rustix::fs::{Mode, mkdirat};
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -110,7 +110,8 @@ impl HostRoot {
             }
             root.directory().sync_all()?;
             self.parent.directory().sync_all()?;
-            self.check_named(&self.target, root.identity())?;
+            self.parent
+                .verify_entry_identity(&self.target, root.identity())?;
             self.recheck_parent()?;
             return Ok((false, lease));
         }
@@ -140,7 +141,8 @@ impl HostRoot {
             root,
         )?;
         let root = lease.root();
-        self.check_named(&self.pending, root.identity())?;
+        self.parent
+            .verify_entry_identity(&self.pending, root.identity())?;
         self.recheck_parent()?;
         // A retry after mkdir resumes this same empty, administrative-owned
         // pending inode. Never chmod the final root or any nonempty staging tree.
@@ -148,51 +150,15 @@ impl HostRoot {
             .set_permissions(std::fs::Permissions::from_mode(0o755))?;
         root.directory().sync_all()?;
         self.parent.directory().sync_all()?;
-        self.check_named(&self.pending, root.identity())?;
+        self.parent
+            .verify_entry_identity(&self.pending, root.identity())?;
         self.recheck_parent()?;
-        let failure = |source| PublicationFailure {
-            directory: self.parent.identity(),
-            staging: self.pending.as_os_str().to_string_lossy().into_owned(),
-            target: self.target.as_path().to_owned(),
-            identity: root.identity(),
-            source,
-        };
-        renameat_with(
-            self.parent.directory(),
-            self.pending.as_os_str(),
-            self.parent.directory(),
-            self.target.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
-        self.check_named(&self.target, root.identity())
-            .map_err(|error| failure(AtomicCommitError::Published(error)))?;
-        self.parent.directory().sync_all().map_err(|error| {
-            failure(AtomicCommitError::Published(
-                Error::PublishedDurabilityUnknown(error),
-            ))
-        })?;
+        publish_directory(&self.parent, &self.pending, &self.target, root)?;
         self.recheck_parent()?;
         Ok((
             true,
             lease.published_at(&self.parent_path.join(self.target.as_os_str()))?,
         ))
-    }
-    fn check_named(
-        &self,
-        name: &EntryName,
-        expected: FileIdentity,
-    ) -> std::result::Result<(), Error> {
-        let stat = statat(
-            self.parent.directory(),
-            name.as_os_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )
-        .map_err(std::io::Error::from)?;
-        if (stat.st_dev, stat.st_ino) != (expected.device, expected.inode) {
-            return Err(Error::IdentityChanged(name.as_path().to_owned()));
-        }
-        Ok(())
     }
 }
 #[cfg(test)]

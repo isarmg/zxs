@@ -201,3 +201,119 @@ fn publication_receipt_keeps_original_inode_alive_during_caller_readback() {
     assert_eq!(receipt._file.metadata().unwrap().ino(), original.ino());
     assert_ne!(fs::metadata(&path).unwrap().ino(), original.ino());
 }
+
+#[test]
+fn prepared_directory_publication_keeps_the_held_parent_and_child() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("parent");
+    private_dir(&path);
+    let staging = EntryName::new("prepared.pending").unwrap();
+    let target = EntryName::new("published").unwrap();
+    private_dir(&path.join(staging.as_os_str()));
+    private_file(&path.join(staging.as_os_str()).join("content"), b"prepared");
+    let parent = OpenAt2Root::open(&path, MountPolicy::SameMount).unwrap();
+    let child = OpenAt2Root::from_directory(
+        parent.open_directory(&staging.as_relative()).unwrap(),
+        MountPolicy::SameMount,
+    )
+    .unwrap();
+    child.directory().sync_all().unwrap();
+    parent
+        .verify_entry_identity(&staging, child.identity())
+        .unwrap();
+    let moved = temporary.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    private_dir(&path);
+    publish_directory(&parent, &staging, &target, &child).unwrap();
+    parent
+        .verify_entry_identity(&target, child.identity())
+        .unwrap();
+    assert!(!moved.join(staging.as_os_str()).exists());
+    assert_eq!(
+        fs::read(moved.join("published/content")).unwrap(),
+        b"prepared"
+    );
+    assert!(!path.join(target.as_os_str()).exists());
+}
+
+#[test]
+fn directory_publication_conflict_preserves_both_names_and_the_unknown_phase() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = OpenAt2Root::open(temporary.path(), MountPolicy::SameMount).unwrap();
+    let staging = EntryName::new("pending").unwrap();
+    let target = EntryName::new("existing").unwrap();
+    for (name, bytes) in [
+        ("pending", b"prepared".as_slice()),
+        ("existing", b"original"),
+    ] {
+        private_dir(&temporary.path().join(name));
+        private_file(&temporary.path().join(name).join("content"), bytes);
+    }
+    let child = OpenAt2Root::from_directory(
+        parent.open_directory(&staging.as_relative()).unwrap(),
+        MountPolicy::SameMount,
+    )
+    .unwrap();
+    let error = publish_directory(&parent, &staging, &target, &child).unwrap_err();
+    let failure = error.downcast_ref::<PublicationFailure>().unwrap();
+    assert_eq!(failure.directory, parent.identity());
+    assert_eq!(failure.staging, "pending");
+    assert_eq!(failure.target, target.as_path());
+    assert_eq!(failure.identity, child.identity());
+    assert!(matches!(
+        failure.source,
+        AtomicCommitError::Unknown(crate::fs_safety::Error::Io(ref source))
+            if source.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(
+        fs::read(temporary.path().join("pending/content")).unwrap(),
+        b"prepared"
+    );
+    assert_eq!(
+        fs::read(temporary.path().join("existing/content")).unwrap(),
+        b"original"
+    );
+}
+
+#[test]
+fn renamed_directory_identity_failure_is_published_and_retains_all_evidence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = OpenAt2Root::open(temporary.path(), MountPolicy::SameMount).unwrap();
+    let staging = EntryName::new("pending").unwrap();
+    let target = EntryName::new("published").unwrap();
+    private_dir(&temporary.path().join("pending"));
+    private_file(&temporary.path().join("pending/content"), b"admitted");
+    let child = OpenAt2Root::from_directory(
+        parent.open_directory(&staging.as_relative()).unwrap(),
+        MountPolicy::SameMount,
+    )
+    .unwrap();
+    parent
+        .verify_entry_identity(&staging, child.identity())
+        .unwrap();
+    // Model a name replacement after the caller's last admission and before rename.
+    fs::rename(
+        temporary.path().join("pending"),
+        temporary.path().join("retained"),
+    )
+    .unwrap();
+    private_dir(&temporary.path().join("pending"));
+    private_file(&temporary.path().join("pending/content"), b"replacement");
+    let error = publish_directory(&parent, &staging, &target, &child).unwrap_err();
+    let failure = error.downcast_ref::<PublicationFailure>().unwrap();
+    assert!(matches!(
+        failure.source,
+        AtomicCommitError::Published(crate::fs_safety::Error::IdentityChanged(ref name))
+            if name == target.as_path()
+    ));
+    assert_eq!(failure.identity, child.identity());
+    assert!(!temporary.path().join("pending").exists());
+    assert_eq!(
+        fs::read(temporary.path().join("retained/content")).unwrap(),
+        b"admitted"
+    );
+    assert_eq!(
+        fs::read(temporary.path().join("published/content")).unwrap(),
+        b"replacement"
+    );
+}

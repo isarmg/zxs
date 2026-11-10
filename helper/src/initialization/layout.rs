@@ -1,13 +1,14 @@
 use crate::Result;
 use platform_io::{
     fs_safety::{
-        AtomicCommitError, EntryName, Error,
+        EntryName, Error,
         linux::{FileIdentity, MountPolicy, OpenAt2Root},
     },
+    publication::publish_directory,
     service_lease::{HOST_ROOT, ServiceLease},
 };
 use rustix::{
-    fs::{AtFlags, Mode, RenameFlags, fchown, mkdirat, renameat_with, statat},
+    fs::{Mode, fchown, mkdirat},
     process::{Gid, Uid},
 };
 use std::{
@@ -26,26 +27,6 @@ pub(super) struct Destination {
 enum PendingOwner {
     Helper,
     Service,
-}
-#[derive(Debug)]
-struct PublicationFailure {
-    parent: FileIdentity,
-    pending: String,
-    source: AtomicCommitError,
-}
-impl std::fmt::Display for PublicationFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "private data layout publication under {:?}, pending {:?}, target data; preserve all evidence",
-            self.parent, self.pending
-        )
-    }
-}
-impl std::error::Error for PublicationFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 impl Destination {
     pub(super) fn host(owner: (u32, u32)) -> Result<Self> {
@@ -79,7 +60,8 @@ impl Destination {
         };
         check_owner(directory.directory(), self.owner)?;
         self.complete_children(&directory)?;
-        check_named(&self.root, &EntryName::new("data")?, directory.identity())?;
+        self.root
+            .verify_entry_identity(&EntryName::new("data")?, directory.identity())?;
         self.lease.recheck()?;
         Ok(true)
     }
@@ -107,7 +89,8 @@ impl Destination {
             }
             existing.directory().sync_all()?;
             self.root.directory().sync_all()?;
-            check_named(&self.root, &target, existing.identity())?;
+            self.root
+                .verify_entry_identity(&target, existing.identity())?;
             self.lease.recheck()?;
             revalidate()?;
             return Ok(false);
@@ -135,7 +118,8 @@ impl Destination {
         directory.directory().sync_all()?;
         revalidate()?;
         self.lease.recheck()?;
-        check_named(&self.root, &pending, directory.identity())?;
+        self.root
+            .verify_entry_identity(&pending, directory.identity())?;
         // This dedicated, exact-request pending tree is never a preexisting live
         // data root. An interrupted top-level handoff can finish the same plan.
         if owner == PendingOwner::Helper {
@@ -144,28 +128,10 @@ impl Destination {
         check_owner(directory.directory(), self.owner)?;
         directory.directory().sync_all()?;
         self.complete_children(&directory)?;
-        check_named(&self.root, &pending, directory.identity())?;
+        self.root
+            .verify_entry_identity(&pending, directory.identity())?;
         self.lease.recheck()?;
-        let failure = |source| PublicationFailure {
-            parent: self.identity(),
-            pending: pending_name.clone(),
-            source,
-        };
-        renameat_with(
-            self.root.directory(),
-            pending.as_os_str(),
-            self.root.directory(),
-            target.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
-        check_named(&self.root, &target, directory.identity())
-            .map_err(|error| failure(AtomicCommitError::Published(error)))?;
-        self.root.directory().sync_all().map_err(|error| {
-            failure(AtomicCommitError::Published(
-                Error::PublishedDurabilityUnknown(error),
-            ))
-        })?;
+        publish_directory(&self.root, &pending, &target, &directory)?;
         self.lease.recheck()?;
         self.complete_children(&directory)?;
         Ok(true)
@@ -192,7 +158,7 @@ impl Destination {
                         return Err("handed-off pending layout has an unfinished child; its original contents were preserved".into());
                     }
                     empty(&child)?;
-                    check_named(directory, &entry, child.identity())?;
+                    directory.verify_entry_identity(&entry, child.identity())?;
                     Some(child)
                 }
                 Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -209,7 +175,8 @@ impl Destination {
         }
         for (entry, child) in children {
             self.lease.recheck()?;
-            check_named(&self.root, pending, directory.identity())?;
+            self.root
+                .verify_entry_identity(pending, directory.identity())?;
             revalidate()?;
             let child = match child {
                 Some(child) => child,
@@ -225,7 +192,7 @@ impl Destination {
                     )?
                 }
             };
-            check_named(directory, &entry, child.identity())?;
+            directory.verify_entry_identity(&entry, child.identity())?;
             empty(&child)?;
             if pending_owner(child.directory(), self.owner)? == PendingOwner::Helper {
                 // mkdir may have succeeded before an earlier process stopped.
@@ -235,7 +202,7 @@ impl Destination {
             }
             check_owner(child.directory(), self.owner)?;
             child.directory().sync_all()?;
-            check_named(directory, &entry, child.identity())?;
+            directory.verify_entry_identity(&entry, child.identity())?;
         }
         Ok(())
     }
@@ -295,22 +262,6 @@ fn empty(directory: &OpenAt2Root) -> Result<()> {
     if let Some(entry) = directory.entries()?.next() {
         let _ = entry?;
         return Err("private layout is not pristine; no existing data was cleared".into());
-    }
-    Ok(())
-}
-fn check_named(
-    parent: &OpenAt2Root,
-    name: &EntryName,
-    identity: FileIdentity,
-) -> std::result::Result<(), Error> {
-    let stat = statat(
-        parent.directory(),
-        name.as_os_str(),
-        AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(std::io::Error::from)?;
-    if (stat.st_dev, stat.st_ino) != (identity.device, identity.inode) {
-        return Err(Error::IdentityChanged(name.as_path().to_owned()));
     }
     Ok(())
 }
