@@ -1,6 +1,7 @@
 //! Actual native plans, D3 publication and permanent cancellation recovery.
 //! These tests depend on local Ready plans staying in system/plans, not State.
 use super::*;
+use crate::publication_shape::{Table, unchanged_except};
 use crate::*;
 use std::{
     fs,
@@ -237,7 +238,9 @@ fn current_plan_cancellation_keeps_other_local_plans_and_cold_replays_permanentl
         .cancel_plan(&first.plan_id, "admin", operation)
         .unwrap();
     let next = fixture.engine.state.clone();
-    assert!(unchanged_cancellation_state(&before, &next));
+    assert!(unchanged_except(&before, &next, &[Table::Plans]));
+    assert_eq!(before.topology_generation, next.topology_generation);
+    assert_eq!(before.control_auth, next.control_auth);
     assert_eq!(next.plans.len(), before.plans.len() + 1);
     assert_eq!(next.plans[&first.plan_id].state, PlanState::Cancelled);
     assert!(!next.plans.contains_key(&second.plan_id));
@@ -361,10 +364,16 @@ fn current_plan_cancellation_on_disabled_and_detached_owner_never_reopens_storag
             .engine
             .cancel_plan(&plan.plan_id, "admin", operation)
             .unwrap();
-        assert!(unchanged_cancellation_state(
+        assert!(unchanged_except(
             &before,
-            fixture.engine.state()
+            fixture.engine.state(),
+            &[Table::Plans],
         ));
+        assert_eq!(
+            before.topology_generation,
+            fixture.engine.state().topology_generation
+        );
+        assert_eq!(before.control_auth, fixture.engine.state().control_auth);
         assert_same_scopes(&view, fixture.engine.current_namespaces.as_ref().unwrap());
         assert_eq!(
             fixture

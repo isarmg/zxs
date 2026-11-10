@@ -1,5 +1,6 @@
 //! Actual native publication, physical file-container and cold-replay tests.
 use super::*;
+use crate::publication_shape::{Table, unchanged_except};
 
 #[path = "current_recursive_tree_tests.rs"]
 mod directory_tree;
@@ -335,10 +336,20 @@ fn recursive_receipt_and_path_updates_are_strictly_replayed_live_and_cold() {
             created_at: 0,
         },
     );
-    assert!(!super::super::unchanged_state(
-        &previous,
-        &injected_deletion
-    ));
+    assert!(
+        !(previous.topology_generation == injected_deletion.topology_generation
+            && previous.control_auth == injected_deletion.control_auth
+            && unchanged_except(
+                &previous,
+                &injected_deletion,
+                &[
+                    Table::ProtectionPolicies,
+                    Table::FileBackupPaths,
+                    Table::FileBackupPolicies,
+                    Table::Placements,
+                ],
+            ))
+    );
     rejected(
         &view,
         &previous,

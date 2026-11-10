@@ -1,6 +1,7 @@
 //! Real lifecycle D3, permanent native SMB results and metadata-only replay.
 //! Temporary roots and closed-binding proofs do not replace physical I/O tracing.
 use super::*;
+use crate::publication_shape::{Table, unchanged_except};
 use crate::*;
 use std::{
     fs,
@@ -275,7 +276,13 @@ fn current_smb_binding_after_d3_keeps_alias_history_and_old_workspace_then_cold_
     let operation = op();
     let result = fixture.bind(false, operation).unwrap();
     let next = fixture.engine.state.clone();
-    assert!(unchanged_binding_state(&previous, &next));
+    assert!(unchanged_except(
+        &previous,
+        &next,
+        &[Table::Repositories, Table::Histories],
+    ));
+    assert_eq!(previous.topology_generation, next.topology_generation);
+    assert_eq!(previous.control_auth, next.control_auth);
     assert_eq!(next.branches, previous.branches);
     assert_eq!(next.commits, previous.commits);
     assert_eq!(next.directory_branches, previous.directory_branches);
@@ -421,7 +428,16 @@ fn current_smb_binding_after_d3_keeps_alias_history_and_old_workspace_then_cold_
             .unwrap(),
         enabled
     );
-    assert!(unchanged_binding_state(&previous, engine.state()));
+    assert!(unchanged_except(
+        &previous,
+        engine.state(),
+        &[Table::Repositories, Table::Histories],
+    ));
+    assert_eq!(
+        previous.topology_generation,
+        engine.state().topology_generation
+    );
+    assert_eq!(previous.control_auth, engine.state().control_auth);
     assert!(
         engine
             .namespace_tree(&fixture.alias.branch_id)
@@ -469,7 +485,16 @@ fn current_smb_binding_on_disabled_or_detached_owner_never_grants_body_io_or_wri
         let generation = fixture.generation();
         let operation = op();
         let result = fixture.bind(true, operation).unwrap();
-        assert!(unchanged_binding_state(&before, fixture.engine.state()));
+        assert!(unchanged_except(
+            &before,
+            fixture.engine.state(),
+            &[Table::Repositories, Table::Histories],
+        ));
+        assert_eq!(
+            before.topology_generation,
+            fixture.engine.state().topology_generation
+        );
+        assert_eq!(before.control_auth, fixture.engine.state().control_auth);
         assert_same_scopes(&view, fixture.engine.current_namespaces.as_ref().unwrap());
         assert!(
             !fixture

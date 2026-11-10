@@ -4,6 +4,11 @@
 
 
 
+## 本轮 State 比较测试接线修复
+
+- CI #1062 的 quality、core、workspace 在六处旧私有比较函数调用报 E0425。三份根测试改为当前共享 unchanged_except，并显式保留原拓扑代数及控制身份断言；Backup 的四张允许表、取消的 Plans、SMB 的 Repositories/Histories 与生产入口一致。不恢复旧生产复制体，生产代码未变。
+- 格式与精确补丁检查通过；未本地编译或运行 Rust，新的准确提交 CI 尚待验证。
+
 ## 本轮 State 发布字段统一
 
 - 原七处独立 State 字段宏由 publication_shape 的一份穷尽 35 表声明替换，各操作只声明允许变化的表；原业务行规则、序号、控制身份、永久收据、主体和事件验证仍在原入口，普通注释随调用点保留。src 实际净删 243 行。
