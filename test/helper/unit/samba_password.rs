@@ -49,9 +49,26 @@ fn different_password_entries_fail_before_preparing_any_system_target() {
 #[test]
 fn pending_diagnostic_never_formats_its_private_source() {
     let pending = Pending {
+        operation: "reset",
         request_digest: "a".repeat(64),
         source: "private-source-test-value".into(),
     };
     assert!(pending.to_string().contains(&"a".repeat(64)));
     assert!(!pending.to_string().contains("private-source-test-value"));
+}
+
+#[test]
+fn retained_reset_plan_keeps_its_exact_wire_order_and_distinct_format() {
+    let bytes = include_str!("../fixtures/samba-reset-plan.json").trim_end();
+    let plan: Plan = json_codec::from_str(bytes).unwrap();
+    assert_eq!(json_codec::to_vec(&plan).unwrap(), bytes.as_bytes());
+    assert_eq!(
+        digest(&plan).unwrap(),
+        "fd5d11ceac9c84961a4371b85e8f1907991f03d0751f126e81cf6560d2eeb30f"
+    );
+    let enrollment = include_str!("../fixtures/samba-enrollment-plan.json");
+    assert!(json_codec::from_str::<Plan>(enrollment).is_err());
+    let mut invalid: json_codec::Value = json_codec::from_str(bytes).unwrap();
+    invalid["command"] = json!("unexpected");
+    assert!(json_codec::from_value::<Plan>(invalid).is_err());
 }

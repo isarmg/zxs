@@ -318,3 +318,7 @@ zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
 对象和盘根 `rebuild` 现在在无覆盖发表后持有准确原 inode，对实际 SQLite 完整解码、对比原归档全部记录，并重核实际文件字节、属性、具名父目录及未知侧车。只有成功才报告 `file_readback_verified:true`，分别带归档/实际文件摘要和准确文件身份。已发表但核验失败会明确保留文件，不回滚或覆盖。新 `object-database verify` 与 `disk-database-rescue verify` 可在进程重启后只读完成同类核验，盘根仍必须明确 `--source`；缺失或错误镜像不会被补造。详见[读回协议与保全边界](../design/rescue-database-readback.md)。它们均无活动安装或来源接纳能力；本次生产 helper check、22 项所选 Rust 回归通过；三项新增 Engine libtest 用例尚未执行，不能据此宣称盘根全套验证通过。未复跑 CI，无真实盘操作。
 
 外来链后继直接推进[共同决定与冷态联合 State](../design/helper-foreign-joint-protocol.md)，不增加图准备 UI；原根 enrollment、全链 FULL/目标三范围安装与实际活动切换仍缺，正式接入没有开放。该后继未编译测试，不将协议源码或旧 Node 检查当可用流程验收。
+
+## Samba 密码操作共同边界
+
+既有账户重置与首次账户登记共用配置及三个固定程序的持有上下文，以及一次性 intent 的创建门禁。二者仍使用各自格式和 passdb 证明类型，保留原计划字段顺序、请求摘要和历史回执形状。只有新建意图允许进入原命令；已有、续作或未知暂存材料不产生自动重放授权。账户存在／缺失、其他账户保护、原命令、同步及后置再验仍由原业务实现拥有；密码仍只经秘密输入交付给固定 smbpasswd。此去重不表示真实 Samba 或完整安装验收通过。

@@ -1,17 +1,13 @@
 //! Confirmed password reset for an existing local Samba account.
 //! Unknown external-command outcomes retain their original request for inspection.
 pub(crate) mod enrollment;
+mod operation;
 mod state;
-use super::{Input as DeploymentInput, install};
-use crate::{
-    Result,
-    account::Snapshot as AccountSnapshot,
-    private_io::{BundleDestination, BundlePublication},
-    system_program::{Executable, Program, Snapshot as ProgramSnapshot},
-};
+use super::Input as DeploymentInput;
+use crate::{Result, private_io::BundleDestination, system_program::Executable};
 use data_serialization::{Deserialize, Deserializer, Serialize};
+use operation::{Context, Pending, digest};
 use platform_io::secret::SecretString;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const MAX_RECORD_BYTES: usize = 64 * 1024;
@@ -48,16 +44,7 @@ enum Format {
     #[serialization(rename = "zxs-helper-existing-local-samba-password-reset")]
     LocalSambaPassword,
 }
-#[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct Plan {
-    format: Format,
-    operation_id: String,
-    installed_configuration_digest: String,
-    account: AccountSnapshot,
-    database: state::Revision,
-    programs: Vec<ProgramSnapshot>,
-}
+type Plan = operation::Plan<Format, state::Revision>;
 #[derive(Serialize)]
 pub(crate) struct Preview {
     pub request_digest: String,
@@ -88,26 +75,9 @@ pub(crate) struct Receipt {
     service_started: bool,
     complete_installation_ready: bool,
 }
-#[derive(Serialize)]
-#[serialization(tag = "state", rename_all = "snake_case")]
-pub(crate) enum Status {
-    NoCompletePlanReadable {
-        request_digest: String,
-    },
-    OutcomeUnknownDoNotReplay {
-        request_digest: String,
-        account: String,
-    },
-    CommandCompletedHistoricalReceipt {
-        receipt: Box<Receipt>,
-        current_password_or_service_state_verified: bool,
-    },
-}
+pub(crate) type Status = operation::Status<Receipt>;
 struct Prepared {
-    configuration: install::Prepared,
-    testparm: Executable,
-    pdbedit: Executable,
-    smbpasswd: Executable,
+    context: Context,
     database: state::Database,
     plan: Plan,
     digest: String,
@@ -124,11 +94,6 @@ fn hex(value: &str, length: usize) -> Result<()> {
     }
     Ok(())
 }
-fn digest(plan: &Plan) -> Result<String> {
-    Ok(platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(
-        plan,
-    )?)))
-}
 fn prepare(input: Input) -> Result<Prepared> {
     if rustix::process::getuid().as_raw() != 0 || rustix::process::geteuid().as_raw() != 0 {
         return Err(
@@ -140,33 +105,19 @@ fn prepare(input: Input) -> Result<Prepared> {
         return Err("stop Samba and external passdb/configuration administrators before preparing this reset; this acknowledgment is not an OS lock for those writers".into());
     }
     hex(&input.operation_id, 32)?;
-    let configuration = install::existing(input.deployment)?;
-    let account = configuration.samba_account()?.snapshot();
-    let testparm = Executable::open(Program::Testparm)?;
-    let pdbedit = Executable::open(Program::Pdbedit)?;
-    let smbpasswd = Executable::open(Program::Smbpasswd)?;
-    // The helper-generated configuration fixes the local backend and hooks.
-    state::require_local_configuration(&testparm)?;
-    configuration.require_existing()?;
+    let (context, account) = Context::open(input.deployment)?;
     let database = state::Database::open()?;
     let plan = Plan {
         format: Format::LocalSambaPassword,
         operation_id: input.operation_id,
-        installed_configuration_digest: configuration.context_digest().into(),
+        installed_configuration_digest: context.configuration.context_digest().into(),
         account,
         database: database.revision()?,
-        programs: vec![
-            testparm.snapshot(),
-            pdbedit.snapshot(),
-            smbpasswd.snapshot(),
-        ],
+        programs: context.programs(),
     };
     let digest = digest(&plan)?;
     Ok(Prepared {
-        configuration,
-        testparm,
-        pdbedit,
-        smbpasswd,
+        context,
         database,
         plan,
         digest,
@@ -174,10 +125,7 @@ fn prepare(input: Input) -> Result<Prepared> {
 }
 impl Prepared {
     fn unchanged(&self) -> Result<()> {
-        self.configuration.require_existing()?;
-        self.testparm.recheck()?;
-        self.pdbedit.recheck()?;
-        self.smbpasswd.recheck()?;
+        self.context.recheck()?;
         self.database.require_original()
     }
     fn name(&self) -> String {
@@ -215,25 +163,6 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
         automatic_replay_available: false,
     })
 }
-#[derive(Debug)]
-struct Pending {
-    request_digest: String,
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
-impl std::fmt::Display for Pending {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Samba reset {} has a retained intent and may have changed the password; query this exact request, preserve evidence and do not automatically replay or restore an old database",
-            self.request_digest
-        )
-    }
-}
-impl std::error::Error for Pending {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
 pub(crate) fn reset(input: Reset) -> Result<Status> {
     if input.confirmation != "reset-existing-local-samba-password"
         || !input.input.external_writers_stopped
@@ -250,30 +179,14 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
         return Err("Samba configuration, account, database metadata or fixed programs differ from the exact preview; no password command was admitted".into());
     }
     prepared.unchanged()?;
-    // One-shot intent creation is the admission point. Even a missing receipt
-    // or failed spawn cannot prove a previous external command did not commit.
-    let recorded = prepared.configuration.host().read_operation(
+    operation::admit(
+        prepared.context.configuration.host(),
         &prepared.name(),
-        "plan.json",
-        MAX_RECORD_BYTES,
+        &prepared.plan,
     )?;
-    if recorded.is_some() {
-        return Err("this original Samba reset was already admitted; query its retained outcome, never automatically repeat it".into());
-    }
-    let bytes = json_codec::to_vec_pretty(&prepared.plan)?;
-    if !matches!(
-        prepared
-            .configuration
-            .host()
-            .publish(&prepared.name(), &[("plan.json", bytes.as_slice())])?,
-        BundlePublication::Created
-    ) {
-        return Err(
-            "original Samba reset staging already existed; command was not repeated".into(),
-        );
-    }
     execute(&prepared, &input.new_password).map_err(|source| {
         Box::new(Pending {
+            operation: "reset",
             request_digest: prepared.digest.clone(),
             source,
         }) as Box<dyn std::error::Error + Send + Sync>
@@ -281,11 +194,11 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
 }
 fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
     prepared.unchanged()?;
-    state::require_existing_account(&prepared.pdbedit, &prepared.plan.account)?;
+    state::require_existing_account(&prepared.context.pdbedit, &prepared.plan.account)?;
     // pdbedit is not called with export/hash/modification flags. Unexpected
     // metadata changes, including its own maintenance, prevent password write.
     prepared.unchanged()?;
-    prepared.smbpasswd.password(
+    prepared.context.smbpasswd.password(
         &[
             "-L",
             "-s",
@@ -297,9 +210,9 @@ fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
         ],
         password,
     )?;
-    prepared.configuration.require_existing()?;
+    prepared.context.configuration.require_existing()?;
     prepared.database.revision()?;
-    state::require_existing_account(&prepared.pdbedit, &prepared.plan.account)?;
+    state::require_existing_account(&prepared.context.pdbedit, &prepared.plan.account)?;
     let after = prepared.database.synchronize()?;
     let receipt = Receipt {
         request_digest: prepared.digest.clone(),
@@ -315,11 +228,11 @@ fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
         complete_installation_ready: false,
     };
     let bytes = json_codec::to_vec_pretty(&receipt)?;
-    prepared.configuration.host().publish(
+    prepared.context.configuration.host().publish(
         &format!("{}-complete", prepared.name()),
         &[("receipt.json", bytes.as_slice())],
     )?;
-    prepared.configuration.require_existing()?;
+    prepared.context.configuration.require_existing()?;
     if prepared.database.revision()? != receipt.after {
         return Err(
             "Samba database changed after reset receipt; receipt is historical only".into(),
