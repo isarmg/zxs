@@ -407,13 +407,15 @@ required Backend::initialize_directory_scope 取代 JSON action；AuthorizedBack
 
 ### 文件管理器目录分支创建与选择
 
-磁盘路径的 directory-branches 使用真实命令 MutateDiskDirectory 与 Create 动作，不经过 BackendAction 的 JSON 分派。原只持 path/name 的 directory-select 公开路由已移除，选择必须经仓库 default-branch 接口提供稳定 directory_branch_id 及 expected_tree_id/expected_head。可信原生内部仍可即时按名称选取，不属于 HTTP 契约。bounded HTTP 解析 slot/path/name/operation：省略 path 或空串都保持原磁盘根语义，显式非字符串仍拒绝；创建拼写 PortablePath 转为 LookupPath，BranchName 缓存名称 key，OperationId 按该路由原 INVALID_REQUEST 映射保留来源。原名称失败先于 operation 格式失败的顺序不变，未知字段仍拒绝。静态格式解析现位于 HTTP 阻塞任务内、先于排队后的 current 再验证；中间件认证仍先于 body，合法命令仍先验证当前身份再接触资源。
+磁盘路径的 directory-branches 使用真实命令 MutateDiskDirectory 的 ReviewedCreate 动作，不经过 BackendAction 的 JSON 分派。HTTP 创建必须携带 source：repository_id、directory_id、directory_branch_id、working_tree_id、head_tree_id、index_generation、namespace_head。共享 DirectoryBranchCreateSource 严格拒绝未知字段、缺项、非法身份及零代数；index_generation 只接受规范 u64 十进制字符串。原只持 path/name 的 directory-select 公开路由已移除，选择必须经仓库 default-branch 接口提供稳定 directory_branch_id 及 expected_tree_id/expected_head。可信原生 Create/Select 仍为即时调用，不是旧 HTTP 格式的兼容入口。
 
-EngineBackend 在同锁 current 身份后进入真实目录命令。虚拟仓库目录需显式范围、备份盘只读、合并命名空间歧义与惰性根准入保持；只有 Create 且根路径才允许建磁盘根，已用 operation 和 main 基线名称碰撞在建根前失败。共享磁盘解析器返回输入路径的借用后缀，不先分配裸 String。命名仓库去掉一个已验证组件得到 LookupPath 后缀，直接复用 display/key；磁盘根路径直接移动原解析结果，没有内部重新 parse 或 re-hash。
+bounded HTTP 解析 slot/path/name/operation/source：省略 path 或空串仍表示磁盘根，显式非字符串拒绝；创建拼写 PortablePath 转为 LookupPath，BranchName 缓存名称 key。原名称失败先于 operation 格式失败的顺序保持。解析位于 HTTP 阻塞任务内，先于排队后的 current 再验证；中间件认证先于 body，合法命令仍同锁验证当前身份和资源准入。ReviewedCreate 使用已有仓库的 Write 解析，不惰性建立磁盘根。虚拟仓库需显式范围、备份盘只读、合并命名空间歧义不变；原生 Create 的惰性根准入仍保留。命名仓库去掉已验证的首路径组件，直接复用 LookupPath 后缀。
 
-核心 create_directory_branches / select_directory_branches 接收 LookupPath 和 BranchName，只重查当前资源/选择/配额/正文可读性等动态条件。创建时仅需要 history ID 而不复制整个 Repository；已有目录选择和按名称选择不为取得目录 ID 复制 entries，首次物化复用已捕获共享 Commit。新名称 key 在碰撞/查找循环外已缓存，现有名称记录仍按当前存储模型计算 key。原 directory.branches.create/select 的 kind/principal/repository/path/name 展示字符串摘要、永久 receipt、scope 生成、同步顺序、操作健康观察包与文件正文检查不变；不承诺持久化全增量或吞吐提升。
+核心 create_directory_branch_from_source 将完整 source 放入 directory.git.branch-create 的原生 input，永久摘要绑定 kind/principal/input，固定 result.input 保留同一来源。现有 operation 匹配先于新的状态规划：相同原请求返回原收据，即使来源后来保存、提交或切换；相同 ID 换 source 返回 IDEMPOTENCY_KEY_REUSED。尚无收据的请求在共享 branches::create 中核验实际初始化目录身份、当前选择、工作树、已提交 HEAD、index 代数及 namespace HEAD；任一失效拒绝，不改用新来源。相同实现供 Current 冷重推导使用，不以 HTTP 侧的单独 guard 代替恢复证明。原脏内容、子仓库边界、名称碰撞、当前权限及正文可用性验证保留。
 
-无效裸 JSON 的原惰性根回归迁到真实 parser 和 HTTP 路由，逐次比较数据盘字节及仓库列表；合法内核/SMB夹具调用 typed backend，授权、两种动作的排队撤权、取消容量与 panic 边界均有对应调用。既有目录选择预算、部分选择、冲突、损坏正文和重启回归保留，不使用只改测试期望来放行不完整选择。
+新增来源比较是固定字段和已有索引查找，不新增锁、fsync、后台状态机或第二份操作收据；不改变现有目录扫描、元数据持久化和同步预算，不宣称吞吐提升。解析拒绝、逐来源失效、同 ID 冲突、原收据冷重放与 Current 篡改拒绝接入既有测试模块。
+
+Web 命名编辑器保存已复核来源，发送前再次核对同一会话、目录与读取代次；不能从刷新后的目录替换旧来源。目录创建与默认选择共用既有本机原请求队列，完整请求派生固定 method/URL/body/operation，创建为 POST、稳定分支选择为 PUT。先保存并读回再发送，恢复只查询原编号，明确续发仍使用原来源与 HEAD。固定类型、摘要和 result.input 验证原收据；未知结果或续发遭拒不等于首次未执行，清理失败仍保留围栏。恢复记录是请求材料而非成功证明，不保存凭据、不增加后端收据或服务端同步阶段。本轮补齐源码及回归输入，未运行格式化、编译、测试、短 CI 或浏览器验收。
 
 ### 文件分支公开名称修改
 

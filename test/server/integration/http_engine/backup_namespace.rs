@@ -226,7 +226,9 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         ),
         (
             "directory-branches",
-            json!({"path":"WorkBackup/nested","name":"forbidden","operation_id":new_id("op").unwrap()}),
+            // A structurally valid source reaches the backup write refusal;
+            // it must never become an authorized source on this read-only route.
+            json!({"path":"WorkBackup/nested","name":"forbidden","operation_id":new_id("op").unwrap(),"source":{"repository_id":"repo_00000000000000000000000000000001","directory_id":"entry_00000000000000000000000000000002","directory_branch_id":"dbr_00000000000000000000000000000003","working_tree_id":"dtree_00000000000000000000000000000004","head_tree_id":"dtree_00000000000000000000000000000005","index_generation":"9007199254740993","namespace_head":"commit_00000000000000000000000000000006"}}),
         ),
         (
             "namespace-batch",

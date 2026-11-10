@@ -8645,6 +8645,52 @@
         }
       }
     },
+    "DirectoryBranchCreateSource": {
+      "type": "object",
+      "description": "创建目录分支时已复核的准确来源；根 directory_id 必须等于 repository_id，非根使用 EntryId。动态状态在首次发布时复核。",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "directory_id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "directory_branch_id": {
+          "$ref": "#/$defs/DirectoryBranchId"
+        },
+        "working_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "head_tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        },
+        "index_generation": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "not": {
+                "const": "0"
+              }
+            }
+          ]
+        },
+        "namespace_head": {
+          "$ref": "#/$defs/CommitId"
+        }
+      },
+      "required": [
+        "repository_id",
+        "directory_id",
+        "directory_branch_id",
+        "working_tree_id",
+        "head_tree_id",
+        "index_generation",
+        "namespace_head"
+      ],
+      "additionalProperties": false
+    },
     "DirectoryGitChildReference": {
       "type": "object",
       "properties": {

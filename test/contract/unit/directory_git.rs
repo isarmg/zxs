@@ -24,6 +24,43 @@ fn decode(schema: &str, value: Value) -> Option<Result<Value, json_codec::Error>
 }
 
 #[test]
+fn directory_branch_create_source_vectors_match_wire_and_identity_validation() {
+    let vectors: Value =
+        json_codec::from_str(include_str!("../../../docs/contracts/vectors.json")).unwrap();
+    let mut counts = [0, 0];
+    for (index, group) in ["positive", "negative"].into_iter().enumerate() {
+        for vector in vectors[group].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            if !name.starts_with("directory-branch-source-") {
+                continue;
+            }
+            assert_eq!(vector["schema"], "DirectoryBranchCreateSource", "{name}");
+            let decoded: Result<DirectoryBranchCreateSource, _> =
+                json_codec::from_value(vector["value"].clone());
+            if index == 0 {
+                let source = decoded.unwrap();
+                source.validate().unwrap();
+                assert_eq!(
+                    json_codec::to_value(source).unwrap(),
+                    vector["value"],
+                    "{name}"
+                );
+            } else {
+                assert!(
+                    match decoded {
+                        Ok(source) => source.validate().is_err(),
+                        Err(_) => true,
+                    },
+                    "accepted {name}"
+                );
+            }
+            counts[index] += 1;
+        }
+    }
+    assert_eq!(counts, [2, 21]);
+}
+
+#[test]
 fn directory_git_fixed_vectors_match_strict_rust_wire_types() {
     let vectors: Value =
         json_codec::from_str(include_str!("../../../docs/contracts/vectors.json")).unwrap();

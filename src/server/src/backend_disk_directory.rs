@@ -1,7 +1,8 @@
 //! Parsed commands over the file manager's displayed disk directory namespace.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum DiskDirectoryAction {
     Create,
+    ReviewedCreate(storage_contract::directory_git::DirectoryBranchCreateSource),
     Select,
 }
 pub struct MutateDiskDirectory {

@@ -1,6 +1,6 @@
 //! Namespace, branch and note transactions; writes never bypass the pending-save gate.
 use super::{
-    disk_path, history_write_allowed,
+    history_write_allowed,
     operation::{record_operation, record_receipt},
     write_allowed,
 };
@@ -24,82 +24,14 @@ pub(crate) fn namespace(
 }
 pub(crate) fn directory_branch(
     state: RwSignal<State>,
-    path: String,
+    source: storage_contract::directory_git::DirectoryBranchCreateSource,
     name: String,
 ) -> Option<String> {
-    if !state.with_untracked(|state| {
-        write_allowed(state)
-            && state.files.directory_branches_supported
-            && state.files.directory == path
-    }) {
-        return None;
-    }
-    let operation_id = crate::ui::file_operation_id(state)?;
-    state.update(|s| {
-        s.notices.operation_success(t(
-            "目录分支组合已登记，尚未切换。",
-            "The folder branch combination was registered without switching to it.",
-        ));
-    });
-    let slot = state.with_untracked(|s| s.files.slot.clone());
-    let endpoint = format!("{}/directory-branches", disk_path(&slot));
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    state.update(|s| s.files.mutation_pending = true);
-    let submitted = operation_id.clone();
-    spawn_local(async move {
-        let result = api::request(
-            "POST",
-            &endpoint,
-            Some(json!({"path":path,"name":name,"operation_id":operation_id})),
-        )
-        .await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                record_receipt(state, &operation_id, value);
-            }
-            Err(error) => {
-                record_failure(state, epoch, &operation_id, error);
-            }
-        }
-        state.update(|s| s.files.mutation_pending = false);
-    });
-    Some(submitted)
+    crate::files::mkdir::start_directory_branch(state, source, name)
 }
 
 pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
-    let request = state.with_untracked(|s| {
-        if !super::default_write_allowed(s)
-            || !s.files.loaded
-            || !s.files.directory_branches_supported
-        {
-            return None;
-        }
-        let preview = s.files.directory_preview.as_ref()?;
-        let branch = preview.branch()?;
-        if !preview.at_directory(&s.files.directory) || branch.id() != branch_id {
-            return None;
-        }
-        Some((
-            s.files.repository_id.clone(),
-            branch.head_tree_id().to_owned(),
-            s.files.namespace_head.clone(),
-        ))
-    });
-    let Some((repository, tree, head)) = request else {
-        return;
-    };
-    publish_default(
-        state,
-        "PUT",
-        format!(
-            "/api/repositories/{}/default-branch",
-            api::segment(&repository)
-        ),
-        json!({"directory_branch_id":branch_id,"expected_tree_id":tree,"expected_head":head}),
-    );
+    crate::files::mkdir::start_directory_checkout(state, &branch_id);
 }
 
 fn publish_default(

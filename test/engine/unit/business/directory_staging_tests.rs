@@ -981,3 +981,126 @@ fn detached_status_read_is_cancellable_and_rechecks_its_exact_observation() {
         ErrorCode::OperationAborted
     );
 }
+
+fn branch_source(engine: &Engine, repo: &Repository, path: &str) -> DirectoryBranchCreateSource {
+    let current = status(engine, repo, path);
+    DirectoryBranchCreateSource {
+        repository_id: repo.repository_id.clone(),
+        directory_id: current.directory_id,
+        directory_branch_id: current.directory_branch_id.unwrap(),
+        working_tree_id: current.working_tree_id.unwrap(),
+        head_tree_id: current.head_tree_id.unwrap(),
+        index_generation: current.index_generation,
+        namespace_head: engine.state.branches[&repo.main_branch_id]
+            .head_commit_id
+            .clone(),
+    }
+}
+
+#[test]
+fn reviewed_branch_source_is_exact_and_durable_replay_does_not_read_a_new_source() {
+    let (temp, mut engine, repo) = fixture();
+    save(&mut engine, &repo, "child/file", b"reviewed");
+    initialize(&mut engine, &repo, "child");
+    commit(&mut engine, &repo, "child");
+    let path = name_policy::LookupPath::parse("child").unwrap();
+    let source = branch_source(&engine, &repo, "child");
+    let name = storage_contract::BranchName::parse("reviewed branch").unwrap();
+    for field in ["directory", "branch", "working", "head", "index", "namespace"] {
+        let mut changed = source.clone();
+        match field {
+            "directory" => changed.directory_id = new_id("entry").unwrap(),
+            "branch" => changed.directory_branch_id = new_id("dbr").unwrap(),
+            "working" => changed.working_tree_id = new_id("dtree").unwrap(),
+            "head" => changed.head_tree_id = new_id("dtree").unwrap(),
+            "index" => changed.index_generation += 1,
+            "namespace" => changed.namespace_head = new_id("commit").unwrap(),
+            _ => unreachable!(),
+        }
+        let before = engine.state.clone();
+        assert_eq!(
+            engine
+                .create_directory_branch_from_source(
+                    &changed,
+                    Some(&path),
+                    &name,
+                    "admin",
+                    OperationId::generate().unwrap(),
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::DirectoryBranchConflict,
+            "{field}",
+        );
+        assert_eq!(engine.state, before, "{field}");
+    }
+    let operation = OperationId::generate().unwrap();
+    let receipt = engine
+        .create_directory_branch_from_source(&source, Some(&path), &name, "admin", operation)
+        .unwrap();
+    assert_eq!(receipt.result["input"]["source"], json_codec::json!(source));
+    let current_branch = source.directory_branch_id.clone();
+    let created_branch = receipt.result["directory_branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        status(&engine, &repo, "child").directory_branch_id,
+        Some(current_branch)
+    );
+    // Restaging identical bytes still invalidates the reviewed index generation.
+    stage_owned(&mut engine, &repo, "child");
+    let fresh = branch_source(&engine, &repo, "child");
+    assert_ne!(fresh.index_generation, source.index_generation);
+    let before = engine.state.clone();
+    assert_eq!(
+        engine
+            .create_directory_branch_from_source(
+                &source,
+                Some(&path),
+                &storage_contract::BranchName::parse("unknown retry").unwrap(),
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::DirectoryBranchConflict,
+    );
+    assert_eq!(engine.state, before);
+    assert_eq!(
+        engine
+            .create_directory_branch_from_source(&fresh, Some(&path), &name, "admin", operation)
+            .unwrap_err()
+            .code(),
+        ErrorCode::IdempotencyKeyReused,
+    );
+    save(&mut engine, &repo, "child/file", b"newer saved source");
+    commit(&mut engine, &repo, "child");
+    engine
+        .select_directory_branches(
+            &repo.repository_id,
+            Some(&path),
+            &name,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        status(&engine, &repo, "child").directory_branch_id,
+        Some(created_branch)
+    );
+    assert_eq!(
+        engine
+            .create_directory_branch_from_source(&source, Some(&path), &name, "admin", operation)
+            .unwrap(),
+        receipt,
+    );
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        engine
+            .create_directory_branch_from_source(&source, Some(&path), &name, "admin", operation)
+            .unwrap(),
+        receipt,
+    );
+}

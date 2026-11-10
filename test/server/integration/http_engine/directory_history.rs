@@ -84,7 +84,7 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
             &token,
             "POST",
             "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"path":"docs","name":name,"operation_id":new_id("op").unwrap()})),
+            Some(json!({"path":"docs","name":name,"operation_id":new_id("op").unwrap(),"source":manager_directory_branch_source(&app, &token, "docs").await})),
         )
         .await;
     }
@@ -192,7 +192,7 @@ async fn directory_history_http_is_read_only_root_bound_and_authenticated() {
             Some(&token),
             "POST",
             "/api/file-manager/disks/B01/directory-branches",
-            Some(json!({"path":"P01/docs","name":"denied","operation_id":new_id("op").unwrap()}))
+            Some(json!({"path":"P01/docs","name":"denied","operation_id":new_id("op").unwrap(),"source":manager_directory_branch_source(&app, &token, "docs").await}))
         )
         .await
         .0,

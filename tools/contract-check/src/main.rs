@@ -294,6 +294,11 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::smb_account::SmbAccountStatus =
                 json_codec::from_value(value.clone())?;
         }
+        "DirectoryBranchCreateSource" => {
+            let source: storage_contract::directory_git::DirectoryBranchCreateSource =
+                json_codec::from_value(value.clone())?;
+            source.validate()?;
+        }
         "DiskHealth" => {
             let _: storage_contract::disk_details::DiskHealth =
                 json_codec::from_value(value.clone())?;

@@ -7,6 +7,18 @@ use std::{
 };
 use storage_engine::{CommitRequest, Config, Workspace, new_id};
 
+fn reviewed_directory_source() -> storage_contract::directory_git::DirectoryBranchCreateSource {
+    storage_contract::directory_git::DirectoryBranchCreateSource {
+        repository_id: "repo_00000000000000000000000000000001".into(),
+        directory_id: "entry_00000000000000000000000000000002".into(),
+        directory_branch_id: "dbr_00000000000000000000000000000003".into(),
+        working_tree_id: "dtree_00000000000000000000000000000004".into(),
+        head_tree_id: "dtree_00000000000000000000000000000005".into(),
+        index_generation: 1,
+        namespace_head: "commit_00000000000000000000000000000006".into(),
+    }
+}
+
 /// Pause only after AuthorizedBackend has released its account-store lock.
 /// Publishing a revocation here must finish before EngineBackend captures a
 /// read plan or admits a mutation; neither side may reverse the lock order.
@@ -893,6 +905,7 @@ enum Request {
     SetFileDefault,
     RenameFileBranch,
     DiskDirectoryCreate,
+    DiskDirectoryReviewedCreate,
     DiskDirectorySelect,
     InitializeDirectoryScope,
     ArchiveBranch,
@@ -1529,6 +1542,20 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
+            Self::DiskDirectoryReviewedCreate => backend
+                .mutate_disk_directory(
+                    identity,
+                    crate::MutateDiskDirectory {
+                        slot_id: "missing".into(),
+                        path: None,
+                        name: storage_contract::BranchName::parse("Side").unwrap(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
+                        action: crate::DiskDirectoryAction::ReviewedCreate(
+                            reviewed_directory_source(),
+                        ),
+                    },
+                )
+                .map(|_| ()),
             Self::DiskDirectorySelect => backend
                 .mutate_disk_directory(
                     identity,
@@ -1777,6 +1804,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::HistoryField,
                 Request::DiskDirectorySelect,
                 Request::DiskDirectoryCreate,
+                Request::DiskDirectoryReviewedCreate,
                 Request::InitializeDirectoryScope,
                 Request::CreateMergeLink,
                 Request::CreateBranch,
@@ -2048,6 +2076,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::SetFileDefault,
         Request::RenameFileBranch,
         Request::DiskDirectoryCreate,
+        Request::DiskDirectoryReviewedCreate,
         Request::DiskDirectorySelect,
         Request::InitializeDirectoryScope,
         Request::ArchiveBranch,

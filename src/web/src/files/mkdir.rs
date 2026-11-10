@@ -1,4 +1,4 @@
-//! Recover exact folder creations and ordinary file moves across sessions.
+//! Recover exact namespace and directory branch requests across sessions.
 //! The server retains authority; browser storage only retains the original input.
 use super::{FileOperation, SaveStatus, actions};
 use crate::{
@@ -18,7 +18,7 @@ pub(crate) use view::view;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReceiptOrigin {
     Lookup,
-    OriginalPost,
+    OriginalRequest,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -91,6 +91,11 @@ pub(crate) fn blocks_writes(state: &State) -> bool {
     let model = &state.files.mkdir;
     model.owns(state) && (!model.records.is_empty() || model.error.is_some())
 }
+pub(crate) fn default_completion_applies(state: &State, id: &str) -> bool {
+    state.files.mkdir.records.iter()
+        .find(|retained| retained.record.operation().to_string() == id)
+        .is_none_or(|retained| retained.record.checkout_applies(state))
+}
 pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
     if !state
         .with_untracked(|s| actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s))
@@ -134,6 +139,56 @@ pub(super) fn start_relocation(
     retain(state, record)
 }
 
+pub(super) fn start_directory_branch(
+    state: RwSignal<State>,
+    source: storage_contract::directory_git::DirectoryBranchCreateSource,
+    name: String,
+) -> Option<String> {
+    if !state.with_untracked(|s| {
+        actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s)
+            && s.files.directory_branches_supported
+            && s.files.repository_id == source.repository_id
+            && s.files.namespace_head == source.namespace_head
+    }) {
+        return None;
+    }
+    let operation = crate::ui::file_operation_id(state)?
+        .parse()
+        .expect("invariant: UI generated a canonical operation ID");
+    let record = state.with_untracked(|s| {
+        Record::capture_directory_branch(s, operation, source, name)
+    });
+    match record {
+        Ok(record) => retain(state, Arc::new(record)),
+        Err(error) => {
+            fail(state, error);
+            None
+        }
+    }
+}
+
+pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
+    if !state.with_untracked(|s| {
+        actions::default_write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s)
+            && s.files.directory_branches_supported
+            && s.files.directory_preview.as_ref().is_some_and(|preview| {
+                preview.at_directory(&s.files.directory)
+                    && preview.branch().is_some_and(|choice| choice.id() == branch)
+            })
+    }) {
+        return;
+    }
+    let Some(id) = crate::ui::file_operation_id(state) else {
+        return;
+    };
+    let operation = id.parse().expect("invariant: UI generated a canonical operation ID");
+    let record = state.with_untracked(|s| Record::capture_directory_checkout(s, operation));
+    match record {
+        Ok(record) => { retain(state, Arc::new(record)); }
+        Err(error) => fail(state, error),
+    }
+}
+
 fn retain(state: RwSignal<State>, record: Arc<Record>) -> Option<String> {
     let id = record.operation().to_string();
     if let Err(error) = storage::save(&record) {
@@ -145,6 +200,9 @@ fn retain(state: RwSignal<State>, record: Arc<Record>) -> Option<String> {
     }
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| {
+        if record.is_directory_checkout() {
+            s.files.default_operation = Some(id.clone());
+        }
         s.files.mkdir.records.push(Retained {
             record: Arc::clone(&record),
             phase: Phase::Pending,
@@ -220,8 +278,8 @@ fn send(state: RwSignal<State>, epoch: u64, record: Arc<Record>, submission: Sub
         if !current_session(state, epoch) {
             return;
         }
-        let (endpoint, body) = record.request();
-        let result = api::request("POST", &endpoint, Some(body)).await;
+        let (method, endpoint, body) = record.request();
+        let result = api::request(method, &endpoint, Some(body)).await;
         if !current_session(state, epoch) {
             return;
         }
@@ -238,7 +296,7 @@ fn send(state: RwSignal<State>, epoch: u64, record: Arc<Record>, submission: Sub
         });
         match result {
             Ok(value) => {
-                let operation = if record.matches_receipt(&value, ReceiptOrigin::OriginalPost) {
+                let operation = if record.matches_receipt(&value, ReceiptOrigin::OriginalRequest) {
                     FileOperation::from_receipt(&id, &value)
                 } else {
                     FileOperation::unknown(&id)
@@ -248,7 +306,7 @@ fn send(state: RwSignal<State>, epoch: u64, record: Arc<Record>, submission: Sub
             Err(error) => match submission {
                 Submission::First => actions::record_failure(state, epoch, &id, error),
                 Submission::OriginalRetry => {
-                    // Rejection of a retry is not evidence about the first POST.
+                    // Rejection of a retry is not evidence about the first request.
                     actions::record_operation(state, FileOperation::unknown(&id));
                     fail_in(state, epoch, ErrorContext::Operation(id.clone()), error);
                 }
@@ -358,6 +416,14 @@ pub(crate) fn restore(state: RwSignal<State>) {
         })
         .unwrap_or_default();
     for id in operations {
+        state.update(|s| {
+            if s.files.mkdir.records.iter().any(|retained| {
+                retained.record.operation().to_string() == id
+                    && retained.record.is_directory_checkout()
+            }) {
+                s.files.default_operation = Some(id.clone());
+            }
+        });
         actions::record_operation(state, FileOperation::unknown(&id));
     }
     actions::poll(state);
@@ -369,6 +435,9 @@ fn adopt_owner(state: &mut State, current: &(u64, String)) {
         .iter()
         .map(|retained| retained.record.operation().to_string())
         .collect();
+    if state.files.default_operation.as_ref().is_some_and(|id| old_ids.contains(id)) {
+        state.files.default_operation = None;
+    }
     if model
         .records
         .iter()

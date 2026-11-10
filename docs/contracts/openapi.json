@@ -1874,7 +1874,7 @@
     "/api/file-manager/disks/{slot}/directory-branches": {
       "post": {
         "operationId": "createDirectoryBranch",
-        "description": "登记一个命名目录分支，直接引用父目录子树及其冻结文件/子目录节点。不提前创建文件分支，不复制正文，不创建占位文件，也不自动选择。首次实际写入继承文件才创建公共文件分支及FULL；之后的组成变化只追加子树，保留目录分支身份。",
+        "description": "从准确复核的已初始化目录来源登记命名分支。source 绑定仓库、目录、当前分支、工作树、已提交 HEAD、index 代数及外层 namespace HEAD。首次发布拒绝失效来源，不自动改用新来源；同一 operation_id 的原请求重放原收据。仅登记冻结引用，不复制正文、不创建占位文件、不自动选择。",
         "parameters": [
           {
             "name": "slot",
@@ -2043,7 +2043,7 @@
             }
           },
           "409": {
-            "description": "DIRECTORY_SCOPE_REQUIRED：磁盘根包含多个旧命名空间，应选择具体文件夹。",
+            "description": "来源已失效或目录范围冲突；同一 operation_id 更改来源为 IDEMPOTENCY_KEY_REUSED。原请求不自动重新取源。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2080,13 +2080,16 @@
                   },
                   "operation_id": {
                     "$ref": "#/components/schemas/OperationId"
+                  },
+                  "source": {
+                    "$ref": "#/components/schemas/DirectoryBranchCreateSource"
                   }
                 },
                 "additionalProperties": false,
                 "required": [
-                  "path",
                   "name",
-                  "operation_id"
+                  "operation_id",
+                  "source"
                 ]
               }
             }
@@ -18709,6 +18712,52 @@
             ]
           }
         }
+      },
+      "DirectoryBranchCreateSource": {
+        "type": "object",
+        "description": "创建目录分支时已复核的准确来源；根 directory_id 必须等于 repository_id，非根使用 EntryId。动态状态在首次发布时复核。",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "working_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "head_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "index_generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              {
+                "not": {
+                  "const": "0"
+                }
+              }
+            ]
+          },
+          "namespace_head": {
+            "$ref": "#/components/schemas/CommitId"
+          }
+        },
+        "required": [
+          "repository_id",
+          "directory_id",
+          "directory_branch_id",
+          "working_tree_id",
+          "head_tree_id",
+          "index_generation",
+          "namespace_head"
+        ],
+        "additionalProperties": false
       },
       "DirectoryGitChildReference": {
         "type": "object",

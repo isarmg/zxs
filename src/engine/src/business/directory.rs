@@ -1403,6 +1403,33 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         let input = json!({"repository_id":repository,"path":path.map_or("",name_policy::LookupPath::as_str),"name":name.as_str()});
+        self.create_directory_branch_input(input, principal, operation)
+    }
+
+    pub fn create_directory_branch_from_source(
+        &mut self,
+        source: &storage_contract::directory_git::DirectoryBranchCreateSource,
+        path: Option<&name_policy::LookupPath>,
+        name: &storage_contract::BranchName,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        source.validate()?;
+        let input = json!({
+            "repository_id": source.repository_id,
+            "path": path.map_or("", name_policy::LookupPath::as_str),
+            "name": name.as_str(),
+            "source": source,
+        });
+        self.create_directory_branch_input(input, principal, operation)
+    }
+
+    fn create_directory_branch_input(
+        &mut self,
+        input: json_codec::Value,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
         self.mutate(
             "directory.git.branch-create",
             principal,

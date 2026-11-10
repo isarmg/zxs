@@ -603,14 +603,31 @@ fn disk_exit_directory_fork_replay_rejects_cross_scope_identity_and_context_impo
     fixture.exit(MembershipExitAction::Deregister);
     let previous = Arc::clone(&fixture.engine.state);
     let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
-    let result = create(
-        &mut fixture.engine,
-        &fixture.repo,
-        Some("dir"),
-        "after exit",
-        op(),
-    )
-    .unwrap();
+    let status = fixture
+        .engine
+        .directory_git_status(&fixture.repo.repository_id, "dir")
+        .unwrap();
+    let source = storage_contract::directory_git::DirectoryBranchCreateSource {
+        repository_id: fixture.repo.repository_id.clone(),
+        directory_id: status.directory_id,
+        directory_branch_id: status.directory_branch_id.unwrap(),
+        working_tree_id: status.working_tree_id.unwrap(),
+        head_tree_id: status.head_tree_id.unwrap(),
+        index_generation: status.index_generation,
+        namespace_head: fixture.engine.state.branches[&fixture.repo.main_branch_id]
+            .head_commit_id
+            .clone(),
+    };
+    let result = fixture
+        .engine
+        .create_directory_branch_from_source(
+            &source,
+            Some(&name_policy::LookupPath::parse("dir").unwrap()),
+            &BranchName::parse("after exit").unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap();
     let branch = result.result["directory_branch_id"].as_str().unwrap();
     let published = fixture.engine.state.as_ref().clone();
     view.advance(&previous, &published).unwrap();
@@ -641,8 +658,32 @@ fn disk_exit_directory_fork_replay_rejects_cross_scope_identity_and_context_impo
         }
         assert!(view.advance(&previous, &next).is_err(), "{corruption}");
     }
+    // Recompute the forged digest too: rejection must come from source
+    // re-derivation against previous State, not just a receipt hash mismatch.
+    for (field, value) in [
+        ("repository_id", new_id("repo").unwrap()),
+        ("directory_id", new_id("entry").unwrap()),
+        ("directory_branch_id", new_id("dbr").unwrap()),
+        ("working_tree_id", new_id("dtree").unwrap()),
+        ("head_tree_id", new_id("dtree").unwrap()),
+        (
+            "index_generation",
+            (source.index_generation + 1).to_string(),
+        ),
+        ("namespace_head", new_id("commit").unwrap()),
+    ] {
+        let mut next = published.clone();
+        let receipt = next.operations.get_mut(&result.operation_id).unwrap();
+        receipt.result["input"]["source"][field] = json_codec::json!(value);
+        receipt.request_digest = Engine::native_request_digest(
+            &receipt.kind,
+            "admin",
+            &receipt.result["input"],
+        )
+        .unwrap();
+        assert!(view.advance(&previous, &next).is_err(), "{field}");
+    }
 }
-
 #[test]
 fn disk_exit_parent_checkout_preserves_child_after_its_old_file_branch_is_archived() {
     let mut fixture = Fixture::new();

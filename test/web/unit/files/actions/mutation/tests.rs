@@ -23,7 +23,7 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             // sign-out admission closes, even while credentials are kept
             // for a failed revocation retry.
             let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
-            let _ = directory_branch(state, "folder".into(), "draft".into());
+            let _ = directory_branch(state, branch_source(), "draft".into());
             let _ = update_note(state, None, "note".into());
             select_branch(state, "other".into());
             let _ = record_mutation(state, "PATCH", "/api/test".into(), json!({}));
@@ -54,7 +54,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
         });
         // These must return before generating IDs or spawning browser work.
         let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
-        let _ = directory_branch(state, "folder".into(), "draft".into());
+        let _ = directory_branch(state, branch_source(), "draft".into());
         let _ = update_note(state, None, "note".into());
         select_branch(state, "other".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
@@ -204,4 +204,16 @@ fn selecting_an_empty_file_branch_is_browsing_without_a_publication() {
             assert!(s.files.operations.is_empty() && s.files.default_operation.is_none());
         });
     });
+}
+
+fn branch_source() -> storage_contract::directory_git::DirectoryBranchCreateSource {
+    storage_contract::directory_git::DirectoryBranchCreateSource {
+        repository_id: format!("repo_{:032x}", 1),
+        directory_id: format!("entry_{:032x}", 1),
+        directory_branch_id: format!("dbr_{:032x}", 1),
+        working_tree_id: format!("dtree_{:032x}", 1),
+        head_tree_id: format!("dtree_{:032x}", 1),
+        index_generation: 1,
+        namespace_head: format!("commit_{:032x}", 1),
+    }
 }

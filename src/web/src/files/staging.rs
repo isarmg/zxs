@@ -6,7 +6,9 @@ use crate::{
     ui::{State, accept_read_response},
 };
 use std::{collections::BTreeSet, sync::Arc};
-use storage_contract::directory_git::{DirectoryGitChildStatus, DirectoryGitStatus};
+use storage_contract::directory_git::{
+    DirectoryBranchCreateSource, DirectoryGitChildStatus, DirectoryGitStatus,
+};
 use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_local};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,6 +173,7 @@ fn decode(value: json_codec::Value, target: &Target) -> Result<DirectoryGitStatu
     if status.initialized {
         if status.directory_branch_id.is_none()
             || status.working_tree_id.is_none()
+            || status.index_generation == 0
             || (status.head_tree_id.is_none() && !status.staged)
             || !status.owner.as_ref().is_some_and(|owner| {
                 owner.directory_id == status.directory_id && owner.path == status.path
@@ -344,12 +347,47 @@ fn owned_review(state: &State, model: &Model) -> Option<Review> {
         index_generation: status.index_generation,
     })
 }
-fn branch_ready(state: &State, model: &Model) -> bool {
-    if !state.files.directory_branches_supported {
-        return false;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BranchReview {
+    target: Target,
+    slot: String,
+    display_path: String,
+    source: DirectoryBranchCreateSource,
+}
+impl BranchReview {
+    pub(super) fn submit(self, state: RwSignal<State>, name: String) -> Option<String> {
+        if !state.with_untracked(|state| {
+            Target::capture(state).as_ref() == Some(&self.target)
+                && state.files.slot == self.slot
+                && state.files.directory == self.display_path
+        }) {
+            return None;
+        }
+        actions::directory_branch(state, self.source, name)
     }
-    model.ready(state).is_some_and(|(_, status)| {
-        status.initialized && !status.staged && !status.unstaged && !status.needs_restage
+}
+
+fn branch_review(state: &State, model: &Model) -> Option<BranchReview> {
+    if !state.files.directory_branches_supported {
+        return None;
+    }
+    let (target, status) = model.ready(state)?;
+    if !status.initialized || status.staged || status.unstaged || status.needs_restage {
+        return None;
+    }
+    Some(BranchReview {
+        target: target.clone(),
+        slot: state.files.slot.clone(),
+        display_path: state.files.directory.clone(),
+        source: DirectoryBranchCreateSource {
+            repository_id: status.repository_id.clone(),
+            directory_id: status.directory_id.clone(),
+            directory_branch_id: status.directory_branch_id.clone()?,
+            working_tree_id: status.working_tree_id.clone()?,
+            head_tree_id: status.head_tree_id.clone()?,
+            index_generation: status.index_generation,
+            namespace_head: target.namespace_head.clone(),
+        },
     })
 }
 
@@ -459,8 +497,9 @@ fn child_view(
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
     let target = Memo::new(move |_| state.with(Target::capture));
-    let branch_disabled =
-        Signal::derive(move || state.with(|state| model.with(|model| !branch_ready(state, model))));
+    let branch_source =
+        Signal::derive(move || state.with(|state| model.with(|model| branch_review(state, model))));
+    let branch_disabled = Signal::derive(move || branch_source.get().is_none());
     let history_target = Memo::new(move |_| {
         state.with(|state| {
             if state.files.selected.is_some() {
@@ -510,7 +549,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     {branch::control(
                         state,
                         t("创建目录分支", "Create folder branch"),
-                        branch::Target::CurrentDirectory,
+                        branch::Target::CurrentDirectory(branch_source),
                         branch_disabled,
                     )}
                 </div>

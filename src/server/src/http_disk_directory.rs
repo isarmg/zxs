@@ -9,13 +9,10 @@ use http_routing::{
 };
 use json_codec::{Map, Value};
 
-fn parse(
-    mut body: Map<String, Value>,
-    action: DiskDirectoryAction,
-) -> Result<MutateDiskDirectory, ApiError> {
-    if let Some(key) = body
-        .keys()
-        .find(|key| !["slot_id", "path", "name", "operation_id"].contains(&key.as_str()))
+fn parse(mut body: Map<String, Value>) -> Result<MutateDiskDirectory, ApiError> {
+    if let Some(key) = body.keys().find(|key| {
+        !["slot_id", "path", "name", "operation_id", "source"].contains(&key.as_str())
+    })
     {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }
@@ -52,12 +49,18 @@ fn parse(
         _ => return Err(ApiError::invalid("missing string field operation_id")),
     };
     let operation_id = operation.parse().map_err(ApiError::invalid_source)?;
+    let source = body
+        .remove("source")
+        .ok_or_else(|| ApiError::invalid("missing directory branch source"))?;
+    let source: storage_contract::directory_git::DirectoryBranchCreateSource =
+        json_codec::from_value(source).map_err(ApiError::invalid_source)?;
+    source.validate().map_err(ApiError::invalid_source)?;
     Ok(MutateDiskDirectory {
         slot_id,
         path,
         name,
         operation_id,
-        action,
+        action: DiskDirectoryAction::ReviewedCreate(source),
     })
 }
 async fn submit(
@@ -65,7 +68,6 @@ async fn submit(
     identity: Identity,
     slot: String,
     request: Request,
-    action: DiskDirectoryAction,
 ) -> Result<Json<Value>, ApiError> {
     let Value::Object(body) = crate::with_id(crate::json_body(request).await?, "slot_id", slot)?
     else {
@@ -79,7 +81,7 @@ async fn submit(
     crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
         .run(move |backend| {
             backend
-                .mutate_disk_directory(&identity, parse(body, action)?)
+                .mutate_disk_directory(&identity, parse(body)?)
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
@@ -91,7 +93,7 @@ pub(crate) async fn create(
     ApiPath(slot): ApiPath<String>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
-    submit(state, identity, slot, request, DiskDirectoryAction::Create).await
+    submit(state, identity, slot, request).await
 }
 
 #[cfg(test)]

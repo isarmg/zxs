@@ -157,6 +157,10 @@ Development 代表模拟登记目录，不对宿主采集物理硬件信息，�
 
 ## 显式目录仓库
 
+创建目录分支的磁盘 HTTP 请求必须携带 `DirectoryBranchCreateSource`，固定仓库、目录、当前分支、工作树、已提交 HEAD、index 代数与外层 namespace HEAD；仅省略 path 或空串表示磁盘根，不省略来源。代数使用非零规范 u64 十进制字符串，根目录 ID 必须等于仓库 ID。schema 描述字段，Rust 共享验证补充身份关系，首次规划复核当前状态。旧 path/name 请求拒绝且不会惰性建立磁盘根。
+
+同一 operation_id 的原请求先匹配永久摘要与收据，再决定是否需要规划；来源变化后仍可重放已经发布的原结果，不能为重试改用新来源。Web 在首次发送前保存完整创建或选择请求，恢复保留原 HTTP method、目标、来源、期望 HEAD 及操作 ID；本地恢复记录不证明发布成功。默认分支选择仍使用稳定分支 ID 与双 HEAD 的 PUT，不恢复按名 directory-select。新增固定向量和回归源码尚须由统一 GitHub CI 执行。
+
 `DirectoryGitRepository` 保存各目录仓库独立的 HEAD、index 与明确孩子引用。必需 `main_branch_id` 固定初始化时的目录分支身份，布局基准读取该分支最新已保存工作组合（包括未提交内容），不随 current 或显示名称改变；缺失字段拒绝，不隐式补齐。Snapshot 与 PagedHistoryRoot 的必需映射各增加 `directory_git_repositories`，结合文件删除生命周期表后，总数分别为37与32；缺失此映射的根拒绝，不补空表迁移旧格式。原证明仍绑定完整根，这些 schema 不能证明跨源完整历史或引用闭包。
 
 `DirectoryGitStatus` 和孩子状态的 nullable 字段必须显式出现，`unstaged` 为必填布尔值且不补旧响应默认值；目录初始化不创建提交，读取不初始化。暂存及提交请求必须携带规范十进制字符串 index 代数，未知字段、数值或遗漏代数拒绝。固定正反向量由 schema 及 Rust DTO 回归共同验证。HTTP 公开四个目录 Git 接口，旧 `/directory-scopes` 和按名 `/directory-select` 入口移除，目录选择改用稳定分支 ID 及双 HEAD CAS；父提交只采用固定暂存快照和明确暂存的孩子 HEAD，不递归提交，也不自动加入暂存后保存的工作内容。状态 GET 的完整编码上限为1MiB，超过失败而不截断。

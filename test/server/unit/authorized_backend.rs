@@ -5,6 +5,18 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+fn reviewed_directory_source() -> storage_contract::directory_git::DirectoryBranchCreateSource {
+    storage_contract::directory_git::DirectoryBranchCreateSource {
+        repository_id: "repo_00000000000000000000000000000001".into(),
+        directory_id: "entry_00000000000000000000000000000002".into(),
+        directory_branch_id: "dbr_00000000000000000000000000000003".into(),
+        working_tree_id: "dtree_00000000000000000000000000000004".into(),
+        head_tree_id: "dtree_00000000000000000000000000000005".into(),
+        index_generation: 1,
+        namespace_head: "commit_00000000000000000000000000000006".into(),
+    }
+}
+
 struct Recorded {
     method: &'static str,
     identity: Option<Identity>,
@@ -1979,6 +1991,9 @@ impl Fixture {
             }),
             ("mutate_disk_directory", {
                 backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::Create}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})
+            }),
+            ("mutate_disk_directory", {
+                backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::ReviewedCreate(reviewed_directory_source())}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})
             }),
             ("mutate_disk_directory", {
                 backend.mutate_disk_directory(identity,crate::MutateDiskDirectory {slot_id:"P01".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),name:storage_contract::BranchName::parse("Side").unwrap(),operation_id,action:crate::DiskDirectoryAction::Select}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"mutate_disk_directory"));json!({"returned_by":"mutate_disk_directory"})})

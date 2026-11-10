@@ -6,6 +6,50 @@ use std::collections::BTreeMap;
 mod visibility;
 pub use visibility::current_entry_visible;
 
+/// The exact initialized source reviewed before creating a directory branch.
+/// This is a wire request value; current ownership and state are checked at commit.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryBranchCreateSource {
+    pub repository_id: String,
+    pub directory_id: String,
+    pub directory_branch_id: String,
+    pub working_tree_id: String,
+    pub head_tree_id: String,
+    #[serialization(with = "crate::u64_string")]
+    pub index_generation: u64,
+    pub namespace_head: String,
+}
+
+impl DirectoryBranchCreateSource {
+    pub fn validate(&self) -> crate::Result<()> {
+        let Self {
+            repository_id,
+            directory_id,
+            directory_branch_id,
+            working_tree_id,
+            head_tree_id,
+            index_generation,
+            namespace_head,
+        } = self;
+        crate::validate_id(repository_id, "repo")?;
+        if directory_id != repository_id {
+            crate::validate_id(directory_id, "entry")?;
+        }
+        crate::validate_id(directory_branch_id, "dbr")?;
+        crate::validate_id(working_tree_id, "dtree")?;
+        crate::validate_id(head_tree_id, "dtree")?;
+        crate::validate_id(namespace_head, "commit")?;
+        if *index_generation == 0 {
+            return Err(crate::Error::new(
+                crate::ErrorCode::InvalidInteger,
+                "directory source index generation must be positive",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryGitChildReference {

@@ -23,6 +23,11 @@ pub(super) fn create(
     }
     let git = &state.directory_git_repositories[&status.directory_id];
     let current = &git.current_branch_id;
+    if let Some(source) = input.get("source") {
+        let source: DirectoryBranchCreateSource = json_codec::from_value(source.clone())?;
+        source.validate()?;
+        require_reviewed_source(state, repository, git, &source)?;
+    }
     if git
         .branches
         .keys()
@@ -73,6 +78,43 @@ pub(super) fn create(
     Ok(
         json!({"input":input,"directory_branch_id":id,"history_tree_id":state.repositories[repository].history_tree_id,"path":path,"name":name.as_str(),"head_tree_id":tree,"count":count.to_string(),"branches":files,"copied_files":"0","placeholder_files":"0","materialized":false,"selected":false}),
     )
+}
+
+/// Used by both live planning and Current's cold, closed-write-set replay.
+/// The native instantaneous command omits a reviewed source; HTTP never does.
+fn require_reviewed_source(
+    state: &State,
+    repository: &str,
+    git: &DirectoryGitRepository,
+    source: &DirectoryBranchCreateSource,
+) -> Result<()> {
+    let DirectoryBranchCreateSource {
+        repository_id,
+        directory_id,
+        directory_branch_id,
+        working_tree_id,
+        head_tree_id,
+        index_generation,
+        namespace_head,
+    } = source;
+    let current = &git.current_branch_id;
+    let branch = &state.directory_branches[current];
+    let index = &git.branches[current];
+    let repo = &state.repositories[repository];
+    if repository_id != repository
+        || directory_id != &git.directory_id
+        || directory_branch_id != current
+        || state.directory_selections.get(directory_id) != Some(current)
+        || working_tree_id != &branch.head_tree_id
+        || index.head_tree_id.as_ref() != Some(head_tree_id)
+        || index_generation != &index.index_generation
+        || namespace_head != &state.branches[&repo.main_branch_id].head_commit_id
+    {
+        return Err(conflict(
+            "reviewed directory branch source changed; refresh before creating a branch",
+        ));
+    }
+    Ok(())
 }
 
 fn within(entry: &Entry, path: &str) -> bool {

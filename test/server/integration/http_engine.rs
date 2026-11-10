@@ -20,6 +20,8 @@ mod backup_namespace;
 mod branch_preview;
 #[path = "http_engine/daily_management.rs"]
 mod daily_management;
+#[path = "http_engine/directory_branch_source.rs"]
+mod directory_branch_source;
 #[path = "http_engine/directory_git.rs"]
 mod directory_git;
 #[path = "http_engine/directory_history.rs"]
@@ -1801,7 +1803,9 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         .find(|e| e["name"] == "outside.txt")
         .unwrap()["version_id"]
         .clone();
-    let body = json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap()});
+    let source = manager_directory_branch_source(&app, &token, "folder").await;
+    let body =
+        json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap(),"source":source});
     let created = success(
         &app,
         &token,
@@ -2111,7 +2115,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
             "POST",
             "/api/file-manager/disks/B01/directory-branches",
             Some(
-                json!({"path":"P01/folder","name":"readonly","operation_id":new_id("op").unwrap()})
+                json!({"path":"P01/folder","name":"readonly","operation_id":new_id("op").unwrap(),"source":source})
             )
         )
         .await
@@ -2134,7 +2138,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
             Some(&token),
             "POST",
             "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"path":"","name":"root partial forbidden","operation_id":new_id("op").unwrap()}))
+            Some(json!({"path":"","name":"root partial forbidden","operation_id":new_id("op").unwrap(),"source":source}))
         )
         .await
         .0,
@@ -3059,6 +3063,49 @@ async fn manager_checkpoint_git(app: &Router, token: &str, path: &str) {
     }))).await;
 }
 
+/// Capture a request source through read-only public observations, without
+/// refreshing it later when the saved request is retried.
+async fn manager_directory_branch_source(app: &Router, token: &str, path: &str) -> Value {
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", path)
+        .finish();
+    let listing = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/file-manager/disks/P01/entries?{query}"),
+        None,
+    )
+    .await;
+    let repository = listing["context"]["repository_id"].as_str().unwrap();
+    let within = listing["context"]["repository_path"].as_str().unwrap();
+    let query = url_encoding::form::Serializer::new(String::new())
+        .append_pair("path", within)
+        .finish();
+    let status = success(
+        app,
+        token,
+        "GET",
+        &format!("/api/repositories/{repository}/directory-git?{query}"),
+        None,
+    )
+    .await;
+    assert_eq!(status["initialized"], true);
+    let source = json!({
+        "repository_id": repository,
+        "directory_id": status["directory_id"],
+        "directory_branch_id": status["directory_branch_id"],
+        "working_tree_id": status["working_tree_id"],
+        "head_tree_id": status["head_tree_id"],
+        "index_generation": status["index_generation"],
+        "namespace_head": listing["context"]["base_head"],
+    });
+    let typed: storage_contract::directory_git::DirectoryBranchCreateSource =
+        json_codec::from_value(source.clone()).unwrap();
+    typed.validate().unwrap();
+    source
+}
+
 async fn manager_prepare_default_request(
     app: &Router,
     token: &str,
@@ -3146,7 +3193,8 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
         Some(json!({
-            "path":"","name":"frozen","operation_id":new_id("op").unwrap()
+            "path":"","name":"frozen","operation_id":new_id("op").unwrap(),
+            "source":manager_directory_branch_source(&app, &admin, "").await
         })),
     )
     .await;
@@ -3692,7 +3740,8 @@ async fn manager_prepare_directory_branch(
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
         Some(json!({
-            "path":path,"name":name,"operation_id":new_id("op").unwrap()
+            "path":path,"name":name,"operation_id":new_id("op").unwrap(),
+            "source":manager_directory_branch_source(app, token, path).await
         })),
     )
     .await["result"]["directory_branch_id"]
@@ -5171,26 +5220,27 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
             Some(json!({"name":name,"operation_id":operation})),
         )
         .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(response["error"]["code"], "NAME_COLLISION");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(response["error"]["code"], "INVALID_REQUEST");
         assert_eq!(manager_disk_files(root.path()), before);
     }
     // Valid branch creation now requires an explicitly created and committed
     // directory repository; the raw-error phase above still creates nothing.
     manager_upload(&app, &token, "seed.txt", b"fixture seed").await;
     manager_checkpoint_git(&app, &token, "").await;
+    let source = manager_directory_branch_source(&app, &token, "").await;
     let created = success(
         &app,
         &token,
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
-        Some(json!({"name":"side","operation_id":operation})),
+        Some(json!({"name":"side","operation_id":operation,"source":source})),
     )
     .await;
     assert_eq!(created["operation_kind"], "directory.git.branch-create");
     let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
     let repo = &repositories["repositories"][0]["repository_id"];
-    let digest=storage_contract::object_hash("request",&json!({"kind":"directory.git.branch-create","principal":"admin","body":{"repository_id":repo,"path":"","name":"side"}})).unwrap();
+    let digest=storage_contract::object_hash("request",&json!({"kind":"directory.git.branch-create","principal":"admin","body":{"repository_id":repo,"path":"","name":"side","source":source}})).unwrap();
     assert_eq!(created["request_digest"], digest);
     assert_eq!(created["result"]["path"], "");
     let replay = success(
@@ -5198,7 +5248,7 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
         &token,
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
-        Some(json!({"path":"","name":"side","operation_id":operation})),
+        Some(json!({"path":"","name":"side","operation_id":operation,"source":source})),
     )
     .await;
     for key in [

@@ -722,11 +722,11 @@ pub(super) fn mutate_directory(
             "select a specific folder before branching this disk root",
         ));
     }
-    let access = match action {
+    let access = match &action {
         crate::DiskDirectoryAction::Create if path.is_none() => DiskAccess::Create,
-        crate::DiskDirectoryAction::Create | crate::DiskDirectoryAction::Select => {
-            DiskAccess::Write
-        }
+        crate::DiskDirectoryAction::Create
+        | crate::DiskDirectoryAction::ReviewedCreate(_)
+        | crate::DiskDirectoryAction::Select => DiskAccess::Write,
     };
     if access == DiskAccess::Create
         && admit_root_operation(engine, &slot_id, display, operation_id)?
@@ -745,6 +745,21 @@ pub(super) fn mutate_directory(
             .strip_components(1)
     };
     match action {
+        crate::DiskDirectoryAction::ReviewedCreate(source) => {
+            if source.repository_id != repo.repository_id {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::DirectoryBranchConflict,
+                    "directory branch source belongs to another repository",
+                ));
+            }
+            engine.create_directory_branch_from_source(
+                &source,
+                relative.as_ref(),
+                &name,
+                &identity.principal,
+                operation_id,
+            )
+        }
         crate::DiskDirectoryAction::Create => engine.create_directory_branches(
             &repo.repository_id,
             relative.as_ref(),

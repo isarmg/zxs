@@ -5,10 +5,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-folder-create-recovery="">
-                <h2>{t("文件路径操作：原请求恢复", "File paths: original-request recovery")}</h2>
+                <h2>{t("文件路径与目录分支：原请求恢复", "File paths and folder branches: original-request recovery")}</h2>
                 <p>{t(
-                    "原账号、磁盘、完整路径和操作编号已按站点保留；文件移动另绑定原文件身份和目录依据。导航或刷新只查询原结果，不自动重发。",
-                    "The original account, disk, paths and operation ID are retained. File moves also bind the original identity and namespace basis. Navigation and refresh only query; they never resend.",
+                    "原账号、请求方法、目标、路径和操作编号已按站点保留；目录分支创建保留原来源，默认切换保留原分支和目录依据。导航或刷新只查询原结果，不自动重发。",
+                    "The original account, request method, target, paths and operation ID are retained. Folder branch creation retains its reviewed source; default switching retains the original branch and namespace basis. Navigation and refresh only query; they never resend.",
                 )}</p>
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.mutation_pending)
                     on:click=move |_|restore(state)>{t("重新读取本机原请求", "Reload local original requests")}</button>
@@ -22,8 +22,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                                 <p>{label}</p>
                                 <Show when=move ||state.with(|s|s.files.mkdir.records.iter().any(|retained|retained.record.operation()==operation&&retained.phase!=Phase::Settled))>
                                     <p>{t(
-                                        "重试保留同一编号和完整原输入。尚未发布时会实际执行原建目录或文件移动；已发布时只返回原收据。查询缺失或重试被拒绝不证明原请求未发布。",
-                                        "Retry retains the same ID and complete original input. It can perform the original folder creation or file move if uncommitted; a published request returns its original receipt. A missing lookup or rejected retry does not prove that the first request never published.",
+                                        "重试保留同一编号、请求方法和完整原输入。尚未发布时会实际执行原建目录、文件移动、分支创建或默认切换；已发布时只返回原收据。查询缺失或重试被拒绝不证明原请求未发布。",
+                                        "Retry retains the same ID, method and complete original input. It can perform the original folder creation, file move, branch creation or default switch if uncommitted; a published request returns its original receipt. A missing lookup or rejected retry does not prove that the first request never published.",
                                     )}</p>
                                     {requires_post.then(||view! {
                                         <p>{t(
