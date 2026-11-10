@@ -782,3 +782,20 @@
 
 - #1063 static 的 6 项失败来自保存配方解析器不认识 workspace 新增条件分流。只精确认识该已知分流块，并要求保存配方未设置分片环境，随后仍验证原始完整命令；未知条件、删去 exit、改变分流脚本和保存配方启用分片均拒绝。
 - 对应 25 项纯 Python foundation 覆盖回归通过，含 3 项新正反例。没有本地 Rust 编译；实际全量分片结果由本提交的 GitHub CI 继续验证。
+
+
+## 本轮 SMB namespace 单一操作模型
+
+- [x] 删除 `NamespaceInput` 并列保存的 source/destination 路径。协议解析后直接把已有类型移入一份 `storage_contract::NamespaceOperation`，不再克隆两套显示路径与规范键。协议 unlink/rmdir 区分和 replace 意图仍单独保留。
+- [x] 路径预留、目录文件导出、D 删除、workspace 快照检查、原字节恢复记录及最终 stage 共用该领域操作；沿用现成 path/key/destination 投影，不新增包装类型、解析入口或兼容分支。
+- [x] 根测试继续验证 NFD lookup 与 NFC creation，并增加四类操作的显示路径/规范键缓冲所有权转移断言。
+- [ ] 已做静态消费者与借用审阅、rustfmt 和严格补丁验证；遵照要求未本地编译或执行 Rust 测试。准确提交的 GitHub CI 与真实 Samba 后续验证仍待完成。
+
+
+## 本轮 SMB 路径占用所有权统一
+
+- [x] 以现有双端 move guard 统一写句柄、namespace、目录 export/retry 和跨盘 move 的占用。一个 `Shared.file_writers` 索引和一个 `PathReservation` 生命周期，删除 Session 第二索引、手工 reserve/release 与整段 Drop 清理链。
+- [x] Open 准备阶段持局部 guard，失败 abort/清理完成后才释放；成功把 guard 与 Writer 一起交给写句柄。Dirty/Flush 沿用同一所有权；Close/Detach 在出版、清理或脱离保留完成后释放，断连仍只释放活跃占用、不删除恢复资料。
+- [x] 所有生产入口直接使用已准入路径类型的 key。双端注册仍在同一个锁内完成；冲突、父子路径和大小写等价、毒锁拒绝、原收据和不确定出版语义保持。
+- [x] 根测试迁到实际所有权，新增“句柄脱离 Session 后仍持锁”和“双端预留遇 unwind 释放”回归；原失败、Close/Detach、断连、撤权、命名空间与跨盘冲突测试继续保留。
+- [ ] 已做静态类型/消费者与资源顺序审阅，rustfmt 和严格补丁验证；未本地编译或执行 Rust 测试，准确提交的 GitHub CI/真实 Samba 待验证。

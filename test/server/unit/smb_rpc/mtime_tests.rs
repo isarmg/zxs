@@ -163,7 +163,7 @@ fn mtime_failed_flush_keeps_the_confirmed_head_until_original_operation_is_recon
     let mut active = session(shared, &branch);
     let (opened, file) = open_file(&mut active, true);
     let previous_head = match &active.handles[&opened.handle] {
-        Handle::Write(writer) => writer.last_head.clone(),
+        Handle::Write(writer, _) => writer.last_head.clone(),
         _ => unreachable!(),
     };
     file.write_all_at(b"new", 0).unwrap();
@@ -175,7 +175,7 @@ fn mtime_failed_flush_keeps_the_confirmed_head_until_original_operation_is_recon
     );
     assert_eq!(handle_time(&mut active, opened.handle), opened.mtime);
     let operation = match &active.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert_eq!(writer.last_head, previous_head);
             assert!(!writer.committed);
             writer.operation_id
@@ -189,7 +189,7 @@ fn mtime_failed_flush_keeps_the_confirmed_head_until_original_operation_is_recon
         .operation_outcome(&active.identity, operation)
         .unwrap();
     match &active.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert_eq!(Some(&writer.last_head), published.commit_id.as_ref());
             assert!(writer.committed);
         }
@@ -214,7 +214,7 @@ fn mtime_write_through_dirty_uses_the_confirmed_publication_even_if_later_projec
     file.write_all_at(b"new", 0).unwrap();
     active.dirty(opened.handle).unwrap();
     let first_head = match &active.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert!(writer.committed);
             writer.last_head.clone()
         }
@@ -233,7 +233,7 @@ fn mtime_write_through_dirty_uses_the_confirmed_publication_even_if_later_projec
         storage_contract::ErrorCode::MetadataUnavailable
     );
     let confirmed_head = match &active.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert_ne!(writer.last_head, first_head);
             assert!(!writer.committed);
             let outcome = backend
@@ -252,7 +252,7 @@ fn mtime_write_through_dirty_uses_the_confirmed_publication_even_if_later_projec
     );
     active.flush(opened.handle).unwrap();
     match &active.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert_eq!(writer.last_head, confirmed_head);
             assert!(writer.committed);
         }

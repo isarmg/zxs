@@ -151,8 +151,8 @@ impl Session {
             .ok_or_else(ApiError::forbidden)?;
         if input.kind != NamespaceOperation::Rename
             || input.replace != retained.replace
-            || input.source_path.key() != retained.request.source_path.key()
-            || input.destination_path.as_ref() != Some(&retained.request.destination)
+            || input.change.key() != retained.request.source_path.key()
+            || input.change.destination() != Some(&retained.request.destination)
             || self.account_generation != retained.account_generation
             || binding.generation != retained.binding_generation
             || binding.repository_id != retained.request.repository_id
@@ -163,13 +163,14 @@ impl Session {
                 "directory export retry differs from the captured request or binding",
             ));
         }
-        let reserved = self.reserve_paths(&[
-            retained.request.source_path.as_str(),
-            retained.request.destination.as_str(),
-        ])?;
-        let result = self.submit_directory_export(retained.request, &retained.admission);
-        self.release_paths(&reserved);
-        result
+        let _paths = path_reservation::PathReservation::acquire(
+            &self.shared,
+            [
+                (self.branch.as_str(), retained.request.source_path.key()),
+                (self.branch.as_str(), retained.request.destination.key()),
+            ],
+        )?;
+        self.submit_directory_export(retained.request, &retained.admission)
     }
 
     fn submit_directory_export(

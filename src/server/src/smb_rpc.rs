@@ -97,7 +97,13 @@ impl Shared {
 enum Handle {
     Read(Content, String),
     Directory(DirectoryHandle),
-    Write(Box<Writer>),
+    // Every live writer has handed out a mutable FD. The peer can have
+    // changed it before a Dirty request reached us, including after a
+    // successful Flush. A disconnect therefore cannot prove clean bytes.
+    // Retain both data and the recovery record without hashing in Drop or
+    // publishing a new generation. Explicit successful Close still cleans up.
+    // The handle owns its path reservation independently of the Session map.
+    Write(Box<Writer>, path_reservation::PathReservation),
 }
 
 struct DirectoryHandle {

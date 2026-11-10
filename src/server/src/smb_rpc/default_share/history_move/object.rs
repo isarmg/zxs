@@ -196,11 +196,11 @@ impl DefaultShare {
             },
             |key| key.branch.clone(),
         );
-        let _paths = MovePaths::acquire(
+        let _paths = PathReservation::acquire(
             &self.shared,
             [
-                (&source.branch, source_path.as_str()),
-                (&target_scope, target_path.as_str()),
+                (source.branch.as_str(), source_path.key()),
+                (target_scope.as_str(), target_path.key()),
             ],
         )?;
         let entry = self
@@ -372,7 +372,7 @@ impl DefaultShare {
         intent: Intent,
         admission: NamespaceAdmission,
         bytes: &[u8],
-        captured_paths: Option<MovePaths>,
+        captured_paths: Option<PathReservation>,
     ) -> Result<Value, ApiError> {
         if intent.format != FORMAT
             || intent.operation_id != admission.operation_id()
@@ -425,14 +425,14 @@ impl DefaultShare {
         );
         let _paths = match captured_paths {
             Some(paths) => paths,
-            None => MovePaths::acquire(
+            None => PathReservation::acquire(
                 &self.shared,
                 [
                     (
-                        &intent.source_binding.branch_id,
-                        intent.movement.source_path.as_str(),
+                        intent.source_binding.branch_id.as_str(),
+                        intent.movement.source_path.key(),
                     ),
-                    (&target_scope, intent.movement.target_path.as_str()),
+                    (target_scope.as_str(), intent.movement.target_path.key()),
                 ],
             )?,
         };

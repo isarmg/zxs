@@ -1,7 +1,7 @@
-//! Two-branch namespace mutations reserve both paths in one writer-registry step.
+//! File handles and namespace mutations own one atomic path reservation.
 use super::*;
 
-pub(super) fn overlaps(left: &str, right: &str) -> bool {
+fn overlaps(left: &str, right: &str) -> bool {
     left == right
         || left
             .strip_prefix(right)
@@ -11,19 +11,21 @@ pub(super) fn overlaps(left: &str, right: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('/'))
 }
 
-pub(super) struct MovePaths {
+pub(super) struct PathReservation {
     shared: Arc<Shared>,
     keys: BTreeSet<(String, String)>,
 }
 
-impl MovePaths {
-    pub(super) fn acquire(
+impl PathReservation {
+    // Callers project keys from admitted LookupPath/PortablePath values. No
+    // raw protocol or disk spelling enters this registry without parsing.
+    pub(super) fn acquire<'a>(
         shared: &Arc<Shared>,
-        paths: [(&str, &str); 2],
+        paths: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> Result<Self, ApiError> {
         let keys = paths
             .into_iter()
-            .map(|(branch, path)| (branch.to_owned(), name_policy::path_key(path)))
+            .map(|(branch, key)| (branch.to_owned(), key.to_owned()))
             .collect::<BTreeSet<_>>();
         let mut writers = shared
             .file_writers
@@ -47,7 +49,7 @@ impl MovePaths {
     }
 }
 
-impl Drop for MovePaths {
+impl Drop for PathReservation {
     fn drop(&mut self) {
         match self.shared.file_writers.lock() {
             Ok(mut writers) => {
@@ -56,7 +58,7 @@ impl Drop for MovePaths {
                 }
             }
             Err(_) => {
-                tracing::error!("move path cleanup blocked by poisoned writer registry");
+                tracing::error!("SMB path cleanup blocked by poisoned writer registry");
             }
         }
     }

@@ -422,11 +422,11 @@ fn move_reserves_both_paths_atomically_and_respects_case_and_ancestor_writers() 
         assert!(roots.backend.move_requests.lock().unwrap().is_empty());
         roots.shared.file_writers.lock().unwrap().remove(&key);
     }
-    let held = path_reservation::MovePaths::acquire(
+    let held = path_reservation::PathReservation::acquire(
         &roots.shared,
         [
-            (&roots.source.main_branch_id, "source.txt"),
-            (&roots.target.main_branch_id, "arrived.txt"),
+            (roots.source.main_branch_id.as_str(), "source.txt"),
+            (roots.target.main_branch_id.as_str(), "arrived.txt"),
         ],
     )
     .unwrap();
@@ -435,9 +435,9 @@ fn move_reserves_both_paths_atomically_and_respects_case_and_ancestor_writers() 
         (&roots.source.main_branch_id, "SOURCE.TXT"),
         (&roots.target.main_branch_id, "ARRIVED.TXT"),
     ] {
-        let mut other = session(roots.shared.clone(), branch);
+        let other = session(roots.shared.clone(), branch);
         assert_eq!(
-            other.reserve_paths(&[path]).unwrap_err().code,
+            reserve_paths(&other, &[path]).err().unwrap().code,
             storage_contract::ErrorCode::FileWriteBusy
         );
     }

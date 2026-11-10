@@ -4,7 +4,7 @@ use crate::smb_rpc::recovery_record::persist;
 
 fn writer(client: &Session, handle: u64) -> &Writer {
     match &client.handles[&handle] {
-        Handle::Write(writer) => writer,
+        Handle::Write(writer, _) => writer,
         _ => panic!("expected writer"),
     }
 }

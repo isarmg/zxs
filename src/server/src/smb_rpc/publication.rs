@@ -181,7 +181,7 @@ impl Session {
         end: u64,
         bytes: u64,
     ) -> Result<Value, ApiError> {
-        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
+        let Some(Handle::Write(writer, _)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
         self.shared
@@ -211,7 +211,7 @@ impl Session {
     pub(super) fn dirty(&mut self, handle: u64) -> Result<Value, ApiError> {
         // The FD has already been modified. Preserve it even when current
         // authorization or rebase validation rejects the operation.
-        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
+        let Some(Handle::Write(writer, _)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
         writer.dirty = true;
@@ -299,7 +299,7 @@ impl Session {
             .get_mut(&handle)
             .ok_or_else(handles::missing_handle)?;
         match opened {
-            Handle::Write(writer) if writer.dirty => flush_writer(
+            Handle::Write(writer, _) if writer.dirty => flush_writer(
                 &self.shared,
                 &self.identity,
                 &self.branch,
@@ -314,7 +314,7 @@ impl Session {
                     Handle::Directory(directory) => {
                         directory.file.sync_all().map_err(ApiError::io)?;
                     }
-                    Handle::Write(_) => {}
+                    Handle::Write(_, _) => {}
                 }
                 Ok(json!({"saved":true,"changed":false}))
             }
@@ -335,7 +335,7 @@ impl Session {
             .handles
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
-        if let Handle::Write(mut writer) = opened {
+        if let Handle::Write(mut writer, _paths) = opened {
             // Close owns the descriptor even when publication fails. Its path
             // reservation stays held until cleanup or detached retention finishes.
             let saved = (|| {
@@ -361,7 +361,6 @@ impl Session {
                     retain_detached(&mut writer, &self.identity.principal, &self.branch, error);
                 }
             }
-            self.release_paths(&[writer.path.key().to_owned()]);
             saved?;
         }
         Ok(json!({"closed":true,"aborted":abort}))
@@ -382,14 +381,13 @@ impl Session {
             .remove(&handle)
             .ok_or_else(handles::missing_handle)?;
         let mut result = json!({"closed":true,"detached":true});
-        if let Handle::Write(mut writer) = entry {
+        if let Handle::Write(mut writer, _paths) = entry {
             let reason = ApiError::new(
                 ::http::StatusCode::SERVICE_UNAVAILABLE,
                 storage_contract::ErrorCode::RecoveryRequired,
                 "SMB handle detached without saving; retained work requires reconciliation",
             );
             retain_detached(&mut writer, &self.identity.principal, &self.branch, &reason);
-            self.release_paths(&[writer.path.key().to_owned()]);
             result["operation_id"] = json!(writer.operation_id);
         }
         Ok(result)

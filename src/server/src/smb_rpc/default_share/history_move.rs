@@ -1,6 +1,6 @@
 //! Captured object moves and their exact publication receipts.
 use super::*;
-use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::MovePaths};
+use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::PathReservation};
 
 mod object;
 

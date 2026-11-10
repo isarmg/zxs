@@ -1023,7 +1023,12 @@ fn failed_terminal_close_consumes_writer_and_preserves_reader_and_recovery() {
         storage_contract::ErrorCode::InjectedFailure
     );
     assert!(!active.handles.contains_key(&writer.handle));
-    assert!(active.writer_locks.is_empty());
+    assert!(
+        active
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     assert!(shared.file_writers.lock().unwrap().is_empty());
     assert_eq!(fs::read(&retained).unwrap(), b"new");
     assert_eq!(record(&retained)["handle_state"], "detached");

@@ -46,8 +46,6 @@ pub(super) struct NamespaceInput {
     kind: NamespaceOperation,
     replace: bool,
     change: storage_contract::NamespaceOperation,
-    source_path: name_policy::LookupPath,
-    destination_path: Option<name_policy::PortablePath>,
 }
 impl NamespaceInput {
     pub(super) fn parse(
@@ -78,28 +76,22 @@ impl NamespaceInput {
         }
         let change = match kind {
             NamespaceOperation::Mkdir => storage_contract::NamespaceOperation::Mkdir {
-                path: name_policy::PortablePath::try_from(source_path.clone())
+                path: name_policy::PortablePath::try_from(source_path)
                     .map_err(|source| contract(source.into()))?,
             },
             NamespaceOperation::Unlink | NamespaceOperation::Rmdir => {
-                storage_contract::NamespaceOperation::Delete {
-                    path: source_path.clone(),
-                }
+                storage_contract::NamespaceOperation::Delete { path: source_path }
             }
             NamespaceOperation::Rename => storage_contract::NamespaceOperation::Rename {
-                source: source_path.clone(),
+                source: source_path,
                 destination: destination_path
-                    .as_ref()
-                    .ok_or_else(|| ApiError::invalid("rename needs a destination"))?
-                    .clone(),
+                    .ok_or_else(|| ApiError::invalid("rename needs a destination"))?,
             },
         };
         Ok(Self {
             kind,
             replace,
             change,
-            source_path,
-            destination_path,
         })
     }
 }
@@ -369,15 +361,9 @@ impl Session {
             kind,
             replace,
             change,
-            source_path,
-            destination_path,
         } = input;
         let operation_id = admission.reservation.operation_id;
         let record = &admission.record;
-        let mut affected = vec![source_path.as_str()];
-        if let Some(target) = &destination_path {
-            affected.push(target.as_str());
-        }
         let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
             match &self.identity.smb_binding {
                 Some(binding) => {
@@ -391,34 +377,41 @@ impl Session {
         } else {
             false
         };
-        let reserved = self.reserve_paths(&affected)?;
-        if kind == NamespaceOperation::Rename {
-            let target = destination_path
-                .as_ref()
-                .expect("invariant: rename input has a typed destination");
-            match self.try_directory_file_export(&source_path, target, replace, &admission) {
+        let _paths = path_reservation::PathReservation::acquire(
+            &self.shared,
+            std::iter::once((self.branch.as_str(), change.key())).chain(
+                change
+                    .destination()
+                    .map(|target| (self.branch.as_str(), target.key())),
+            ),
+        )?;
+        if let storage_contract::NamespaceOperation::Rename {
+            source,
+            destination,
+        } = &change
+        {
+            match self.try_directory_file_export(source, destination, replace, &admission) {
                 Ok(None) => {}
                 result => {
-                    self.release_paths(&reserved);
                     return result.map(|reply| reply.expect("invariant: None was handled"));
                 }
             }
         }
-        if soft_delete_directory {
-            match self.soft_delete_rmdir(&source_path, operation_id, record) {
-                Ok(None) => {}
-                result => {
-                    self.release_paths(&reserved);
-                    return result.map(|reply| reply.expect("invariant: None was handled"));
+        if let storage_contract::NamespaceOperation::Delete { path } = &change {
+            if soft_delete_directory {
+                match self.soft_delete_rmdir(path, operation_id, record) {
+                    Ok(None) => {}
+                    result => {
+                        return result.map(|reply| reply.expect("invariant: None was handled"));
+                    }
                 }
             }
-        }
-        if kind == NamespaceOperation::Unlink {
-            match self.soft_delete_unlink(&source_path, operation_id, record) {
-                Ok(None) => {}
-                result => {
-                    self.release_paths(&reserved);
-                    return result.map(|reply| reply.expect("invariant: None was handled"));
+            if kind == NamespaceOperation::Unlink {
+                match self.soft_delete_unlink(path, operation_id, record) {
+                    Ok(None) => {}
+                    result => {
+                        return result.map(|reply| reply.expect("invariant: None was handled"));
+                    }
                 }
             }
         }
@@ -443,8 +436,8 @@ impl Session {
                 record,
                 &json!({
                     "format":"smb-protocol-namespace","principal":self.identity.principal,
-                    "branch_id":self.branch,"kind":kind,"path":source_path.as_str(),
-                    "destination":destination_path.as_ref().map(|path| path.as_str()),"replace":replace,"operation_id":operation_id,
+                    "branch_id":self.branch,"kind":kind,"path":change.path(),
+                    "destination":change.destination().map(|path| path.as_str()),"replace":replace,"operation_id":operation_id,
                     "publication_outcome":"unconfirmed","commit_request":{
                         "workspace_id":commit.workspace_id,"operation_id":commit.operation_id,
                         "expected_head":commit.expected_head,"fencing_token":commit.fencing_token.to_string(),
@@ -475,7 +468,7 @@ impl Session {
                         .any(|child| child.lookup_key().starts_with(&prefix))
             };
             if kind == NamespaceOperation::Unlink || kind == NamespaceOperation::Rmdir {
-                let entry = find(source_path.key()).ok_or_else(|| {
+                let entry = find(change.key()).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -510,10 +503,10 @@ impl Session {
             }
             if kind == NamespaceOperation::Rename
                 && replace
-                && let Some(target) = destination_path.as_ref()
+                && let Some(target) = change.destination()
                 && let Some(target_entry) = find(target.key())
             {
-                let source = find(source_path.key()).ok_or_else(|| {
+                let source = find(change.key()).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -586,7 +579,7 @@ impl Session {
         }
         // Once submission starts, even a business or transport error is not
         // proof of non-publication. Leave workspace and record untouched.
-        self.release_paths(&reserved);
+
         result
     }
 }

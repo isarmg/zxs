@@ -149,7 +149,6 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
                 branch: branch.clone(),
                 handles: BTreeMap::new(),
                 next_handle: 1,
-                writer_locks: BTreeSet::new(),
                 max_file_bytes,
                 read_cache: None,
             };

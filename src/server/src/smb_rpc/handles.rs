@@ -181,7 +181,10 @@ impl Session {
         // an existing read-only open stays pinned to its immutable version.
         let (handle, fd, size, workspace_id) = if writable || (create && existing.is_none()) {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
-            self.reserve_paths(&[path.as_str()])?;
+            let paths = path_reservation::PathReservation::acquire(
+                &self.shared,
+                [(self.branch.as_str(), path.key())],
+            )?;
             let mut pending_workspace = None;
             let mut pending_source = None;
             let mut pending_reservation = None;
@@ -298,12 +301,7 @@ impl Session {
                     publication::cleanup_writer(&writer);
                     return Err(error);
                 }
-                Ok((
-                    Handle::Write(Box::new(writer)),
-                    fd,
-                    size,
-                    Some(workspace_id),
-                ))
+                Ok((Box::new(writer), fd, size, Some(workspace_id)))
             })();
             if result.is_err() {
                 if let Some(id) = pending_workspace
@@ -320,9 +318,9 @@ impl Session {
                         }
                     }
                 }
-                self.release_paths(&[path.key().to_owned()]);
             }
-            result?
+            let (writer, fd, size, workspace_id) = result?;
+            (Handle::Write(writer, paths), fd, size, workspace_id)
         } else {
             let version_id = version.as_deref().ok_or_else(|| {
                 ApiError::new(
@@ -393,7 +391,7 @@ impl Session {
                     "directory data is not readable",
                 ));
             }
-            Handle::Write(_) => return Err(ApiError::unsupported()),
+            Handle::Write(_, _) => return Err(ApiError::unsupported()),
         };
         // Version authorization concerns metadata; it does not admit disk I/O.
         // Check even a cached/empty read so an idle handle cannot resurrect a
@@ -463,7 +461,7 @@ impl Handle {
     ) -> Result<(), ApiError> {
         match self {
             Self::Read(_, version) => shared.backend.authorize_version(identity, version),
-            Self::Write(_) | Self::Directory(_) => {
+            Self::Write(..) | Self::Directory(_) => {
                 shared.backend.authorize_current(identity, branch)
             }
         }

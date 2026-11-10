@@ -256,7 +256,12 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
                 .unwrap()
                 .is_some()
         );
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
     }
 }
 
@@ -297,7 +302,12 @@ fn rename_replacement_preserves_both_entries_and_reports_target_kind() {
             .unwrap_err();
         assert_eq!(error.code, expected);
         assert_eq!(session.entries().unwrap(), before);
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         assert!(session.shared.file_writers.lock().unwrap().is_empty());
         assert!(!fs::read_dir(&session.shared.spool).unwrap().any(|entry| {
             entry
@@ -1135,7 +1145,12 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         assert_eq!(record["destination"], "renamed.txt");
         assert_eq!(record["principal"], "alice");
         assert_eq!(record["branch_id"], branch);
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         assert_eq!(
             session
                 .find(&name_policy::LookupPath::parse("renamed.txt").unwrap())
@@ -1392,7 +1407,12 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
                 })
                 .is_err()
         );
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
     }
     let after = backend
         .inner
@@ -1425,7 +1445,7 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
         })
         .unwrap();
     let first = match &session.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id,
+        Handle::Write(writer, _) => writer.operation_id,
         _ => unreachable!(),
     };
     backend.fail.store(true, Ordering::SeqCst);
@@ -1437,7 +1457,7 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
         .unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
     let current = match &session.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id,
+        Handle::Write(writer, _) => writer.operation_id,
         _ => unreachable!(),
     };
     assert_ne!(current, first);
@@ -2216,7 +2236,12 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
                         .starts_with("ws_")
                 );
             }
-            assert!(session.writer_locks.is_empty());
+            assert!(
+                session
+                    .handles
+                    .values()
+                    .all(|handle| !matches!(handle, Handle::Write(..)))
+            );
             assert!(
                 backend
                     .inner
@@ -2341,7 +2366,12 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
             .swap(false, Ordering::SeqCst),
         "rejected request created a workspace"
     );
-    assert!(session.writer_locks.is_empty());
+    assert!(
+        session
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     assert!(shared.namespace_operations.lock().unwrap().is_empty());
 
     let published_operation = new_id("op").unwrap();
@@ -2404,7 +2434,12 @@ fn malformed_raw_operation_ids_keep_handles_and_reject_before_side_effects() {
         assert_eq!(read_session(&mut session, opened.handle, 0, 1), b"o");
         assert_eq!(spool(), before);
         assert!(backend.change_before_workspace.load(Ordering::SeqCst));
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         assert!(shared.namespace_operations.lock().unwrap().is_empty());
     }
     session

@@ -821,7 +821,12 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             .workspace(&session.identity, &captured.workspace_id)
             .unwrap();
         assert_eq!(aborted.state, storage_contract::WorkspaceState::Aborted);
-        assert!(session.writer_locks.is_empty());
+        assert!(
+            session
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         assert!(session.shared.file_writers.lock().unwrap().is_empty());
         assert!(
             session
@@ -910,7 +915,7 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
     assert_eq!(renamed.entry_id, opened.entry_id);
 
     // Compare the actual renamed snapshot while the open descriptor keeps its old path.
-    let Handle::Write(writer) = session.handles.get_mut(&opened.handle).unwrap() else {
+    let Handle::Write(writer, _) = session.handles.get_mut(&opened.handle).unwrap() else {
         panic!("expected write handle");
     };
     super::super::publication::finish_publication(
@@ -933,6 +938,11 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
     content.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"new");
     session.close(opened.handle, false).unwrap();
-    assert!(session.writer_locks.is_empty());
+    assert!(
+        session
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     assert!(session.shared.file_writers.lock().unwrap().is_empty());
 }

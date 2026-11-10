@@ -722,7 +722,12 @@ fn no_change_flush_revocation(revocation: FlushRevocation) {
     active.close(writer.handle, false).unwrap();
     active.detach(directory.handle).unwrap();
     assert!(active.handles.is_empty());
-    assert!(active.writer_locks.is_empty());
+    assert!(
+        active
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     assert!(shared.file_writers.lock().unwrap().is_empty());
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
     drop((reader_fd, writer_fd, directory_fd));
@@ -750,7 +755,7 @@ fn no_change_flush_revoked_unpublished_writer_close_retains_work_and_releases_ha
     let mut active = session(shared.clone(), &branch);
     let (opened, _fd) = open_file(&mut active, true);
     let source = match &active.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => unreachable!(),
     };
     temp.auth

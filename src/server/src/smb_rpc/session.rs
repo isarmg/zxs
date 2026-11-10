@@ -8,7 +8,6 @@ pub(super) struct Session {
     pub(super) branch: String,
     pub(super) handles: BTreeMap<u64, Handle>,
     pub(super) next_handle: u64,
-    pub(super) writer_locks: BTreeSet<String>,
     pub(super) max_file_bytes: u64,
     pub(super) read_cache: Option<(u64, crate::verified_chunk::VerifiedChunk)>,
 }
@@ -22,27 +21,6 @@ impl std::ops::Deref for DispatchError {
     type Target = ApiError;
     fn deref(&self) -> &Self::Target {
         &self.error
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        match self.shared.file_writers.lock() {
-            Ok(mut writers) => {
-                for path in &self.writer_locks {
-                    writers.remove(&(self.branch.clone(), path.clone()));
-                }
-            }
-            Err(_) => {
-                // Preserve ownership and poison: no subsequent admission may trust this index.
-                tracing::error!("writers cleanup blocked by poisoned registry");
-            }
-        }
-        // Every live writer has handed out a mutable FD. The peer can have
-        // changed it before a Dirty request reached us, including after a
-        // successful Flush. A disconnect therefore cannot prove clean bytes.
-        // Retain both data and the recovery record without hashing in Drop or
-        // publishing a new generation. Explicit successful Close still cleans up.
     }
 }
 
@@ -62,46 +40,6 @@ impl Session {
         self.shared
             .backend
             .lookup_current(&self.identity, &self.branch, path)
-    }
-    pub(super) fn reserve_paths(&mut self, paths: &[&str]) -> Result<Vec<String>, ApiError> {
-        let keys = paths
-            .iter()
-            .map(|path| name_policy::path_key(path))
-            .collect::<BTreeSet<_>>();
-        let mut writers = self
-            .shared
-            .file_writers
-            .lock()
-            .expect("service state lock poisoned");
-        if writers.iter().any(|(branch, existing)| {
-            branch == &self.branch
-                && keys
-                    .iter()
-                    .any(|key| super::path_reservation::overlaps(existing, key))
-        }) {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::FileWriteBusy,
-                "an affected SMB file has an active write handle",
-            ));
-        }
-        for key in &keys {
-            writers.insert((self.branch.clone(), key.clone()));
-            self.writer_locks.insert(key.clone());
-        }
-        Ok(keys.into_iter().collect())
-    }
-    pub(super) fn release_paths(&mut self, paths: &[String]) {
-        {
-            let mut writers = self
-                .shared
-                .file_writers
-                .lock()
-                .expect("service state lock poisoned");
-            for path in paths {
-                writers.remove(&(self.branch.clone(), path.clone()));
-                self.writer_locks.remove(path);
-            }
-        }
     }
     pub(super) fn dispatch(
         &mut self,
@@ -129,7 +67,7 @@ impl Session {
             Request::Namespace { operation_id, .. } => Some(operation_id.to_string()),
             Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
                 match self.handles.get(handle) {
-                    Some(Handle::Write(writer)) => Some(writer.operation_id.to_string()),
+                    Some(Handle::Write(writer, _)) => Some(writer.operation_id.to_string()),
                     _ => None,
                 }
             }
@@ -144,7 +82,7 @@ impl Session {
         // Dirty can create a new generation and submit it for write-through.
         // Report that generation, not the previously published operation.
         if let Some(handle) = dirty_handle
-            && let Some(Handle::Write(writer)) = self.handles.get(&handle)
+            && let Some(Handle::Write(writer, _)) = self.handles.get(&handle)
         {
             operation_id = Some(writer.operation_id.to_string());
         }

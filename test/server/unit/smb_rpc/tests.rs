@@ -1035,7 +1035,6 @@ fn session(shared: Arc<Shared>, branch: &str) -> Session {
         branch: branch.into(),
         handles: BTreeMap::new(),
         next_handle: 1,
-        writer_locks: BTreeSet::new(),
         max_file_bytes: 4096,
         read_cache: None,
     }
@@ -1220,7 +1219,7 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     );
     assert_eq!(error.status, 409);
     let writer = match &one.handles[&opened.handle] {
-        Handle::Write(w) => w,
+        Handle::Write(w, _) => w,
         _ => unreachable!(),
     };
     assert!(writer.source.is_file());
@@ -1250,7 +1249,7 @@ fn directory_default_switch_fences_open_and_already_published_writers() {
     );
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
     let writer = match &one.handles[&opened.handle] {
-        Handle::Write(w) => w,
+        Handle::Write(w, _) => w,
         _ => unreachable!(),
     };
     assert!(writer.dirty && writer.source.is_file());
@@ -1421,7 +1420,7 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
         storage_contract::ErrorCode::DirectoryBranchConflict
     );
     let writer = match &original.handles[&opened.handle] {
-        Handle::Write(w) => w,
+        Handle::Write(w, _) => w,
         _ => unreachable!(),
     };
     assert!(writer.source.is_file() && writer.dirty);
@@ -1843,29 +1842,104 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
     one.close(first.handle, false).unwrap();
     two.close(second.handle, false).unwrap();
 }
+fn reserve_paths(
+    session: &Session,
+    paths: &[&str],
+) -> Result<path_reservation::PathReservation, ApiError> {
+    let paths = paths
+        .iter()
+        .map(|path| name_policy::LookupPath::parse(path).unwrap())
+        .collect::<Vec<_>>();
+    path_reservation::PathReservation::acquire(
+        &session.shared,
+        paths
+            .iter()
+            .map(|path| (session.branch.as_str(), path.key())),
+    )
+}
+
 #[test]
 fn writer_reservations_compare_path_segments_without_prefix_aliasing() {
     let (_temp, shared, _backend, branch) = fixture();
-    let mut owner = session(shared.clone(), &branch);
-    let mut other = session(shared, &branch);
+    let owner = session(shared.clone(), &branch);
+    let other = session(shared, &branch);
     for held in ["目录", "目录/child"] {
-        let reserved = owner.reserve_paths(&[held]).unwrap();
+        let reserved = reserve_paths(&owner, &[held]).unwrap();
         for conflict in ["目录", "目录/child", "目录/child/grandchild"] {
             assert_eq!(
-                other.reserve_paths(&[conflict]).unwrap_err().code,
+                reserve_paths(&other, &[conflict]).err().unwrap().code,
                 storage_contract::ErrorCode::FileWriteBusy,
                 "{held} must overlap {conflict}"
             );
         }
         for unrelated in ["目录-other", "目录child", "other/目录"] {
-            let allowed = other.reserve_paths(&[unrelated]).unwrap();
-            other.release_paths(&allowed);
+            let allowed = reserve_paths(&other, &[unrelated]).unwrap();
+            drop(allowed);
         }
-        owner.release_paths(&reserved);
+        drop(reserved);
     }
-    assert!(owner.writer_locks.is_empty());
-    assert!(other.writer_locks.is_empty());
+    assert!(
+        owner
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
+    assert!(
+        other
+            .handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     assert!(owner.shared.file_writers.lock().unwrap().is_empty());
+}
+
+#[test]
+fn detached_handle_keeps_its_path_reserved_until_the_owner_is_dropped() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let mut owner = session(shared.clone(), &branch);
+    let (opened, _file) = open_file(&mut owner, true);
+    let handle = owner.handles.remove(&opened.handle).unwrap();
+    let source = match &handle {
+        Handle::Write(writer, _) => writer.source.clone(),
+        _ => panic!("expected write handle"),
+    };
+    drop(owner);
+    let mut other = session(shared.clone(), &branch);
+    assert_eq!(
+        other
+            .open("report.txt".into(), true, false, false, false, false)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::FileWriteBusy
+    );
+    assert_eq!(shared.file_writers.lock().unwrap().len(), 1);
+    drop(handle);
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    assert!(source.is_file());
+    assert!(source.with_extension("work.json").is_file());
+    let (reopened, _file) = open_file(&mut other, true);
+    other.close(reopened.handle, true).unwrap();
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+}
+
+#[test]
+fn namespace_path_owner_releases_both_scopes_during_unwind() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let source = name_policy::LookupPath::parse("Cafe\u{301}/File.txt").unwrap();
+    let destination = name_policy::PortablePath::parse("Other.txt").unwrap();
+    let second = "branch_second";
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _paths = path_reservation::PathReservation::acquire(
+            &shared,
+            [(branch.as_str(), source.key()), (second, destination.key())],
+        )
+        .unwrap();
+        assert_eq!(shared.file_writers.lock().unwrap().len(), 2);
+        panic!("unwind after both paths were reserved");
+    }));
+    assert!(result.is_err());
+    assert!(!shared.file_writers.is_poisoned());
+    assert!(shared.file_writers.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -2100,7 +2174,7 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
         storage_contract::ErrorCode::FileVersionConflict
     );
     let pending = match &one.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => panic!("write handle missing"),
     };
     assert_eq!(
@@ -2108,7 +2182,11 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
         storage_contract::ErrorCode::WorkspaceRebaseRequired
     );
     assert!(!one.handles.contains_key(&opened.handle));
-    assert!(one.writer_locks.is_empty());
+    assert!(
+        one.handles
+            .values()
+            .all(|handle| !matches!(handle, Handle::Write(..)))
+    );
     drop(one);
     assert_eq!(fs::read(pending).unwrap(), b"end");
 }
@@ -2303,7 +2381,12 @@ fn writable_open_rejects_entry_changed_before_workspace_snapshot() {
             storage_contract::ErrorCode::FileVersionConflict
         );
         assert!(client.handles.is_empty());
-        assert!(client.writer_locks.is_empty());
+        assert!(
+            client
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         let entry = client
             .find(&name_policy::LookupPath::parse("report.txt").unwrap())
             .unwrap()
@@ -2329,7 +2412,7 @@ fn disconnect_before_dirty_delivery_retains_unacknowledged_fd_bytes() {
             client.flush(opened.handle).unwrap();
         }
         let source = match &client.handles[&opened.handle] {
-            Handle::Write(writer) => writer.source.clone(),
+            Handle::Write(writer, _) => writer.source.clone(),
             _ => unreachable!(),
         };
         file.write_all_at(b"two", 0).unwrap();
@@ -2360,7 +2443,7 @@ fn unchanged_writable_close_cleans_up_but_disconnect_remains_uncertain() {
             .unwrap();
         let (opened, _file) = open_file(&mut client, true);
         let source = match &client.handles[&opened.handle] {
-            Handle::Write(writer) => writer.source.clone(),
+            Handle::Write(writer, _) => writer.source.clone(),
             _ => unreachable!(),
         };
         if !disconnect {
@@ -2474,7 +2557,7 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
     );
     let (opened, file) = open_file(&mut client, true);
     let source = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => unreachable!(),
     };
     file.write_all_at(b"unconfirmed", 0).unwrap();
@@ -2778,7 +2861,7 @@ fn replaced_smb_source_or_spool_is_rejected_before_backend_publication() {
         file.write_all_at(b"new", 0).unwrap();
         session.dirty(opened.handle).unwrap();
         let source = match &session.handles[&opened.handle] {
-            Handle::Write(writer) => writer.source.clone(),
+            Handle::Write(writer, _) => writer.source.clone(),
             _ => unreachable!(),
         };
         if swap_parent {
@@ -2837,7 +2920,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         .open("e\u{301}.txt".into(), true, false, false, false, false)
         .unwrap();
     let opened: OpenResult = json_codec::from_value(result).unwrap();
-    let Handle::Write(writer) = &session.handles[&opened.handle] else {
+    let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };
     assert_eq!(writer.path, "é.txt");
@@ -2886,7 +2969,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         .open("e\u{301}.txt".into(), true, true, true, false, false)
         .unwrap();
     let opened: OpenResult = json_codec::from_value(result).unwrap();
-    let Handle::Write(writer) = &session.handles[&opened.handle] else {
+    let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };
     assert_eq!(writer.path, "é.txt");
@@ -2952,7 +3035,7 @@ fn session_drop_after_writer_poison_retains_work_and_other_owners() {
     let (opened, file) = open_file(&mut client, true);
     file.write_all_at(b"two", 0).unwrap();
     let source = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => unreachable!(),
     };
     let other = (branch.clone(), "other".into());
@@ -2976,10 +3059,13 @@ fn session_drop_after_writer_poison_retains_work_and_other_owners() {
     );
     assert_eq!(fs::read(&source).unwrap(), b"two");
     assert!(source.with_extension("work.json").is_file());
-    let mut next = session(shared.clone(), &branch);
+    let next = session(shared.clone(), &branch);
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next.reserve_paths(&["new"])))
-            .is_err()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reserve_paths(
+            &next,
+            &["new"]
+        )))
+        .is_err()
     );
 }
 

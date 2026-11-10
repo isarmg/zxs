@@ -116,7 +116,7 @@ fn published(session: &Session, path: &str) -> Vec<u8> {
 }
 
 fn write_handle(session: &Session, handle: u64) -> &Writer {
-    let Handle::Write(writer) = &session.handles[&handle] else {
+    let Handle::Write(writer, _) = &session.handles[&handle] else {
         panic!("expected a writer")
     };
     writer
@@ -380,7 +380,7 @@ fn a_generation_grows_its_budget_record_once_per_grant() {
     let mut session = session(shared, &branch);
     let mut vfs = Vfs::open(&mut session, "fresh.bin", true, false);
     let source = match &session.handles[&vfs.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => panic!("expected a writer"),
     };
     let (creates, grows) = budget::persist::record_writes();
@@ -458,7 +458,6 @@ mod measurement {
             branch: branch.into(),
             handles: BTreeMap::new(),
             next_handle: 1,
-            writer_locks: BTreeSet::new(),
             max_file_bytes: limit,
             read_cache: None,
         }
@@ -676,7 +675,7 @@ fn flush_reports_external_workspace_ownership_without_losing_pending_bytes() {
     let mut pending = [0; 3];
     vfs.file.read_exact_at(&mut pending, 0).unwrap();
     assert_eq!(&pending, b"smb");
-    let Handle::Write(writer) = &session.handles[&vfs.handle] else {
+    let Handle::Write(writer, _) = &session.handles[&vfs.handle] else {
         panic!("failed flush must retain the writer");
     };
     assert!(!writer.committed);

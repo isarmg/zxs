@@ -20,12 +20,14 @@ fn namespace_typed_paths_keep_lookup_spelling_but_require_nfc_for_creation() {
             false,
         )
         .unwrap();
-        assert_eq!(input.source_path.as_str(), nfd);
-        assert_eq!(input.source_path.key(), "café/file.txt");
+        assert_eq!(input.kind, kind);
+        assert_eq!(input.change.path(), nfd);
+        assert_eq!(input.change.key(), "café/file.txt");
+        assert!(input.change.destination().is_none());
         let storage_contract::NamespaceOperation::Delete { path } = input.change else {
             panic!("expected typed deletion")
         };
-        assert_eq!(path, input.source_path);
+        assert_eq!(path.as_str(), nfd);
     }
     assert!(
         NamespaceInput::new(
@@ -43,11 +45,8 @@ fn namespace_typed_paths_keep_lookup_spelling_but_require_nfc_for_creation() {
         true,
     )
     .unwrap();
-    assert_eq!(input.source_path.as_str(), nfd);
-    assert_eq!(
-        input.destination_path.as_ref().unwrap().as_str(),
-        "Café/New.txt"
-    );
+    assert_eq!(input.change.path(), nfd);
+    assert_eq!(input.change.destination().unwrap().as_str(), "Café/New.txt");
     let storage_contract::NamespaceOperation::Rename {
         source,
         destination,
@@ -55,8 +54,8 @@ fn namespace_typed_paths_keep_lookup_spelling_but_require_nfc_for_creation() {
     else {
         panic!("expected typed rename")
     };
-    assert_eq!(source, input.source_path);
-    assert_eq!(Some(destination), input.destination_path);
+    assert_eq!(source.as_str(), nfd);
+    assert_eq!(destination.as_str(), "Café/New.txt");
     assert!(
         NamespaceInput::parse(
             NamespaceOperation::Rename,
@@ -66,4 +65,33 @@ fn namespace_typed_paths_keep_lookup_spelling_but_require_nfc_for_creation() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn namespace_input_transfers_each_typed_path_into_one_staged_change() {
+    for kind in [
+        NamespaceOperation::Mkdir,
+        NamespaceOperation::Unlink,
+        NamespaceOperation::Rmdir,
+        NamespaceOperation::Rename,
+    ] {
+        let source = name_policy::LookupPath::parse("Café/Existing.txt").unwrap();
+        let source_display = source.as_str().as_ptr();
+        let source_key = source.key().as_ptr();
+        let destination = (kind == NamespaceOperation::Rename)
+            .then(|| name_policy::PortablePath::parse("Café/New.txt").unwrap());
+        let target_buffers = destination
+            .as_ref()
+            .map(|path| (path.as_str().as_ptr(), path.key().as_ptr()));
+        let input = NamespaceInput::new(kind, source, destination, false).unwrap();
+        assert_eq!(input.change.path().as_ptr(), source_display);
+        assert_eq!(input.change.key().as_ptr(), source_key);
+        assert_eq!(
+            input
+                .change
+                .destination()
+                .map(|path| (path.as_str().as_ptr(), path.key().as_ptr())),
+            target_buffers
+        );
+    }
 }

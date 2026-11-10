@@ -70,7 +70,7 @@ impl Session {
         let mtime = match opened {
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::Directory(_) => FileMtime::NotFile {},
-            Handle::Write(writer) => {
+            Handle::Write(writer, _) => {
                 let entry = self.shared.backend.lookup_at(
                     &self.identity,
                     &self.branch,

@@ -11,7 +11,7 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         file.write_all_at(b"new", 0).unwrap();
         client.dirty(opened.handle).unwrap();
         let (source, workspace, operation) = match &client.handles[&opened.handle] {
-            Handle::Write(writer) => (
+            Handle::Write(writer, _) => (
                 writer.source.clone(),
                 writer.workspace.clone(),
                 writer.operation_id,
@@ -118,7 +118,7 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         if !close_first {
             let assert_active = |client: &Session, expected_bytes: &[u8]| {
                 let writer = match &client.handles[&opened.handle] {
-                    Handle::Write(writer) => writer,
+                    Handle::Write(writer, _) => writer,
                     _ => unreachable!(),
                 };
                 assert!(writer.dirty && !writer.committed);
@@ -173,7 +173,12 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         }
 
         assert!(!client.handles.contains_key(&opened.handle));
-        assert!(client.writer_locks.is_empty());
+        assert!(
+            client
+                .handles
+                .values()
+                .all(|handle| !matches!(handle, Handle::Write(..)))
+        );
         assert!(shared.file_writers.lock().unwrap().is_empty());
         assert_eq!(
             fs::read(&source).unwrap(),
@@ -227,7 +232,7 @@ fn explicit_abort_after_completed_publication_does_not_erase_lost_reply_receipt(
     file.write_all_at(b"new", 0).unwrap();
     client.dirty(opened.handle).unwrap();
     let (operation, workspace, source) = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => (
+        Handle::Write(writer, _) => (
             writer.operation_id,
             writer.workspace.clone(),
             writer.source.clone(),
@@ -289,7 +294,7 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
             file.write_all_at(b"new", 0).unwrap();
             one.dirty(opened.handle).unwrap();
             let operation_id = match &one.handles[&opened.handle] {
-                Handle::Write(writer) => writer.operation_id,
+                Handle::Write(writer, _) => writer.operation_id,
                 _ => unreachable!(),
             };
             backend
@@ -348,7 +353,7 @@ fn failed_publication_reconciliation_preserves_later_bytes_for_authorized_rebase
             storage_contract::ErrorCode::WorkspaceRebaseRequired
         );
         let writer = match &one.handles[&opened.handle] {
-            Handle::Write(writer) => writer,
+            Handle::Write(writer, _) => writer,
             _ => unreachable!(),
         };
         assert!(writer.committed && writer.dirty);

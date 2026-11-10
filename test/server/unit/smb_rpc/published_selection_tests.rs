@@ -24,7 +24,7 @@ fn first_save(
     file.write_all_at(b"one", 0).unwrap();
     client.dirty(opened.handle).unwrap();
     let operation = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.operation_id,
+        Handle::Write(writer, _) => writer.operation_id,
         _ => unreachable!(),
     };
     if lose_reply {
@@ -126,7 +126,7 @@ fn new_file_published_handle_rejects_same_version_file_branch_switch() {
         );
         assert_eq!(backend.uploads.load(Ordering::SeqCst), uploads);
         let writer = match &client.handles[&opened.handle] {
-            Handle::Write(writer) => writer,
+            Handle::Write(writer, _) => writer,
             _ => unreachable!(),
         };
         assert!(writer.dirty && writer.committed && writer.source.is_file());
@@ -158,7 +158,7 @@ fn published_handles_can_write_again_without_selection_change() {
             let path = if create { "fresh.txt" } else { "report.txt" };
             let (opened, file) = first_save(&mut client, &backend, path, create, lose_reply);
             let first_operation = match &client.handles[&opened.handle] {
-                Handle::Write(writer) => writer.operation_id,
+                Handle::Write(writer, _) => writer.operation_id,
                 _ => unreachable!(),
             };
             client
@@ -171,7 +171,7 @@ fn published_handles_can_write_again_without_selection_change() {
             file.write_all_at(b"two", 0).unwrap();
             client.dirty(opened.handle).unwrap();
             let writer = match &client.handles[&opened.handle] {
-                Handle::Write(writer) => writer,
+                Handle::Write(writer, _) => writer,
                 _ => unreachable!(),
             };
             assert_ne!(
@@ -211,7 +211,7 @@ fn unpublished_dirty_preserves_generation_and_records_before_authorization_failu
     let mut client = session(shared, &branch);
     let (opened, file) = open_file(&mut client, true);
     let (source, operation) = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => (writer.source.clone(), writer.operation_id),
+        Handle::Write(writer, _) => (writer.source.clone(), writer.operation_id),
         _ => unreachable!(),
     };
     let record_path = source.with_extension("work.json");
@@ -245,7 +245,7 @@ fn failed_initial_dirty_record_retains_source_and_retry_records_generation() {
     let mut client = session(shared, &branch);
     let (opened, file) = open_file(&mut client, true);
     let source = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => unreachable!(),
     };
     let record_path = source.with_extension("work.json");
@@ -272,7 +272,7 @@ fn failed_new_generation_record_is_retried_without_another_workspace() {
     let mut client = session(shared, &branch);
     let (opened, file) = first_save(&mut client, &backend, "report.txt", false, false);
     let source = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => writer.source.clone(),
+        Handle::Write(writer, _) => writer.source.clone(),
         _ => unreachable!(),
     };
     let record_path = source.with_extension("work.json");
@@ -281,7 +281,7 @@ fn failed_new_generation_record_is_retried_without_another_workspace() {
     let error = client.dirty(opened.handle).unwrap_err();
     assert!(std::error::Error::source(&error).is_some());
     let (workspace, operation) = match &client.handles[&opened.handle] {
-        Handle::Write(writer) => {
+        Handle::Write(writer, _) => {
             assert!(writer.dirty && !writer.committed);
             (writer.workspace.workspace_id.clone(), writer.operation_id)
         }
@@ -291,7 +291,7 @@ fn failed_new_generation_record_is_retried_without_another_workspace() {
     assert_eq!(fs::read(&source).unwrap(), b"two");
     fs::remove_dir(&record_path).unwrap();
     client.dirty(opened.handle).unwrap();
-    let Handle::Write(writer) = &client.handles[&opened.handle] else {
+    let Handle::Write(writer, _) = &client.handles[&opened.handle] else {
         panic!("writer must remain owned by its original handle");
     };
     assert_eq!(writer.workspace.workspace_id, workspace);
