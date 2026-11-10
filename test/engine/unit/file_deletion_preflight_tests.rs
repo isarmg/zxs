@@ -65,6 +65,7 @@ impl Fixture {
             smb_enabled: true,
             smb_binding_generation: 1,
             file_manager_root: true,
+            directory_deletions: std::collections::BTreeMap::new(),
         };
         let mut state = State {
             sequence: 20,
@@ -204,7 +205,6 @@ impl Fixture {
         self.state.directory_git_repositories.insert(
             directory.clone(),
             storage_contract::directory_git::DirectoryGitRepository {
-                deletions: std::collections::BTreeMap::new(),
                 repository_id: self.repository_id.as_str().into(),
                 directory_id: directory,
                 initialized_sequence: 1,

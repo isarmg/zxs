@@ -52,7 +52,7 @@ pub(super) fn dependency_fixture() -> State {
         state.repositories.entry(repository.into()).or_insert_with(|| record(json!({
             "repository_id":repository,"name":repository,"history_tree_id":history,
             "main_branch_id":branch,"primary_slot_id":"P01","target_copies":1,
-            "name_policy":"portable","unicode_version":"15.1","smb_enabled":false,"smb_binding_generation":"1"
+            "name_policy":"portable","unicode_version":"15.1","smb_enabled":false,"smb_binding_generation":"1","directory_deletions":{}
         })));
         state.branches.insert(branch.into(), record(json!({
             "branch_id":branch,"history_tree_id":history,"name":branch,"head_commit_id":commit,

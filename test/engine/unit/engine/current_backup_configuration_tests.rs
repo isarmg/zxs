@@ -649,7 +649,6 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
         },
         directory_git_repositories => {
             state.directory_git_repositories.insert("unexpected".into(), storage_contract::directory_git::DirectoryGitRepository {
-                deletions: std::collections::BTreeMap::new(),
                 repository_id: "unexpected".into(),
                 directory_id: "unexpected".into(),
                 initialized_sequence: state.sequence,

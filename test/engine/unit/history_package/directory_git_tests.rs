@@ -70,7 +70,6 @@ fn fixture() -> Fixture {
         manifest.directory_git_repositories.insert(
             branch.directory_id.clone(),
             DirectoryGitRepository {
-                deletions: std::collections::BTreeMap::new(),
                 repository_id: repository.repository_id.clone(),
                 directory_id: branch.directory_id.clone(),
                 initialized_sequence: 1,

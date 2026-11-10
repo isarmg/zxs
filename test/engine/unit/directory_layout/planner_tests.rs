@@ -30,6 +30,7 @@ fn fixture_state() -> State {
             smb_enabled: false,
             smb_binding_generation: 0,
             file_manager_root: true,
+            directory_deletions: std::collections::BTreeMap::new(),
         },
     );
     state.histories.insert(
@@ -155,7 +156,6 @@ fn branch(
         state.directory_git_repositories.insert(
             owner.into(),
             DirectoryGitRepository {
-                deletions: std::collections::BTreeMap::new(),
                 repository_id: root(),
                 directory_id: owner.into(),
                 initialized_sequence: 1,

@@ -535,7 +535,7 @@ fn sharing_fixture() -> State {
             "repository_id":"r1", "name":"repository", "history_tree_id":"h1",
             "main_branch_id":"b-a", "primary_slot_id":"P01", "target_copies":1,
             "name_policy":"portable", "unicode_version":"15.1", "smb_enabled":false,
-            "smb_binding_generation":"1"
+            "smb_binding_generation":"1", "directory_deletions":{}
         })),
     );
     state.directory_branches.insert("directory-branch".into(), record(json!({

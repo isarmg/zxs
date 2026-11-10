@@ -57,6 +57,7 @@ fn manifest() -> HistoryManifest {
             "target_copies": 3,
             "smb_enabled": true,
             "smb_binding_generation": "1",
+            "directory_deletions": {},
             "name_policy": "portable",
             "unicode_version": "15.1"
         },

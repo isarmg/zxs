@@ -14,6 +14,8 @@
 
 ## 本轮正常业务收敛
 
+- M01／T00 目录 D 独立索引测试形状依赖片：按后继 `Repository.directory_deletions` 必需字段与 `DirectoryGitRepository` 移除旧 `deletions` 的契约，同步十份 Engine 结构字面量与三份 JSON 构造夹具；保留现有测试断言和目标，不新增生产 hook、框架或重复场景。该片从 `d4669b63` 独立保全，必须与目录生命周期索引业务及其统一搬运依赖组合；普通空初始化和正常搬运流程通过 Engine 创建仓库，无需添加重复字段构造。固定哈希 `canonical_publication.json`、`manifest-sharing-golden.json` 及 contract 镜像仍需由对应维护流程同步，未将本片视为完整测试就绪。未运行程序、格式器、编译、测试或 CI。
+
 - T02 13:30 批次整合共享搬运执行器独立首片 `bc02eb02`：原文件正常执行与原操作恢复统一进入 finish_move，同一能力控制 FILE／DISK／SYSTEM 安装、历史根与可见状态发布；原文件专属 scopes 移到共同执行器，不保留两套实现。已发布原回执在 names 安装前核对完整候选及原结果。
 - 原 SMB 捕获的 source entry/file 身份由核心在原回执／意图之后核对，保留覆盖目标完整身份。对齐 `f7c4783a` 后，11 个业务路径 +666/-515，净增151行；仅 TASKS 与较新主线重叠，保留先前业务和测试源码。
 - 此批仅整合可独立接入的执行器重构，不含未闭环 object.move、Web／HTTP／SMB 新入口或依赖测试。不宣称整目录搬运完成；未运行程序、格式器、编译、测试或 CI。

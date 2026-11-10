@@ -26,6 +26,7 @@ fn repository(number: u32, slot: &str) -> Repository {
         smb_enabled: true,
         smb_binding_generation: 1,
         file_manager_root: true,
+        directory_deletions: std::collections::BTreeMap::new(),
     }
 }
 

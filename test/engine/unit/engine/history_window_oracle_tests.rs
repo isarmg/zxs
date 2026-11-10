@@ -75,6 +75,7 @@ pub(super) fn fixture() -> MetadataView {
             smb_enabled: false,
             smb_binding_generation: 1,
             file_manager_root: true,
+            directory_deletions: std::collections::BTreeMap::new(),
         },
     );
     for n in 0..17 {
