@@ -198,37 +198,47 @@ async fn disconnect_does_not_release_the_blocking_job_owner() {
         gate.release.recv()?;
         Ok(json!({"completed":true}))
     }
-    let (started, ready) = oneshot::channel();
-    let (release, waiting) = mpsc::channel();
-    *GATE.lock().unwrap() = Some(Gate {
-        started,
-        release: waiting,
-    });
-    let state = state();
-    let request_task = tokio::spawn(app(state.clone(), blocked).oneshot(request("{}")));
-    tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+    for kind in [
+        None,
+        Some(CredentialInput::Public),
+        Some(CredentialInput::Secret),
+    ] {
+        let (started, ready) = oneshot::channel();
+        let (release, waiting) = mpsc::channel();
+        *GATE.lock().unwrap() = Some(Gate {
+            started,
+            release: waiting,
+        });
+        let state = state();
+        let router = match kind {
+            None => app(state.clone(), blocked),
+            Some(input) => credential_app(state.clone(), blocked, input),
+        };
+        let request_task = tokio::spawn(router.oneshot(request("{}")));
+        tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        request_task.abort();
+        assert!(request_task.await.unwrap_err().is_cancelled());
+        assert_eq!(state.jobs.available_permits(), 0);
+        let response = app(state.clone(), empty)
+            .oneshot(request("{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(body(response).await["error"]["code"], "helper_busy");
+        release.send(()).unwrap();
+        let finished = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Arc::clone(&state.jobs).acquire_owned(),
+        )
         .await
         .unwrap()
         .unwrap();
-    request_task.abort();
-    assert!(request_task.await.unwrap_err().is_cancelled());
-    assert_eq!(state.jobs.available_permits(), 0);
-    let response = app(state.clone(), empty)
-        .oneshot(request("{}"))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(body(response).await["error"]["code"], "helper_busy");
-    release.send(()).unwrap();
-    let finished = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        Arc::clone(&state.jobs).acquire_owned(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    drop(finished);
-    assert_eq!(state.jobs.available_permits(), 1);
+        drop(finished);
+        assert_eq!(state.jobs.available_permits(), 1);
+    }
 }
 
 #[tokio::test]
@@ -275,5 +285,152 @@ async fn all_native_job_routes_reject_malformed_json_before_work() {
             "{path}"
         );
         assert_eq!(state.jobs.available_permits(), 1, "{path}");
+    }
+}
+
+fn credential_app<I, O>(
+    state: State,
+    operation: fn(I) -> crate::Result<O>,
+    input: CredentialInput,
+) -> Router
+where
+    I: DeserializeOwned + Send + 'static,
+    O: Serialize + Send + 'static,
+{
+    Router::new()
+        .route(
+            "/job",
+            Job::new("credential-failed", "credential-worker").credential_route(operation, input),
+        )
+        .with_state(state)
+}
+
+#[tokio::test]
+async fn credential_observation_and_change_never_return_operation_source_chains() {
+    fn failure(_: Empty) -> crate::Result<Value> {
+        Err(Box::new(OperationError(std::io::Error::other(
+            "private native detail",
+        ))))
+    }
+    for input in [CredentialInput::Public, CredentialInput::Secret] {
+        let state = state();
+        let response = credential_app(state.clone(), failure, input)
+            .oneshot(request("{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body(response).await,
+            json!({"error":{"code":"credential-failed","message":"operation context"}})
+        );
+        assert_eq!(state.jobs.available_permits(), 1);
+    }
+}
+
+#[tokio::test]
+async fn credential_secret_decode_preserves_redaction_strictness_and_budget() {
+    #[derive(Deserialize)]
+    #[serialization(deny_unknown_fields)]
+    struct Password {
+        #[serialization(deserialize_with = "secret")]
+        password: platform_io::secret::SecretString,
+    }
+    fn secret<'de, D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<platform_io::secret::SecretString, D::Error> {
+        String::deserialize(deserializer).map(platform_io::secret::SecretString::new)
+    }
+    fn accepted(input: Password) -> crate::Result<Value> {
+        assert_eq!(input.password.expose(), "private-password-fixture");
+        Ok(json!({"accepted":true}))
+    }
+    let state = state();
+    let response = credential_app(state.clone(), accepted, CredentialInput::Secret)
+        .oneshot(request(r#"{"password":"private-password-fixture"}"#))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await, json!({"accepted":true}));
+    for input in [
+        "not JSON private-password-fixture",
+        "{}",
+        r#"{"password":"private-password-fixture","extra":true}"#,
+    ] {
+        let response = credential_app(state.clone(), accepted, CredentialInput::Secret)
+            .oneshot(request(input))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body(response).await,
+            json!({"error":{
+                "code":"credential_request_json",
+                "message":"Invalid credential request; password values and parser details are not returned."
+            }})
+        );
+        assert_eq!(state.jobs.available_permits(), 1);
+    }
+    let response = credential_app(state.clone(), accepted, CredentialInput::Secret)
+        .oneshot(request(
+            " ".repeat(super::super::super::MAX_REQUEST_BYTES + 1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body(response).await["error"]["code"],
+        "credential_request_body"
+    );
+    assert_eq!(state.jobs.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn credential_routes_keep_exact_parser_codes_and_admission_before_decode() {
+    let routing_state = state();
+    let router = super::super::router(routing_state.clone());
+    for (path, code) in [
+        ("/api/credentials/samba-preview", "request_json"),
+        ("/api/credentials/samba-reset", "credential_request_json"),
+        ("/api/credentials/samba-status", "request_json"),
+        ("/api/credentials/samba-account-preview", "request_json"),
+        (
+            "/api/credentials/samba-account-create",
+            "credential_request_json",
+        ),
+        ("/api/credentials/samba-account-status", "request_json"),
+    ] {
+        let mut input = request("not JSON");
+        *input.uri_mut() = path.parse().unwrap();
+        let response = router.clone().oneshot(input).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(body(response).await["error"]["code"], code, "{path}");
+        assert_eq!(routing_state.jobs.available_permits(), 1);
+    }
+    for input in [CredentialInput::Public, CredentialInput::Secret] {
+        let state = state();
+        let permit = Arc::clone(&state.jobs).try_acquire_owned().unwrap();
+        let mut missing_csrf = request("not JSON");
+        missing_csrf.headers_mut().remove("x-zxs-helper-csrf");
+        let response = credential_app(state.clone(), empty, input)
+            .oneshot(missing_csrf)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = credential_app(state.clone(), empty, input)
+            .oneshot(request("not JSON"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(body(response).await["error"]["code"], "helper_busy");
+        state.stopping.send_replace(true);
+        let response = credential_app(state.clone(), empty, input)
+            .oneshot(request("not JSON"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body(response).await["error"]["code"], "helper_stopping");
+        assert_eq!(state.jobs.available_permits(), 0);
+        drop(permit);
+        assert_eq!(state.jobs.available_permits(), 1);
     }
 }

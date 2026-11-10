@@ -4,7 +4,6 @@ mod job;
 mod materials;
 mod packages;
 mod response_body;
-mod samba_enrollment;
 mod service_account;
 use data_serialization::{Deserialize, de::DeserializeOwned};
 use http_routing::{
@@ -16,7 +15,7 @@ use http_routing::{
     response::{Html, IntoResponse, Response},
     routing::{MethodRouter, get, post},
 };
-use job::{Empty, Job};
+use job::{CredentialInput, Empty, Job};
 use json_codec::json;
 use std::time::Duration;
 use storage_engine::offline_maintenance::Operation;
@@ -74,6 +73,8 @@ pub(super) fn router(state: State) -> Router {
     let packages = Job::new("system_packages", "packages_worker");
     let vfs = Job::new("sealed_vfs_installation", "vfs_installation_worker");
     let activation = Job::new("service_activation", "activation_worker");
+    let samba_reset = Job::new("local_samba_password_reset", "samba_reset_worker");
+    let samba_enrollment = Job::new("local_samba_account_enrollment", "samba_enrollment_worker");
     Router::new()
         .route("/", get(index))
         .route("/console.css", get(styles))
@@ -346,20 +347,47 @@ pub(super) fn router(state: State) -> Router {
             "/api/credentials/reset-recover-preview",
             maintenance(Operation::AdministratorResetRecoverPreview),
         )
-        .route("/api/credentials/samba-preview", post(samba_reset_preview))
-        .route("/api/credentials/samba-reset", post(samba_reset))
-        .route("/api/credentials/samba-status", post(samba_reset_status))
+        .route(
+            "/api/credentials/samba-preview",
+            samba_reset.credential_route(
+                crate::deployment::samba_password::preview,
+                CredentialInput::Public,
+            ),
+        )
+        .route(
+            "/api/credentials/samba-reset",
+            samba_reset.credential_route(
+                crate::deployment::samba_password::reset,
+                CredentialInput::Secret,
+            ),
+        )
+        .route(
+            "/api/credentials/samba-status",
+            samba_reset.credential_route(
+                crate::deployment::samba_password::status,
+                CredentialInput::Public,
+            ),
+        )
         .route(
             "/api/credentials/samba-account-preview",
-            post(samba_enrollment::preview),
+            samba_enrollment.credential_route(
+                crate::deployment::samba_password::enrollment::preview,
+                CredentialInput::Public,
+            ),
         )
         .route(
             "/api/credentials/samba-account-create",
-            post(samba_enrollment::create),
+            samba_enrollment.credential_route(
+                crate::deployment::samba_password::enrollment::create,
+                CredentialInput::Secret,
+            ),
         )
         .route(
             "/api/credentials/samba-account-status",
-            post(samba_enrollment::status),
+            samba_enrollment.credential_route(
+                crate::deployment::samba_password::enrollment::status,
+                CredentialInput::Public,
+            ),
         )
         .route(
             "/api/host/preview",
@@ -625,75 +653,6 @@ async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failur
             "Invalid credential request; password values and parser details are not returned.",
         )
     })
-}
-
-async fn samba_reset_preview(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::samba_password::Input = input(request).await?;
-    let preview = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::samba_password::preview(input).map_err(samba_reset_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "samba_reset_worker",
-            error,
-        )
-    })??;
-    Ok(Json(preview).into_response())
-}
-async fn samba_reset(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::samba_password::Reset = secret_input(request).await?;
-    let receipt = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::samba_password::reset(input).map_err(samba_reset_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "samba_reset_worker",
-            error,
-        )
-    })??;
-    Ok(Json(receipt).into_response())
-}
-async fn samba_reset_status(
-    ExtractState(state): ExtractState<State>,
-    request: Request,
-) -> Result<Response, Failure> {
-    let permit = admit_job(&state, &request)?;
-    let input: crate::deployment::samba_password::Original = input(request).await?;
-    let status = tokio::task::spawn_blocking(move || {
-        let _owner = permit;
-        crate::deployment::samba_password::status(input).map_err(samba_reset_failure)
-    })
-    .await
-    .map_err(|error| {
-        Failure::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "samba_reset_worker",
-            error,
-        )
-    })??;
-    Ok(Json(status).into_response())
-}
-fn samba_reset_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
-    // Credential failures use a fixed public diagnostic to keep secrets private.
-    Failure::message(
-        StatusCode::CONFLICT,
-        "local_samba_password_reset",
-        &error.to_string(),
-    )
 }
 
 fn maintenance(operation: Operation) -> MethodRouter<State> {
