@@ -68,6 +68,24 @@ struct Native {
     writer: BackupWriterIoConfig,
     ordinary: BackupOrdinaryServingReport,
 }
+/// Process-local ownership of this exact final handoff. It is not serialized,
+/// does not release the source stop, and is never constructed from progress.
+/// Every retry rereads the common native proof and exact selected file set.
+pub(in crate::engine) struct ServingSwitch {
+    registry: published_registry::Plan,
+    publication: PreparedBackupFirstPublication,
+    published: AdmittedState,
+    writer: BackupWriterIoConfig,
+    current: Arc<crate::engine::disk_registry::current::CurrentNamespaces>,
+    barrier: ServingBarrier,
+    roots: roots::Roots,
+    targets: Vec<Arc<DiskHandle>>,
+    writers: Vec<(String, DiskWriter)>,
+    selection: Vec<u8>,
+    completed_objects: Vec<String>,
+    target_count: usize,
+}
+
 impl Native {
     fn capture(
         context: &common_databases::Context<'_>,
@@ -206,11 +224,16 @@ impl Engine {
                 "Backup final switch does not own the original operation and principal",
             ));
         }
-        // Do not make a succeeded/new generation look like an old Engine merely
-        // to reuse preparation code. Native cold recovery handles that case.
-        task.installation.require_current(self)?;
+        if self.backup_serving_switch.is_none() {
+            task.installation.require_current(self)?;
+        }
         self.blocked = true;
-        let result = complete(self, task, &system, &AtomicBool::new(false));
+        let result = (|| {
+            if self.backup_serving_switch.is_none() {
+                prepare_switch(self, task, &system, &AtomicBool::new(false))?;
+            }
+            self.finish_backup_serving_switch(operation, principal)
+        })();
         if let Err(error) = &result
             && let Some(worker) = &self.backup_preparation
         {
@@ -218,7 +241,7 @@ impl Engine {
             failed.phase = BackupPreparationPhase::Blocked;
             failed.error_code = Some(error.code());
             failed.detail = format!(
-                "Backup final switch remains fenced; retain this operation and its existing locks. If an original selector was already changed, use explicit same-operation cold recovery after orderly service restart: {error}"
+                "Backup final switch remains fenced; explicitly resume this same operation with its retained owners. If the process was lost, use same-operation cold recovery: {error}"
             );
             // This is the diagnostic cache only. Native selections and held
             // owners remain untouched, including on a poisoned cache.
@@ -231,12 +254,12 @@ impl Engine {
     }
 }
 
-fn complete(
+fn prepare_switch(
     engine: &mut Engine,
     task: Task,
     system: &DiskRoot,
     stop: &AtomicBool,
-) -> Result<OperationResult> {
+) -> Result<()> {
     let (targets, choices) = runtime::acquire(engine, &task)?;
     let sources = common_databases::Sources::capture(engine, system)?;
     let prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
@@ -365,102 +388,201 @@ fn complete(
         pool,
     )?;
     sources.recheck(system)?;
-    // Original Sources intentionally accept only the old seals. No old task
-    // verifier is called after this point to normalize a partial selector set.
-    let bootstrap = crate::engine::membership_transition::pending::activation::backup::startup::PreparedBackupBootstrap::select(
-        engine, &native.writer, native.registry.candidate(), &native.publication, &target_handles)?;
-    roots.apply(&selection)?;
-    let native_files = roots.completion()?;
-    let completion = bounded(&Completion {
-        format: "zxs-backup-serving-completed".into(),
-        selection_hash: blake3::hash(&selection).to_hex().to_string(),
-        original_objects: completed_objects,
-        native_files,
-    })?;
-    roots
-        .visit(|root| install_preparation_bytes(root, &root.path().join(COMPLETE), &completion))?;
-    install_preparation_bytes(system, &system.path().join(COMPLETE), &completion)?;
-    roots.visit(|root| require_bytes(root, COMPLETE, &completion, MAX_PLAN))?;
-    require_bytes(system, COMPLETE, &completion, MAX_PLAN)?;
+    // Keep the full native continuation and the actual old/new seal handles
+    // BEFORE changing the first selector. A retry cannot recapture old seals
+    // after a partial exchange, nor should it release these owners to reopen.
     let barrier = native.barrier();
-    bootstrap.publish(&barrier)?;
-    install_engine(engine, native, roots.handles(), writers, &barrier)
-}
-
-fn install_engine(
-    engine: &mut Engine,
-    native: Native,
-    handles: Vec<Arc<DiskHandle>>,
-    writers: Vec<(String, DiskWriter)>,
-    barrier: &ServingBarrier,
-) -> Result<OperationResult> {
-    let current = native.replay.finish_serving(
+    let current = Arc::new(native.replay.finish_serving(
         &native.publication,
         native.registry.candidate(),
         &native.graph,
         &native.published,
+        &barrier,
+    )?);
+    engine.backup_serving_switch = Some(ServingSwitch {
+        registry: native.registry,
+        publication: native.publication,
+        published: native.published,
+        writer: native.writer,
+        current,
         barrier,
-    )?;
-    let config = native
-        .writer
-        .config()
-        .clone()
-        .with_workspace_limits(Some(engine.config.effective_workspace_limits()))?
-        .with_backup_serving_resources(barrier)?;
-    // Adopt existing lock owners before any fallible handoff. The pool never
-    // drops either the old or selected-target writer descriptions on failure.
-    engine._locks.extend(writers);
-    let resources = Arc::new(DiskResources::generation_handles(&config, handles)?);
-    let mut journals = BTreeMap::new();
-    for disk in config.metadata_members() {
-        let root = &resources.get(disk)?.root;
-        native.publication.original_journal_binding(
-            root,
-            disk,
-            native.registry.candidate(),
-            &AtomicBool::new(false),
-        )?;
-        let opened = OpenJournal::scan_configured_at(root, disk, &config)?;
-        if opened.scan.torn_tail || opened.scan.records.len() != 3 {
-            return Err(invalid(
-                "live first Backup switch changed its exact original three-frame journal",
-            ));
-        }
-        let (writer, _) = opened.into_writer()?;
-        journals.insert(disk.disk_id.clone(), writer);
+        roots,
+        targets: target_handles,
+        writers,
+        selection,
+        completed_objects,
+        target_count: native.ordinary.targets.len(),
+    });
+    Ok(())
+}
+
+impl Engine {
+    fn finish_backup_serving_switch(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+    ) -> Result<OperationResult> {
+        let pending = self.backup_serving_switch.take().ok_or_else(|| {
+            invalid("Backup final switch has no retained original continuation")
+        })?;
+        // All fallible handoff work is performed while the original Engine
+        // stays fenced. Failure puts back the SAME proof, roots and owners.
+        let prepared = (|| {
+            let first = pending.registry.candidate();
+            if first.result().operation_id != operation
+                || pending
+                    .published
+                    .state()
+                    .operation_principals
+                    .get(&operation)
+                    .map(String::as_str)
+                    != Some(principal)
+                || !self.blocked
+                || self.pending_membership.is_some()
+                || self.pending_disk_exit.is_some()
+                || self.history_move_choice.is_some()
+                || self.history_move_prepare.is_some()
+            {
+                return Err(invalid(
+                    "Backup live continuation is not its exact stopped original operation",
+                ));
+            }
+            self.require_no_commit_preparation()?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("after_backup_serving_selected")?;
+            let system = DiskRoot::open(&self.root)?;
+            let mut owners = self._locks.retain()?;
+            owners.extend(pending.writers.to_vec());
+            for handle in pending.roots.handles() {
+                let disk = pending
+                    .writer
+                    .config()
+                    .disks
+                    .iter()
+                    .find(|disk| disk.disk_id == handle.seal.disk_id)
+                    .ok_or_else(|| {
+                        invalid("Backup retained root is not in its native membership")
+                    })?;
+                owners.verify_disk(disk, &handle.root)?;
+            }
+            let _activity = owners.activity()?;
+            let bootstrap = crate::engine::membership_transition::pending::activation::backup::startup::PreparedBackupBootstrap::select(
+                self,
+                &pending.writer,
+                first,
+                &pending.publication,
+                &pending.targets,
+            )?;
+            let completed = recovery::verify_live_selection(
+                &system,
+                bootstrap.admission(),
+                &pending.selection,
+                &pending.completed_objects,
+                &AtomicBool::new(false),
+            )?;
+            pending.roots.apply(&pending.selection, completed)?;
+            let completion = bounded(&Completion {
+                format: "zxs-backup-serving-completed".into(),
+                selection_hash: blake3::hash(&pending.selection).to_hex().to_string(),
+                original_objects: pending.completed_objects.clone(),
+                native_files: pending.roots.completion()?,
+            })?;
+            pending.roots.visit(|root| {
+                install_preparation_bytes(root, &root.path().join(COMPLETE), &completion)
+            })?;
+            install_preparation_bytes(&system, &system.path().join(COMPLETE), &completion)?;
+            pending
+                .roots
+                .visit(|root| require_bytes(root, COMPLETE, &completion, MAX_PLAN))?;
+            require_bytes(&system, COMPLETE, &completion, MAX_PLAN)?;
+            bootstrap.publish(&pending.barrier)?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("after_backup_bootstrap_published")?;
+            let config = pending
+                .writer
+                .config()
+                .clone()
+                .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
+                .with_backup_serving_resources(&pending.barrier)?;
+            // Retain all actual target owners before generation binding can
+            // fail. No directory or writer is unlocked and reacquired.
+            self._locks.extend(pending.writers.to_vec());
+            let resources = Arc::new(DiskResources::generation_handles(
+                &config,
+                pending.roots.handles(),
+            )?);
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("after_backup_serving_resources")?;
+            let mut journals = BTreeMap::new();
+            for disk in config.metadata_members() {
+                let root = &resources.get(disk)?.root;
+                pending.publication.original_journal_binding(
+                    root,
+                    disk,
+                    first,
+                    &AtomicBool::new(false),
+                )?;
+                let opened = OpenJournal::scan_configured_at(root, disk, &config)?;
+                if opened.scan.torn_tail || opened.scan.records.len() != 3 {
+                    return Err(invalid(
+                        "live first Backup switch changed its exact original three-frame journal",
+                    ));
+                }
+                let (writer, _) = opened.into_writer()?;
+                journals.insert(disk.disk_id.clone(), writer);
+            }
+            let (_, history_roots) = crate::history_package::bound_history_objects_with_roots_at(
+                &resources,
+                &config.metadata_members().cloned().collect::<Vec<_>>(),
+                first.candidate(),
+                Some(&pending.published),
+            )?;
+            let snapshot = first.snapshot_hash().to_owned();
+            let next_slot = first
+                .sequence()
+                .checked_add(1)
+                .ok_or_else(|| invalid("Backup first publication exhausts journal sequence"))?;
+            let admitted = crate::engine::backup_preparation::ServingAdmission::capture(
+                pending.barrier.clone(),
+                Arc::clone(&pending.current),
+                first,
+                pending.target_count,
+            )?;
+            Ok::<_, Error>((
+                config,
+                resources,
+                journals,
+                history_roots,
+                snapshot,
+                next_slot,
+                admitted,
+            ))
+        })();
+        let (config, resources, journals, history_roots, snapshot, next_slot, admitted) =
+            match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.backup_serving_switch = Some(pending);
+                    return Err(error);
+                }
+            };
+        // No fallible operation may split this in-memory handoff. Later
+        // Current/SYSTEM/config failures retry through backup_serving, with the
+        // original stop still retained until complete_backup_serving_open.
+        self.config = config;
+        self.disk_resources = resources;
+        self.journals = journals;
+        self.state = Arc::new(pending.published.into_state());
+        self.snapshot = Some(snapshot);
+        self.next_slot = next_slot;
+        self.backup_serving = Some(admitted);
+        self.current_namespaces = Some(pending.current);
+        self.workspace_namespace_baselines.clear();
+        self.published_state_base = None;
+        self.metadata_integrity.invalidate();
+        self.bind_recovered_history_roots(history_roots);
+        #[cfg(feature = "fault-injection")]
+        self.failpoint("after_backup_current_installed")?;
+        self.complete_backup_serving_open()
     }
-    let (_, history_roots) = crate::history_package::bound_history_objects_with_roots_at(
-        &resources,
-        &config.metadata_members().cloned().collect::<Vec<_>>(),
-        native.registry.candidate().candidate(),
-        Some(&native.published),
-    )?;
-    let snapshot = native.registry.candidate().snapshot_hash().to_owned();
-    let next_slot = native
-        .registry
-        .candidate()
-        .sequence()
-        .checked_add(1)
-        .ok_or_else(|| invalid("Backup first publication exhausts journal sequence"))?;
-    engine.config = config;
-    engine.disk_resources = resources;
-    engine.journals = journals;
-    engine.state = Arc::new(native.published.into_state());
-    engine.snapshot = Some(snapshot);
-    engine.next_slot = next_slot;
-    let current = Arc::new(current);
-    engine.backup_serving = Some(
-        crate::engine::backup_preparation::ServingAdmission::capture(
-            barrier.clone(),
-            Arc::clone(&current),
-            native.registry.candidate(),
-            native.ordinary.targets.len(),
-        )?,
-    );
-    engine.current_namespaces = Some(current);
-    engine.workspace_namespace_baselines.clear();
-    engine.published_state_base = None;
-    engine.metadata_integrity.invalidate();
-    engine.bind_recovered_history_roots(history_roots);
-    engine.complete_backup_serving_open()
 }

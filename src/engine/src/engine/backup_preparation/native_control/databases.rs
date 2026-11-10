@@ -6,6 +6,7 @@ use crate::container_storage::backup_databases::PreparedDatabases;
 mod materials;
 mod runtime;
 mod scoped;
+pub(in crate::engine) use scoped::ServingSwitch;
 pub use scoped::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

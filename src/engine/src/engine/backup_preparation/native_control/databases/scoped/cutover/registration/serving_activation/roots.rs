@@ -201,6 +201,10 @@ impl Original {
             ));
         }
         self.verify()?;
+        // A prior exchange can be visible even when its stage-directory sync
+        // failed. Preserve the displaced old name durably before completion;
+        // verifying the exact inode pair alone does not finish that sync tail.
+        self.stage.sync_dir(self.stage.path())?;
         install_preparation_bytes(root, &root.path().join(GENERATION), authority)?;
         require_bytes(root, GENERATION, authority, MAX_METADATA)?;
         root.sync_dir(&root.path().join("metadata/pool-membership"))?;
@@ -273,10 +277,14 @@ impl Roots {
         }
         Ok(())
     }
-    pub(super) fn apply(&self, common: &[u8]) -> Result<()> {
+    pub(super) fn apply(&self, common: &[u8], verify_only: bool) -> Result<()> {
         self.visit(|root| require_bytes(root, SELECTED, common, MAX_PLAN))?;
         for original in &self.originals {
-            original.apply(common, &self.authority)?;
+            if verify_only {
+                original.verify()?;
+            } else {
+                original.apply(common, &self.authority)?;
+            }
         }
         self.verify()
     }

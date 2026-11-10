@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`a8bfc9d8`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`82e8d6f1`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -19,6 +19,8 @@
 - `3ba27b9a` 在成功收束本次 stop 后及显式冷恢复完成后接已有 history 重建；普通冷开原调用保留。派生 history 沿既有错误/Unavailable 记录语义，配套完整日志、Backup 后继重放与准确 catalog 门禁已于 `1ca1b170` 合入，当前组合未验。
 - `71a0beae` 已合入原 P1 候选 `dd84673b`，保留新 move 事务；修复在写唯一 `transaction.json` 前复用真实源序列/范围、完整拓扑及全部目标目录准入。管理员显式 Cancel 仅对源尚未停写、尚未决定的原任务生效：先持久化取消 intent，再停止并 join 原 worker，无覆盖归档整个 SYSTEM 原任务；全部目标字节原地保留，不自动清空或复用。中断后只允许同 op 续取消，源已停写/已决定保持原任务恢复，绝不借取消清 native fence。未到 SYSTEM 的原 Start 可按完整原输入写取消 tombstone，迟到 Start 不得复活该 op。
 - Web 只在服务确认准确 Cancelled 后，用户另行选择重新开始，才在同源/账号 Web Lock 内清理相同 op 的本机记录并重新读取来源序列和空目标。未知结果保留原输入与取消围栏，只有 typed CancellationRejected 才回到同任务恢复。Web Locks 缺失拒绝本机写/清理，没有无锁退路。仅业务源码与必要 TASKS，已随 `71a0beae` 发布；该取消组合尚未通过实际验收，未操作真实盘。崩溃/跨标签页与真实浏览器尚未验；取消不删除目标副本、不支持停写后换新任务，原 selector 部分交换仍需有序重启后同 op 冷恢复。
+
+- 当前本地后继恢复 `a8890879` 原最终 live-switch 候选并对齐准确 `82e8d6f1`，保留后续已合入修复和任务记录：原 native/Current/根/目标 writer 在首个 selector 交换前作为同操作续作持有；失败后显式 Resume／Activate 不重开新任务、不重复 Publication、不释放再抢 writer。bootstrap 已完成而内存交接未完成时，只核原 locator 与完整选定实体后续作；完成后缺 selector／换 inode 仍拒绝补造。另补原 seal 交换后的 stage 目录同步尾，已看见新 seal 也须持久保存原旧名才能完成。此前“部分 selector 必须重启”仅适用于未含本修复的旧代码；进程丢失仍按原计划冷恢复。原 InterruptedServing、helper 和三项回归均显式限定 fault-injection 特性，避免普通目标引用特性 API；既有集成文件新增三项测试仅为源码（四个在线边界、三个冷恢复边界及丢失 selector），未运行、编译、格式化、测试或 CI；没有实际磁盘操作，不宣称主备份整体已验收。下一步由协调者串行合入并核对准确 head 短 CI，真实同步故障／断电和端到端服务另行验收。
 
 ## 已合入的产品切片
 

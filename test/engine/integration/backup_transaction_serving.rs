@@ -399,3 +399,171 @@ fn unfinished_native_resume_does_not_recreate_a_missing_target_writer_lock() {
     assert!(!lock.exists());
     assert!(!root.join("backup-root-extension/complete.json").exists());
 }
+
+#[cfg(feature = "fault-injection")]
+struct InterruptedServing {
+    temp: tempfile::TempDir,
+    engine: Engine,
+    repository: Repository,
+    request: BackupTransactionRequest,
+    old: Entry,
+}
+
+#[cfg(feature = "fault-injection")]
+fn interrupted_serving(point: &str) -> InterruptedServing {
+    let (temp, mut engine, repository) = full_route();
+    let old = save(&mut engine, &repository, "kept", b"original retained body");
+    let request = transaction(&engine, vec![target(temp.path(), "retained-target")]);
+    prepared(&mut engine, &request);
+    engine.inject_fault_once(point);
+    assert_eq!(
+        engine
+            .complete_backup_registry_placement_decision(
+                request.preparation.operation_id,
+                "admin",
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::InjectedFailure,
+        "{point}"
+    );
+    assert!(engine.is_read_only());
+    assert!(engine.membership_fence_status().is_some());
+    assert_ne!(
+        engine.backup_preparation_status().unwrap().phase,
+        BackupPreparationPhase::GenerationServingActive
+    );
+    assert!(Engine::open(&temp.path().join("system")).is_err());
+    InterruptedServing {
+        temp,
+        engine,
+        repository,
+        request,
+        old,
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn live_final_handoff_retries_keep_the_original_operation_and_writers() {
+    for point in [
+        "after_backup_serving_selected",
+        "after_backup_bootstrap_published",
+        "after_backup_serving_resources",
+        "after_backup_current_installed",
+    ] {
+        let InterruptedServing {
+            temp,
+            mut engine,
+            repository,
+            request,
+            old,
+        } = interrupted_serving(point);
+        let operation = request.preparation.operation_id;
+        assert!(engine.resume_backup_transaction(operation, "other").is_err());
+        assert!(engine.resume_backup_transaction(op(), "admin").is_err());
+        assert!(engine.is_read_only());
+        assert_eq!(
+            engine
+                .resume_backup_transaction(operation, "admin")
+                .unwrap()
+                .phase,
+            BackupPreparationPhase::GenerationServingActive,
+            "{point}"
+        );
+        let result = engine.operation(operation).unwrap();
+        let sequence = engine.state().sequence;
+        let receipts = engine.state().operations.clone();
+        assert_eq!(
+            engine
+                .complete_backup_registry_placement_decision(operation, "admin")
+                .unwrap(),
+            result
+        );
+        assert_eq!(engine.state().sequence, sequence);
+        assert_eq!(engine.state().operations, receipts);
+        assert!(!engine.is_read_only());
+        assert_eq!(body(&engine, &old.version_id), b"original retained body");
+        let after = save(&mut engine, &repository, "after", b"ordinary write after retry");
+        drop(engine);
+        let engine = Engine::open(&temp.path().join("system")).unwrap();
+        assert_eq!(engine.operation(operation).unwrap(), result);
+        assert_eq!(body(&engine, &old.version_id), b"original retained body");
+        assert_eq!(body(&engine, &after.version_id), b"ordinary write after retry");
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn completed_bootstrap_failure_resumes_cold_without_another_publication() {
+    for point in [
+        "after_backup_bootstrap_published",
+        "after_backup_serving_resources",
+        "after_backup_current_installed",
+    ] {
+        let InterruptedServing {
+            temp,
+            engine,
+            repository,
+            request,
+            old,
+        } = interrupted_serving(point);
+        let operation = request.preparation.operation_id;
+        let root = temp.path().join("system");
+        assert!(root.join("backup-root-extension/complete.json").is_file());
+        drop(engine);
+        let mut engine = Engine::resume_backup_transaction_at_with_workspace_limits(
+            &root,
+            operation,
+            "admin",
+            None,
+        )
+        .unwrap();
+        let result = engine.operation(operation).unwrap();
+        let sequence = engine.state().sequence;
+        assert_eq!(
+            engine
+                .complete_backup_registry_placement_decision(operation, "admin")
+                .unwrap(),
+            result
+        );
+        assert_eq!(engine.state().sequence, sequence);
+        assert!(!engine.is_read_only());
+        assert_eq!(body(&engine, &old.version_id), b"original retained body");
+        save(&mut engine, &repository, "after-cold", b"cold retry serves writes");
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn live_completed_bootstrap_never_recreates_a_missing_target_selector() {
+    let InterruptedServing {
+        temp,
+        mut engine,
+        request,
+        ..
+    } = interrupted_serving("after_backup_bootstrap_published");
+    let operation = request.preparation.operation_id;
+    let selector =
+        request.preparation.target_paths[0].join("metadata/pool-membership/generation.json");
+    let retained = selector.with_file_name("retained-selector.json");
+    fs::rename(&selector, &retained).unwrap();
+    let bytes = fs::read(&retained).unwrap();
+    assert!(engine.resume_backup_transaction(operation, "admin").is_err());
+    assert!(engine.is_read_only());
+    assert!(engine.membership_fence_status().is_some());
+    assert!(!selector.exists());
+    assert_eq!(fs::read(&retained).unwrap(), bytes);
+    drop(engine);
+    assert!(
+        Engine::resume_backup_transaction_at_with_workspace_limits(
+            &temp.path().join("system"),
+            operation,
+            "admin",
+            None,
+        )
+        .is_err()
+    );
+    assert!(!selector.exists());
+    assert_eq!(fs::read(retained).unwrap(), bytes);
+}

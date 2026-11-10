@@ -35,6 +35,9 @@ impl PreparedBackupResume {
             .require_published_root_extension(&self.admission.plan.extension)
             .map_err(management_error)?;
         self.require_owners()?;
+        // An earlier create can be visible before its sync tail succeeded.
+        // The immutable writer compares exact bytes before syncing again.
+        self.saved.complete()?;
         Ok(ResumeResources {
             root: self.root,
             bootstrap: self.bootstrap,

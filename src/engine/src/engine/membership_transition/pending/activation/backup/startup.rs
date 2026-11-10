@@ -216,6 +216,7 @@ pub(in crate::engine) struct PreparedBackupBootstrap<'a> {
     plan: Plan,
     roots: Vec<(DiskConfig, DiskRoot)>,
     config: ValidatedConfig,
+    admission: BackupStartupAdmission,
 }
 impl<'a> PreparedBackupBootstrap<'a> {
     pub(in crate::engine) fn select(
@@ -278,13 +279,12 @@ impl<'a> PreparedBackupBootstrap<'a> {
         let observations = observe_fixed_roots(config, &roots)?;
         let (saved, plan) = match PlanStore::open(&engine.root)? {
             Some((saved, plan)) => {
-                if saved.completed()?
-                    || plan.operation()? != first.result().operation_id
+                if plan.operation()? != first.result().operation_id
                     || plan.candidate != first.hash()
                     || plan.publication != publication.report().publication_hash
                 {
                     return Err(invalid(
-                        "Backup expansion is already completed or selected for another operation",
+                        "Backup expansion is selected for another native operation",
                     ));
                 }
                 plan.require_config(config)?;
@@ -312,8 +312,38 @@ impl<'a> PreparedBackupBootstrap<'a> {
         // Independently match every plan identity before the caller may start
         // selectors. No writes, repairs or dropped original descriptors here.
         drop(open_fixed_roots(&locator, config)?);
+        let completed = saved.completed()?;
+        if completed {
+            bootstrap
+                .require_published_root_extension(&plan.extension)
+                .map_err(management_error)?;
+        }
+        let admitted_roots = roots
+            .iter()
+            .map(|(disk, root)| Ok((disk.clone(), root.retained(disk.root.clone())?)))
+            .collect::<Result<Vec<_>>>()?;
+        // This is still the original live first handoff. Even after bootstrap
+        // completed, no ordinary successor slot may be silently adopted here.
+        let admission = authenticate(
+            plan.clone(),
+            admitted_roots,
+            &engine.config,
+            false,
+            &AtomicBool::new(false),
+        )?;
+        if admission.first().hash() != first.hash()
+            || admission.publication().publication_bytes() != publication.publication_bytes()
+            || admission.publication().seal_bytes() != publication.seal_bytes()
+            || admission.registry().commitment() != &plan.registry
+            || engine.snapshot != first.candidate().previous_snapshot
+            || engine.state.sequence != admission.source().state().sequence
+        {
+            return Err(invalid(
+                "Backup live retry changed its native first handoff or frozen Engine",
+            ));
+        }
         for (disk, root) in &roots {
-            native::require_selector(&plan, root, disk, config, false)?;
+            native::require_selector(&plan, root, disk, config, completed)?;
         }
         Ok(Self {
             engine,
@@ -324,7 +354,11 @@ impl<'a> PreparedBackupBootstrap<'a> {
             plan,
             roots,
             config: config.clone(),
+            admission,
         })
+    }
+    pub(in crate::engine) fn admission(&self) -> &BackupStartupAdmission {
+        &self.admission
     }
     pub(in crate::engine) fn publish(mut self, barrier: &ServingBarrier) -> Result<()> {
         barrier.require_native(self.first, self.publication, &self.plan.registry)?;
@@ -332,6 +366,13 @@ impl<'a> PreparedBackupBootstrap<'a> {
         self.saved.verify_writer(self.engine)?;
         for (disk, root) in &self.roots {
             native::require_selector(&self.plan, root, disk, &self.config, true)?;
+        }
+        if self.saved.completed()? {
+            // Completion cannot authorize repairing a missing/replaced head.
+            self.bootstrap
+                .require_published_root_extension(&self.plan.extension)
+                .map_err(management_error)?;
+            return self.saved.complete();
         }
         let observations = observe_fixed_roots(&self.config, &self.roots)?;
         self.bootstrap

@@ -13,6 +13,7 @@ mod ordinary_serving;
 mod original_control;
 mod root_databases;
 mod serving_activation;
+pub(in crate::engine) use serving_activation::ServingSwitch;
 mod system_database;
 mod target_locator;
 mod target_seals;

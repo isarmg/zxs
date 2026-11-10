@@ -194,6 +194,37 @@ fn completion(
     Ok(complete)
 }
 
+/// Revalidate retained live state against actual complete native evidence and
+/// the exact selected entity inodes. A live cache never repairs changed input.
+pub(super) fn verify_live_selection(
+    system: &DiskRoot,
+    admitted: &BackupStartupAdmission,
+    expected: &[u8],
+    expected_objects: &[String],
+    stop: &AtomicBool,
+) -> Result<bool> {
+    let (selection, bytes) = selected(system, admitted)?;
+    if bytes != expected {
+        return Err(invalid("Backup live retry changed its selected common switch"));
+    }
+    require_initial_targets(system, admitted, &selection, stop)?;
+    let actual = original_objects::verify_recovered(
+        admitted.held_roots(),
+        admitted.first(),
+        admitted.source(),
+        &selection.original_objects,
+        stop,
+    )?;
+    if actual != expected_objects {
+        return Err(invalid("Backup live retry changed its completed original objects"));
+    }
+    let mut completed = preparation_path_exists(system, &system.path().join(COMPLETE))?;
+    for (_, root) in admitted.held_roots() {
+        completed |= preparation_path_exists(root, &root.path().join(COMPLETE))?;
+    }
+    Ok(completed)
+}
+
 impl Engine {
     pub(in crate::engine) fn prepare_backup_serving_resources(
         &mut self,

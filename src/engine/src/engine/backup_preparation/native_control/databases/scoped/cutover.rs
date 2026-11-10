@@ -12,6 +12,7 @@ mod installation;
 mod registration;
 pub(in crate::engine) use fence::BackupSourceFenceEvidence;
 pub(in crate::engine::backup_preparation) use installation::resume_fenced;
+pub(in crate::engine) use registration::ServingSwitch;
 pub use registration::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

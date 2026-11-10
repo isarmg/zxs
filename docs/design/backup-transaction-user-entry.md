@@ -76,4 +76,8 @@ HTTP 只适配 `start_backup_transaction`、`continue_backup_transaction`、`res
 
 ## 中断边界
 
-最终在线激活若在原 selector／seal 开始交换后失败，旧 Engine 仍保有原锁与拒写围栏，普通准备线程不能再按旧 seal 续作。此时错误与状态明确保留原操作，需正常停止并重启服务后，在无活动 Engine 的管理态显式恢复同一操作；不在活 Engine 内释放再抢锁，也不把重复 Activate 当作隐式回滚。bootstrap 已完整完成的重启走普通 Engine 冷开；显式未完成恢复不 fallback 到另一条打开路径。热/冷切换均保留宿主传入的 workspace 限额。
+最终在线激活在首个原 selector／seal 交换前，把原 native Publication、Current、所有原根／目标根与 writer owner 保留为同一次内存续作。失败仍保有原锁与拒写围栏，显式 Resume／Activate 只能重验并完成同一操作，不重新捕获已变化的旧 seal、不释放再抢锁，也不重发首 Publication。bootstrap 已完成但 Engine 交接尚未完成时，必须核对原已发布 locator 和完整选定实体，不能用完成标记补造丢失 selector；后继 Journal、Current 与 SYSTEM 仍须通过原终态门才释放本次 stop。
+
+进程丢失时继续使用已选原计划的显式冷恢复；bootstrap 已完成可以由正常冷开或显式同操作恢复接管同一实际 journal，不回到旧来源快照。原 seal 的已安装／已保留 inode 对只用于判断当前交换状态；重试还须同步保旧 stage 目录，完成此前 rename 的同步尾，不能把可见旧名等同于已经持久保存。所有路径保留原数据、永久回执与宿主 workspace 限额。
+
+本次仅恢复 `a8890879` 原候选并对齐 `82e8d6f1`，同步补上保旧目录同步尾。既有集成文件新增三项 feature-gated 回归源码，覆盖四个在线晚失败边界、已完成 bootstrap 后三种冷恢复，以及目标 selector 缺失拒绝补造；源码未编译或执行，亦非物理断电／文件系统同步失败证明。活 Engine 的首个 selector 部分交换、真实同步错误及服务端到端恢复仍需统一验证。

@@ -3,6 +3,7 @@
 use super::*;
 
 mod cutover;
+pub(in crate::engine) use cutover::ServingSwitch;
 pub(in crate::engine::backup_preparation) use cutover::resume_fenced;
 pub use cutover::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,

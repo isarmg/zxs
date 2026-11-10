@@ -21,7 +21,7 @@ mod completion;
 mod execution;
 mod inspection;
 mod native_control;
-pub(in crate::engine) use native_control::BackupNativeObjects;
+pub(in crate::engine) use native_control::{BackupNativeObjects, ServingSwitch};
 pub use native_control::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

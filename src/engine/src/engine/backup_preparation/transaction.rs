@@ -282,7 +282,7 @@ impl Engine {
         let saved = Retained::read(&system)?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "no original Backup transaction"))?;
         saved.require_actor(operation, principal)?;
-        if self.backup_serving.is_some() {
+        if self.backup_serving.is_some() || self.backup_serving_switch.is_some() {
             // Resume may finish only the activation already selected by this
             // original task. Re-enter the native coordinator so a late failed
             // Current/SYSTEM/config handoff is not mistaken for read-only status.
