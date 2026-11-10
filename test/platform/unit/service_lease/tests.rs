@@ -6,6 +6,9 @@ use std::{
 
 #[test]
 fn one_inode_excludes_another_owner_and_alias_until_guard_drop() {
+    if isolated("last_owner") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let uid = rustix::process::geteuid().as_raw();
     let owner = ServiceLease::acquire(root.path(), uid).unwrap();
@@ -54,6 +57,9 @@ fn path_replacement_does_not_silently_transfer_the_held_inode_proof() {
 
 #[test]
 fn cloned_lease_does_not_unlock_the_remaining_owner() {
+    if isolated("last_clone") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let uid = rustix::process::geteuid().as_raw();
     let owner = ServiceLease::acquire(root.path(), uid).unwrap();
@@ -70,6 +76,9 @@ fn cloned_lease_does_not_unlock_the_remaining_owner() {
 
 #[test]
 fn published_name_keeps_the_same_inode_locked() {
+    if isolated("published_owner") {
+        return;
+    }
     let parent = tempfile::tempdir().unwrap();
     let pending = parent.path().join("pending");
     let published = parent.path().join("published");
@@ -88,6 +97,24 @@ fn published_name_keeps_the_same_inode_locked() {
     ServiceLease::acquire(&published, uid).unwrap();
 }
 
+// CLOEXEC acts at exec, not fork. Last-FD assertions run apart from other
+// tests that may temporarily inherit every open descriptor while spawning.
+fn isolated(mode: &str) -> bool {
+    if std::env::var("ZXS_SERVICE_LEASE_TEST_CHILD").as_deref() == Ok(mode) {
+        return false;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let output = child(mode, root.path()).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    true
+}
+
 fn child(mode: &str, root: &Path) -> std::process::Command {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
@@ -95,6 +122,7 @@ fn child(mode: &str, root: &Path) -> std::process::Command {
             "--exact",
             "service_lease::tests::process_lease_child",
             "--nocapture",
+            "--test-threads=1",
         ])
         .env("ZXS_SERVICE_LEASE_TEST_CHILD", mode)
         .env("ZXS_SERVICE_LEASE_TEST_ROOT", root);
@@ -143,6 +171,9 @@ fn entered_scope_reuses_the_owner_without_holding_it_forever() {
 fn two_internal_hops_keep_the_lease_after_prior_owners_exit() {
     use std::io::Write;
     use std::process::Stdio;
+    if isolated("last_inherited") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let uid = rustix::process::geteuid().as_raw();
     let owner = ServiceLease::acquire(root.path(), uid).unwrap();
@@ -213,6 +244,13 @@ fn process_lease_child() {
     let Ok(mode) = std::env::var("ZXS_SERVICE_LEASE_TEST_CHILD") else {
         return;
     };
+    match mode.as_str() {
+        "last_owner" => return one_inode_excludes_another_owner_and_alias_until_guard_drop(),
+        "last_clone" => return cloned_lease_does_not_unlock_the_remaining_owner(),
+        "published_owner" => return published_name_keeps_the_same_inode_locked(),
+        "last_inherited" => return two_internal_hops_keep_the_lease_after_prior_owners_exit(),
+        _ => {}
+    }
     let root = PathBuf::from(std::env::var_os("ZXS_SERVICE_LEASE_TEST_ROOT").unwrap());
     let uid = rustix::process::geteuid().as_raw();
     if mode == "scope" {

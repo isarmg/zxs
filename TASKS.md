@@ -4,6 +4,12 @@
 
 
 
+## 本轮生命周期租约测试隔离
+
+- CI #1061（ec7b0e46）在 platform-io 的 published_name_keeps_the_same_inode_locked 遇到本线程 drop 后立即重获锁仍 busy。同期有多个子进程启动；CLOEXEC 在 exec 而非 fork 时关闭，其他并行测试的 fork 可暂时持有同一 open-file-description，不能把最后一个本地 Arc 当成整个进程族最后一个 FD。日志未指认具体哪次 fork。
+- 四个要求精确最后 owner 释放的平台用例复用原单测试子进程入口；helper host 的同类用例也独立运行。原争用、克隆、发布身份、两级继承及释放后可重获的断言全部保留，子进程须成功且确有一项测试通过。不改生产锁、继承协议、CI 并行度，不加睡眠或重试。
+- 固定 Rust 格式与精确补丁检查通过，独立静态审阅未见确定阻断；未本地编译或执行 Rust 测试，准确提交 CI 待验证。
+
 ## 本轮 State 比较测试接线修复
 
 - CI #1062 的 quality、core、workspace 在六处旧私有比较函数调用报 E0425。三份根测试改为当前共享 unchanged_except，并显式保留原拓扑代数及控制身份断言；Backup 的四张允许表、取消的 Plans、SMB 的 Repositories/Histories 与生产入口一致。不恢复旧生产复制体，生产代码未变。

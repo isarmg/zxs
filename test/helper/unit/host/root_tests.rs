@@ -2,6 +2,26 @@ use super::*;
 use std::{ffi::OsStr, fs, os::unix::fs::symlink};
 #[test]
 fn root_is_published_without_replacement_and_matching_retry_keeps_content() {
+    // A parallel test's fork can retain a CLOEXEC lease until its exec boundary.
+    if std::env::var_os("ZXS_HOST_ROOT_LAST_OWNER_TEST_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "private_io::host_root::tests::root_is_published_without_replacement_and_matching_retry_keeps_content",
+                "--test-threads=1",
+            ])
+            .env("ZXS_HOST_ROOT_LAST_OWNER_TEST_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
     let parent = tempfile::tempdir().unwrap();
     let root = HostRoot::open(parent.path(), OsStr::new("zxs")).unwrap();
     assert!(!root.present().unwrap());
