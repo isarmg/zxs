@@ -434,12 +434,14 @@ fn prepare_following_add(
     root: &Path,
 ) -> (OperationId, DiskConfig, MembershipControlArchive) {
     let mut target = engine.config().clone();
-    let n = target.disks.len();
-    let added = Config::development((0..=n).map(|i| root.join(format!("next-{i}"))))
+    // The original primary has left the registry. Add an independent primary,
+    // rather than extending a backup chain whose ancestor is no longer enabled.
+    let mut added = Config::development([root.join("next-primary")])
         .unwrap()
         .disks
         .pop()
         .unwrap();
+    added.slot_id = "P02".into();
     private_dir(&added.root).unwrap();
     target.disks.push(added.clone());
     let operation = OperationId::generate().unwrap();
