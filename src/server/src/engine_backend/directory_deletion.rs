@@ -223,7 +223,6 @@ impl EngineBackend {
                 entry.kind == storage_contract::NamespaceEntryKind::Directory
                     && git.deletions.contains_key(&entry.entry_id)
             })
-            .take(git.deletions.len())
             .map(|entry| (entry.entry_id.as_str(), entry))
             .collect::<std::collections::BTreeMap<_, _>>();
         let lower = request
