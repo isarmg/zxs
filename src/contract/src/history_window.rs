@@ -44,18 +44,6 @@ fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::InvalidRequest, message)
 }
 
-// Internally tagged unit variants discard remaining fields. Parse their map as
-// an empty struct so this wire boundary also rejects surplus fields.
-fn deserialize_empty_history_variant<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<(), D::Error> {
-    #[derive(Deserialize)]
-    #[serialization(deny_unknown_fields)]
-    struct Empty {}
-
-    Empty::deserialize(deserializer).map(|Empty {}| ())
-}
-
 macro_rules! string_enum {
     ($name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -160,16 +148,18 @@ impl HistoryLocation {
 // Unbounded persisted scalar fields are read separately without new write limits.
 string_enum!(HistoryField { Message => "message", Author => "author", CreatedAt => "created_at" });
 
+// Internally tagged unit variants discard remaining fields. Parse their map as
+// an empty struct so this wire boundary also rejects surplus fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryCollection {
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Nodes,
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Versions,
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Branches,
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Merges,
     NodeParents {
         node_id: HistoryNodeId,
@@ -241,7 +231,7 @@ string_enum!(HistoryDirection { Forward => "forward", Backward => "backward" });
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryPosition {
     /// Inclusive beginning for a parent's first page when preview allocated no edges.
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Start,
     Node {
         #[serialization(with = "crate::u64_string")]
@@ -465,7 +455,7 @@ pub struct HistoryPageCursors {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryContentSource {
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Owned,
     Inherited {
         source_version_id: Option<HistoryVersionId>,
@@ -488,7 +478,7 @@ string_enum!(HistoryNodeKind { Content => "content", Rename => "rename", Tags =>
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryParentSet {
-    #[serialization(deserialize_with = "deserialize_empty_history_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Complete,
     More {
         cursor: HistoryCursor,

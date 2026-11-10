@@ -6,6 +6,29 @@ use data_serialization::{
 use json_codec::{Map, Number, Value};
 use std::fmt;
 
+/// Keep a nullable field required at its wire boundary. `deserialize_with`
+/// preserves missing-field errors while Option retains null and typed failures.
+pub(crate) fn required_nullable<
+    'de,
+    T: Deserialize<'de>,
+    D: data_serialization::Deserializer<'de>,
+>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error> {
+    Option::deserialize(deserializer)
+}
+
+/// Tagged unit variants otherwise ignore surplus payload fields. A strict empty
+/// struct rejects those fields without changing the valid unit representation.
+pub(crate) fn empty_variant<'de, D: data_serialization::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<(), D::Error> {
+    #[derive(Deserialize)]
+    #[serialization(deny_unknown_fields)]
+    struct Empty {}
+    Empty::deserialize(deserializer).map(|Empty {}| ())
+}
+
 fn parse_strict<const MATERIALIZE: bool>(bytes: &[u8]) -> Result<Value> {
     struct Strict<const MATERIALIZE: bool>(Value);
     impl<'de, const MATERIALIZE: bool> Deserialize<'de> for Strict<MATERIALIZE> {

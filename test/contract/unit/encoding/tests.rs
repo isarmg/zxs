@@ -469,3 +469,89 @@ fn typed_operation_id_preserves_request_envelope_digest() {
 mod baseline;
 mod number_emission;
 mod object_ordering;
+
+#[test]
+fn required_nullable_keeps_missing_null_value_and_error_boundaries() {
+    fn original<'de, D, T>(decoder: D) -> std::result::Result<Option<T>, D::Error>
+    where
+        D: data_serialization::Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        Option::<T>::deserialize(decoder)
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serialization(rename = "NullableFixture", deny_unknown_fields)]
+    struct Original {
+        #[serialization(deserialize_with = "original")]
+        value: Option<u32>,
+    }
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serialization(rename = "NullableFixture", deny_unknown_fields)]
+    struct Current {
+        #[serialization(deserialize_with = "crate::encoding::required_nullable")]
+        value: Option<u32>,
+    }
+    for wire in [
+        r#"{"value":null}"#,
+        r#"{"value":0}"#,
+        r#"{"value":4294967295}"#,
+        r#"{}"#,
+        r#"{"value":"1"}"#,
+        r#"{"value":4294967296}"#,
+        r#"{"value":-1}"#,
+        r#"{"value":true}"#,
+        r#"{"value":[]}"#,
+        r#"{"value":{}}"#,
+        r#"{"value":null,"value":1}"#,
+        r#"{"value":null,"extra":1}"#,
+        "null",
+        "[]",
+    ] {
+        let expected = json_codec::from_str::<Original>(wire)
+            .map(|value| json_codec::to_string(&value).unwrap())
+            .map_err(|error| error.to_string());
+        let actual = json_codec::from_str::<Current>(wire)
+            .map(|value| json_codec::to_string(&value).unwrap())
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected, "{wire}");
+    }
+    assert!(json_codec::from_str::<Current>("{}").is_err());
+    assert_eq!(
+        json_codec::from_str::<Current>(r#"{"value":null}"#)
+            .unwrap()
+            .value,
+        None
+    );
+}
+
+#[test]
+fn tagged_unit_empty_payload_retains_original_strict_errors() {
+    fn original<'de, D: data_serialization::Deserializer<'de>>(
+        decoder: D,
+    ) -> std::result::Result<(), D::Error> {
+        #[derive(Deserialize)]
+        #[serialization(deny_unknown_fields)]
+        struct Empty {}
+        Empty::deserialize(decoder).map(|Empty {}| ())
+    }
+    for wire in [
+        "{}",
+        "[]",
+        "null",
+        "0",
+        r#""unit""#,
+        r#"{"online":true}"#,
+        r#"{"selected":null}"#,
+    ] {
+        let expected = original(&mut json_codec::Deserializer::from_str(wire))
+            .map_err(|error| error.to_string());
+        let actual = empty_variant(&mut json_codec::Deserializer::from_str(wire))
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected, "{wire}");
+        if wire == "{}" {
+            assert!(actual.is_ok());
+        } else if wire.contains("online") || wire.contains("selected") {
+            assert!(actual.is_err());
+        }
+    }
+}

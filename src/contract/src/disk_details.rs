@@ -27,12 +27,6 @@ impl<'de> Deserialize<'de> for DiskMapping {
     }
 }
 
-fn nullable_text<'de, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error> {
-    Option::deserialize(deserializer)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskDetailsRecord {
@@ -40,19 +34,19 @@ pub struct DiskDetailsRecord {
     pub disk_id: String,
     /// The configured ZXS storage directory, not necessarily a mountpoint.
     pub root_path: String,
-    #[serialization(deserialize_with = "nullable_text")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub mount_path: Option<String>,
-    #[serialization(deserialize_with = "nullable_text")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub model: Option<String>,
-    #[serialization(deserialize_with = "nullable_text")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub serial: Option<String>,
     #[serialization(with = "crate::optional_u64_string")]
     pub capacity_bytes: Option<u64>,
     /// A current device node, never a stable identity.
-    #[serialization(deserialize_with = "nullable_text")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub device_path: Option<String>,
     /// Filesystem UUID only; not a namespace UUID or a ZXS disk ID.
-    #[serialization(deserialize_with = "nullable_text")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub filesystem_uuid: Option<String>,
     pub mapping: DiskMapping,
     pub health: DiskHealth,
@@ -72,17 +66,11 @@ pub enum DiskHealth {
         /// Whole device queried; may differ from the mounted partition path.
         device_path: String,
         assessment: DiskHealthAssessment,
-        #[serialization(deserialize_with = "nullable_temperature")]
+        #[serialization(deserialize_with = "crate::encoding::required_nullable")]
         temperature_celsius: Option<i32>,
         #[serialization(with = "crate::optional_u64_string")]
         power_on_hours: Option<u64>,
     },
-}
-
-fn nullable_temperature<'de, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<i32>, D::Error> {
-    Option::deserialize(deserializer)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

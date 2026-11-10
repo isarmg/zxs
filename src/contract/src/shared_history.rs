@@ -110,7 +110,7 @@ pub struct SharedHistoryVersion {
     #[serialization(with = "crate::u64_string")]
     pub logical_size: u64,
     pub content_hash: ContentHash,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub content_state: Option<ContentState>,
 }
 
@@ -120,7 +120,7 @@ pub struct SharedHistoryNode {
     pub node_id: SharedHistoryNodeId,
     pub file_id: HistoryFileId,
     pub kind: SharedHistoryNodeKind,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub version_id: Option<HistoryVersionId>,
     /// Retained record sequence, not an ordering proof between different files.
     #[serialization(with = "crate::u64_string")]
@@ -136,7 +136,7 @@ pub struct SharedHistoryBranch {
     pub name: String,
     pub head_node_id: SharedHistoryNodeId,
     pub state: BranchState,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub merged_into: Option<HistoryBranchId>,
 }
 
@@ -415,13 +415,6 @@ fn ordered<T, K: Ord>(items: &[T], key: impl Fn(&T) -> &K) -> Result<BTreeMap<&K
         result.insert(id, item);
     }
     Ok(result)
-}
-fn required_option<'de, D, T>(d: D) -> std::result::Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(d)
 }
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::InvalidRequest, message)

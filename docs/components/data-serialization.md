@@ -35,6 +35,12 @@ fn round_trip() -> Result<(), json_codec::Error> {
 
 借用反序列化可通过 `Deserialize<'de>` 保留输入切片引用，前提是输入活得足够久且所用格式支持借用。`DeserializeOwned` 要求结果不依赖输入缓冲，适用于读取后就释放输入或 HTTP 提取器；它不是 `Deserialize<'static>` 的同义词。
 
+## ZXS 严格可空字段与空变体
+
+契约层通过同一 `required_nullable` 反序列化函数保留“字段必须存在，但值可以为 null”的约束。各 DTO 原有的 `deserialize_with` 标记仍在原字段上；共享实现只调用目标 `Option<T>` 的解析，不把字段缺失转换为 null，也不改变目标类型错误或序列化字节。
+
+内部标签枚举的无载荷变体共用 `empty_variant`，以拒绝未知字段的空结构解析标签外的载荷。历史集合、独立节点观察及未准入登记继续拒绝夹带额外状态；不能因枚举顶层已有 `deny_unknown_fields` 就省略此边界。有效标签和表示不变，各业务身份、预算与状态关系验证仍由原模块维护。
+
 ## 带路径的解码错误
 
 启用 `error-path` 后，用格式自己的 deserializer 包装成结构化错误。它补充字段/数组路径，不改变格式解析器的原始错误，也不自动确保输入已全部消费：

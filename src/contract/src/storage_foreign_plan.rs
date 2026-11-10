@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub struct ForeignPlanTarget {
     pub slot_id: String,
     /// Null selects an empty disk root; a path selects an existing empty directory.
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub parent: Option<String>,
     /// Every verified history group must have exactly one distinct child name.
     pub history_names: BTreeMap<String, String>,
@@ -88,10 +88,4 @@ pub enum ForeignPlanValidation {
 pub struct ForeignPlanStatus {
     pub preview: ForeignPlanPreview,
     pub validation: ForeignPlanValidation,
-}
-
-fn required_nullable<'de, T: Deserialize<'de>, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<T>, D::Error> {
-    Option::<T>::deserialize(deserializer)
 }

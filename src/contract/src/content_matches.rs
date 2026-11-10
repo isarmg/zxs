@@ -74,7 +74,7 @@ pub struct ContentMatch {
     pub creation_name: String,
     pub file_id: HistoryFileId,
     pub version_id: HistoryVersionId,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub content_state: Option<ContentState>,
 }
 
@@ -89,10 +89,10 @@ pub struct ContentMatchPage {
     #[serialization(with = "crate::u64_string")]
     pub logical_size: u64,
     pub content_hash: ContentHash,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub source_content_state: Option<ContentState>,
     pub matches: Vec<ContentMatch>,
-    #[serialization(deserialize_with = "required_option")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub next_after_version_id: Option<HistoryVersionId>,
 }
 impl ContentMatchPage {
@@ -133,13 +133,6 @@ impl ContentMatchPage {
         }
         Ok(())
     }
-}
-fn required_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
-where
-    D: data_serialization::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer)
 }
 
 fn invalid(message: &str) -> Error {

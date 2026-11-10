@@ -154,19 +154,13 @@ pub struct IndependentIdentity {
     pub role: IndependentRole,
 }
 
-fn nullable_publication<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<PublicationId>, D::Error> {
-    Option::deserialize(d)
-}
-
 /// Logical checkpoint fields only. Equality is not capture identity or proof
 /// that a physical directory is still present.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct IndependentCheckpoint {
     pub identity: IndependentIdentity,
-    #[serialization(deserialize_with = "nullable_publication")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub publication: Option<PublicationId>,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -247,25 +241,18 @@ impl IndependentNodeReference {
 
 // Tagged unit variants otherwise discard surplus fields. Require an empty map
 // so a unit status cannot silently carry online, selected or writable claims.
-fn empty_variant<'de, D: Deserializer<'de>>(d: D) -> Result<(), D::Error> {
-    #[derive(Deserialize)]
-    #[serialization(deny_unknown_fields)]
-    struct Empty {}
-    Empty::deserialize(d).map(|Empty {}| ())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CandidateStatus {
-    #[serialization(deserialize_with = "empty_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     IdentityMismatch,
-    #[serialization(deserialize_with = "empty_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     UnpinnedNode,
     MissingPinnedCheckpoints {
         #[serialization(deserialize_with = "pins")]
         missing: Vec<PublicationId>,
     },
-    #[serialization(deserialize_with = "empty_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     SatisfiesPinnedCheckpoints,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -278,7 +265,7 @@ pub struct CandidateRow {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BatchStatus {
-    #[serialization(deserialize_with = "empty_variant")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     NotObserved,
     IncompleteObservation {
         matching_candidates: usize,

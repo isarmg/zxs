@@ -1197,12 +1197,6 @@ pub enum DiskObservationIssue {
     Capacity(crate::ErrorCode),
 }
 
-fn nullable_disk_issue<'de, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<DiskObservationIssue>, D::Error> {
-    Option::deserialize(deserializer)
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskStatus {
@@ -1216,7 +1210,7 @@ pub struct DiskStatus {
     pub physical_device: Option<String>,
     #[serialization(with = "crate::optional_u64_string")]
     pub available_bytes: Option<u64>,
-    #[serialization(deserialize_with = "nullable_disk_issue")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub observation_failure: Option<DiskObservationIssue>,
     #[serialization(with = "crate::u64_string")]
     pub used_bytes: u64,

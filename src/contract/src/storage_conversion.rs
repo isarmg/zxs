@@ -57,26 +57,26 @@ pub enum OrdinaryDiskConversionPhase {
 pub struct OrdinaryDiskConversionStatus {
     pub preview: OrdinaryDiskConversionPreview,
     pub phase: OrdinaryDiskConversionPhase,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub registration: Option<AdditionStatus>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub workspace_id: Option<String>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub root_operation_id: Option<OperationId>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub result: Option<OperationResult>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub stop_operation_id: Option<OperationId>,
     /// Exact permanent stop receipt, never a successful content import result.
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub stop_result: Option<OperationResult>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub failure: Option<AdditionFailure>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct OrdinaryDiskConversionStatusResponse {
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub operation: Option<OrdinaryDiskConversionStatus>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,9 +89,4 @@ pub struct OrdinaryDiskConversionResume {
 pub struct OrdinaryDiskConversionStop {
     pub operation_id: OperationId,
     pub acknowledge_retained_state: bool,
-}
-fn required_nullable<'de, T: Deserialize<'de>, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<T>, D::Error> {
-    Option::<T>::deserialize(deserializer)
 }

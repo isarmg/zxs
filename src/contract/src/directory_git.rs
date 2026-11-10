@@ -54,14 +54,14 @@ impl DirectoryBranchCreateSource {
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryGitChildReference {
     pub directory_branch_id: String,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub tree_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryGitBranch {
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub head_tree_id: Option<String>,
     pub index_tree_id: String,
     #[serialization(with = "crate::u64_string")]
@@ -131,7 +131,7 @@ pub struct DirectoryDeletionSummary {
 pub struct DirectoryDeletionsPage {
     pub snapshot: String,
     pub entries: Vec<DirectoryDeletionSummary>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub next_after: Option<String>,
 }
 
@@ -157,11 +157,11 @@ pub struct DirectoryGitChildStatus {
     pub directory_id: String,
     pub path: String,
     pub directory_branch_id: String,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub head_tree_id: Option<String>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub staged_tree_id: Option<String>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub committed_tree_id: Option<String>,
     pub dirty: bool,
     pub reference_changed: bool,
@@ -176,13 +176,13 @@ pub struct DirectoryGitStatus {
     pub directory_id: String,
     pub path: String,
     pub initialized: bool,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub owner: Option<DirectoryGitOwner>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub directory_branch_id: Option<String>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub working_tree_id: Option<String>,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub head_tree_id: Option<String>,
     #[serialization(with = "crate::u64_string")]
     pub index_generation: u64,
@@ -255,14 +255,6 @@ pub struct DirectoryLayoutResult {
     pub unavailable_containers: u64,
     #[serialization(with = "crate::u64_string")]
     pub unavailable_histories: u64,
-}
-
-fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: data_serialization::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer)
 }
 
 #[cfg(test)]

@@ -120,17 +120,17 @@ pub struct ReadmissionStatus {
     pub state: ReadmissionState,
     pub phase: ReadmissionPhase,
     pub preview: ReadmissionPreview,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub failure: Option<ReadmissionFailure>,
     /// Only the core's exact publication after new I/O epoch admission is success.
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub result: Option<OperationResult>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct ReadmissionStatusResponse {
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub operation: Option<ReadmissionStatus>,
 }
 
@@ -161,18 +161,12 @@ pub struct RegistrationEntry {
     pub mode: RegistrationMode,
     pub metadata_member: bool,
     /// Null means the current authority does not offer this readmission lane.
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub readmission: Option<ReadmissionRole>,
 }
 
-fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: data_serialization::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::deserialize(deserializer)
-}
-
+// Internally tagged unit variants discard remaining fields, even with the
+// enum's deny_unknown_fields. Parse the payload as a strict empty map instead.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "authority", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RegistrationSnapshot {
@@ -183,21 +177,8 @@ pub enum RegistrationSnapshot {
         registrations: Vec<RegistrationEntry>,
     },
     /// No admitted registry is currently available. Empty is not an empty pool.
-    #[serialization(deserialize_with = "deserialize_unadmitted_registration")]
+    #[serialization(deserialize_with = "crate::encoding::empty_variant")]
     Unadmitted,
-}
-
-// Internally tagged unit variants discard remaining fields, even with the
-// enum's deny_unknown_fields. Parse the payload as a strict empty map instead.
-fn deserialize_unadmitted_registration<'de, D>(deserializer: D) -> Result<(), D::Error>
-where
-    D: data_serialization::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serialization(deny_unknown_fields)]
-    struct Empty {}
-
-    Empty::deserialize(deserializer).map(|Empty {}| ())
 }
 
 #[cfg(test)]

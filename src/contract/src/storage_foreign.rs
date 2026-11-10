@@ -25,7 +25,7 @@ pub struct ForeignDiskCheckpoint {
     pub publication_hash: String,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
-    #[serialization(deserialize_with = "required_nullable")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub authority_hash: Option<String>,
     pub unpublished_tail: bool,
 }
@@ -68,10 +68,4 @@ pub struct ForeignDiskPreview {
     pub checkpoint: ForeignDiskCheckpoint,
     pub histories: Vec<ForeignHistorySummary>,
     pub execution: ForeignExecutionCapability,
-}
-
-fn required_nullable<'de, T: Deserialize<'de>, D: data_serialization::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<T>, D::Error> {
-    Option::<T>::deserialize(deserializer)
 }

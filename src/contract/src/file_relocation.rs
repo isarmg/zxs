@@ -26,28 +26,12 @@ pub struct ObjectMoveRequest {
     pub source_entry_id: NamespaceEntryId,
     pub source_path: name_policy::LookupPath,
     pub target_slot_id: String,
-    #[serialization(deserialize_with = "required_repository")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub target_repository_id: Option<HistoryRepositoryId>,
     pub target_path: name_policy::PortablePath,
     pub replace: bool,
-    #[serialization(deserialize_with = "required_target_entry")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub target_entry_id: Option<NamespaceEntryId>,
-}
-
-fn required_repository<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<HistoryRepositoryId>, D::Error> {
-    Option::<HistoryRepositoryId>::deserialize(decoder)
-}
-
-fn required_target_entry<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<NamespaceEntryId>, D::Error> {
-    Option::<NamespaceEntryId>::deserialize(decoder)
-}
-
-fn required_file<'de, D: Deserializer<'de>>(decoder: D) -> Result<Option<HistoryFileId>, D::Error> {
-    Option::<HistoryFileId>::deserialize(decoder)
 }
 
 impl ObjectMoveRequest {
@@ -108,9 +92,9 @@ pub struct ObjectMoveFact {
     pub principal: String,
     pub target_repository_id: HistoryRepositoryId,
     pub target_entry_id: NamespaceEntryId,
-    #[serialization(deserialize_with = "required_file")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub source_file_id: Option<HistoryFileId>,
-    #[serialization(deserialize_with = "required_file")]
+    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub displaced_target_file_id: Option<HistoryFileId>,
 }
 impl<'de> Deserialize<'de> for NamespaceEntryId {
