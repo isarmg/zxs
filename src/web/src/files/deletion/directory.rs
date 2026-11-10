@@ -182,13 +182,12 @@ fn status(value: Value, repository: &str, path: &str) -> Result<DirectoryGitStat
             "Directory status must contain named identity objects.",
         ));
     }
-    let status: DirectoryGitStatus =
-        json_codec::from_value(value).map_err(|source| {
-            api::Error::invalid_response(
-                "The directory repository response did not match its contract.",
-                api::ErrorSource::DirectoryGit(source),
-            )
-        })?;
+    let status: DirectoryGitStatus = json_codec::from_value(value).map_err(|source| {
+        api::Error::invalid_response(
+            "The directory repository response did not match its contract.",
+            api::ErrorSource::DirectoryGit(source),
+        )
+    })?;
     if status.repository_id != repository
         || status.path != path
         || !directory_id(&status.directory_id, repository, path)

@@ -92,7 +92,11 @@ fn object_move_publishes_independent_fulls_and_equal_file_databases_on_both_targ
     let moved = entry(&fixture.engine, &fixture.target, "moved.txt");
     assert_ne!(moved.file_id, source.file_id);
     assert_eq!(
-        fixture.engine.file_deletion(&source.file_id).unwrap().operation_id,
+        fixture
+            .engine
+            .file_deletion(&source.file_id)
+            .unwrap()
+            .operation_id,
         operation
     );
     assert!(
@@ -115,7 +119,10 @@ fn object_move_publishes_independent_fulls_and_equal_file_databases_on_both_targ
     let expected = records(&paths[0]);
     assert_eq!(expected, records(&paths[1]));
     assert_eq!(
-        expected.keys().filter(|(kind, _)| kind == "version").count(),
+        expected
+            .keys()
+            .filter(|(kind, _)| kind == "version")
+            .count(),
         originals.len()
     );
     let source_database = database(

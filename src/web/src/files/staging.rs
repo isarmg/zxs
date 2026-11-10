@@ -134,16 +134,15 @@ fn directory_id(id: &str, path: &str, repository: &str) -> bool {
     }
 }
 fn decode(value: json_codec::Value, target: &Target) -> Result<DirectoryGitStatus, api::Error> {
-    let status: DirectoryGitStatus =
-        json_codec::from_value(value).map_err(|source| {
-            api::Error::invalid_response(
-                t(
-                    "目录仓库响应格式无效。",
-                    "The directory repository response did not match its contract.",
-                ),
-                api::ErrorSource::DirectoryGit(source),
-            )
-        })?;
+    let status: DirectoryGitStatus = json_codec::from_value(value).map_err(|source| {
+        api::Error::invalid_response(
+            t(
+                "目录仓库响应格式无效。",
+                "The directory repository response did not match its contract.",
+            ),
+            api::ErrorSource::DirectoryGit(source),
+        )
+    })?;
     if status.repository_id != target.repository || status.path != target.path {
         return Err(api::error(
             storage_contract::ErrorCode::HistoryChanged,
