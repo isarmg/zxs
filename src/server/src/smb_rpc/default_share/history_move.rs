@@ -58,12 +58,12 @@ impl DefaultShare {
         self.move_context().capture(
             MoveSource {
                 binding: (&source).into(),
-                slot: source_slot,
+                slot: &source_slot,
                 path: source_path,
             },
             MoveTarget {
                 binding: target.as_ref().map(Into::into),
-                slot: target_slot,
+                slot: &target_slot,
                 path: target_path,
             },
             replace,

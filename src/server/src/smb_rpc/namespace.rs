@@ -425,12 +425,12 @@ impl Session {
             return self.move_context().capture(
                 object_move::MoveSource {
                     binding: binding.clone(),
-                    slot: slot.clone(),
+                    slot: &slot,
                     path: source,
                 },
                 object_move::MoveTarget {
                     binding: Some(binding),
-                    slot,
+                    slot: &slot,
                     path: destination,
                 },
                 replace,

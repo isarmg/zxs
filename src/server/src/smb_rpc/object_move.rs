@@ -136,15 +136,15 @@ pub(super) struct MoveContext<'a> {
     pub(super) account_generation: u64,
 }
 
-pub(super) struct MoveSource {
+pub(super) struct MoveSource<'a> {
     pub(super) binding: SmbBinding,
-    pub(super) slot: TopologySlot,
+    pub(super) slot: &'a TopologySlot,
     pub(super) path: name_policy::LookupPath,
 }
 
-pub(super) struct MoveTarget {
+pub(super) struct MoveTarget<'a> {
     pub(super) binding: Option<SmbBinding>,
-    pub(super) slot: TopologySlot,
+    pub(super) slot: &'a TopologySlot,
     pub(super) path: name_policy::PortablePath,
 }
 
@@ -212,8 +212,8 @@ impl MoveContext<'_> {
 
     pub(super) fn capture(
         &self,
-        source: MoveSource,
-        target: MoveTarget,
+        source: MoveSource<'_>,
+        target: MoveTarget<'_>,
         replace: bool,
         admission: NamespaceAdmission,
     ) -> Result<Value, ApiError> {
@@ -288,9 +288,9 @@ impl MoveContext<'_> {
             replace_requested: replace,
             source_binding: Binding::capture(&source.binding),
             target_binding: target.binding.as_ref().map(Binding::capture),
-            source_disk: DiskIdentity::capture(&source.slot),
-            source_slot_id: source.slot.slot_id,
-            target_disk: DiskIdentity::capture(&target.slot),
+            source_disk: DiskIdentity::capture(source.slot),
+            source_slot_id: source.slot.slot_id.clone(),
+            target_disk: DiskIdentity::capture(target.slot),
             source_file_id: file_identity(&entry)?,
             target_file_id: displaced.as_ref().map(file_identity).transpose()?.flatten(),
             movement: ObjectMoveRequest {
@@ -299,7 +299,7 @@ impl MoveContext<'_> {
                 source_entry_id: NamespaceEntryId::parse(&entry.entry_id)
                     .map_err(ApiError::contract_input)?,
                 source_path: source.path,
-                target_slot_id: target.slot.slot_id,
+                target_slot_id: target.slot.slot_id.clone(),
                 target_repository_id: target
                     .binding
                     .as_ref()
