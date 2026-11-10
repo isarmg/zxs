@@ -275,15 +275,13 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
         .unwrap();
     let older_nodes = engine.state().file_path_nodes.clone();
     assert_eq!(older_nodes.len(), 2);
-    let source = create(&mut engine, &repo, "source", "source branch");
-    let target = create(&mut engine, &repo, "b", "target branch");
-    select(&mut engine, &repo, "source", "source branch");
-    select(&mut engine, &repo, "b", "target branch");
+    let owner = create(&mut engine, &repo, "", "move branch");
+    select(&mut engine, &repo, "", "move branch");
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Move,
         items: vec![
-            item(&engine, &source, "source/z.txt", Some((&target, "b/z.txt"))),
-            item(&engine, &source, "source/a.txt", Some((&target, "b/a.txt"))),
+            item(&engine, &owner, "source/z.txt", Some((&owner, "b/z.txt"))),
+            item(&engine, &owner, "source/a.txt", Some((&owner, "b/a.txt"))),
         ],
     };
     let operation = OperationId::generate().unwrap();
@@ -337,23 +335,21 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
 }
 
 #[test]
-fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
+fn move_within_one_owner_retains_unselected_frozen_branches_and_identity() {
     let (t, mut e, r) = fixture();
     save(&mut e, &r, "a/f.txt", b"F1");
     save(&mut e, &r, "b/keep.txt", b"keep");
     let f = entries(&e, &r)["a/f.txt"].clone();
-    let m = create(&mut e, &r, "a", "m");
-    let n = create(&mut e, &r, "a", "n");
-    let l = create(&mut e, &r, "b", "l");
-    let p = create(&mut e, &r, "b", "p");
-    select(&mut e, &r, "a", "m");
-    select(&mut e, &r, "b", "l");
+    let m = create(&mut e, &r, "", "m");
+    let n = create(&mut e, &r, "", "n");
+    let p = create(&mut e, &r, "", "p");
+    select(&mut e, &r, "", "m");
     let n_head = e.state().directory_branches[&n].head_tree_id.clone();
     let p_head = e.state().directory_branches[&p].head_tree_id.clone();
     let versions = e.state().versions.len();
     let request = DirectoryNamespaceBatch {
         kind: storage_contract::DirectoryBatchKind::Move,
-        items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
+        items: vec![item(&e, &m, "a/f.txt", Some((&m, "b/f.txt")))],
     };
     let op = storage_contract::OperationId::generate().unwrap();
     let receipt = e
@@ -373,9 +369,19 @@ fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
     assert_eq!(e.state().file_locations[&f.file_id], "b/f.txt");
     let m_head = e.state().directory_branches[&m].head_tree_id.clone();
     save(&mut e, &r, "b/f.txt", b"F2");
-    assert_eq!(e.state().directory_branches[&m].head_tree_id, m_head);
+    assert_ne!(e.state().directory_branches[&m].head_tree_id, m_head);
     assert_eq!(e.state().directory_branches[&n].head_tree_id, n_head);
     assert_eq!(e.state().directory_branches[&p].head_tree_id, p_head);
+    for branch in [&n, &p] {
+        let frozen = &e.state().directory_branches[branch];
+        let retained = frozen
+            .entries
+            .iter()
+            .find(|entry| entry.path == "a/f.txt")
+            .unwrap();
+        assert_eq!(retained.file_id, f.file_id);
+        assert_eq!(retained.version_id, f.version_id);
+    }
     assert_eq!(body(&e, &f.version_id), b"F1");
     assert_eq!(body(&e, &entries(&e, &r)["b/f.txt"].version_id), b"F2");
     drop(e);
@@ -394,13 +400,11 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
         save(&mut e, &r, "a/f.txt", b"source");
         save(&mut e, &r, "b/keep.txt", b"keep");
         let f = entries(&e, &r)["a/f.txt"].clone();
-        let m = create(&mut e, &r, "a", "m");
-        let l = create(&mut e, &r, "b", "l");
-        select(&mut e, &r, "a", "m");
-        select(&mut e, &r, "b", "l");
+        let m = create(&mut e, &r, "", "m");
+        select(&mut e, &r, "", "m");
         let request = DirectoryNamespaceBatch {
             kind: storage_contract::DirectoryBatchKind::Move,
-            items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
+            items: vec![item(&e, &m, "a/f.txt", Some((&m, "b/f.txt")))],
         };
         let op = storage_contract::OperationId::generate().unwrap();
         e.inject_fault_once(fault);
@@ -432,15 +436,50 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
     }
 }
 #[test]
+fn batch_move_cannot_remove_a_committed_file_from_an_independent_directory_owner() {
+    let (t, mut e, r) = fixture();
+    save(&mut e, &r, "a/f.txt", b"source");
+    save(&mut e, &r, "b/keep.txt", b"keep");
+    let source = create(&mut e, &r, "a", "source");
+    let target = create(&mut e, &r, "b", "target");
+    assert_ne!(
+        e.state().directory_branches[&source].directory_id,
+        e.state().directory_branches[&target].directory_id
+    );
+    let original = entries(&e, &r)["a/f.txt"].clone();
+    let before = canonical_json(e.state()).unwrap();
+    let request = DirectoryNamespaceBatch {
+        kind: storage_contract::DirectoryBatchKind::Move,
+        items: vec![item(&e, &source, "a/f.txt", Some((&target, "b/f.txt")))],
+    };
+    let operation = storage_contract::OperationId::generate().unwrap();
+    assert_eq!(
+        e.directory_namespace_batch(&r.repository_id, &request, "admin", operation)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(canonical_json(e.state()).unwrap(), before);
+    assert!(!e.state().operations.contains_key(&operation));
+    assert_eq!(body(&e, &original.version_id), b"source");
+    drop(e);
+    let e = Engine::open(&t.path().join("system")).unwrap();
+    assert_eq!(canonical_json(e.state()).unwrap(), before);
+    assert_eq!(entries(&e, &r)["a/f.txt"], original);
+    assert!(!entries(&e, &r).contains_key("b/f.txt"));
+    assert_eq!(body(&e, &original.version_id), b"source");
+}
+
+#[test]
 fn batch_rejects_ambiguous_move_and_late_collision_without_any_branch_change() {
     let (_t, mut e, r) = fixture();
     save(&mut e, &r, "a/f.txt", b"source");
     save(&mut e, &r, "b/exists.txt", b"exists");
     save(&mut e, &r, "c/keep.txt", b"keep");
-    let m = create(&mut e, &r, "a", "m");
-    let n = create(&mut e, &r, "a", "n");
-    let l = create(&mut e, &r, "b", "l");
-    let q = create(&mut e, &r, "c", "q");
+    let m = create(&mut e, &r, "", "m");
+    let n = create(&mut e, &r, "", "n");
+    let l = create(&mut e, &r, "", "l");
+    let q = create(&mut e, &r, "", "q");
     let before = canonical_json(e.state()).unwrap();
     for (expected, items) in [
         (
