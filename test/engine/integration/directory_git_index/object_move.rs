@@ -62,6 +62,17 @@ fn entry(engine: &Engine, repository: &Repository, path: &str) -> Entry {
         .clone()
 }
 
+fn mkdir(engine: &mut Engine, repository: &Repository, path: &str) {
+    engine
+        .file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+}
+
 fn move_to(
     engine: &mut Engine,
     source: &Repository,
@@ -136,14 +147,7 @@ fn snapshot_files(engine: &Engine, head: &str) -> BTreeMap<String, Vec<u8>> {
 fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object() {
     for route in [Route::SameDisk, Route::ExistingDisk, Route::EmptyDisk] {
         let (_temp, mut engine, source, destination) = fixture_for(route);
-        engine
-            .file_namespace(
-                &source.repository_id,
-                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "empty", None).unwrap(),
-                "admin",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        mkdir(&mut engine, &source, "empty");
         let original = entry(&engine, &source, "empty");
         let target = move_to(&mut engine, &source, &destination, "empty", "moved");
         let moved = entry(&engine, &target, "moved");
@@ -169,6 +173,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         let (_temp, mut engine, source, destination) = fixture_for(route);
         save(&mut engine, &source, "project/owned", b"committed parent");
         save(&mut engine, &source, "project/child/file", b"committed child");
+        mkdir(&mut engine, &source, "project/empty");
         initialize(&mut engine, &source, "project/child");
         commit(&mut engine, &source, "project/child");
         initialize(&mut engine, &source, "project");
@@ -225,6 +230,9 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         assert!(!child_before.staged && child_before.unstaged);
 
         let target = move_to(&mut engine, &source, &destination, "project", "moved");
+        let empty = entry(&engine, &target, "moved/empty");
+        assert_eq!(empty.kind, NamespaceEntryKind::Directory, "{route:?}");
+        assert!(!status(&engine, &target, "moved/empty").initialized);
         assert_eq!(
             bytes(&engine, &target, "moved/owned"),
             b"saved parent",
@@ -366,6 +374,10 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             .unwrap();
         assert_eq!(bytes(&engine, &target, "moved/owned"), b"committed parent");
         assert_eq!(bytes(&engine, &target, "moved/child/file"), b"saved child");
+        assert_eq!(
+            entry(&engine, &target, "moved/empty").kind,
+            NamespaceEntryKind::Directory
+        );
         assert!(
             engine
                 .namespace_tree(&target.main_branch_id)
@@ -397,14 +409,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
 fn same_disk_move_refreshes_both_parent_workspaces_without_committing_either() {
     let (_temp, mut engine, source, destination) = fixture_for(Route::SameDisk);
     for path in ["a", "a/empty", "b"] {
-        engine
-            .file_namespace(
-                &source.repository_id,
-                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
-                "admin",
-                OperationId::generate().unwrap(),
-            )
-            .unwrap();
+        mkdir(&mut engine, &source, path);
     }
     initialize(&mut engine, &source, "a");
     initialize(&mut engine, &source, "b");
