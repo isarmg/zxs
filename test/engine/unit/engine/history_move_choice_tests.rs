@@ -111,3 +111,110 @@ fn persisted_choice_parser_rejects_wrong_slot_membership_and_noncanonical_bytes(
     whitespace.push(b'\n');
     assert!(Choice::decode(&engine.config, &whitespace).is_err());
 }
+
+#[test]
+fn absent_move_materials_do_not_require_an_active_generation_seal() {
+    for pending in [true, false] {
+        let (_temp, mut engine) = engine();
+        let disk = engine.config.disks[0].clone();
+        let path = disk.root.join("disk.json");
+        let bytes = if pending {
+            br#"{"format":"membership-pending","control_archive_root":"unpromoted"}"#.to_vec()
+        } else {
+            let mut previous = engine.disk_resources.get(&disk).unwrap().seal.clone();
+            previous.format = DiskSealFormat::MembershipGeneration {
+                authority_hash: "previous-generation".into(),
+            };
+            encode_metadata(&previous, MAX_METADATA).unwrap()
+        };
+        std::fs::write(&path, &bytes).unwrap();
+        engine.discover_file_history_move_choice().unwrap();
+        assert!(engine.history_move_choice.is_none());
+        assert!(engine.history_move_intent.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            validate_seal(&engine.config, &disk).unwrap_err().code(),
+            ErrorCode::DiskIdentityMismatch
+        );
+    }
+}
+
+#[test]
+fn an_observed_move_choice_still_requires_the_exact_active_seal() {
+    let (_temp, mut engine) = engine();
+    let choice = selected(&engine);
+    let disk = engine.config.disks[0].clone();
+    let root = &engine.disk_resources.get(&disk).unwrap().root;
+    let stage = disk.root.join(DIRECTORY);
+    root.private_dir(&stage).unwrap();
+    root.write_atomic(&stage.join(NAME), &choice.bytes, false)
+        .unwrap();
+    engine.discover_file_history_move_choice().unwrap();
+    assert!(engine.history_move_choice.as_ref() == Some(&choice));
+    let mut changed = engine.disk_resources.get(&disk).unwrap().seal.clone();
+    changed.inode += 1;
+    let bytes = encode_metadata(&changed, MAX_METADATA).unwrap();
+    std::fs::write(disk.root.join("disk.json"), &bytes).unwrap();
+    assert_eq!(
+        engine
+            .discover_file_history_move_choice()
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(std::fs::read(stage.join(NAME)).unwrap(), choice.bytes);
+    assert_eq!(std::fs::read(disk.root.join("disk.json")).unwrap(), bytes);
+}
+
+#[test]
+fn intent_discovery_rejects_every_present_incomplete_slot() {
+    for kind in ["empty", "file", "symlink", "corrupt"] {
+        let (_temp, mut engine) = engine();
+        let disk = engine.config.disks[0].clone();
+        let root = &engine.disk_resources.get(&disk).unwrap().root;
+        let slot = disk.root.join("file-history-move-recovery");
+        match kind {
+            "empty" => root.private_dir(&slot).unwrap(),
+            "file" => std::fs::write(&slot, b"unchanged").unwrap(),
+            "symlink" => std::os::unix::fs::symlink("missing", &slot).unwrap(),
+            "corrupt" => {
+                root.private_dir(&slot).unwrap();
+                std::fs::write(slot.join("preparation.json"), b"{}").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(engine.discover_move_intent().is_err(), "{kind}");
+        assert!(engine.history_move_intent.is_none());
+        match kind {
+            "empty" => assert_eq!(std::fs::read_dir(&slot).unwrap().count(), 0),
+            "file" => assert_eq!(std::fs::read(&slot).unwrap(), b"unchanged"),
+            "symlink" => assert_eq!(
+                std::fs::read_link(&slot).unwrap(),
+                std::path::Path::new("missing")
+            ),
+            "corrupt" => {
+                assert_eq!(std::fs::read(slot.join("preparation.json")).unwrap(), b"{}");
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn absent_move_materials_still_reject_replaced_or_quiesced_roots() {
+    for replaced in [true, false] {
+        let (temp, mut engine) = engine();
+        let disk = engine.config.disks[0].clone();
+        if replaced {
+            std::fs::rename(&disk.root, temp.path().join("parked")).unwrap();
+            private_dir(&disk.root).unwrap();
+        } else {
+            let root = &engine.disk_resources.get(&disk).unwrap().root;
+            drop(root.io_binding().unwrap().begin_quiesce().unwrap());
+        }
+        assert!(engine.discover_file_history_move_choice().is_err());
+        assert!(engine.discover_move_intent().is_err());
+        assert!(engine.history_move_choice.is_none());
+        assert!(engine.history_move_intent.is_none());
+    }
+}

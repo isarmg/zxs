@@ -56,6 +56,7 @@ fn retain(selected: &mut Option<Choice>, observed: Option<Choice>) -> Result<()>
 impl Engine {
     /// Called with pool writer locks held, before ordinary recovery opens a
     /// journal writer. Probe only admitted I/O roots, not arbitrary config paths.
+    /// Generation admission owns seal promotion when no move record is present.
     pub(in crate::engine) fn discover_file_history_move_choice(&mut self) -> Result<()> {
         let root = DiskRoot::open(&self.root)?;
         root.private_directory(root.path())?;
@@ -79,26 +80,23 @@ impl Engine {
                 .find(|disk| disk.disk_id == handle.seal.disk_id)
                 .expect("invariant: admitted handle has an I/O configuration binding");
             let lease = handle.root.admit_io()?;
-            let check_seal = || -> Result<()> {
+            let observed = read_at(&handle.root, &self.config)?;
+            if let Some(choice) = &observed {
                 let seal =
                     validate_seal_observed(&self.config, disk, &mut |_| lease.check_running())?;
                 validate_stored_seal(&handle.seal, &seal)?;
-                lease.check_running()
-            };
-            check_seal()?;
-            let observed = read_at(&handle.root, &self.config)?;
-            if observed.as_ref().is_some_and(|choice| {
-                !choice
+                if !choice
                     .record
                     .participants
                     .iter()
                     .any(|identity| identity.disk_id == disk.disk_id)
-            }) {
-                return Err(invalid(
-                    "move choice is stored outside its original participant set",
-                ));
+                {
+                    return Err(invalid(
+                        "move choice is stored outside its original participant set",
+                    ));
+                }
             }
-            check_seal()?;
+            lease.check_running()?;
             retain(&mut selected, observed)?;
         }
         self.history_move_choice = selected;

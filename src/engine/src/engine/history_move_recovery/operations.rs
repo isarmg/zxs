@@ -98,7 +98,14 @@ impl Engine {
             None => None,
         };
         for disk in self.config.disks.iter().filter(|disk| disk.metadata_member) {
-            if self.disk_resources.available(disk).is_none() {
+            let Some(handle) = self.disk_resources.available(disk) else {
+                continue;
+            };
+            let root = handle.root.retained(disk.root.clone())?;
+            if root
+                .optional_metadata(&root.path().join(persist::DIRECTORY))?
+                .is_none()
+            {
                 continue;
             }
             let identity = DiskRegistrationIdentity {

@@ -3,7 +3,7 @@ use super::*;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::{fs::File, os::unix::fs::FileExt, sync::Arc};
 
-const DIRECTORY: &str = "file-history-move-recovery";
+pub(super) const DIRECTORY: &str = "file-history-move-recovery";
 const NAME: &str = "preparation.json";
 
 #[derive(Serialize, Deserialize)]
