@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::directory_git::DirectoryGitRepository;
 use storage_contract::file_relocation::ObjectMoveRequest;
 mod projection;
+mod evidence;
+pub(crate) use evidence::{admit_result, deletion_for, retained_for, verify_publication};
 pub(crate) use projection::{plan, read_result, verify_transition, MovePlan, ResultBody};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -128,6 +130,12 @@ fn target_scope(state: &State, request: &ObjectMoveRequest, current: &[Entry]) -
     }
     let namespace = current.to_vec();
     let tree = namespace::NamespaceTree::from_current_state(state, &repository.repository_id, &namespace);
+    if tree.get_key(request.target_path.key()).is_none()
+        && current.iter().any(|entry| entry.lookup_key()==request.target_path.key())
+    {
+        return Err(Error::new(ErrorCode::NameCollision,
+            "move destination is reserved by a deleted object; restore or choose another name"));
+    }
     let displaced = tree.get_key(request.target_path.key()).filter(|entry| {
         request.target_repository_id.as_ref() != Some(&request.source_repository_id)
             || entry.entry_id != request.source_entry_id.as_str()
@@ -181,7 +189,7 @@ fn current_entries(
         return Err(Error::new(ErrorCode::InvalidMove, "move destination is inside the source"));
     }
     let depth = root.path().split('/').count();
-    tree.visible_entries().filter(|entry| in_scope(entry, root)).map(|entry| {
+    snapshot.iter().filter(|entry| in_scope(entry, root)).map(|entry| {
         let destination = if entry.entry_id == root.entry_id {
             request.target_path.clone()
         } else {
@@ -338,6 +346,23 @@ fn capture(state: &State, request: &ObjectMoveRequest, basis: &NamespaceBasis, m
         }
         ownership.requires_history_copy(state)?
     } else { true };
+    // A deletion belongs to its initialized owner, not merely its old path.
+    // Whole-owner moves carry the marker and its retained tree together. A
+    // partial export must not expose the hidden rows under a different owner.
+    let moved_ids=entries.iter().map(|entry|entry.source.entry_id.as_str()).collect::<BTreeSet<_>>();
+    for owner in state.directory_git_repositories.values() {
+        if owner.repository_id!=source_repository.repository_id || directories.contains_key(&owner.directory_id) {continue;}
+        for node in owner.deletions.values().filter(|node|moved_ids.contains(node.directory_id.as_str())) {
+            if copy_history || entries.iter().find(|entry|entry.source.entry_id==node.directory_id)
+                .is_some_and(|entry| {
+                    let tree=namespace::NamespaceTree::from_current_state(state,&source_repository.repository_id,&target_entries);
+                    tree.initialized_repository_id(entry.destination.key())!=Some(owner.directory_id.as_str())
+                }) {
+                return Err(Error::new(ErrorCode::UnsupportedOperation,
+                    "restore the deleted child before exporting it separately from its initialized owner"));
+            }
+        }
+    }
     history_copy::retained::bounded(&(request, &entries, &directories, &files))?;
     Ok(MoveUnit {
         request: request.clone(), source_repository: source_repository.clone(),

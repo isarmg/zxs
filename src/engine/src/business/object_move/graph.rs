@@ -26,7 +26,8 @@ impl Graph {
         Ok(FileContext {
             branch_id: self.id(&context.branch_id)?,
             node_id: context.node_id.as_deref().map(|id| self.id(id)).transpose()?,
-            inherited_from: context.inherited_from.as_ref().and_then(|id| self.ids.get(id).cloned()),
+            inherited_from: context.inherited_from.as_ref().and_then(|id| self.ids.get(id))
+                .filter(|id|id.starts_with("dbr_")).cloned(),
             selection_generation: context.selection_generation,
         })
     }
@@ -103,6 +104,26 @@ fn identities(previous: &State, unit: &MoveUnit, target: &Repository, operation:
         Ok((id.clone(), history_copy::identity(operation, &id)?))
     }).collect::<Result<BTreeMap<_,_>>>()?;
     ids.insert(unit.source_repository.main_branch_id.clone(),target.main_branch_id.clone());
+    // A file may still borrow its current contents from an exterior directory
+    // branch. That owner's branch is not copied; arrival creates its own file
+    // branch from the same pending version under the target namespace.
+    let contexts=unit.entries.iter().filter_map(|member|member.context.as_ref())
+        .chain(unit.directories.values().flat_map(|directory|&directory.tree_ids)
+            .flat_map(|tree|previous.directory_trees[tree].file_contexts.values()));
+    for context in contexts {
+        if !ids.contains_key(&context.branch_id) && previous.directory_branches.contains_key(&context.branch_id) {
+            ids.insert(context.branch_id.clone(),target.main_branch_id.clone());
+        }
+    }
+    for node in previous.file_deletions.values().filter(|node|unit.files.contains_key(&node.file_id)) {
+        ids.insert(node.node_id.clone(),IdentityScope {operation,member:None}.generated("fdel",&format!("import:{}",ids[&node.file_id]))?);
+    }
+    for directory in unit.directories.values() {
+        for node in directory.repository.deletions.values() {
+            let mapped_directory=ids[&node.directory_id].clone();
+            ids.insert(node.node_id.clone(),crate::file_deletion::directory::identity(operation,"ddel",&mapped_directory)?);
+        }
+    }
     let versions = unit.files.values().flat_map(|file| file.version_ids.iter())
         .map(|id| (id.clone(), ids[id].clone())).collect();
     Ok(Graph { ids, versions, lifecycle: Vec::new(), commits })
@@ -200,8 +221,10 @@ pub(super) fn copy(previous: &State, next: &mut State, unit: &MoveUnit, target: 
             target_path:&target_path,route,principal,scope:IdentityScope {operation,member:Some(file)},
             aggregate_ids:Some(&graph.ids),
         })?;
-        graph.lifecycle.push(history_copy::retained::capture_mapped(previous, file,
-            &unit.source_repository.history_tree_id, &target.history_tree_id, operation)?);
+        if !member.version_ids.is_empty() {
+            graph.lifecycle.push(history_copy::retained::capture_mapped(previous, file,
+                &unit.source_repository.history_tree_id, &target.history_tree_id, operation)?);
+        }
     }
     Ok(graph)
 }

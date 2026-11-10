@@ -76,29 +76,28 @@ pub(super) fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, key: &str) -> Optio
     namespace::closest_directory_repository(parent, |key| owners.get(key).copied())
 }
 
-pub(super) fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
-    let children = tree
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && tree.directory_refs.contains_key(&entry.entry_id)
-        })
-        .map(Entry::lookup_key)
-        .collect::<BTreeSet<_>>();
-    tree.entries.iter().any(|entry| {
-        if entry.kind != NamespaceEntryKind::File || !files.contains(entry.file_id.as_str()) {
-            return false;
-        }
-        let mut key = entry.lookup_key();
-        while let Some((parent, _)) = key.rsplit_once('/') {
-            if children.contains(parent) {
-                return false;
-            }
-            key = parent;
+fn owned_files<'a>(tree:&'a DirectoryTree,files:&'a BTreeSet<&str>)->impl Iterator<Item=&'a str> {
+    let children=tree.entries.iter().filter(|entry|entry.kind==NamespaceEntryKind::Directory
+        && tree.directory_refs.contains_key(&entry.entry_id)).map(Entry::lookup_key).collect::<BTreeSet<_>>();
+    tree.entries.iter().filter(move |entry| {
+        if entry.kind!=NamespaceEntryKind::File || !files.contains(entry.file_id.as_str()) {return false;}
+        let mut key=entry.lookup_key();
+        while let Some((parent,_))=key.rsplit_once('/') {
+            if children.contains(parent) {return false;}
+            key=parent;
         }
         true
-    })
+    }).map(|entry|entry.file_id.as_str())
+}
+
+pub(super) fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
+    owned_files(tree,files).next().is_some()
+}
+
+pub(crate) fn committed_files(state:&State,files:&BTreeSet<&str>)->BTreeSet<String> {
+    state.directory_trees.values()
+        .filter(|tree|storage_contract::directory_staging::directory_tree_is_committed(state,tree))
+        .flat_map(|tree|owned_files(tree,files)).map(str::to_owned).collect()
 }
 
 pub(super) fn has_committed_departure(

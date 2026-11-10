@@ -55,6 +55,27 @@ fn immutable_frontier(state: &State, node: &FileDeletionNode) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the original creator of this exact marker. An aggregate movement
+/// may contain several imported markers, so it never impersonates a one-marker
+/// directory.delete receipt.
+pub(crate) fn admit_original(state:&State,receipt:&OperationResult,node:&DirectoryDeletionNode)->Result<Admitted> {
+    if receipt.kind!=storage_contract::file_relocation::OBJECT_MOVE_KIND {return admit(state,receipt);}
+    let result=crate::business::object_move::admit_result(state,receipt)?;
+    if !result.imported_directory_deletions.iter().any(|original|original==node) {return Err(invalid());}
+    shape(node)?;source::retained(state,node)?;
+    let mut files=Vec::new();
+    for (file,member) in &node.files {
+        let imported=result.imported_deletions.iter().find(|row|&row.file_id==file
+            && row.node_id==member.deletion_node_id).ok_or_else(invalid)?;
+        immutable_frontier(state,imported)?;
+        if imported.repository_id!=node.repository_id || imported.history_tree_id!=node.history_tree_id {
+            return Err(invalid());
+        }
+        if member.created_by_directory {files.push(imported.clone());}
+    }
+    Ok(Admitted {node:node.clone(),files,undo:false})
+}
+
 pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted> {
     let undo = receipt.kind == UNDO;
     if !is_kind(&receipt.kind) {
@@ -96,9 +117,9 @@ pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted
         let original = state
             .operations
             .get(&node.operation_id)
-            .filter(|original| original.kind == DELETE)
+            .filter(|original| matches!(original.kind.as_str(),DELETE | storage_contract::file_relocation::OBJECT_MOVE_KIND))
             .ok_or_else(invalid)?;
-        let original = admit(state, original)?;
+        let original = admit_original(state,original,&node)?;
         if original.node != node
             || original.files != files
             || receipt.sequence <= node.sequence
@@ -363,3 +384,4 @@ pub(crate) fn verify_publication(
     }
     Ok(true)
 }
+

@@ -13,7 +13,7 @@ fn inherited_files(graph:&Graph,input:&BTreeMap<String,String>)->Result<BTreeMap
     // An external directory's write origin does not move with this unit.
     // Its frozen bytes are already retained through the pending-version graph;
     // only an included directory origin remains a lazy branch-write intent.
-    input.iter().filter_map(|(file,origin)|graph.ids.get(origin)
+    input.iter().filter_map(|(file,origin)|graph.ids.get(origin).filter(|origin|origin.starts_with("dbr_"))
         .map(|origin|graph.id(file).map(|file|(file,origin.clone())))).collect()
 }
 fn references(graph: &Graph, input: &BTreeMap<String,DirectoryReference>) -> Result<BTreeMap<String,DirectoryReference>> {

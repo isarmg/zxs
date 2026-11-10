@@ -86,11 +86,9 @@ pub(crate) fn plan(engine:&Engine,request:&ObjectMoveRequest,principal:&str,oper
 
 fn publish_namespace(next:&mut State,repository:&Repository,entries:Vec<Entry>,principal:&str,operation:OperationId,purpose:&str)->Result<String> {
     let branch=next.branches[&repository.main_branch_id].clone();
-    let previous=&next.commits[&branch.head_commit_id];
-    let files=entries.iter().filter(|entry| entry.kind==NamespaceEntryKind::File)
-        .map(|entry| entry.file_id.as_str()).collect::<BTreeSet<_>>();
-    let pending=previous.pending_file_versions.iter().filter(|(file,_)| files.contains(file.as_str()))
-        .map(|(file,version)|(file.clone(),version.clone())).collect();
+    let pending=entries.iter().filter(|entry| entry.kind==NamespaceEntryKind::File
+        && next.versions[&entry.version_id].file_id!=entry.file_id)
+        .map(|entry|(entry.file_id.clone(),entry.version_id.clone())).collect();
     let id=generated(operation,"commit",purpose)?;
     next.commits.insert(id.clone(),Commit {
         commit_id:id.clone(),history_tree_id:repository.history_tree_id.clone(),kind:"object_move".into(),
@@ -119,7 +117,7 @@ fn deletion(previous:&State,repository:&Repository,entry:&Entry,principal:&str,o
     })
 }
 
-fn relocate_current_files(next:&mut State,unit:&MoveUnit,target:&Repository,graph:Option<&graph::Graph>,arrived:&[Entry],route:&CopyRoute,principal:&str,operation:OperationId)->Result<()> {
+fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:&Repository,graph:Option<&graph::Graph>,arrived:&[Entry],route:&CopyRoute,principal:&str,operation:OperationId)->Result<()> {
     // Clear old keys first, before installing any destination occurrence.
     for member in &unit.entries {
         if member.source.kind==NamespaceEntryKind::File {
@@ -130,6 +128,9 @@ fn relocate_current_files(next:&mut State,unit:&MoveUnit,target:&Repository,grap
     let entries_by_path=target_head.entries.iter().map(|entry|(entry.lookup_key(),entry)).collect::<BTreeMap<_,_>>();
     for (member,entry) in unit.entries.iter().zip(arrived) {
         if entry.kind!=NamespaceEntryKind::File { continue; }
+        next.file_names.insert(entry.file_id.clone(),entry.name().into());
+        next.file_locations.insert(entry.file_id.clone(),entry.path().into());
+        if previous.file_deletions.contains_key(&member.source.file_id) {continue;}
         let old=match graph {Some(graph)=>graph.entry(&member.source)?,None=>member.source.clone()};
         let original=member.context.as_ref().expect("invariant: captured file has context");
         let mut context=match graph {Some(graph)=>graph.context(original)?,None=>original.clone()};
@@ -142,8 +143,12 @@ fn relocate_current_files(next:&mut State,unit:&MoveUnit,target:&Repository,grap
             context.branch_id=file::ensure_shared_file_branch_with_ids(next,&target_head,entry,&mut ids)?;
         }
         if old.path()!=entry.path() {
-            context=file_paths::rename_node_with_ids(next,&target.repository_id,&old,entry,Some(context),
-                principal,operation,route.created_at,&mut ids)?;
+            // Borrowed contents have no file-owned node before their first
+            // save. Move the pending occurrence without forging that node.
+            if next.versions[&entry.version_id].file_id==entry.file_id {
+                context=file_paths::rename_node_with_ids(next,&target.repository_id,&old,entry,Some(context),
+                    principal,operation,route.created_at,&mut ids)?;
+            }
             file::relocate_namespace_file_branch_with_ids(next,&context,&entries_by_path,entry,operation,&mut ids)?;
         }
         next.file_contexts.insert(directory::context_key_from_key(&target.repository_id,entry.lookup_key()),context);
@@ -214,7 +219,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
         let removed=unit.entries.iter().map(|entry|storage_contract::DeletedPath {path:entry.source.path().into(),kind:entry.source.kind}).collect();
         next.commits.get_mut(&source_commit).expect("invariant: new source commit exists").namespace_deletions=namespace::deletion_record(removed,route.created_at);
     }
-    relocate_current_files(&mut next,&unit,&target,graph.as_ref(),&arrived,route,principal,operation)?;
+    relocate_current_files(previous,&mut next,&unit,&target,graph.as_ref(),&arrived,route,principal,operation)?;
     let mut imported_deletions=Vec::new();
     if let Some(graph)=&graph {
         for original in previous.file_deletions.values().filter(|node|unit.files.contains_key(&node.file_id)) {
@@ -223,6 +228,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
             node.repository_id=target.repository_id.clone();node.history_tree_id=target.history_tree_id.clone();
             node.branch_heads=original.branch_heads.iter().map(|(branch,head)|Ok((graph.id(branch)?,graph.id(head)?))).collect::<Result<_>>()?;
             node.parent_node_ids=original.parent_node_ids.iter().map(|id|graph.id(id)).collect::<Result<_>>()?;
+            node.parent_node_ids.sort();
             node.operation_id=operation;node.author=principal.into();node.sequence=sequence;node.created_at=route.created_at;
             next.file_deletions.insert(node.file_id.clone(),node.clone());imported_deletions.push(node);
         }
@@ -231,8 +237,14 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
     let mut displaced_deletions=Vec::new();
     let mut seen=BTreeSet::new();
     if unit.copy_history {
+        let source_files=unit.entries.iter().filter(|member|member.source.kind==NamespaceEntryKind::File)
+            .map(|member|member.source.file_id.as_str()).collect::<BTreeSet<_>>();
+        let committed=directory_git::committed_files(previous,&source_files);
         for member in unit.entries.iter().filter(|member|member.source.kind==NamespaceEntryKind::File) {
-            if seen.insert(member.source.file_id.as_str()) && !unit.source_namespace.iter().any(|entry|
+            if !unit.files[&member.source.file_id].version_ids.is_empty()
+                && !previous.file_deletions.contains_key(&member.source.file_id)
+                && !committed.contains(&member.source.file_id)
+                && seen.insert(member.source.file_id.as_str()) && !unit.source_namespace.iter().any(|entry|
                 entry.kind==NamespaceEntryKind::File && entry.file_id==member.source.file_id
                     && !source_ids.contains(entry.entry_id.as_str())) {
                 let node=deletion(previous,&unit.source_repository,&member.source,principal,operation,sequence,route.created_at)?;
@@ -242,7 +254,8 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
     }
     seen.clear();
     for entry in displaced.iter().filter(|entry|entry.kind==NamespaceEntryKind::File) {
-        if seen.insert(entry.file_id.as_str()) && !next.commits[&commit].entries.iter().any(|current|
+        if previous.versions.values().any(|version|version.file_id==entry.file_id)
+            && seen.insert(entry.file_id.as_str()) && !next.commits[&commit].entries.iter().any(|current|
             current.kind==NamespaceEntryKind::File && current.file_id==entry.file_id) {
             let node=deletion(previous,&target,entry,principal,operation,sequence,route.created_at)?;
             next.file_deletions.insert(node.file_id.clone(),node.clone());displaced_deletions.push(node);

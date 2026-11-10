@@ -330,7 +330,7 @@ pub(in crate::business) fn project(
         next.file_notes.insert(file.clone(), note.clone());
     }
     if let Some(origin) = previous.file_write_origins.get(&source.file) {
-        if let Some(mapped_origin) = ids.get(origin) {
+        if let Some(mapped_origin) = ids.get(origin).filter(|id|id.starts_with("dbr_")) {
             next.file_write_origins.insert(file.clone(), mapped_origin.clone());
         }
     }
@@ -361,7 +361,8 @@ pub(in crate::business) fn project(
     let mut copied_context = context.clone();
     copied_context.branch_id = selected.clone();
     copied_context.node_id = context.node_id.as_deref().map(mapped).transpose()?;
-    copied_context.inherited_from = context.inherited_from.as_ref().and_then(|id| ids.get(id).cloned());
+    copied_context.inherited_from = context.inherited_from.as_ref().and_then(|id| ids.get(id))
+        .filter(|id|id.starts_with("dbr_")).cloned();
     // The current occurrence has a new destination path. Historic paths remain
     // immutable, with an explicit new path node continuing the copied head.
     if aggregate_ids.is_none() && old_entry.path() != target_path.as_str() {

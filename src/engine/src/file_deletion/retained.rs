@@ -39,6 +39,8 @@ impl From<&crate::FileDeletionNode> for DeletionRow {
 pub(crate) enum DeletionAction {
     Delete,
     Undo,
+    /// Relocate an already deleted unit without inventing an undo/delete pair.
+    Import,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
@@ -60,9 +62,10 @@ fn invalid() -> Error {
 
 fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let receipt = &state.operations[&id];
-    let (action, key) = match receipt.kind.as_str() {
+    let (mut action, key) = match receipt.kind.as_str() {
         "file.delete"
         | crate::business::FILE_HISTORY_MOVE_KIND
+        | storage_contract::file_relocation::OBJECT_MOVE_KIND
         | super::batch::KIND
         | super::directory::DELETE => (DeletionAction::Delete, "deletion_node"),
         "file.delete.undo" | super::directory::UNDO => {
@@ -74,6 +77,14 @@ fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
         super::directory::node_for(state, receipt, file)?
     } else if receipt.kind == super::batch::KIND {
         super::batch::node_for(receipt, file)?
+    } else if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+        let result=crate::business::object_move::read_result(receipt)?;
+        if let Some(node)=result.imported_deletions.into_iter().find(|node|node.file_id==file) {
+            action=DeletionAction::Import;node
+        } else {
+            result.source_deletions.into_iter().chain(result.displaced_deletions)
+                .find(|node|node.file_id==file).ok_or_else(invalid)?
+        }
     } else if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::retained_file_history_move_deletion(receipt, file)?
     } else {
@@ -82,7 +93,7 @@ fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
     let author = state.operation_principals.get(&id).ok_or_else(invalid)?;
     if receipt.operation_id != id
         || source.file_id != file
-        || action == DeletionAction::Delete
+        || action != DeletionAction::Undo
             && (source.operation_id != id
                 || source.sequence != receipt.sequence
                 || source.author != *author)
@@ -133,7 +144,11 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
         if receipt.operation_id != *id {
             return Err(invalid());
         }
-        if receipt.kind == crate::business::history_copy::RETAINED_KIND
+        if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+            for event in crate::business::object_move::retained_for(receipt,file)?.events {
+                insert(event)?;
+            }
+        } else if receipt.kind == crate::business::history_copy::RETAINED_KIND
             || receipt.kind == crate::business::history_copy::DIRECTORY_EXPORT_KIND
             || receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         {
@@ -148,3 +163,4 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
     }
     Ok(events.into_values().collect())
 }
+
