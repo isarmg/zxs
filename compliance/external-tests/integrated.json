@@ -139,7 +139,7 @@
         },
         {
           "path": "test/naming/unit/key_tests.rs",
-          "sha256": "6bd66c9ecbb84e2003301f8540545ab0782917e27e23561854dff0126ba7ff2b",
+          "sha256": "05fe8a896a33c653f0773cf442efe19f6ec2398b2999956357516bdf393d1339",
           "source": "src/naming/src/key_tests.rs",
           "source_sha256_before": "b7769845ea159b121934cd4e721d445177731fe90df5fd6ba8ae20c9093dd75d"
         },

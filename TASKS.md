@@ -7,6 +7,7 @@
 - ResolveSmbPath 的 LookupPath 经引擎路由后继续保留类型和缓存 key；SmbPathLocation 明确区分 repository root 与非空相对路径，删除空串哨兵及 DefaultShare／Session 的重复解析。命名仓库后缀从已验证路径裁取，默认根保留完整路径。
 - Open／Stat／namespace／object.move 和保留请求重试共用这些类型；NamespaceInput 删除额外原始 path／destination 字符串，仅在协议回复和恢复记录边界输出原拼写。LookupPath 转创建路径只检查此前尚未证明的组件 NFC，转移原 display／key，不重新验证结构、字符、预算或计算 key。实时授权、磁盘／绑定身份、创建前 NFC 拒绝和恢复字节比对仍保留。
 - 根测试补充 NFC 转换与原缓冲转移、NFD 查询／创建拒绝、命名仓库 root／后缀和默认根路径。格式、调用点静态检查与补丁检查通过；未本地编译或执行 Rust，准确提交 CI 待验证。本片不改变存储格式或发布协议。
+- 准确提交 `55630bb5` 的 #1056 在静态来源门禁发现本片遗漏同步 naming 当前源码／外测清单，Rust 与 SDK 均未运行。按既有外测规则补齐当前摘要，再用 `manage.py refresh` 更新派生来源清单与字节总数；初始来源路径、初始摘要、不可变收据和校验门禁均未改。`manage.py verify --metadata` 与 26 项外测清单 Python 回归通过；仅解析离线 Cargo 元数据，未编译，后继实际 Rust／Samba 验证仍待 CI。
 
 ## 本轮辅助工具与外来材料派生重构
 
