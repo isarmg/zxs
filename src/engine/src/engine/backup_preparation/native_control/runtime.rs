@@ -180,6 +180,72 @@ pub(in crate::engine::backup_preparation) fn resume(
     Ok(true)
 }
 
+fn copy_control(
+    task: &NativeTask,
+    work: &[Target],
+    archive: &PreparedArchive,
+    progress: &Progress,
+) -> Result<()> {
+    let stop = progress.stop.as_ref();
+    let intent = task.bytes()?;
+    for (target, job) in work.iter().zip(task.selection.jobs()) {
+        named_target(&target.root, job)?;
+        require_capacity(&target.root, archive)?;
+    }
+    for (index, (target, job)) in work.iter().zip(task.selection.jobs()).enumerate() {
+        crate::history_package::preparation_checkpoint(stop)?;
+        progress.update(|status| {
+            status.phase = BackupPreparationPhase::Verifying;
+            status.detail = format!(
+                "native evidence target {}/{}; original member journals and publication closure, no authority switch",
+                index + 1,
+                work.len(),
+            );
+        })?;
+        named_target(&target.root, job)?;
+        crate::history_package::install_preparation_bytes(
+            &target.root,
+            &target.root.path().join(INTENT),
+            &intent,
+        )?;
+        archive.copy(&target.root, stop)?;
+        let report = archive::read(&target.root, job, &task.archive_hash, stop)?;
+        if report != archive.report {
+            return Err(invalid(
+                "target native prefix differs from the independently frozen original",
+            ));
+        }
+    }
+    let roots = work.iter().map(|target| &target.root).collect::<Vec<_>>();
+    let report = verify_targets(task, &roots, stop)?;
+    let bytes = canonical_json(&report)?;
+    if bytes.len() > MAX_TASK {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "native completion exceeds reader budget",
+        ));
+    }
+    for (target, job) in work.iter().zip(task.selection.jobs()) {
+        crate::history_package::preparation_checkpoint(stop)?;
+        named_target(&target.root, job)?;
+        crate::history_package::install_preparation_bytes(
+            &target.root,
+            &target.root.path().join(COMPLETE),
+            &bytes,
+        )?;
+    }
+    for (target, job) in work.iter().zip(task.selection.jobs()) {
+        named_target(&target.root, job)?;
+    }
+    progress.update(|status| {
+        status.phase = BackupPreparationPhase::NativeControlPrepared;
+        status.detail = format!(
+            "all {} targets independently retain original native control and complete history material; database installation, complete-chain admission and cutover are not implemented",
+            work.len(),
+        );
+    })
+}
+
 fn spawn(
     engine: &Engine,
     task: NativeTask,
@@ -188,66 +254,15 @@ fn spawn(
     archive: PreparedArchive,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
-    let state = Arc::new(Mutex::new(task.selection.status()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancellation = Arc::clone(&stop);
+    let initial = task.selection.status();
     let frozen = task.clone();
-    let thread = std::thread::Builder::new().name("zxs-backup-native-control".into()).spawn(move || {
-        let _locks = locks;
-        // All targets remain held and locked through the last complete-set
-        // marker. No diagnostic mutex is held while copying or syncing bytes.
-        let update = |action: &dyn Fn(&mut BackupPreparationStatus)| -> Result<()> {
-            let mut status = progress.lock().expect("invariant: native progress poisoned").clone();
-            action(&mut status);
-            let persisted = system.write_json(&system.path().join(PROGRESS), &status, true);
-            *progress.lock().expect("invariant: native progress poisoned") = status;
-            persisted
-        };
-        let result = (|| {
-            let intent = frozen.bytes()?;
-            for (target, job) in work.iter().zip(frozen.selection.jobs()) {
-                named_target(&target.root, job)?;
-                require_capacity(&target.root, &archive)?;
-            }
-            for (index, (target, job)) in work.iter().zip(frozen.selection.jobs()).enumerate() {
-                crate::history_package::preparation_checkpoint(&cancellation)?;
-                update(&|status| { status.phase = BackupPreparationPhase::Verifying; status.detail = format!("native evidence target {}/{}; original member journals and publication closure, no authority switch", index + 1, work.len()); })?;
-                named_target(&target.root, job)?;
-                crate::history_package::install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
-                archive.copy(&target.root, &cancellation)?;
-                let report = archive::read(&target.root, job, &frozen.archive_hash, &cancellation)?;
-                if report != archive.report { return Err(invalid("target native prefix differs from the independently frozen original")); }
-            }
-            let roots = work.iter().map(|target| &target.root).collect::<Vec<_>>();
-            let report = verify_targets(&frozen, &roots, &cancellation)?;
-            let bytes = canonical_json(&report)?;
-            if bytes.len() > MAX_TASK { return Err(Error::new(ErrorCode::ResourceLimit, "native completion exceeds reader budget")); }
-            for (target, job) in work.iter().zip(frozen.selection.jobs()) {
-                crate::history_package::preparation_checkpoint(&cancellation)?;
-                named_target(&target.root, job)?;
-                crate::history_package::install_preparation_bytes(&target.root, &target.root.path().join(COMPLETE), &bytes)?;
-            }
-            for (target, job) in work.iter().zip(frozen.selection.jobs()) { named_target(&target.root, job)?; }
-            update(&|status| { status.phase = BackupPreparationPhase::NativeControlPrepared; status.detail = format!("all {} targets independently retain original native control and complete history material; database installation, complete-chain admission and cutover are not implemented", work.len()); })
-        })();
-        if let Err(error) = result
-            && let Err(persistence) = update(&|status| { status.phase = BackupPreparationPhase::Blocked; status.error_code = Some(error.code()); status.detail = error.to_string(); })
-        {
-            progress.lock().expect("invariant: native progress poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
-        }
-    })?;
-    let job = task.selection.first().clone();
-    let batch = match task.selection {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
-    })
+    task.selection.worker(initial).spawn(
+        locks,
+        system,
+        "zxs-backup-native-control",
+        move |progress| {
+            // Retain all target locks through complete-set and failure diagnostics.
+            progress.finish(copy_control(&frozen, &work, &archive, progress));
+        },
+    )
 }

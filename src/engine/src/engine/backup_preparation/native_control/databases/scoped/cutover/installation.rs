@@ -2,7 +2,6 @@
 //! This does not choose a successor authority, release a fence or serve a disk.
 use super::*;
 use crate::container_storage::backup_entities::Image;
-use crate::engine::backup_preparation::native_control::databases::runtime::update;
 
 const FORMAT: &str = "zxs-backup-fenced-entity-installation";
 const TASK: &str = "backup-preparation/target-entities.json";
@@ -293,13 +292,8 @@ pub(super) fn with_image<T>(
     Ok(result)
 }
 
-fn run(
-    task: &Task,
-    system: &DiskRoot,
-    targets: &[Target],
-    progress: &Mutex<BackupPreparationStatus>,
-    stop: &AtomicBool,
-) -> Result<()> {
+fn run(task: &Task, targets: &[Target], progress: &Progress) -> Result<()> {
+    let stop = progress.stop.as_ref();
     let roots = targets
         .iter()
         .map(|target| &target.root)
@@ -319,7 +313,7 @@ fn run(
     let mut acceptances = Vec::with_capacity(targets.len());
     for (index, target) in targets.iter().enumerate() {
         preparation_checkpoint(stop)?;
-        update(system, progress, |status| {
+        progress.update( |status| {
             status.phase = BackupPreparationPhase::Copying;
             status.detail = format!(
                 "installing independent target entity image {}/{}; source remains stopped and original bytes retained",
@@ -339,12 +333,12 @@ fn run(
         )?;
         acceptances.push(accepted);
         let completed = index as u64 + 1;
-        update(system, progress, |status| {
+        progress.update(|status| {
             status.completed_files = task.selection().first().total_files * completed;
             status.completed_bytes = task.selection().first().total_bytes * completed;
         })?;
     }
-    update(system, progress, |status| {
+    progress.update( |status| {
         status.phase = BackupPreparationPhase::Verifying;
         status.detail = "independently rereading every installed image before whole-target completion; no authority publication".into();
     })?;
@@ -372,7 +366,7 @@ fn run(
         named_target(&target.root, job)?;
         target.recheck_writer()?;
     }
-    update(system, progress, |status| {
+    progress.update( |status| {
         status.phase = BackupPreparationPhase::TargetEntitiesPrepared;
         status.completed_files = status.total_files;
         status.completed_bytes = status.total_bytes;
@@ -385,41 +379,22 @@ fn spawn(engine: &Engine, task: Task, system: DiskRoot, targets: Vec<Target>) ->
     let mut initial = task.selection().status();
     initial.detail =
         "recovering exact source-fenced installation; no active target or source deletion".into();
-    let state = Arc::new(Mutex::new(initial));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancel = Arc::clone(&stop);
     let frozen = task.clone();
-    let thread = std::thread::Builder::new()
-        .name("zxs-backup-target-entities".into())
-        .spawn(move || {
-            let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &targets, &progress, &cancel)
-                && let Err(persistence) = update(&system, &progress, |status| {
-                    status.phase = BackupPreparationPhase::Blocked;
-                    status.error_code = Some(error.code());
-                    status.detail = error.to_string();
-                })
-            {
-                progress
-                    .lock()
-                    .expect("invariant: entity diagnostic mutex poisoned")
-                    .detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        })?;
-    let job = task.selection().first().clone();
-    let batch = match task.evidence.task.scoped.objects.native.selection {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
-    })
+    task.evidence
+        .task
+        .scoped
+        .objects
+        .native
+        .selection
+        .worker(initial)
+        .spawn(
+            locks,
+            system,
+            "zxs-backup-target-entities",
+            move |progress| {
+                progress.finish(run(&frozen, &targets, progress));
+            },
+        )
 }
 
 fn completion(task: &Task, hash: &str, acceptances: &[Vec<u8>]) -> Result<Vec<u8>> {

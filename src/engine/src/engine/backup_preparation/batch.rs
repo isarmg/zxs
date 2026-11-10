@@ -363,14 +363,7 @@ fn idle(batch: Batch, error: Error, phase: BackupPreparationPhase) -> Worker {
     status.phase = phase;
     status.error_code = Some(error.code());
     status.detail = error.to_string();
-    Worker {
-        job: batch.first().clone(),
-        batch: Some(batch),
-        state: Arc::new(Mutex::new(status)),
-        stop: Arc::new(AtomicBool::new(false)),
-        thread: None,
-        targets: Vec::new(),
-    }
+    Worker::new(batch.first().clone(), Some(batch), status)
 }
 
 /// Return whether a retained batch owns preparation. The source binding is
@@ -522,63 +515,87 @@ fn spawn_batch(
     snapshot: snapshot::PreparedSnapshot,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
-    let state = Arc::new(Mutex::new(batch.status()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancel = Arc::clone(&stop);
-    let frozen = batch.clone();
-    let thread = std::thread::Builder::new().name("zxs-backup-batch".into()).spawn(move || {
-        let _locks = locks;
+    let worker = Worker::new(batch.first().clone(), Some(batch.clone()), batch.status());
+    worker.spawn(locks, system, "zxs-backup-batch", move |progress| {
         // All target locks and source body leases outlive the entire batch.
-        let update = |action: &dyn Fn(&mut BackupPreparationStatus)| -> Result<()> {
-            let mut next = progress.lock().expect("invariant: backup batch status poisoned").clone();
-            action(&mut next);
-            let result = system.write_json(&system.path().join(PROGRESS), &next, true);
-            *progress.lock().expect("invariant: backup batch status poisoned") = next;
-            result
-        };
+        let update = |action: &dyn Fn(&mut BackupPreparationStatus)| progress.update(action);
+        let cancel = progress.stop.as_ref();
         let result = (|| {
-            let intent = frozen.encoded()?;
-            for (job, target) in frozen.targets.iter().zip(&work) {
+            let intent = batch.encoded()?;
+            for (job, target) in batch.targets.iter().zip(&work) {
                 named_target(&target.root, job)?;
                 execution::require_capacity(&target.root, &target.histories, &snapshot)?;
             }
-            for (index, (job, target)) in frozen.targets.iter().zip(&mut work).enumerate() {
-                crate::history_package::preparation_checkpoint(&cancel)?;
-                update(&|s| s.detail = format!("target {}/{}: preparing complete frozen unit at {}; placement unchanged", index + 1, frozen.targets.len(), target.root.path().display()))?;
+            for (index, (job, target)) in batch.targets.iter().zip(&mut work).enumerate() {
+                crate::history_package::preparation_checkpoint(cancel)?;
+                update(&|status| {
+                    status.detail = format!(
+                        "target {}/{}: preparing complete frozen unit at {}; placement unchanged",
+                        index + 1,
+                        batch.targets.len(),
+                        target.root.path().display(),
+                    );
+                })?;
                 let copied = (|| {
                     reserve_target(&target.root, job)?;
-                    crate::history_package::install_preparation_bytes(&target.root, &target.root.path().join(BATCH_INTENT), &intent)?;
-                    execution::copy_target(job, &target.root, std::mem::take(&mut target.histories), &snapshot, &cancel, &update)
+                    crate::history_package::install_preparation_bytes(
+                        &target.root,
+                        &target.root.path().join(BATCH_INTENT),
+                        &intent,
+                    )?;
+                    execution::copy_target(
+                        job,
+                        &target.root,
+                        std::mem::take(&mut target.histories),
+                        &snapshot,
+                        cancel,
+                        &update,
+                    )
                 })();
-                copied.map_err(|e| { let code = e.code(); e.context(code, format!("batch target {} failed; other copies and all source data retained", index + 1)) })?;
+                copied.map_err(|error| {
+                    let code = error.code();
+                    error.context(
+                        code,
+                        format!(
+                            "batch target {} failed; other copies and all source data retained",
+                            index + 1,
+                        ),
+                    )
+                })?;
             }
-            update(&|s| { s.phase = BackupPreparationPhase::Verifying; s.detail = "revalidating every complete target before the batch material marker".into(); })?;
+            update(&|status| {
+                status.phase = BackupPreparationPhase::Verifying;
+                status.detail = "revalidating every complete target before the batch material marker".into();
+            })?;
             let roots = work.iter().map(|w| &w.root).collect::<Vec<_>>();
-            let report = verify_targets(&frozen, &roots, &cancel)?;
+            let report = verify_targets(&batch, &roots, cancel)?;
             let bytes = canonical_json(&report)?;
-            if bytes.len() > MAX_BATCH_BYTES { return Err(Error::new(ErrorCode::ResourceLimit, "batch completion exceeds reader budget")); }
-            for (root, job) in roots.iter().zip(&frozen.targets) {
-                named_target(root, job)?;
-                crate::history_package::preparation_checkpoint(&cancel)?;
-                crate::history_package::install_preparation_bytes(root, &root.path().join(BATCH_COMPLETE), &bytes)?;
+            if bytes.len() > MAX_BATCH_BYTES {
+                return Err(Error::new(
+                    ErrorCode::ResourceLimit,
+                    "batch completion exceeds reader budget",
+                ));
             }
-            for (root, job) in roots.iter().zip(&frozen.targets) { named_target(root, job)?; }
-            update(&|s| { s.phase = BackupPreparationPhase::HistoryPrepared;
-                s.detail = format!("all {} explicit targets contain complete frozen State and history; database installation, chain admission and authority switch remain unsupported", frozen.targets.len()); })
+            for (root, job) in roots.iter().zip(&batch.targets) {
+                named_target(root, job)?;
+                crate::history_package::preparation_checkpoint(cancel)?;
+                crate::history_package::install_preparation_bytes(
+                    root,
+                    &root.path().join(BATCH_COMPLETE),
+                    &bytes,
+                )?;
+            }
+            for (root, job) in roots.iter().zip(&batch.targets) {
+                named_target(root, job)?;
+            }
+            update(&|status| {
+                status.phase = BackupPreparationPhase::HistoryPrepared;
+                status.detail = format!(
+                    "all {} explicit targets contain complete frozen State and history; database installation, chain admission and authority switch remain unsupported",
+                    batch.targets.len(),
+                );
+            })
         })();
-        if let Err(error) = result
-            && let Err(persistence) = update(&|s| { s.phase = BackupPreparationPhase::Blocked; s.error_code = Some(error.code()); s.detail = error.to_string(); })
-        {
-            progress.lock().expect("invariant: backup batch status poisoned").detail = format!("{error}; progress persistence failed: {persistence}");
-        }
-    })?;
-    Ok(Worker {
-        job: batch.first().clone(),
-        batch: Some(batch),
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
+        progress.finish(result);
     })
 }

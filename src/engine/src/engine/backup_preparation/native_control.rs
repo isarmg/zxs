@@ -56,6 +56,12 @@ enum Selection {
     Batch(batch::Batch),
 }
 impl Selection {
+    fn worker(self, status: BackupPreparationStatus) -> Worker {
+        match self {
+            Self::Single(job) => Worker::new(job, None, status),
+            Self::Batch(batch) => Worker::new(batch.first().clone(), Some(batch), status),
+        }
+    }
     fn jobs(&self) -> &[Job] {
         match self {
             Self::Single(job) => std::slice::from_ref(job),
@@ -162,19 +168,7 @@ impl Selection {
         status.phase = phase;
         status.error_code = Some(error.code());
         status.detail = error.to_string();
-        let job = self.first().clone();
-        let batch = match self {
-            Self::Single(_) => None,
-            Self::Batch(batch) => Some(batch),
-        };
-        Worker {
-            job,
-            batch,
-            state: Arc::new(Mutex::new(status)),
-            stop: Arc::new(AtomicBool::new(false)),
-            thread: None,
-            targets: Vec::new(),
-        }
+        self.worker(status)
     }
 }
 

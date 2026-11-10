@@ -183,6 +183,157 @@ fn poisoned_progress_is_reported_as_unavailable_not_a_healthy_or_missing_task() 
 }
 
 #[test]
+fn shared_worker_progress_persists_without_holding_its_cache_lock() {
+    let mut fixture = Fixture::new();
+    let worker = fixture.engine.backup_preparation.take().unwrap();
+    let cache = Arc::clone(&worker.state);
+    let mut worker = worker
+        .spawn(
+            fixture.engine.retain_writer_locks().unwrap(),
+            DiskRoot::open(&fixture.engine.root).unwrap(),
+            "test-backup-progress",
+            move |progress| {
+                progress
+                    .update(|status| {
+                        assert!(cache.try_lock().is_ok());
+                        status.detail = "shared progress persisted".into();
+                    })
+                    .unwrap();
+                progress.finish(Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "controlled stage failure",
+                )));
+            },
+        )
+        .unwrap();
+    worker.join().unwrap();
+    let status = worker.status();
+    assert_eq!(status.phase, BackupPreparationPhase::Blocked);
+    assert_eq!(status.error_code, Some(ErrorCode::ConfigConflict));
+    assert!(status.detail.contains("controlled stage failure"));
+    let persisted: BackupPreparationStatus =
+        crate::journal::decode_proof(&fs::read(fixture.engine.root.join(PROGRESS)).unwrap())
+            .unwrap();
+    assert_eq!(persisted, status);
+    assert_eq!(
+        canonical_json(fixture.engine.state()).unwrap(),
+        fixture.state
+    );
+    assert_eq!(
+        fs::read(fixture.engine.root.join(JOB)).unwrap(),
+        fixture.job
+    );
+}
+
+#[test]
+fn shared_worker_progress_failure_keeps_the_primary_error_and_observed_state() {
+    let mut fixture = Fixture::new();
+    let progress_path = fixture.engine.root.join(PROGRESS);
+    let retained = progress_path.with_extension("retained");
+    fs::rename(&progress_path, &retained).unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&progress_path)
+        .unwrap();
+    let original = fs::read(&retained).unwrap();
+    let mut worker = fixture
+        .engine
+        .backup_preparation
+        .take()
+        .unwrap()
+        .spawn(
+            fixture.engine.retain_writer_locks().unwrap(),
+            DiskRoot::open(&fixture.engine.root).unwrap(),
+            "test-backup-progress-failure",
+            |progress| {
+                assert!(
+                    progress
+                        .update(|status| status.completed_bytes = 7)
+                        .is_err()
+                );
+                progress.finish(Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "controlled stage failure",
+                )));
+            },
+        )
+        .unwrap();
+    worker.join().unwrap();
+    let status = worker.status();
+    assert_eq!(status.phase, BackupPreparationPhase::Blocked);
+    assert_eq!(status.error_code, Some(ErrorCode::ConfigConflict));
+    assert_eq!(status.completed_bytes, 7);
+    assert!(status.detail.contains("controlled stage failure"));
+    assert!(status.detail.contains("progress persistence failed:"));
+    assert_eq!(fs::read(retained).unwrap(), original);
+    assert!(progress_path.is_dir());
+    assert_eq!(
+        canonical_json(fixture.engine.state()).unwrap(),
+        fixture.state
+    );
+    assert_eq!(
+        fs::read(fixture.engine.root.join(JOB)).unwrap(),
+        fixture.job
+    );
+}
+
+#[test]
+fn shared_worker_drop_cancels_before_joining_and_releasing_target_ownership() {
+    let mut fixture = Fixture::new();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let held = AdvisoryLock::directory(&root.directory(root.path()).unwrap()).unwrap();
+    let (entered, started) = std::sync::mpsc::sync_channel(0);
+    let worker = fixture
+        .engine
+        .backup_preparation
+        .take()
+        .unwrap()
+        .spawn(
+            fixture.engine.retain_writer_locks().unwrap(),
+            DiskRoot::open(&fixture.engine.root).unwrap(),
+            "test-backup-cancel",
+            move |progress| {
+                let (_root, _held) = (root, held);
+                entered.send(()).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !progress.stop.load(Ordering::Acquire) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "worker did not observe cancellation"
+                    );
+                    std::thread::yield_now();
+                }
+                progress.finish(Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "controlled cancellation observed",
+                )));
+            },
+        )
+        .unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    let observed = Arc::clone(&worker.state);
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    assert!(AdvisoryLock::directory(&root.directory(root.path()).unwrap()).is_err());
+    drop(worker);
+    assert!(
+        observed
+            .lock()
+            .unwrap()
+            .detail
+            .contains("controlled cancellation observed")
+    );
+    fixture.assert_target_lock_released();
+    assert_eq!(
+        canonical_json(fixture.engine.state()).unwrap(),
+        fixture.state
+    );
+    assert_eq!(
+        fs::read(fixture.engine.root.join(JOB)).unwrap(),
+        fixture.job
+    );
+}
+
+#[test]
 fn backup_inspection_entrypoints_preserve_actor_and_preparation_order() {
     let temp = tempfile::tempdir().unwrap();
     let config =

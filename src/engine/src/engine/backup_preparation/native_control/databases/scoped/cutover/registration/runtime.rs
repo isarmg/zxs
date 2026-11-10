@@ -1,7 +1,6 @@
 //! Explicit native choice, retained as one background operation. Target image
 //! completion alone never starts this irreversible decision stage.
 use super::*;
-use crate::engine::backup_preparation::native_control::databases::runtime::update;
 
 impl Engine {
     /// Select one exact registry/whole-unit placement through ALL original native
@@ -142,15 +141,15 @@ struct SystemResources {
 
 fn run(
     task: Task,
-    system: &DiskRoot,
     targets: Vec<Target>,
     choices: BackupChoiceContext,
     resources: SystemResources,
-    progress: &Mutex<BackupPreparationStatus>,
-    stop: &AtomicBool,
+    progress: &Progress,
 ) -> Result<()> {
+    let system = &progress.system;
+    let stop = progress.stop.as_ref();
     let SystemResources { sources, index } = resources;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::Verifying;
         status.detail = "verifying every installed whole-unit image before one native registry/placement choice; original writes remain fenced".into();
     })?;
@@ -163,7 +162,7 @@ fn run(
             choices.decide(&prepared, stop)?
         }
     };
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::RegistryPlacementDecided;
         status.completed_files = status.total_files;
         status.completed_bytes = status.total_bytes;
@@ -178,7 +177,7 @@ fn run(
     // Source locks are retained throughout, but exact native source evidence is
     // still checked before the observable preparation result advances.
     choices.observe_decision(&prepared, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::WriterRoutesPrepared;
         status.detail = format!(
             "decision {hash} retains complete whole-unit fanout material {} on all {} selected targets; no generation publication or writer activation exists, source remains stopped",
@@ -188,7 +187,7 @@ fn run(
     })?;
     let inputs = generation_inputs::prepare(&prepared, &decision, stop)?;
     choices.observe_decision(&prepared, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationInputsPrepared;
         status.detail = format!(
             "decision {hash} retains unpublished native routing snapshot {} on all {} targets; final Backup authority, publication and active writers are absent; source remains stopped",
@@ -196,7 +195,7 @@ fn run(
         );
     })?;
     let control = generation_control::prepare(&prepared, &decision, &choices, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationControlPrepared;
         status.detail = format!(
             "decision {hash} retains normal native control archive {} including all original fenced journals on {} targets; no successor publication or target writer exists; source remains stopped",
@@ -205,7 +204,7 @@ fn run(
     })?;
     let authority = generation_authority::prepare(&prepared, &decision, stop)?;
     choices.observe_decision(&prepared, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationAuthorityPrepared;
         status.detail = format!(
             "decision {hash} retains strict native Backup authority {} on {} isolated targets; first publication, active Current/Config, target writer and source release remain unavailable",
@@ -214,7 +213,7 @@ fn run(
     })?;
     let first = first_candidate::prepare(&prepared, &decision, stop)?;
     choices.observe_decision(&prepared, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationFirstCandidatePrepared;
         status.detail = format!(
             "decision {hash} retains exact native first candidate {} and complete snapshot {} on {} isolated targets; no ACCEPT/FINALIZE/Publication, active target writer or source fence release",
@@ -223,7 +222,7 @@ fn run(
     })?;
     let (_, candidate) = first_candidate::read_verified(&prepared, &decision, stop)?;
     let finalized = choices.finalize_first_candidate(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationFirstCandidateFinalized;
         status.detail = format!(
             "decision {hash} has actual first candidate {} ACCEPT/FINALIZE {} on all {} original members; no Publication, target writer or source fence release",
@@ -234,7 +233,7 @@ fn run(
     })?;
     let publication = choices.publish_first_candidate(&prepared, &candidate, stop)?;
     let published = publication.report();
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationFirstCandidatePublished;
         status.detail = format!(
             "decision {hash} has actual reserved-generation Publication {} with {} verified payload receipts and all {} original member acknowledgements; active Config/Current, target writer and source fence release remain unavailable",
@@ -245,7 +244,7 @@ fn run(
     })?;
     let retained = first_publication::prepare(&prepared, &decision, &candidate, publication, stop)?;
     choices.observe_first_publication(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationFirstPublicationRetained;
         status.detail = format!(
             "decision {hash} retains actual Publication {} and complete payload proofs on all {} selected targets, including empty histories; detached inspection requires independently retained decision and publication hashes; no active Config/Current, target writer or source release",
@@ -256,7 +255,7 @@ fn run(
         crate::BackupFirstPublicationHash::parse(&retained.publication.publication_hash)?;
     let configured = configuration::inspect(&prepared, &decision, &expected, stop)?;
     choices.observe_first_publication(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationConfigurationResolved;
         status.detail = format!(
             "decision {hash} resolves complete fanout Config {} and exact native registry {} from actual Publication {}; all original voters/data remain, target I/O/Current/writer and source fence release are not installed",
@@ -267,7 +266,7 @@ fn run(
     })?;
     let installed = published_registry::install(&prepared, &decision, &expected, stop)?;
     choices.observe_first_publication(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationRegistryInstalled;
         status.detail = format!(
             "decision {hash} retains exact native registry {} and Config on all {} original targets, with {} branch and {} directory scopes; frozen read view only, ordinary Current/target writer and source fence release remain unavailable",
@@ -279,7 +278,7 @@ fn run(
     })?;
     let serving = serving::install(&prepared, &decision, &expected, stop)?;
     choices.observe_first_publication(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationServingImagesInstalled;
         status.detail = format!(
             "decision {hash} independently installed exact published entity/SQLite/locator images on all {} targets after Publication {}; frozen namespace-bound body reads only, ordinary Current/target writer, final SYSTEM/disk installation and source fence release remain unavailable",
@@ -294,7 +293,7 @@ fn run(
     })?;
     let scopes = published_scopes::install(&prepared, &decision, &expected, stop)?;
     choices.observe_first_publication(&prepared, &candidate, stop)?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationPublishedScopesInstalled;
         status.detail = format!(
             "decision {hash} retains published SYSTEM/current-history scopes and each target's own root databases on all {} targets; old histories remain bound to their own disks, source SYSTEM and original disks are unchanged; ordinary Current/writer and source fence release remain unavailable",
@@ -312,7 +311,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationCommonDatabasesInstalled;
         status.detail = format!(
             "decision {hash} retains common published database set {} at SYSTEM, all {} original disks and every target; immutable generation-local copies only, old active database aliases/Current/writer and source fence remain unchanged",
@@ -331,7 +330,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationCurrentReadAdmitted;
         status.detail = format!(
             "decision {hash} admits read-only Current namespaces on all {} targets against actual Publication and common database set {}; {} readable branch scopes and {} directory scopes, no active Engine Current/writer or source fence release",
@@ -352,7 +351,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationDatabaseAliasesInstalled;
         status.detail = format!(
             "decision {hash} resolves {} exact published database aliases in set {}; generation-local reads only, no ordinary active alias/writer switch or source fence release",
@@ -371,7 +370,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationOrdinaryRootDatabasesInstalled;
         status.detail = format!(
             "decision {hash} installed published current/history pairs at all {} original ordinary disk roots and observed all {} target root pairs in set {}; displaced old files are retained, old catalog access is fenced; SYSTEM alias, active Current/writer and source release remain unavailable",
@@ -392,7 +391,7 @@ fn run(
         &index,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationOrdinarySystemDatabaseInstalled;
         status.detail = format!(
             "decision {hash} installed exact ordinary SYSTEM database {} under selection {}, retaining all {} old main/sidecar files after SQLite quiescence; ordinary query admission, active Current/writer, next publication and source release remain unavailable",
@@ -412,7 +411,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationOrdinaryNativeMetadataInstalled;
         status.detail = format!(
             "decision {hash} installed exact ordinary native set {} with {} objects/{} bytes per disk on all {} original disks and {} selected targets; target Current replay reads actual ordinary objects, but active Config/generation locator, writer, next publication and source release remain unavailable",
@@ -434,7 +433,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationTargetWriterFencesInstalled;
         status.detail = format!(
             "decision {hash} durably bound all {} actual target writer files in set {}; this Engine task retains directory/writer ownership after completion; active selector, disk.json, Current, writer I/O, next publication and source release remain unavailable",
@@ -453,7 +452,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationTargetWriterIoPrepared;
         status.detail = format!(
             "decision {hash} retains actual target-only DiskWriter/gates for {} selected targets in admission {}; bound target aliases use native I/O epochs, but Engine selector, disk.json, Current, next ordinary publication and source release remain unavailable",
@@ -472,7 +471,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationTargetSealsInstalled;
         status.detail = format!(
             "decision {hash} installed and inode-bound exact native disk.json files for all {} targets in set {}; task-local DiskWriter ownership remains, but no active generation selector, Engine Current, next publication, SYSTEM query admission or source release is installed",
@@ -491,7 +490,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationTargetLocatorsInstalled;
         status.detail = format!(
             "decision {hash} installed ordinary native generation locators and independent control archive {} on all {} targets ({} files/{} bytes each), set {}; original selectors/journals, Engine Current, SYSTEM query admission and source release are unchanged",
@@ -513,7 +512,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationOriginalControlInstalled;
         status.detail = format!(
             "decision {hash} installed independent native control on all {} original roots ({} files/{} bytes each), set {}; original first journals retain their exact bytes/inodes; source selectors/seals, Engine Current, SYSTEM admission and source fences remain unchanged",
@@ -534,7 +533,7 @@ fn run(
         &expected,
         stop,
     )?;
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::GenerationOrdinaryServingInstalled;
         status.detail = format!(
             "decision {hash} installed complete ordinary container/SQLite/locator entities under actual target writers on all {} targets, set {}; native readers resolve the exact inode-bound copies; active source selectors, Engine Current, next publication, SYSTEM admission and source fence release remain unavailable",
@@ -557,34 +556,12 @@ fn spawn(
     let mut initial = task.selection().status();
     initial.phase = BackupPreparationPhase::Verifying;
     initial.detail = "recovering only the original native registry/placement task; no resampling or source release".into();
-    let state = Arc::new(Mutex::new(initial));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancel = Arc::clone(&stop);
     let frozen = task.clone();
     let retained_targets = targets
         .iter()
         .map(Target::retain)
         .collect::<Result<Vec<_>>>()?;
-    let thread = std::thread::Builder::new()
-        .name("zxs-backup-registry-decision".into())
-        .spawn(move || {
-            let _locks = locks;
-            if let Err(error) = run(
-                frozen, &system, targets, choices, resources, &progress, &cancel,
-            ) && let Err(persistence) = update(&system, &progress, |status| {
-                status.phase = BackupPreparationPhase::Blocked;
-                status.error_code = Some(error.code());
-                status.detail = error.to_string();
-            }) {
-                progress
-                    .lock()
-                    .expect("invariant: registry diagnostic mutex poisoned")
-                    .detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        })?;
-    let job = task.selection().first().clone();
-    let batch = match task
+    let mut worker = task
         .installation
         .evidence
         .task
@@ -592,16 +569,14 @@ fn spawn(
         .objects
         .native
         .selection
-    {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: retained_targets,
-    })
+        .worker(initial);
+    worker.targets = retained_targets;
+    worker.spawn(
+        locks,
+        system,
+        "zxs-backup-registry-decision",
+        move |progress| {
+            progress.finish(run(frozen, targets, choices, resources, progress));
+        },
+    )
 }

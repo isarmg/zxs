@@ -1,6 +1,5 @@
 //! Persist owner intent before per-target topology input acknowledgements.
 //! There is no membership vote or write-fence release in this preparation step.
-use super::super::super::runtime::update;
 use super::*;
 use crate::engine::backup_preparation::native_control::runtime::Target;
 
@@ -177,12 +176,11 @@ fn require_capacity(
 
 fn run(
     task: &CutoverTask,
-    system: &DiskRoot,
     work: &[Target],
     initial: &BackupCutoverPreparationReport,
-    progress: &Mutex<BackupPreparationStatus>,
-    stop: &AtomicBool,
+    progress: &Progress,
 ) -> Result<()> {
+    let stop = progress.stop.as_ref();
     let intent = task.bytes()?;
     for (index, (target, job)) in work.iter().zip(task.selection().jobs()).enumerate() {
         preparation_checkpoint(stop)?;
@@ -194,7 +192,7 @@ fn run(
         named_target(&target.root, job)?;
         install_preparation_bytes(&target.root, &target.root.path().join(INTENT), &intent)?;
     }
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::Verifying;
         status.detail = "independently checking every selected subtree member before topology input acknowledgement; old authority unchanged".into();
     })?;
@@ -237,7 +235,7 @@ fn run(
     for (target, job) in work.iter().zip(task.selection().jobs()) {
         named_target(&target.root, job)?;
     }
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::CutoverInputsPrepared;
         status.detail = format!(
             "{} explicit whole-unit topology targets acknowledged; full historical DB scopes, active installation, source fence and common authority switch are not implemented",
@@ -257,39 +255,13 @@ fn spawn(
     let mut initial = task.selection().status();
     initial.detail =
         "preparing a complete explicit target subtree; this does not register its disks".into();
-    let state = Arc::new(Mutex::new(initial));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancel = Arc::clone(&stop);
     let frozen = task.clone();
-    let thread = std::thread::Builder::new()
-        .name("zxs-backup-cutover-inputs".into())
-        .spawn(move || {
-            let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, &report, &progress, &cancel)
-                && let Err(persistence) = update(&system, &progress, |status| {
-                    status.phase = BackupPreparationPhase::Blocked;
-                    status.error_code = Some(error.code());
-                    status.detail = error.to_string();
-                })
-            {
-                progress
-                    .lock()
-                    .expect("invariant: cutover diagnostic mutex poisoned")
-                    .detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        })?;
-    let job = task.selection().first().clone();
-    let batch = match task.scoped.objects.native.selection {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
-    })
+    task.scoped.objects.native.selection.worker(initial).spawn(
+        locks,
+        system,
+        "zxs-backup-cutover-inputs",
+        move |progress| {
+            progress.finish(run(&frozen, &work, &report, progress));
+        },
+    )
 }

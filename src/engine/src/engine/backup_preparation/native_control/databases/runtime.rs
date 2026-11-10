@@ -117,31 +117,13 @@ pub(in crate::engine::backup_preparation) fn resume(
     Ok(true)
 }
 
-pub(super) fn update(
-    system: &DiskRoot,
-    progress: &Mutex<BackupPreparationStatus>,
-    action: impl FnOnce(&mut BackupPreparationStatus),
-) -> Result<()> {
-    let mut status = progress
-        .lock()
-        .expect("invariant: database progress poisoned")
-        .clone();
-    action(&mut status);
-    let persisted = system.write_json(&system.path().join(PROGRESS), &status, true);
-    *progress
-        .lock()
-        .expect("invariant: database progress poisoned") = status;
-    persisted
-}
-
 fn run(
     task: &DatabaseTask,
-    system: &DiskRoot,
     work: &[Target],
     native: BackupNativePreparationReport,
-    progress: &Mutex<BackupPreparationStatus>,
-    stop: &AtomicBool,
+    progress: &Progress,
 ) -> Result<()> {
+    let stop = progress.stop.as_ref();
     preparation_checkpoint(stop)?;
     let state = snapshot::read(&work[0].root, task.native.selection.first(), stop)?;
     if object_hash("backup-prepared-state", state.state())? != task.state_hash {
@@ -162,7 +144,7 @@ fn run(
     }
     for (index, (target, job)) in work.iter().zip(task.native.selection.jobs()).enumerate() {
         preparation_checkpoint(stop)?;
-        update(system, progress, |status| {
+        progress.update(|status| {
             status.phase = BackupPreparationPhase::Verifying;
             status.detail = format!(
                 "object SQLite target {}/{}; complete files and nested directory repositories, no authority switch",
@@ -197,7 +179,7 @@ fn run(
     for (target, job) in work.iter().zip(task.native.selection.jobs()) {
         named_target(&target.root, job)?;
     }
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::ObjectDatabasesPrepared;
         status.detail = format!(
             "all {} targets retain {} file and {} directory databases each; SYSTEM/disk historical databases, complete-chain admission and cutover remain unsupported",
@@ -220,39 +202,13 @@ fn spawn(
     initial.detail =
         "preparing all object databases from complete admitted State; active disks unchanged"
             .into();
-    let state = Arc::new(Mutex::new(initial));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancellation = Arc::clone(&stop);
     let frozen = task.clone();
-    let thread = std::thread::Builder::new()
-        .name("zxs-backup-object-databases".into())
-        .spawn(move || {
-            let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, native, &progress, &cancellation)
-                && let Err(persistence) = update(&system, &progress, |status| {
-                    status.phase = BackupPreparationPhase::Blocked;
-                    status.error_code = Some(error.code());
-                    status.detail = error.to_string();
-                })
-            {
-                progress
-                    .lock()
-                    .expect("invariant: database progress poisoned")
-                    .detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        })?;
-    let job = task.native.selection.first().clone();
-    let batch = match task.native.selection {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
-    })
+    task.native.selection.worker(initial).spawn(
+        locks,
+        system,
+        "zxs-backup-object-databases",
+        move |progress| {
+            progress.finish(run(&frozen, &work, native, progress));
+        },
+    )
 }

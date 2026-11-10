@@ -1,6 +1,5 @@
 //! Durable next stage of the same target selection. No new placement, member
 //! identity, source deletion or business publication is created by this worker.
-use super::super::runtime::update;
 use super::*;
 use crate::engine::backup_preparation::native_control::runtime::Target;
 use crate::history_package::{
@@ -130,12 +129,11 @@ pub(in crate::engine::backup_preparation) fn resume(
 
 fn run(
     task: &ScopedTask,
-    system: &DiskRoot,
     work: &[Target],
     objects: BackupObjectDatabasePreparationReport,
-    progress: &Mutex<BackupPreparationStatus>,
-    stop: &AtomicBool,
+    progress: &Progress,
 ) -> Result<()> {
+    let stop = progress.stop.as_ref();
     preparation_checkpoint(stop)?;
     let prepared = PreparedScopes::capture(
         &work[0].root,
@@ -156,7 +154,7 @@ fn run(
         .enumerate()
     {
         preparation_checkpoint(stop)?;
-        update(system, progress, |status| {
+        progress.update(|status| {
             status.phase = BackupPreparationPhase::Verifying;
             status.detail = format!(
                 "original-scope SQLite target {}/{}; not an authority cutover",
@@ -197,7 +195,7 @@ fn run(
     for (target, job) in work.iter().zip(task.objects.native.selection.jobs()) {
         named_target(&target.root, job)?;
     }
-    update(system, progress, |status| {
+    progress.update(|status| {
         status.phase = BackupPreparationPhase::ScopedDatabasesPrepared;
         status.detail = format!(
             "all {} targets retain {} original disk scopes / {} scoped SQLite files each; complete audit, active installation and authority switch remain unsupported",
@@ -219,39 +217,13 @@ fn spawn(
     let mut initial = task.objects.native.selection.status();
     initial.detail =
         "preparing original SYSTEM/disk SQLite scopes; active memberships unchanged".into();
-    let state = Arc::new(Mutex::new(initial));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancellation = Arc::clone(&stop);
     let frozen = task.clone();
-    let thread = std::thread::Builder::new()
-        .name("zxs-backup-scoped-databases".into())
-        .spawn(move || {
-            let _locks = locks;
-            if let Err(error) = run(&frozen, &system, &work, objects, &progress, &cancellation)
-                && let Err(persistence) = update(&system, &progress, |status| {
-                    status.phase = BackupPreparationPhase::Blocked;
-                    status.error_code = Some(error.code());
-                    status.detail = error.to_string();
-                })
-            {
-                progress
-                    .lock()
-                    .expect("invariant: scoped database progress poisoned")
-                    .detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        })?;
-    let job = task.objects.native.selection.first().clone();
-    let batch = match task.objects.native.selection {
-        Selection::Single(_) => None,
-        Selection::Batch(batch) => Some(batch),
-    };
-    Ok(Worker {
-        job,
-        batch,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
-    })
+    task.objects.native.selection.worker(initial).spawn(
+        locks,
+        system,
+        "zxs-backup-scoped-databases",
+        move |progress| {
+            progress.finish(run(&frozen, &work, objects, progress));
+        },
+    )
 }

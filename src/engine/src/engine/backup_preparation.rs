@@ -52,11 +52,13 @@ pub(in crate::engine) use native_control::{
 mod snapshot;
 mod target_resources;
 mod transaction;
+mod worker;
 pub use batch::{BackupPreparationBatchReport, offline_check_backup_preparation_batch};
 pub use inspection::{BackupPreparationReport, offline_check_backup_preparation};
 pub use transaction::{
     BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
 };
+use worker::Progress;
 
 const FORMAT: &str = "zxs-backup-history-preparation";
 const JOB: &str = "backup-preparation/job.json";
@@ -486,14 +488,7 @@ impl Worker {
         status.phase = phase;
         status.error_code = Some(error.code());
         status.detail = error.to_string();
-        Self {
-            job,
-            batch: None,
-            state: Arc::new(Mutex::new(status)),
-            stop: Arc::new(AtomicBool::new(false)),
-            thread: None,
-            targets: Vec::new(),
-        }
+        Self::new(job, None, status)
     }
     fn unavailable_status(&self, detail: &str) -> BackupPreparationStatus {
         let mut status = self
@@ -974,46 +969,25 @@ fn spawn(
     snapshot: snapshot::PreparedSnapshot,
 ) -> Result<Worker> {
     let locks = engine.retain_writer_locks()?;
-    let state = Arc::new(Mutex::new(job.status()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let progress = Arc::clone(&state);
-    let cancellation = Arc::clone(&stop);
-    let frozen = job.clone();
-    let thread = std::thread::Builder::new().name("zxs-backup-preparation".into()).spawn(move || {
-        let _locks = locks; let _target_lock = lock;
-        // Only this worker writes progress while alive; join may close its
-        // diagnostic after termination. Never hold the cache lock across I/O.
-        let update = |action: &dyn Fn(&mut BackupPreparationStatus)| -> Result<()> {
-            let mut snapshot = {
-                let status = progress.lock().expect("invariant: backup status poisoned");
-                status.clone()
-            };
-            action(&mut snapshot);
-            let persisted = system.write_json(&system.path().join(PROGRESS), &snapshot, true);
-            *progress.lock().expect("invariant: backup status poisoned") = snapshot;
-            persisted
-        };
-        let result = execution::copy_target(&frozen, &target, plans, &snapshot, &cancellation, &update)
-            .and_then(|_| update(&|status| {
+    let worker = Worker::new(job.clone(), None, job.status());
+    worker.spawn(locks, system, "zxs-backup-preparation", move |progress| {
+        let _target_lock = lock;
+        let update = |action: &dyn Fn(&mut BackupPreparationStatus)| progress.update(action);
+        let result = execution::copy_target(
+            &job,
+            &target,
+            plans,
+            &snapshot,
+            &progress.stop,
+            &update,
+        )
+        .and_then(|_| {
+            progress.update(|status| {
                 status.phase = BackupPreparationPhase::HistoryPrepared;
                 status.detail = "complete history and published State snapshot verified; control archive/database installation and activation are not implemented".into();
-            }));
-        if let Err(error) = result {
-            let persisted = update(&|status| { status.phase = BackupPreparationPhase::Blocked;
-                status.error_code = Some(error.code()); status.detail = error.to_string(); });
-            if let Err(persistence) = persisted {
-                let mut status = progress.lock().expect("invariant: backup status poisoned");
-                status.detail = format!("{error}; progress persistence failed: {persistence}");
-            }
-        }
-    })?;
-    Ok(Worker {
-        job,
-        batch: None,
-        state,
-        stop,
-        thread: Some(thread),
-        targets: Vec::new(),
+            })
+        });
+        progress.finish(result);
     })
 }
 
