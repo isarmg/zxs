@@ -5,8 +5,9 @@ use super::*;
 use std::collections::BTreeMap;
 use storage_contract::{
     Entry, FileTagTarget, NamespaceEntryKind, NamespaceOperation, NamespaceOperationKind,
+    directory_history::{DirectoryHistoryCollection, DirectoryHistoryRequest},
     file_relocation::{NamespaceEntryId, OBJECT_MOVE_KIND, ObjectMoveFact, ObjectMoveRequest},
-    history_window::HistoryRepositoryId,
+    history_window::{HistoryRepositoryId, HistoryWindowCancellation},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -66,6 +67,7 @@ fn move_to(
     source: &Repository,
     destination: &Destination,
     path: &str,
+    target_path: &str,
 ) -> Repository {
     let request = ObjectMoveRequest {
         source_repository_id: HistoryRepositoryId::parse(&source.repository_id).unwrap(),
@@ -76,7 +78,7 @@ fn move_to(
             .repository
             .as_ref()
             .map(|repository| HistoryRepositoryId::parse(&repository.repository_id).unwrap()),
-        target_path: name_policy::PortablePath::parse("moved").unwrap(),
+        target_path: name_policy::PortablePath::parse(target_path).unwrap(),
         replace: false,
         target_entry_id: None,
     };
@@ -100,7 +102,7 @@ fn move_to(
     let target = engine.state().repositories[fact.target_repository_id.as_str()].clone();
     assert_eq!(target.primary_slot_id, destination.slot);
     assert_eq!(
-        entry(engine, &target, "moved").entry_id,
+        entry(engine, &target, target_path).entry_id,
         fact.target_entry_id.as_str()
     );
     assert!(
@@ -143,7 +145,7 @@ fn empty_directory_moves_to_same_existing_and_empty_disks_as_one_usable_object()
             )
             .unwrap();
         let original = entry(&engine, &source, "empty");
-        let target = move_to(&mut engine, &source, &destination, "empty");
+        let target = move_to(&mut engine, &source, &destination, "empty", "moved");
         let moved = entry(&engine, &target, "moved");
         assert_eq!(moved.kind, NamespaceEntryKind::Directory, "{route:?}");
         if matches!(route, Route::SameDisk) {
@@ -212,7 +214,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         assert!(!before.staged && before.unstaged && before.children[0].dirty);
         assert!(!child_before.staged && child_before.unstaged);
 
-        let target = move_to(&mut engine, &source, &destination, "project");
+        let target = move_to(&mut engine, &source, &destination, "project", "moved");
         assert_eq!(
             bytes(&engine, &target, "moved/owned"),
             b"saved parent",
@@ -230,10 +232,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         );
         let after = status(&engine, &target, "moved");
         let child_after = status(&engine, &target, "moved/child");
-        assert!(
-            !after.staged && after.unstaged && !after.needs_restage,
-            "{route:?}"
-        );
+        assert!(!after.staged && after.unstaged, "{route:?}");
         assert!(!child_after.staged && child_after.unstaged, "{route:?}");
         assert_eq!(after.children.len(), 1);
         assert_eq!(after.children[0].directory_id, child_after.directory_id);
@@ -243,6 +242,30 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             snapshot_files(&engine, after.head_tree_id.as_deref().unwrap()),
             committed
         );
+        // The first explicit commits are roots. Moving them must not turn
+        // those real history nodes into uncommitted working projections.
+        for moved in [&after, &child_after] {
+            let request = DirectoryHistoryRequest::parse(
+                &target.repository_id,
+                &moved.directory_id,
+                DirectoryHistoryCollection::Nodes,
+                BTreeMap::new(),
+            )
+            .unwrap();
+            let read = engine
+                .capture_directory_history(request.clone(), HistoryWindowCancellation::new())
+                .unwrap();
+            let page = read.page().unwrap();
+            engine.recheck_directory_history(&read).unwrap();
+            page.validate(&request).unwrap();
+            assert_eq!(page.current.committed_tree_id, moved.head_tree_id);
+            assert!(
+                page.nodes.iter().any(|node| {
+                    Some(node.tree_id.as_str()) == moved.head_tree_id.as_deref()
+                }),
+                "{route:?}"
+            );
+        }
         let git = &engine.state().directory_git_repositories[&after.directory_id];
         let main = git.main_branch_id.clone();
         let names = git
@@ -271,7 +294,23 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         // A later explicit parent commit includes saved owned files but still
         // pins the child's original commit, not the child's dirty working body.
         let pinned = after.children[0].committed_tree_id.clone().unwrap();
-        let head = commit(&mut engine, &target, "moved");
+        // Moving the root may require a new review of absolute child locations.
+        // Only this explicit staging step may advance that reviewed boundary.
+        stage_owned(&mut engine, &target, "moved");
+        let reviewed = status(&engine, &target, "moved");
+        assert!(reviewed.staged && !reviewed.unstaged && !reviewed.needs_restage);
+        assert_eq!(
+            reviewed.children[0].committed_tree_id.as_deref(),
+            Some(pinned.as_str())
+        );
+        let receipt = commit_reviewed(
+            &mut engine,
+            &target,
+            &reviewed,
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+        let head = receipt.result["head_tree_id"].as_str().unwrap().to_owned();
         let files = snapshot_files(&engine, &head);
         assert_eq!(files["owned"], b"saved parent");
         assert_eq!(files["added"], b"never user committed");
@@ -320,4 +359,66 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
                 .any(|entry| entry.file_id == moved_added.file_id)
         );
     }
+}
+
+#[test]
+fn same_disk_move_refreshes_both_parent_workspaces_without_committing_either() {
+    let (_temp, mut engine, source, destination) = fixture_for(Route::SameDisk);
+    for path in ["a", "a/empty", "b"] {
+        engine
+            .file_namespace(
+                &source.repository_id,
+                NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
+    initialize(&mut engine, &source, "a");
+    initialize(&mut engine, &source, "b");
+    let source_head = commit(&mut engine, &source, "a");
+    let target_head = commit(&mut engine, &source, "b");
+    let parents = ["a", "b"].map(|path| {
+        let status = status(&engine, &source, path);
+        let git = &engine.state().directory_git_repositories[&status.directory_id];
+        (path, status.directory_id, git.branches[&git.main_branch_id].clone())
+    });
+
+    move_to(&mut engine, &source, &destination, "a/empty", "b/moved");
+    for (path, directory, original_index) in &parents {
+        let moved = status(&engine, &source, path);
+        assert!(!moved.staged && moved.unstaged && !moved.needs_restage, "{path}");
+        let git = &engine.state().directory_git_repositories[directory];
+        assert_eq!(&git.branches[&git.main_branch_id], original_index);
+    }
+    assert!(
+        engine
+            .directory_git_main_workspace(&source.repository_id, &parents[0].1)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    let target = engine
+        .directory_git_main_workspace(&source.repository_id, &parents[1].1)
+        .unwrap();
+    assert_eq!(target.entries.len(), 1);
+    assert_eq!(target.entries[0].path(), "b/moved");
+    assert_eq!(
+        engine.state().directory_trees[&source_head].entries[0].path(),
+        "a/empty"
+    );
+    assert!(engine.state().directory_trees[&target_head].entries.is_empty());
+
+    let removed = commit(&mut engine, &source, "a");
+    assert!(engine.state().directory_trees[&removed].entries.is_empty());
+    assert_eq!(
+        status(&engine, &source, "b").head_tree_id.as_deref(),
+        Some(target_head.as_str())
+    );
+    assert!(status(&engine, &source, "b").unstaged);
+    let added = commit(&mut engine, &source, "b");
+    assert_eq!(
+        engine.state().directory_trees[&added].entries[0].path(),
+        "b/moved"
+    );
 }
