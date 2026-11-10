@@ -4,6 +4,8 @@
 
 Axum HTTP 服务、持久会话认证及受保护的 Samba 本机桥接。业务变更经过 `storage-engine::Engine`，HTTP 层不直接修改数据盘内容。错误关联 ID 独立于系统熵，仅提供进程内关联；业务 ID 的熵失败保留来源并映射 500，详见[错误封套](../15-api-and-errors.md#s15-04)。
 
+Engine 错误映射由 `engine_backend/error_registry.rs` 的一份穷尽声明维护当前 224 个错误身份、12 个公开别名与 12 类 HTTP 状态；宏仅生成原 `public_code` 和 `status` 两个编译期穷尽匹配，不添加运行时查表或默认分支。公开信封仍先转换别名再取状态，注销计划等直接状态调用保留原语义；错误来源、诊断脱敏和 retryable 决策不变。独立预期表与全错误码回归位于根 `test/`，新增错误身份必须显式登记策略。
+
 根 `test/contract/entropy/entropy-io.sh` 仅对隔离测试子进程注入 libc `getrandom` 的 EIO（包括部分写入后失败），不修改系统安全设置或正在运行的服务。`.github/scripts/check-entropy-fault-io.py` 从成功 Cargo 构建中选取当次 contract、engine、server libtest，并要求精确测试及完成标记；覆盖错误来源、未发布状态、seal 持久化前拒绝、幂等重放和不依赖熵的 HTTP 错误封套。
 
 默认与无 `core` 构建都依赖 `platform-io` 的 Linux amd64 编译期准入；认证、

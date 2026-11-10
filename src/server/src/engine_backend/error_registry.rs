@@ -1,640 +1,275 @@
-//! Exhaustive engine-to-HTTP policy. Wire spellings live in ErrorCode.
+//! One exhaustive declaration owns engine aliases and raw HTTP status policy.
 use storage_contract::ErrorCode;
 
-#[cfg(test)]
-pub(super) const ALIASES: &[(ErrorCode, ErrorCode)] = &[
-    (ErrorCode::PermissionDenied, ErrorCode::Forbidden),
-    (ErrorCode::Unauthenticated, ErrorCode::Unauthorized),
-    (ErrorCode::FileVersionConflict, ErrorCode::FileConflict),
-    (ErrorCode::BaseHeadMismatch, ErrorCode::HeadConflict),
-    (ErrorCode::FileBusy, ErrorCode::FileWriteBusy),
-    (ErrorCode::FencingTokenInvalid, ErrorCode::Fenced),
-    (ErrorCode::FencingTokenExpired, ErrorCode::LeaseExpired),
-    (ErrorCode::ResourceLimit, ErrorCode::ResourceLimitExceeded),
-    (ErrorCode::RouteIncomplete, ErrorCode::BackupRouteIncomplete),
-    (ErrorCode::InDoubt, ErrorCode::CommitInDoubt),
-    (ErrorCode::GenerationMismatch, ErrorCode::ConfigConflict),
-    (
-        ErrorCode::StaleUploadGeneration,
-        ErrorCode::UploadGenerationConflict,
-    ),
-];
+macro_rules! policies {
+    ($($status:ident { $($code:ident $(=> $public:ident)?),+ $(,)? }),+ $(,)?) => {
+        pub(super) fn public_code(code: ErrorCode) -> ErrorCode {
+            match code {
+                $($(ErrorCode::$code => policies!(@public $code $(=> $public)?),)+)+
+            }
+        }
 
-#[cfg(test)]
-pub(super) const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
-    (ErrorCode::Unauthorized, ::http::StatusCode::UNAUTHORIZED),
-    (ErrorCode::Forbidden, ::http::StatusCode::FORBIDDEN),
-    (ErrorCode::ContentPurged, ::http::StatusCode::GONE),
-    (
-        ErrorCode::HttpPreconditionFailed,
-        ::http::StatusCode::PRECONDITION_FAILED,
-    ),
-    (ErrorCode::NoSpace, ::http::StatusCode::INSUFFICIENT_STORAGE),
-    (
-        ErrorCode::ResourceLimitExceeded,
-        ::http::StatusCode::TOO_MANY_REQUESTS,
-    ),
-    (
-        ErrorCode::QuotaExceeded,
-        ::http::StatusCode::TOO_MANY_REQUESTS,
-    ),
-    (
-        ErrorCode::ContentUnavailable,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::MetadataUnavailable,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::RecoveryRequired,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::ReplicaTargetUnavailable,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::RouteTargetUnavailable,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::CommitInDoubt,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::BackupRouteIncomplete,
-        ::http::StatusCode::SERVICE_UNAVAILABLE,
-    ),
-    (
-        ErrorCode::CommitPreparationBusy,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::CommitPreparationStale,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (ErrorCode::PreparationStale, ::http::StatusCode::CONFLICT),
-    (ErrorCode::HeadConflict, ::http::StatusCode::CONFLICT),
-    (ErrorCode::HistoryChanged, ::http::StatusCode::CONFLICT),
-    (ErrorCode::ListingChanged, ::http::StatusCode::CONFLICT),
-    (ErrorCode::BranchNotActive, ::http::StatusCode::CONFLICT),
-    (ErrorCode::Fenced, ::http::StatusCode::CONFLICT),
-    (ErrorCode::LeaseExpired, ::http::StatusCode::CONFLICT),
-    (
-        ErrorCode::UploadGenerationConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (ErrorCode::FileConflict, ::http::StatusCode::CONFLICT),
-    (ErrorCode::FileBranchConflict, ::http::StatusCode::CONFLICT),
-    (
-        ErrorCode::DirectoryBranchConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::DirectoryAliasConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::BatchMappingConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (ErrorCode::BatchScopeConflict, ::http::StatusCode::CONFLICT),
-    (
-        ErrorCode::IdempotencyKeyReused,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (ErrorCode::SplitPlanStale, ::http::StatusCode::CONFLICT),
-    (
-        ErrorCode::PurgeBlockedByReference,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (ErrorCode::ContentPinned, ::http::StatusCode::CONFLICT),
-    (ErrorCode::ConfigConflict, ::http::StatusCode::CONFLICT),
-    (ErrorCode::BranchWriteBusy, ::http::StatusCode::CONFLICT),
-    (ErrorCode::FileWriteBusy, ::http::StatusCode::CONFLICT),
-    (ErrorCode::NamespaceConflict, ::http::StatusCode::CONFLICT),
-    (ErrorCode::NameCollision, ::http::StatusCode::CONFLICT),
-    (ErrorCode::WorkspaceClosed, ::http::StatusCode::CONFLICT),
-    (ErrorCode::PlanStale, ::http::StatusCode::CONFLICT),
-    (ErrorCode::PlanClosed, ::http::StatusCode::CONFLICT),
-    (ErrorCode::TreeMoved, ::http::StatusCode::CONFLICT),
-    (
-        ErrorCode::RestoreBackupConflict,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::DirectoryBranchIncomplete,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::DirectoryScopeRequired,
-        ::http::StatusCode::CONFLICT,
-    ),
-    (
-        ErrorCode::DirectoryHistorySplitUnsupported,
-        ::http::StatusCode::BAD_REQUEST,
-    ),
-    (
-        ErrorCode::FileNodeHistorySplitUnsupported,
-        ::http::StatusCode::BAD_REQUEST,
-    ),
-    (
-        ErrorCode::IoError,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::DurabilityUnknown,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::StateInvalid,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::InternalError,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::ObjectCorrupt,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::LogCorrupt,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::PublicationInvalid,
-        ::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ),
-    (
-        ErrorCode::OperationUnsupported,
-        ::http::StatusCode::NOT_IMPLEMENTED,
-    ),
-    (
-        ErrorCode::PlanUnsupported,
-        ::http::StatusCode::NOT_IMPLEMENTED,
-    ),
-];
-
-pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
-    match internal {
-        ErrorCode::PermissionDenied => ErrorCode::Forbidden,
-        ErrorCode::Unauthenticated => ErrorCode::Unauthorized,
-        ErrorCode::FileVersionConflict => ErrorCode::FileConflict,
-        ErrorCode::BaseHeadMismatch => ErrorCode::HeadConflict,
-        ErrorCode::FileBusy => ErrorCode::FileWriteBusy,
-        ErrorCode::FencingTokenInvalid => ErrorCode::Fenced,
-        ErrorCode::FencingTokenExpired => ErrorCode::LeaseExpired,
-        ErrorCode::ResourceLimit => ErrorCode::ResourceLimitExceeded,
-        ErrorCode::RouteIncomplete => ErrorCode::BackupRouteIncomplete,
-        ErrorCode::InDoubt => ErrorCode::CommitInDoubt,
-        ErrorCode::GenerationMismatch => ErrorCode::ConfigConflict,
-        ErrorCode::StaleUploadGeneration => ErrorCode::UploadGenerationConflict,
-        ErrorCode::AlreadyInitialized
-        | ErrorCode::AuthorityRecoveryRequired
-        | ErrorCode::AuthAlreadyInitialized
-        | ErrorCode::AuthRecoveryRequired
-        | ErrorCode::AuthStateInvalid
-        | ErrorCode::AuthStoreBusy
-        | ErrorCode::BackupConfigurationRequired
-        | ErrorCode::BackupPathConflict
-        | ErrorCode::BackupPrefixRequired
-        | ErrorCode::BackupRouteIncomplete
-        | ErrorCode::BatchMappingConflict
-        | ErrorCode::BatchScopeConflict
-        | ErrorCode::BootstrapExpired
-        | ErrorCode::BranchArchived
-        | ErrorCode::BranchNotActive
-        | ErrorCode::BranchNotFound
-        | ErrorCode::BranchWriteBusy
-        | ErrorCode::CheckpointInvalid
-        | ErrorCode::ChecksumFormatInvalid
-        | ErrorCode::ChecksumMismatch
-        | ErrorCode::CommitInDoubt
-        | ErrorCode::CommitNotFound
-        | ErrorCode::CommitPreparationBusy
-        | ErrorCode::CommitPreparationStale
-        | ErrorCode::ConfigConflict
-        | ErrorCode::ConfigInvalid
-        | ErrorCode::ContainerAmbiguous
-        | ErrorCode::ContainerLayoutInvalid
-        | ErrorCode::ContentCorrupt
-        | ErrorCode::ContentMissing
-        | ErrorCode::ContentPinned
-        | ErrorCode::ContentPurged
-        | ErrorCode::ContentUnavailable
-        | ErrorCode::CurrentPasswordInvalid
-        | ErrorCode::DestinationExists
-        | ErrorCode::DirectoryAliasConflict
-        | ErrorCode::DirectoryBranchConflict
-        | ErrorCode::DirectoryBranchIncomplete
-        | ErrorCode::DirectoryBranchNotFound
-        | ErrorCode::DirectoryBranchScope
-        | ErrorCode::DirectoryHistorySplitUnsupported
-        | ErrorCode::DirectoryNotEmpty
-        | ErrorCode::DirectoryNotFound
-        | ErrorCode::DirectoryScopeRequired
-        | ErrorCode::DiskAlreadyEnrolled
-        | ErrorCode::DiskChanged
-        | ErrorCode::DiskIdentityMismatch
-        | ErrorCode::DiskNotFound
-        | ErrorCode::DiskReadOnly
-        | ErrorCode::DiskSampleUnavailable
-        | ErrorCode::DiskUnavailable
-        | ErrorCode::DurabilityUnknown
-        | ErrorCode::EntryNotFound
-        | ErrorCode::Fenced
-        | ErrorCode::FileBranchConflict
-        | ErrorCode::FileBranchNotFound
-        | ErrorCode::FileBranchRequired
-        | ErrorCode::FileBranchScope
-        | ErrorCode::FileBranchSelected
-        | ErrorCode::FileConflict
-        | ErrorCode::FileHistorySplitUnsupported
-        | ErrorCode::FileNodeHistorySplitUnsupported
-        | ErrorCode::FileNodeNotFound
-        | ErrorCode::FileNotFound
-        | ErrorCode::FileTooLarge
-        | ErrorCode::FileWriteBusy
-        | ErrorCode::Forbidden
-        | ErrorCode::FormatUnsupported
-        | ErrorCode::HeadConflict
-        | ErrorCode::HistoryChanged
-        | ErrorCode::HistoricalSaveRequiresBranch
-        | ErrorCode::HistoryMismatch
-        | ErrorCode::HistoryNodeNotFound
-        | ErrorCode::HistoryNotFound
-        | ErrorCode::HistoryPackageInvalid
-        | ErrorCode::HttpError
-        | ErrorCode::HttpPreconditionFailed
-        | ErrorCode::HttpUploadsPending
-        | ErrorCode::HttpUploadsUnavailable
-        | ErrorCode::IdempotencyKeyReused
-        | ErrorCode::IndexRebuildFailed
-        | ErrorCode::InjectedFailure
-        | ErrorCode::InternalError
-        | ErrorCode::InvalidAdminResponse
-        | ErrorCode::InvalidApiPath
-        | ErrorCode::InvalidBackupPrefix
-        | ErrorCode::InvalidCursor
-        | ErrorCode::InvalidDirectoryPage
-        | ErrorCode::InvalidDiskList
-        | ErrorCode::InvalidId
-        | ErrorCode::InvalidInteger
-        | ErrorCode::InvalidJson
-        | ErrorCode::InvalidMove
-        | ErrorCode::InvalidObjectType
-        | ErrorCode::InvalidRequest
-        | ErrorCode::InvalidResponse
-        | ErrorCode::InvalidSession
-        | ErrorCode::InvalidSetupRequest
-        | ErrorCode::InvalidSlotId
-        | ErrorCode::InvalidTag
-        | ErrorCode::IoError
-        | ErrorCode::IsDirectory
-        | ErrorCode::ItemNotFound
-        | ErrorCode::ItemPathMismatch
-        | ErrorCode::LeaseExpired
-        | ErrorCode::ListingChanged
-        | ErrorCode::LogCorrupt
-        | ErrorCode::LogFork
-        | ErrorCode::LogFormatUnsupported
-        | ErrorCode::MainBranchRequired
-        | ErrorCode::MergeEndpointMismatch
-        | ErrorCode::MetadataQuorumUnavailable
-        | ErrorCode::MetadataTooLong
-        | ErrorCode::MetadataUnavailable
-        | ErrorCode::MethodNotAllowed
-        | ErrorCode::MonitorUnavailable
-        | ErrorCode::NamespaceConflict
-        | ErrorCode::NameCollision
-        | ErrorCode::NameConflict
-        | ErrorCode::NameInvalidCharacter
-        | ErrorCode::NameNotNormalized
-        | ErrorCode::NameReserved
-        | ErrorCode::NameTooLong
-        | ErrorCode::NotDirectory
-        | ErrorCode::NotFound
-        | ErrorCode::NoSpace
-        | ErrorCode::NoWindow
-        | ErrorCode::ObjectCollision
-        | ErrorCode::ObjectCorrupt
-        | ErrorCode::OfflineConfigurationRequired
-        | ErrorCode::OperationAborted
-        | ErrorCode::OperationIdConflict
-        | ErrorCode::OperationNotFound
-        | ErrorCode::OperationUnsupported
-        | ErrorCode::ParentNotDirectory
-        | ErrorCode::PathInvalid
-        | ErrorCode::PathTooDeep
-        | ErrorCode::PayloadTooLarge
-        | ErrorCode::PermanentLossNotAcknowledged
-        | ErrorCode::PlacementInvalid
-        | ErrorCode::PlacementNotFound
-        | ErrorCode::PlanClosed
-        | ErrorCode::PlanInvalid
-        | ErrorCode::PlanNotFound
-        | ErrorCode::PlanStale
-        | ErrorCode::PlanUnsupported
-        | ErrorCode::PreparationStale
-        | ErrorCode::PublicationInvalid
-        | ErrorCode::PurgeBlockedByReference
-        | ErrorCode::QuotaExceeded
-        | ErrorCode::RangeNotSatisfiable
-        | ErrorCode::RecoveryPlanNotFound
-        | ErrorCode::RecoveryRequired
-        | ErrorCode::RecoveryWorkerFailed
-        | ErrorCode::ReplicaTargetUnavailable
-        | ErrorCode::RepositoryNotFound
-        | ErrorCode::RequestBindingMismatch
-        | ErrorCode::RequestDigestMismatch
-        | ErrorCode::RequestTimeout
-        | ErrorCode::ResourceLimitExceeded
-        | ErrorCode::ResponseTooLarge
-        | ErrorCode::RestoreBackupConflict
-        | ErrorCode::RouteTargetUnavailable
-        | ErrorCode::SaveModeUnsupported
-        | ErrorCode::ScopeChanged
-        | ErrorCode::SealedManifestMismatch
-        | ErrorCode::ServiceStopping
-        | ErrorCode::SessionChanged
-        | ErrorCode::SetupBusy
-        | ErrorCode::SetupContentChanged
-        | ErrorCode::SetupPresetChanged
-        | ErrorCode::SetupProofInvalid
-        | ErrorCode::SlotNotFound
-        | ErrorCode::SmbRebindRequired
-        | ErrorCode::SmbSpoolUnavailable
-        | ErrorCode::SmbUnavailable
-        | ErrorCode::SourceChanged
-        | ErrorCode::SplitInvalid
-        | ErrorCode::SplitPlanStale
-        | ErrorCode::SplitRootForbidden
-        | ErrorCode::StateInvalid
-        | ErrorCode::StorageActive
-        | ErrorCode::StorageDraining
-        | ErrorCode::StorageRetryRunning
-        | ErrorCode::StorageUnavailable
-        | ErrorCode::SystemAuthRequired
-        | ErrorCode::SystemRootChanged
-        | ErrorCode::TagLimitExceeded
-        | ErrorCode::TombstoneInvalid
-        | ErrorCode::TopologyGenerationMismatch
-        | ErrorCode::TopologyInvalid
-        | ErrorCode::TransferTimeout
-        | ErrorCode::TransportError
-        | ErrorCode::TreeMoved
-        | ErrorCode::Unauthorized
-        | ErrorCode::UnsafePath
-        | ErrorCode::UnsupportedMediaType
-        | ErrorCode::UnsupportedOperation
-        | ErrorCode::UploadGenerationConflict
-        | ErrorCode::UploadIncomplete
-        | ErrorCode::UploadRangeConflict
-        | ErrorCode::UploadStateInvalid
-        | ErrorCode::VersionNotFound
-        | ErrorCode::WebAssetsUnavailable
-        | ErrorCode::WorkspaceBusy
-        | ErrorCode::WorkspaceChanged
-        | ErrorCode::WorkspaceClosed
-        | ErrorCode::WorkspaceDependencyBusy
-        | ErrorCode::WorkspaceNotFound
-        | ErrorCode::WorkspaceNotSealed
-        | ErrorCode::WorkspaceRebaseRequired
-        | ErrorCode::WriterAlreadyActive => internal,
-    }
+        pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
+            match code {
+                $($(ErrorCode::$code)|+ => ::http::StatusCode::$status,)+
+            }
+        }
+    };
+    (@public $code:ident => $public:ident) => { ErrorCode::$public };
+    (@public $code:ident) => { ErrorCode::$code };
 }
 
-pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
-    match code {
-        ErrorCode::AlreadyInitialized
-        | ErrorCode::AuthorityRecoveryRequired
-        | ErrorCode::AuthAlreadyInitialized
-        | ErrorCode::AuthRecoveryRequired
-        | ErrorCode::AuthStateInvalid
-        | ErrorCode::AuthStoreBusy
-        | ErrorCode::BackupConfigurationRequired
-        | ErrorCode::BackupPathConflict
-        | ErrorCode::BackupPrefixRequired
-        | ErrorCode::BaseHeadMismatch
-        | ErrorCode::BootstrapExpired
-        | ErrorCode::BranchArchived
-        | ErrorCode::CheckpointInvalid
-        | ErrorCode::ChecksumFormatInvalid
-        | ErrorCode::ChecksumMismatch
-        | ErrorCode::ConfigInvalid
-        | ErrorCode::ContainerAmbiguous
-        | ErrorCode::ContainerLayoutInvalid
-        | ErrorCode::ContentCorrupt
-        | ErrorCode::ContentMissing
-        | ErrorCode::CurrentPasswordInvalid
-        | ErrorCode::DestinationExists
-        | ErrorCode::DirectoryBranchScope
-        | ErrorCode::DirectoryHistorySplitUnsupported
-        | ErrorCode::DirectoryNotEmpty
-        | ErrorCode::DiskAlreadyEnrolled
-        | ErrorCode::DiskChanged
-        | ErrorCode::DiskIdentityMismatch
-        | ErrorCode::DiskReadOnly
-        | ErrorCode::DiskSampleUnavailable
-        | ErrorCode::DiskUnavailable
-        | ErrorCode::FencingTokenExpired
-        | ErrorCode::FencingTokenInvalid
-        | ErrorCode::FileBranchRequired
-        | ErrorCode::FileBranchScope
-        | ErrorCode::FileBranchSelected
-        | ErrorCode::FileBusy
-        | ErrorCode::FileHistorySplitUnsupported
-        | ErrorCode::FileNodeHistorySplitUnsupported
-        | ErrorCode::FileTooLarge
-        | ErrorCode::FileVersionConflict
-        | ErrorCode::FormatUnsupported
-        | ErrorCode::GenerationMismatch
-        | ErrorCode::HistoricalSaveRequiresBranch
-        | ErrorCode::HistoryMismatch
-        | ErrorCode::HistoryPackageInvalid
-        | ErrorCode::HttpError
-        | ErrorCode::HttpUploadsPending
-        | ErrorCode::HttpUploadsUnavailable
-        | ErrorCode::IndexRebuildFailed
-        | ErrorCode::InjectedFailure
-        | ErrorCode::InvalidAdminResponse
-        | ErrorCode::InvalidApiPath
-        | ErrorCode::InvalidBackupPrefix
-        | ErrorCode::InvalidCursor
-        | ErrorCode::InvalidDirectoryPage
-        | ErrorCode::InvalidDiskList
-        | ErrorCode::InvalidId
-        | ErrorCode::InvalidInteger
-        | ErrorCode::InvalidJson
-        | ErrorCode::InvalidMove
-        | ErrorCode::InvalidObjectType
-        | ErrorCode::InvalidRequest
-        | ErrorCode::InvalidResponse
-        | ErrorCode::InvalidSession
-        | ErrorCode::InvalidSetupRequest
-        | ErrorCode::InvalidSlotId
-        | ErrorCode::InvalidTag
-        | ErrorCode::InDoubt
-        | ErrorCode::IsDirectory
-        | ErrorCode::ItemPathMismatch
-        | ErrorCode::LogFork
-        | ErrorCode::LogFormatUnsupported
-        | ErrorCode::MainBranchRequired
-        | ErrorCode::MergeEndpointMismatch
-        | ErrorCode::MetadataQuorumUnavailable
-        | ErrorCode::MetadataTooLong
-        | ErrorCode::MethodNotAllowed
-        | ErrorCode::MonitorUnavailable
-        | ErrorCode::NameConflict
-        | ErrorCode::NameInvalidCharacter
-        | ErrorCode::NameNotNormalized
-        | ErrorCode::NameReserved
-        | ErrorCode::NameTooLong
-        | ErrorCode::NotDirectory
-        | ErrorCode::NoWindow
-        | ErrorCode::ObjectCollision
-        | ErrorCode::OfflineConfigurationRequired
-        | ErrorCode::OperationAborted
-        | ErrorCode::OperationIdConflict
-        | ErrorCode::ParentNotDirectory
-        | ErrorCode::PathInvalid
-        | ErrorCode::PathTooDeep
-        | ErrorCode::PayloadTooLarge
-        | ErrorCode::PermanentLossNotAcknowledged
-        | ErrorCode::PermissionDenied
-        | ErrorCode::PlacementInvalid
-        | ErrorCode::PlanInvalid
-        | ErrorCode::RangeNotSatisfiable
-        | ErrorCode::RecoveryWorkerFailed
-        | ErrorCode::RequestBindingMismatch
-        | ErrorCode::RequestDigestMismatch
-        | ErrorCode::RequestTimeout
-        | ErrorCode::ResourceLimit
-        | ErrorCode::ResponseTooLarge
-        | ErrorCode::RouteIncomplete
-        | ErrorCode::SaveModeUnsupported
-        | ErrorCode::ScopeChanged
-        | ErrorCode::SealedManifestMismatch
-        | ErrorCode::ServiceStopping
-        | ErrorCode::SessionChanged
-        | ErrorCode::SetupBusy
-        | ErrorCode::SetupContentChanged
-        | ErrorCode::SetupPresetChanged
-        | ErrorCode::SetupProofInvalid
-        | ErrorCode::SmbRebindRequired
-        | ErrorCode::SmbSpoolUnavailable
-        | ErrorCode::SmbUnavailable
-        | ErrorCode::SourceChanged
-        | ErrorCode::SplitInvalid
-        | ErrorCode::SplitRootForbidden
-        | ErrorCode::StaleUploadGeneration
-        | ErrorCode::StorageActive
-        | ErrorCode::StorageDraining
-        | ErrorCode::StorageRetryRunning
-        | ErrorCode::StorageUnavailable
-        | ErrorCode::SystemAuthRequired
-        | ErrorCode::SystemRootChanged
-        | ErrorCode::TagLimitExceeded
-        | ErrorCode::TombstoneInvalid
-        | ErrorCode::TopologyGenerationMismatch
-        | ErrorCode::TopologyInvalid
-        | ErrorCode::TransferTimeout
-        | ErrorCode::TransportError
-        | ErrorCode::Unauthenticated
-        | ErrorCode::UnsafePath
-        | ErrorCode::UnsupportedMediaType
-        | ErrorCode::UnsupportedOperation
-        | ErrorCode::UploadIncomplete
-        | ErrorCode::UploadRangeConflict
-        | ErrorCode::UploadStateInvalid
-        | ErrorCode::WebAssetsUnavailable
-        | ErrorCode::WorkspaceBusy
-        | ErrorCode::WorkspaceChanged
-        | ErrorCode::WorkspaceDependencyBusy
-        | ErrorCode::WorkspaceNotSealed
-        | ErrorCode::WorkspaceRebaseRequired
-        | ErrorCode::WriterAlreadyActive => ::http::StatusCode::BAD_REQUEST,
-        ErrorCode::Unauthorized => ::http::StatusCode::UNAUTHORIZED,
-        ErrorCode::Forbidden => ::http::StatusCode::FORBIDDEN,
-        ErrorCode::BranchNotFound
-        | ErrorCode::CommitNotFound
-        | ErrorCode::DirectoryBranchNotFound
-        | ErrorCode::DirectoryNotFound
-        | ErrorCode::DiskNotFound
-        | ErrorCode::EntryNotFound
-        | ErrorCode::FileBranchNotFound
-        | ErrorCode::FileNodeNotFound
-        | ErrorCode::FileNotFound
-        | ErrorCode::HistoryNodeNotFound
-        | ErrorCode::HistoryNotFound
-        | ErrorCode::ItemNotFound
-        | ErrorCode::NotFound
-        | ErrorCode::OperationNotFound
-        | ErrorCode::PlacementNotFound
-        | ErrorCode::PlanNotFound
-        | ErrorCode::RecoveryPlanNotFound
-        | ErrorCode::RepositoryNotFound
-        | ErrorCode::SlotNotFound
-        | ErrorCode::VersionNotFound
-        | ErrorCode::WorkspaceNotFound => ::http::StatusCode::NOT_FOUND,
-        ErrorCode::BatchMappingConflict
-        | ErrorCode::BatchScopeConflict
-        | ErrorCode::BranchNotActive
-        | ErrorCode::BranchWriteBusy
-        | ErrorCode::CommitPreparationBusy
-        | ErrorCode::CommitPreparationStale
-        | ErrorCode::ConfigConflict
-        | ErrorCode::ContentPinned
-        | ErrorCode::DirectoryAliasConflict
-        | ErrorCode::DirectoryBranchConflict
-        | ErrorCode::DirectoryBranchIncomplete
-        | ErrorCode::DirectoryScopeRequired
-        | ErrorCode::Fenced
-        | ErrorCode::FileBranchConflict
-        | ErrorCode::FileConflict
-        | ErrorCode::FileWriteBusy
-        | ErrorCode::HeadConflict
-        | ErrorCode::HistoryChanged
-        | ErrorCode::IdempotencyKeyReused
-        | ErrorCode::LeaseExpired
-        | ErrorCode::ListingChanged
-        | ErrorCode::NamespaceConflict
-        | ErrorCode::NameCollision
-        | ErrorCode::PlanClosed
-        | ErrorCode::PlanStale
-        | ErrorCode::PreparationStale
-        | ErrorCode::PurgeBlockedByReference
-        | ErrorCode::RestoreBackupConflict
-        | ErrorCode::SplitPlanStale
-        | ErrorCode::TreeMoved
-        | ErrorCode::UploadGenerationConflict
-        | ErrorCode::WorkspaceClosed => ::http::StatusCode::CONFLICT,
-        ErrorCode::ContentPurged => ::http::StatusCode::GONE,
-        ErrorCode::HttpPreconditionFailed => ::http::StatusCode::PRECONDITION_FAILED,
-        ErrorCode::QuotaExceeded | ErrorCode::ResourceLimitExceeded => {
-            ::http::StatusCode::TOO_MANY_REQUESTS
-        }
-        ErrorCode::DurabilityUnknown
-        | ErrorCode::InternalError
-        | ErrorCode::IoError
-        | ErrorCode::LogCorrupt
-        | ErrorCode::ObjectCorrupt
-        | ErrorCode::PublicationInvalid
-        | ErrorCode::StateInvalid => ::http::StatusCode::INTERNAL_SERVER_ERROR,
-        ErrorCode::OperationUnsupported | ErrorCode::PlanUnsupported => {
-            ::http::StatusCode::NOT_IMPLEMENTED
-        }
-        ErrorCode::BackupRouteIncomplete
-        | ErrorCode::CommitInDoubt
-        | ErrorCode::ContentUnavailable
-        | ErrorCode::MetadataUnavailable
-        | ErrorCode::RecoveryRequired
-        | ErrorCode::ReplicaTargetUnavailable
-        | ErrorCode::RouteTargetUnavailable => ::http::StatusCode::SERVICE_UNAVAILABLE,
-        ErrorCode::NoSpace => ::http::StatusCode::INSUFFICIENT_STORAGE,
-    }
+// Aliases keep their raw status here. The wire adapter first selects the public
+// identity, then its status; direct status callers retain their existing policy.
+policies! {
+    BAD_REQUEST {
+        AlreadyInitialized,
+        AuthorityRecoveryRequired,
+        AuthAlreadyInitialized,
+        AuthRecoveryRequired,
+        AuthStateInvalid,
+        AuthStoreBusy,
+        BackupConfigurationRequired,
+        BackupPathConflict,
+        BackupPrefixRequired,
+        BaseHeadMismatch => HeadConflict,
+        BootstrapExpired,
+        BranchArchived,
+        CheckpointInvalid,
+        ChecksumFormatInvalid,
+        ChecksumMismatch,
+        ConfigInvalid,
+        ContainerAmbiguous,
+        ContainerLayoutInvalid,
+        ContentCorrupt,
+        ContentMissing,
+        CurrentPasswordInvalid,
+        DestinationExists,
+        DirectoryBranchScope,
+        DirectoryHistorySplitUnsupported,
+        DirectoryNotEmpty,
+        DiskAlreadyEnrolled,
+        DiskChanged,
+        DiskIdentityMismatch,
+        DiskReadOnly,
+        DiskSampleUnavailable,
+        DiskUnavailable,
+        FencingTokenExpired => LeaseExpired,
+        FencingTokenInvalid => Fenced,
+        FileBranchRequired,
+        FileBranchScope,
+        FileBranchSelected,
+        FileBusy => FileWriteBusy,
+        FileHistorySplitUnsupported,
+        FileNodeHistorySplitUnsupported,
+        FileTooLarge,
+        FileVersionConflict => FileConflict,
+        FormatUnsupported,
+        GenerationMismatch => ConfigConflict,
+        HistoricalSaveRequiresBranch,
+        HistoryMismatch,
+        HistoryPackageInvalid,
+        HttpError,
+        HttpUploadsPending,
+        HttpUploadsUnavailable,
+        IndexRebuildFailed,
+        InjectedFailure,
+        InvalidAdminResponse,
+        InvalidApiPath,
+        InvalidBackupPrefix,
+        InvalidCursor,
+        InvalidDirectoryPage,
+        InvalidDiskList,
+        InvalidId,
+        InvalidInteger,
+        InvalidJson,
+        InvalidMove,
+        InvalidObjectType,
+        InvalidRequest,
+        InvalidResponse,
+        InvalidSession,
+        InvalidSetupRequest,
+        InvalidSlotId,
+        InvalidTag,
+        InDoubt => CommitInDoubt,
+        IsDirectory,
+        ItemPathMismatch,
+        LogFork,
+        LogFormatUnsupported,
+        MainBranchRequired,
+        MergeEndpointMismatch,
+        MetadataQuorumUnavailable,
+        MetadataTooLong,
+        MethodNotAllowed,
+        MonitorUnavailable,
+        NameConflict,
+        NameInvalidCharacter,
+        NameNotNormalized,
+        NameReserved,
+        NameTooLong,
+        NotDirectory,
+        NoWindow,
+        ObjectCollision,
+        OfflineConfigurationRequired,
+        OperationAborted,
+        OperationIdConflict,
+        ParentNotDirectory,
+        PathInvalid,
+        PathTooDeep,
+        PayloadTooLarge,
+        PermanentLossNotAcknowledged,
+        PermissionDenied => Forbidden,
+        PlacementInvalid,
+        PlanInvalid,
+        RangeNotSatisfiable,
+        RecoveryWorkerFailed,
+        RequestBindingMismatch,
+        RequestDigestMismatch,
+        RequestTimeout,
+        ResourceLimit => ResourceLimitExceeded,
+        ResponseTooLarge,
+        RouteIncomplete => BackupRouteIncomplete,
+        SaveModeUnsupported,
+        ScopeChanged,
+        SealedManifestMismatch,
+        ServiceStopping,
+        SessionChanged,
+        SetupBusy,
+        SetupContentChanged,
+        SetupPresetChanged,
+        SetupProofInvalid,
+        SmbRebindRequired,
+        SmbSpoolUnavailable,
+        SmbUnavailable,
+        SourceChanged,
+        SplitInvalid,
+        SplitRootForbidden,
+        StaleUploadGeneration => UploadGenerationConflict,
+        StorageActive,
+        StorageDraining,
+        StorageRetryRunning,
+        StorageUnavailable,
+        SystemAuthRequired,
+        SystemRootChanged,
+        TagLimitExceeded,
+        TombstoneInvalid,
+        TopologyGenerationMismatch,
+        TopologyInvalid,
+        TransferTimeout,
+        TransportError,
+        Unauthenticated => Unauthorized,
+        UnsafePath,
+        UnsupportedMediaType,
+        UnsupportedOperation,
+        UploadIncomplete,
+        UploadRangeConflict,
+        UploadStateInvalid,
+        WebAssetsUnavailable,
+        WorkspaceBusy,
+        WorkspaceChanged,
+        WorkspaceDependencyBusy,
+        WorkspaceNotSealed,
+        WorkspaceRebaseRequired,
+        WriterAlreadyActive,
+    },
+    UNAUTHORIZED {
+        Unauthorized,
+    },
+    FORBIDDEN {
+        Forbidden,
+    },
+    NOT_FOUND {
+        BranchNotFound,
+        CommitNotFound,
+        DirectoryBranchNotFound,
+        DirectoryNotFound,
+        DiskNotFound,
+        EntryNotFound,
+        FileBranchNotFound,
+        FileNodeNotFound,
+        FileNotFound,
+        HistoryNodeNotFound,
+        HistoryNotFound,
+        ItemNotFound,
+        NotFound,
+        OperationNotFound,
+        PlacementNotFound,
+        PlanNotFound,
+        RecoveryPlanNotFound,
+        RepositoryNotFound,
+        SlotNotFound,
+        VersionNotFound,
+        WorkspaceNotFound,
+    },
+    CONFLICT {
+        BatchMappingConflict,
+        BatchScopeConflict,
+        BranchNotActive,
+        BranchWriteBusy,
+        CommitPreparationBusy,
+        CommitPreparationStale,
+        ConfigConflict,
+        ContentPinned,
+        DirectoryAliasConflict,
+        DirectoryBranchConflict,
+        DirectoryBranchIncomplete,
+        DirectoryScopeRequired,
+        Fenced,
+        FileBranchConflict,
+        FileConflict,
+        FileWriteBusy,
+        HeadConflict,
+        HistoryChanged,
+        IdempotencyKeyReused,
+        LeaseExpired,
+        ListingChanged,
+        NamespaceConflict,
+        NameCollision,
+        PlanClosed,
+        PlanStale,
+        PreparationStale,
+        PurgeBlockedByReference,
+        RestoreBackupConflict,
+        SplitPlanStale,
+        TreeMoved,
+        UploadGenerationConflict,
+        WorkspaceClosed,
+    },
+    GONE {
+        ContentPurged,
+    },
+    PRECONDITION_FAILED {
+        HttpPreconditionFailed,
+    },
+    TOO_MANY_REQUESTS {
+        QuotaExceeded,
+        ResourceLimitExceeded,
+    },
+    INTERNAL_SERVER_ERROR {
+        DurabilityUnknown,
+        InternalError,
+        IoError,
+        LogCorrupt,
+        ObjectCorrupt,
+        PublicationInvalid,
+        StateInvalid,
+    },
+    NOT_IMPLEMENTED {
+        OperationUnsupported,
+        PlanUnsupported,
+    },
+    SERVICE_UNAVAILABLE {
+        BackupRouteIncomplete,
+        CommitInDoubt,
+        ContentUnavailable,
+        MetadataUnavailable,
+        RecoveryRequired,
+        ReplicaTargetUnavailable,
+        RouteTargetUnavailable,
+    },
+    INSUFFICIENT_STORAGE {
+        NoSpace,
+    },
 }
 
 #[cfg(test)]
