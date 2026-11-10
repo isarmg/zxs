@@ -651,7 +651,7 @@ fn parent_checkout_retains_ordinary_ancestors_of_a_new_nested_child_repository()
 #[test]
 fn parent_checkout_rejects_replacing_a_live_child_ancestor_identity() {
     for ancestor_was_directory in [false, true] {
-        let (_temp, mut engine, repo) = fixture();
+        let (temp, mut engine, repo) = fixture();
         save(
             &mut engine,
             &repo,
@@ -677,17 +677,20 @@ fn parent_checkout_rejects_replacing_a_live_child_ancestor_identity() {
             .as_str()
             .unwrap()
             .to_owned();
+        let old_ancestor = engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("ordinary")
+            .unwrap()
+            .entry_id
+            .clone();
         engine
             .file_namespace(
                 &repo.repository_id,
                 NamespaceOperation::parse(
-                    if ancestor_was_directory {
-                        NamespaceOperationKind::DeleteTree
-                    } else {
-                        NamespaceOperationKind::Delete
-                    },
+                    NamespaceOperationKind::Rename,
                     "ordinary",
-                    None,
+                    Some("retained"),
                 )
                 .unwrap(),
                 "admin",
@@ -700,6 +703,24 @@ fn parent_checkout_rejects_replacing_a_live_child_ancestor_identity() {
             "ordinary/child/file",
             b"preserved child",
         );
+        assert_ne!(
+            engine
+                .namespace_tree(&repo.main_branch_id)
+                .unwrap()
+                .get("ordinary")
+                .unwrap()
+                .entry_id,
+            old_ancestor
+        );
+        assert_eq!(
+            engine
+                .namespace_tree(&repo.main_branch_id)
+                .unwrap()
+                .get("retained")
+                .unwrap()
+                .entry_id,
+            old_ancestor
+        );
         initialize(&mut engine, &repo, "ordinary/child");
         commit(&mut engine, &repo, "ordinary/child");
         stage_owned(&mut engine, &repo, "");
@@ -711,8 +732,32 @@ fn parent_checkout_rejects_replacing_a_live_child_ancestor_identity() {
             .select_default_directory_branch(&repo.repository_id, &old, "admin", operation)
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::DirectoryBranchConflict);
+        assert!(
+            error
+                .to_string()
+                .contains("checkout would replace an ancestor of an independent child repository")
+        );
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
         assert!(!engine.state.operations.contains_key(&operation));
+        assert_eq!(
+            bytes(&engine, &repo, "ordinary/child/file"),
+            b"preserved child"
+        );
+        assert_eq!(
+            bytes(
+                &engine,
+                &repo,
+                if ancestor_was_directory {
+                    "retained/old"
+                } else {
+                    "retained"
+                },
+            ),
+            b"old ancestor"
+        );
+        drop(engine);
+        let engine = Engine::open(&temp.path().join("system")).unwrap();
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
         assert_eq!(
             bytes(&engine, &repo, "ordinary/child/file"),
             b"preserved child"
