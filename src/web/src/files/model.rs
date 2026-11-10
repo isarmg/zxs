@@ -256,6 +256,13 @@ impl Model {
         }
     }
 }
+#[derive(Clone)]
+pub(crate) enum NoteTarget {
+    File,
+    Version(String),
+    Node(String),
+}
+
 pub(crate) use storage_contract::client_protocol::OperationStatus as SaveStatus;
 
 /// An operation observation, not a receipt or an authorization grant.

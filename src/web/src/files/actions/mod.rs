@@ -22,8 +22,7 @@ pub(crate) use browse::{
 pub(crate) use mutation::{
     commit_directory, create_branch, directory_branch, initialize_directory_git, record_failure,
     rename_directory_branch, rename_file_branch, select_branch, select_default_branch,
-    set_default_file_branch, stage_directory_child, stage_directory_owned, update_node_note,
-    update_note,
+    set_default_file_branch, stage_directory_child, stage_directory_owned, update_note,
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 

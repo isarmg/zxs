@@ -5,7 +5,7 @@ use super::{
     history::{FileNode, NodeKind, ParentEndpoint, ParentSet},
     history_index::HistoryIndex,
     inline, merge,
-    model::Model,
+    model::{Model, NoteTarget},
     node_card,
 };
 use crate::ui::State;
@@ -825,10 +825,8 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
             .as_ref()
             .expect("invariant: rendered node belongs to the installed window");
         match node.kind() {
-            NodeKind::Rename | NodeKind::Tags | NodeKind::Merge => {
-                inline::Target::NodeNote(id.get_value())
-            }
-            NodeKind::Content => inline::Target::VersionNote(
+            NodeKind::Rename | NodeKind::Tags | NodeKind::Merge => NoteTarget::Node(id.get_value()),
+            NodeKind::Content => NoteTarget::Version(
                 node.version_id()
                     .expect("invariant: visible content node references a body")
                     .to_owned(),
@@ -838,7 +836,12 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
     let boundary = Memo::new(move |_| {
         version.with(|node| node.as_ref().map(parent_boundary).unwrap_or_default())
     });
-    let (note, edit) = inline::version_note(state, note_target, id.get_value(), disabled);
+    let (note, edit) = inline::version_note(
+        state,
+        inline::Target::Note(note_target),
+        id.get_value(),
+        disabled,
+    );
     let card_title = Signal::derive(move || {
         version.with(|node| node.as_ref().map(node_card::file_title).unwrap_or_default())
     });

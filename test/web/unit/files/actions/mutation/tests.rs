@@ -24,7 +24,7 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             // for a failed revocation retry.
             let _ = super::super::create_directory(state, "new");
             let _ = directory_branch(state, branch_source(), "draft".into());
-            let _ = update_note(state, None, "note".into());
+            let _ = update_note(state, NoteTarget::File, "note".into());
             select_branch(state, "other".into());
             for access in [
                 MutationAccess::Current,
@@ -64,7 +64,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
         // These must return before generating IDs or spawning browser work.
         let _ = super::super::create_directory(state, "new");
         let _ = directory_branch(state, branch_source(), "draft".into());
-        let _ = update_note(state, None, "note".into());
+        let _ = update_note(state, NoteTarget::File, "note".into());
         select_branch(state, "other".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
@@ -82,6 +82,26 @@ fn shared_dispatch_keeps_history_admission_before_ids_or_browser_work() {
     initial.files.selected = Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
     initial.files.file_history = crate::files::history::tests::history(json!({}));
     assert!(history_write_allowed(&initial));
+    Owner::new().with(|| {
+        let state = RwSignal::new(initial.clone());
+        for target in [
+            NoteTarget::Version(String::new()),
+            NoteTarget::Node(String::new()),
+        ] {
+            assert!(update_note(state, target, "note".into()).is_none());
+        }
+        for target in [
+            NoteTarget::File,
+            NoteTarget::Version("version".into()),
+            NoteTarget::Node("node".into()),
+        ] {
+            assert!(update_note(state, target, "invalid\nnote".into()).is_none());
+        }
+        state.with_untracked(|state| {
+            assert!(!state.files.mutation_pending);
+            assert!(state.files.operations.is_empty() && state.errors.is_empty());
+        });
+    });
     for change in 0..10 {
         Owner::new().with(|| {
             let mut blocked = initial.clone();
@@ -109,11 +129,20 @@ fn shared_dispatch_keeps_history_admission_before_ids_or_browser_work() {
             let operations = blocked.files.operations.len();
             let state = RwSignal::new(blocked);
             assert!(
-                update_note(state, None, "file note".into()).is_none(),
+                update_note(state, NoteTarget::File, "file note".into()).is_none(),
                 "{change}"
             );
             assert!(
-                update_note(state, Some("version".into()), "version note".into()).is_none(),
+                update_note(
+                    state,
+                    NoteTarget::Version("version".into()),
+                    "version note".into()
+                )
+                .is_none(),
+                "{change}"
+            );
+            assert!(
+                update_note(state, NoteTarget::Node("node".into()), "node note".into()).is_none(),
                 "{change}"
             );
             assert!(

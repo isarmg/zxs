@@ -219,7 +219,7 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
     state.files.file_history = crate::files::history::tests::history(
         json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old/report.txt","path":"new/report.txt","note":""}]}),
     );
-    let target = Target::NodeNote("fnode-rename".into());
+    let target = Target::Note(NoteTarget::Node("fnode-rename".into()));
     assert_eq!(target.initial(&state), Some(String::new()));
     assert_eq!(
         target.display(&super::super::history_index::HistoryIndex::new(
@@ -254,21 +254,24 @@ fn body_note_editors_use_body_versions_and_never_the_graph_node_identity() {
                 "note":"path note","previous_path":"old.txt","path":"new.txt"}
         ],
     }));
-    assert_eq!(Target::FileNote.initial(&state), Some("file note".into()));
     assert_eq!(
-        Target::NodeNote("rename-node".into()).initial(&state),
+        Target::Note(NoteTarget::File).initial(&state),
+        Some("file note".into())
+    );
+    assert_eq!(
+        Target::Note(NoteTarget::Node("rename-node".into())).initial(&state),
         Some("path note".into())
     );
     assert_eq!(
-        Target::VersionNote("body-version".into()).initial(&state),
+        Target::Note(NoteTarget::Version("body-version".into())).initial(&state),
         Some("body note".into())
     );
     assert_eq!(
-        Target::VersionNote("rename-node".into()).initial(&state),
+        Target::Note(NoteTarget::Version("rename-node".into())).initial(&state),
         None
     );
     assert_eq!(
-        Target::NodeNote("body-version".into()).initial(&state),
+        Target::Note(NoteTarget::Node("body-version".into())).initial(&state),
         None
     );
 }
@@ -276,13 +279,13 @@ fn body_note_editors_use_body_versions_and_never_the_graph_node_identity() {
 #[test]
 fn unloaded_note_targets_do_not_become_known_empty_notes() {
     let state = State::default();
-    assert_eq!(Target::FileNote.initial(&state), None);
+    assert_eq!(Target::Note(NoteTarget::File).initial(&state), None);
     assert_eq!(
-        Target::NodeNote("unloaded-node".into()).initial(&state),
+        Target::Note(NoteTarget::Node("unloaded-node".into())).initial(&state),
         None
     );
     assert_eq!(
-        Target::VersionNote("unloaded-body".into()).initial(&state),
+        Target::Note(NoteTarget::Version("unloaded-body".into())).initial(&state),
         None
     );
 }

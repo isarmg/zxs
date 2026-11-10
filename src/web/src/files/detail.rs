@@ -2,7 +2,7 @@ use super::page::Entry;
 use super::{
     actions, backup, batch, branch, inline, merge,
     model::{
-        Model, branch_name, join_path, selected_branch, selected_entry_read_only,
+        Model, NoteTarget, branch_name, join_path, selected_branch, selected_entry_read_only,
         selected_file_branch_record,
     },
     tags, version_tree,
@@ -261,7 +261,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                 <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("目录分支与节点","Folder branches and nodes")}</h3><p class="zxs-row">{t("进入此目录的详情，管理独立仓库初始化、分支、暂存和提交。父仓库不会替子仓库提交。", "Open this folder's Details to manage repository initialization, branches, staging and commits. A parent never commits an independent child.")}</p><div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||folder_navigation_disabled.get()||state.with(actions::pending) on:click=move |_|if let Some(path)=state.with_untracked(|s|selection.with_value(|key|key.directory_path(s).map(str::to_owned))){actions::go_directory(state,path);crate::ui::navigate(state,crate::ui::Page::Details);}>{t("管理此目录的分支与提交", "Manage this folder's branches and commits")}</button></div></section>
             })}
             {is_file.then(move ||view! {
-                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|s.files.file_history.file_note().unwrap_or_default().to_owned())}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::FileNote,note_disabled)}</Show></section>
+                <section class="zxs-entry-section zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件备注","File note")}</h3><Show when=move ||can_modify.get() fallback=move ||view!{<p class="zxs-row">{move ||state.with(|s|s.files.file_history.file_note().unwrap_or_default().to_owned())}</p>}>{inline::control(state,t("编辑文件备注","Edit file note"),None,inline::Target::Note(NoteTarget::File),note_disabled)}</Show></section>
                 <Show when=move ||inherited.get()><p class="zxs-row" role="status">{t("此分支尚未写入，正在显示父版本的元数据；通过 SMB 写入后才保存本分支自己的版本。","This unwritten branch displays its parent version’s metadata. Writing through SMB creates this branch’s own version.")}</p></Show>
                 <section class="zxs-entry-section zxs-file-branches zxs-stack zxs-stack--flush"><h3 class="zxs-row">{t("文件分支","File branches")}</h3><p class="zxs-row">{t("创建时只登记分支并引用父节点，不创建占位文件或复制正文。首次写入后形成自己的版本；切换只浏览历史，设为默认后才更新当前目录的文件引用。","Creating a branch only registers a reference to its parent node, without placeholders or copied content. The first write creates its own version. Switching only browses history; setting the default updates this folder’s file reference.")}</p>
                     <div class="zxs-file-toolbar zxs-flow"><Select label=t("浏览文件分支","Browse file branch") options=options value=value disabled=disabled placeholder=t("请选择本页分支","Choose a branch on this page") on_change=Callback::new(move |branch:String|actions::select_branch(state,branch))/>

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     api,
-    files::model::FileOperation,
+    files::model::{FileOperation, NoteTarget},
     ui::{ErrorContext, State, current_session, fail_in, set_notice},
 };
 use json_codec::{Value, json};
@@ -221,70 +221,47 @@ fn record_mutation(
     Some(submitted)
 }
 
+fn selected_file_id(state: RwSignal<State>) -> Option<String> {
+    state.with_untracked(|s| {
+        s.files
+            .selected
+            .as_ref()
+            .map(|entry| entry.file_id())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    })
+}
 pub(crate) fn update_note(
     state: RwSignal<State>,
-    version: Option<String>,
+    target: NoteTarget,
     note: String,
 ) -> Option<String> {
     if storage_contract::validate_note(&note).is_err() {
         return None;
     }
-    let file = state.with_untracked(|s| {
-        s.files
-            .selected
-            .as_ref()
-            .map(|entry| entry.file_id().to_owned())
-            .unwrap_or_default()
-    });
-    let (collection, id) = match version {
-        Some(version) => ("versions", version),
-        None => ("files", file),
+    let (method, path) = match target {
+        NoteTarget::File => (
+            "POST",
+            format!("files/{}/metadata", api::segment(&selected_file_id(state)?)),
+        ),
+        NoteTarget::Version(id) if !id.is_empty() => {
+            ("POST", format!("versions/{}/metadata", api::segment(&id)))
+        }
+        NoteTarget::Node(id) if !id.is_empty() => (
+            "PATCH",
+            format!(
+                "files/{}/nodes/{}",
+                api::segment(&selected_file_id(state)?),
+                api::segment(&id)
+            ),
+        ),
+        NoteTarget::Version(_) | NoteTarget::Node(_) => return None,
     };
-    if id.is_empty() {
-        return None;
-    }
     record_mutation(
         state,
         MutationAccess::History,
-        "POST",
-        format!(
-            "/api/file-manager/{collection}/{}/metadata",
-            api::segment(&id)
-        ),
-        json!({"note":note}),
-    )
-}
-
-pub(crate) fn update_node_note(
-    state: RwSignal<State>,
-    node: String,
-    note: String,
-) -> Option<String> {
-    if !state.with_untracked(history_write_allowed)
-        || node.is_empty()
-        || storage_contract::validate_note(&note).is_err()
-    {
-        return None;
-    }
-    let file = state.with_untracked(|s| {
-        s.files
-            .selected
-            .as_ref()
-            .map(|entry| entry.file_id().to_owned())
-            .unwrap_or_default()
-    });
-    if file.is_empty() {
-        return None;
-    }
-    record_mutation(
-        state,
-        MutationAccess::Current,
-        "PATCH",
-        format!(
-            "/api/file-manager/files/{}/nodes/{}",
-            api::segment(&file),
-            api::segment(&node)
-        ),
+        method,
+        format!("/api/file-manager/{path}"),
         json!({"note":note}),
     )
 }
@@ -297,16 +274,7 @@ pub(crate) fn create_branch(
     if version.is_empty() {
         return None;
     }
-    let file = state.with_untracked(|s| {
-        s.files
-            .selected
-            .as_ref()
-            .map(|entry| entry.file_id().to_owned())
-            .unwrap_or_default()
-    });
-    if file.is_empty() {
-        return None;
-    }
+    let file = selected_file_id(state)?;
     let mut body = json!({"source_version_id":version,"name":name});
     if let Some(node) = node.filter(|id| !id.is_empty()) {
         body["source_node_id"] = node.into();

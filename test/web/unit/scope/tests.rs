@@ -113,7 +113,7 @@ fn management_views_and_bounded_json_transport_remain() {
         "batch::Kind::Rename",
         "Kind::Delete",
         "backup::view",
-        "FileNote",
+        "NoteTarget::File",
         "select_branch",
         "merge::view",
         "tags::view",

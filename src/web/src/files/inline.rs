@@ -1,5 +1,5 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
-use super::{actions, history::NodeKind};
+use super::{actions, history::NodeKind, model::NoteTarget};
 use crate::{icons::FileIcon, ui::State};
 use wasm_bindgen::JsCast;
 use web_interface::{html, i18n::t, prelude::*};
@@ -42,9 +42,7 @@ pub(super) enum Target {
         branch_id: String,
         name: String,
     },
-    FileNote,
-    VersionNote(String),
-    NodeNote(String),
+    Note(NoteTarget),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,10 +56,7 @@ impl Target {
     fn scope(&self) -> EditScope {
         match self {
             Self::CreateDirectory | Self::RenameDirectoryBranch { .. } => EditScope::Location,
-            Self::RenameFileBranch { .. }
-            | Self::FileNote
-            | Self::VersionNote(_)
-            | Self::NodeNote(_) => EditScope::History,
+            Self::RenameFileBranch { .. } | Self::Note(_) => EditScope::History,
         }
     }
 
@@ -71,7 +66,7 @@ impl Target {
             Self::RenameDirectoryBranch { .. } | Self::RenameFileBranch { .. } => {
                 InputKind::BranchName
             }
-            Self::FileNote | Self::VersionNote(_) | Self::NodeNote(_) => InputKind::Note,
+            Self::Note(_) => InputKind::Note,
         }
     }
 
@@ -93,33 +88,35 @@ impl Target {
             Self::RenameDirectoryBranch { name, .. } | Self::RenameFileBranch { name, .. } => {
                 Some(name.clone())
             }
-            Self::FileNote => state.files.file_history.file_note().map(str::to_owned),
-            Self::NodeNote(id) => state
+            Self::Note(NoteTarget::File) => state.files.file_history.file_note().map(str::to_owned),
+            Self::Note(NoteTarget::Node(id)) => state
                 .files
                 .file_history
                 .node(id)
                 .map(|node| node.note().to_owned()),
-            Self::VersionNote(id) => state.files.file_history.body_note(id).map(str::to_owned),
+            Self::Note(NoteTarget::Version(id)) => {
+                state.files.file_history.body_note(id).map(str::to_owned)
+            }
         }
     }
 
     fn display(&self, history: &super::history_index::HistoryIndex) -> String {
         let node = match self {
-            Self::NodeNote(id) => history.node(id).map(|(_, node)| node),
-            Self::VersionNote(id) => history.version(id),
+            Self::Note(NoteTarget::Node(id)) => history.node(id).map(|(_, node)| node),
+            Self::Note(NoteTarget::Version(id)) => history.version(id),
             _ => unreachable!("invariant: version note displays only node or version metadata"),
         };
         let value = node
             .and_then(|node| match self {
-                Self::NodeNote(_) => Some(node.note()),
-                Self::VersionNote(_) => node.body_note(),
+                Self::Note(NoteTarget::Node(_)) => Some(node.note()),
+                Self::Note(NoteTarget::Version(_)) => node.body_note(),
                 _ => unreachable!("invariant: version note displays only node or version metadata"),
             })
             .unwrap_or_default();
         if !value.is_empty() {
             return value.to_owned();
         }
-        if matches!(self, Self::NodeNote(_))
+        if matches!(self, Self::Note(NoteTarget::Node(_)))
             && let Some(node) = node
         {
             match node.kind() {
@@ -155,9 +152,7 @@ impl Target {
             Self::RenameFileBranch {
                 file, branch_id, ..
             } => actions::rename_file_branch(state, file, branch_id, value),
-            Self::FileNote => actions::update_note(state, None, value),
-            Self::VersionNote(id) => actions::update_note(state, Some(id), value),
-            Self::NodeNote(id) => actions::update_node_note(state, id, value),
+            Self::Note(target) => actions::update_note(state, target, value),
         }
     }
 }
