@@ -229,7 +229,6 @@ fn current_entries(
 }
 
 fn arrival_entries(
-    state: &State,
     request: &ObjectMoveRequest,
     target: &MoveTarget,
     entries: &[MoveEntry],
@@ -240,7 +239,10 @@ fn arrival_entries(
         MoveTarget::Existing { repository, namespace, displaced_entries, .. } => {
             let displaced = displaced_entries.iter().map(|entry| entry.entry_id.as_str())
                 .collect::<BTreeSet<_>>();
-            namespace::NamespaceTree::from_current_state(state, &repository.repository_id, namespace).visible_entries().filter(|entry| {
+            // Hidden rows still reserve names and consume the same namespace
+            // budget as the rows published by compose. Visibility belongs to
+            // target admission, not this complete candidate projection.
+            namespace.iter().filter(|entry| {
                 !displaced.contains(entry.entry_id.as_str())
                     && (repository.repository_id != request.source_repository_id.as_str()
                         || !source_ids.contains(entry.entry_id.as_str()))
@@ -352,7 +354,7 @@ fn capture(state: &State, request: &ObjectMoveRequest, basis: &NamespaceBasis, m
     let source = entries.iter().find(|entry| entry.source.entry_id == request.source_entry_id.as_str())
         .expect("invariant: captured move includes its source identity");
     let target = target_scope(state, request, &source.source, &basis.target_entries)?;
-    let target_entries = arrival_entries(state, request, &target, &entries, maximum)?;
+    let target_entries = arrival_entries(request, &target, &entries, maximum)?;
     let directories = directory_members(state, &entries);
     let files = file_members(state, &entries, &directories);
     let same_repository = request.target_repository_id.as_ref() == Some(&request.source_repository_id);
