@@ -1,4 +1,5 @@
 use super::*;
+use object_receipt_tests::{current, object_result};
 use storage_contract::{CommitState, CurrentHealth, OperationResult, ProtectionAtPublish};
 
 fn receipt(operation_id: OperationId) -> OperationResult {
@@ -20,11 +21,17 @@ fn receipt(operation_id: OperationId) -> OperationResult {
 #[test]
 fn move_reply_only_reports_the_exact_published_protected_healthy_operation() {
     let operation = OperationId::generate().unwrap();
-    let reply = published_reply(receipt(operation), operation).unwrap();
+    let expected = current(operation, false);
+    let result = object_result(&expected);
+    let original = result.result.clone();
+    let reply = expected.published_object_reply(result, "alice").unwrap();
     assert_eq!(reply["operation_id"], operation.to_string());
-    assert_eq!(reply["operation_kind"], "file.history.move");
+    assert_eq!(
+        reply["operation_kind"],
+        storage_contract::file_relocation::OBJECT_MOVE_KIND
+    );
     assert_eq!(reply["commit_state"], "PUBLISHED");
-    assert_eq!(reply["result"]["source_deletion_node_id"], "D-original");
+    assert_eq!(reply["result"], original);
 }
 
 #[test]
@@ -44,10 +51,14 @@ fn prepared_accepted_unknown_aborted_or_degraded_move_is_not_smb_success() {
         CommitState::Aborted,
     ] {
         let operation = OperationId::generate().unwrap();
-        let mut result = receipt(operation);
+        let expected = current(operation, false);
+        let mut result = object_result(&expected);
         result.commit_state = state;
         assert_eq!(
-            published_reply(result, operation).unwrap_err().code,
+            expected
+                .published_object_reply(result, "alice")
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::RecoveryRequired,
             "{state:?}"
         );
@@ -62,10 +73,14 @@ fn published_without_complete_protection_or_health_is_not_smb_success() {
         ProtectionAtPublish::Unconfirmed,
     ] {
         let operation = OperationId::generate().unwrap();
-        let mut result = receipt(operation);
+        let expected = current(operation, false);
+        let mut result = object_result(&expected);
         result.protection_at_publish = protection;
         assert_eq!(
-            published_reply(result, operation).unwrap_err().code,
+            expected
+                .published_object_reply(result, "alice")
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::RecoveryRequired
         );
     }
@@ -76,10 +91,14 @@ fn published_without_complete_protection_or_health_is_not_smb_success() {
         CurrentHealth::Recovering,
     ] {
         let operation = OperationId::generate().unwrap();
-        let mut result = receipt(operation);
+        let expected = current(operation, false);
+        let mut result = object_result(&expected);
         result.current_health = health;
         assert_eq!(
-            published_reply(result, operation).unwrap_err().code,
+            expected
+                .published_object_reply(result, "alice")
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::RecoveryRequired
         );
     }
@@ -89,17 +108,30 @@ fn published_without_complete_protection_or_health_is_not_smb_success() {
 fn another_operation_or_copy_delete_receipt_cannot_complete_move() {
     let operation = OperationId::generate().unwrap();
     let another = OperationId::generate().unwrap();
+    let expected = current(operation, false);
+    let mut result = object_result(&expected);
+    result.operation_id = another;
     assert_eq!(
-        published_reply(receipt(another), operation)
+        expected
+            .published_object_reply(result, "alice")
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::StateInvalid
     );
-    for kind in ["file.delete", "file.history.copy", "workspace.commit"] {
-        let mut result = receipt(operation);
+    for kind in [
+        "file.history.move",
+        "file.delete",
+        "file.history.copy",
+        "workspace.commit",
+    ] {
+        let expected = current(operation, false);
+        let mut result = object_result(&expected);
         result.kind = kind.into();
         assert_eq!(
-            published_reply(result, operation).unwrap_err().code,
+            expected
+                .published_object_reply(result, "alice")
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::StateInvalid
         );
     }

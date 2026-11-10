@@ -7,7 +7,6 @@ use crate::{
 };
 use smb_protocol::protocol::{FileMtime, NamespaceOperation, StatResult};
 mod directory;
-mod directory_export;
 mod history_move;
 use directory::VirtualDirectory;
 
@@ -428,19 +427,7 @@ impl DefaultShare {
                     .map_err(ApiError::invalid_source)?;
             }
             if kind == NamespaceOperation::Rename
-                && let Some(reply) = self.resume_directory_export(
-                    &path,
-                    destination
-                        .as_deref()
-                        .expect("invariant: rename destination was validated"),
-                    replace,
-                    operation_id,
-                )?
-            {
-                return Ok((Reply::Json(reply), None));
-            }
-            if kind == NamespaceOperation::Rename
-                && let Some(reply) = self.resume_move(
+                && let Some(reply) = self.resume_object_move(
                     &path,
                     destination
                         .as_deref()

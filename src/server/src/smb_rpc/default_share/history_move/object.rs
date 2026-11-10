@@ -4,7 +4,7 @@ use data_serialization::{Deserialize, Deserializer, Serialize};
 use storage_contract::file_relocation::{NamespaceEntryId, ObjectMoveRequest};
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
-pub(super) const FORMAT: &str = "smb-object-move";
+const FORMAT: &str = "smb-object-move";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -279,16 +279,21 @@ impl DefaultShare {
         self.submit_object_move(intent, admission, &bytes, Some(_paths))
     }
 
-    pub(in crate::smb_rpc::default_share::history_move) fn resume_object_move(
+    pub(in crate::smb_rpc::default_share) fn resume_object_move(
         &mut self,
         source: &str,
         target: &str,
         replace: bool,
-        admission: NamespaceAdmission,
-        bytes: &[u8],
-    ) -> Result<Value, ApiError> {
+        operation: OperationId,
+    ) -> Result<Option<Value>, ApiError> {
+        let Some(admission) =
+            NamespaceAdmission::retain_move(&self.shared, &self.identity, operation)?
+        else {
+            return Ok(None);
+        };
+        let bytes = admission.retained_move_bytes()?;
         let intent: Intent =
-            storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
+            storage_contract::decode_strict(&bytes).map_err(ApiError::contract_input)?;
         let Location::Path {
             slot: source_slot,
             path: source_path,
@@ -339,7 +344,8 @@ impl DefaultShare {
             }
             None => {}
         }
-        self.submit_object_move(intent, admission, bytes, None)
+        self.submit_object_move(intent, admission, &bytes, None)
+            .map(Some)
     }
 
     fn require_object_binding(&mut self, binding: &Binding, slot: &str) -> Result<(), ApiError> {

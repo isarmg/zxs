@@ -208,6 +208,27 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     assert_eq!(fact.target_entry_id.as_str(), original.entry_id);
     let (mut stream, worker, hello) = wire(shared.clone(), "alice");
     assert!(matches!(hello, Response::Ok { .. }), "{hello:?}");
+    for unsupported in [
+        "smb-file-history-move",
+        "smb-file-history-move-replace",
+        "smb-file-history-move-empty-target",
+        "smb-file-history-move-empty-target-replace",
+        "smb-directory-history-export",
+    ] {
+        let mut changed = intent.clone();
+        changed["format"] = unsupported.into();
+        let bytes = json_codec::to_vec(&changed).unwrap();
+        fs::write(&record, &bytes).unwrap();
+        let (reply, descriptor) = binding_tests::exchange(&mut stream, rename(operation));
+        assert!(descriptor.is_none());
+        assert!(matches!(reply, Response::Error { .. }), "{reply:?}");
+        assert_eq!(fs::read(&record).unwrap(), bytes);
+        assert_eq!(backend.move_requests.lock().unwrap().len(), 1);
+        backend
+            .inner
+            .test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+    }
+    fs::write(&record, &retained).unwrap();
     let (reply, descriptor) = okay(&mut stream, rename(operation));
     assert!(descriptor.is_none());
     assert_eq!(reply["operation_id"], operation.to_string());
