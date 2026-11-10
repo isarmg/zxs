@@ -400,23 +400,45 @@ fn cross_repository_history_without_a_current_home_is_an_explicit_conflict() {
 fn detached_child_and_unproven_retained_file_cannot_disappear() {
     let mut state = fixture_state();
     branch(&mut state, 1, &root(), "", vec![], true);
-    file(&mut state, 1, "deleted-before-initialization");
-    assert!(matches!(
-        plan(&state, &root(), ".zxs-extra"),
-        Err(LayoutError::FileOwnerMissing { .. })
-    ));
-    branch(
-        &mut state,
-        2,
-        &id("entry", 2),
-        "deleted-child",
-        vec![],
-        true,
+    let retained = file(&mut state, 1, "deleted-before-initialization");
+    assert!(matches!(plan(&state, &root(), ".zxs-extra"),
+        Err(LayoutError::FileOwnerMissing { file_id, .. }) if file_id == retained.file_id));
+    let detached = id("entry", 2);
+    branch(&mut state, 2, &detached, "deleted-child", vec![], true);
+    let (registered, roots) = forest_roots(&state, &root()).unwrap();
+    assert_eq!(
+        registered,
+        BTreeSet::from([root().as_str(), detached.as_str()])
     );
-    assert!(matches!(
-        plan(&state, &root(), ".zxs-extra"),
-        Err(LayoutError::UnplacedRepository { .. })
-    ));
+    assert_eq!(roots.iter().copied().collect::<BTreeSet<_>>(), registered);
+    for directory in &roots {
+        assert!(
+            matches!(plan_root(&state, &root(), directory, ".zxs-extra"),
+            Err(LayoutError::FileOwnerMissing { file_id, .. }) if file_id == retained.file_id)
+        );
+    }
+
+    // A retained occurrence supplies file ownership; an absent historical mount
+    // never supplies a current physical parent for the independent repository.
+    retained_commit(&mut state, 90, vec![retained.clone()]);
+    let root_plan = plan(&state, &root(), ".zxs-extra").unwrap();
+    assert_eq!(root_plan.repositories().len(), 1);
+    assert!(root_plan.repositories().contains_key(root().as_str()));
+    assert_eq!(root_plan.files().len(), 1);
+    let file = &root_plan.files()[&key(&state, &retained).unwrap()];
+    assert_eq!(file.directory_id, root());
+    assert!(file.main.is_none());
+    assert!(root_plan.outside_files().is_empty());
+
+    let child_plan = plan_root(&state, &root(), &detached, ".zxs-extra").unwrap();
+    assert_eq!(child_plan.repositories().len(), 1);
+    assert!(child_plan.repositories()[detached.as_str()].root.is_none());
+    assert!(child_plan.files().is_empty());
+    assert_eq!(child_plan.outside_files().len(), 1);
+    assert_eq!(
+        child_plan.outside_files()[&key(&state, &retained).unwrap()].owners,
+        BTreeSet::from([LayoutOwner::Repository(root().as_str())])
+    );
 }
 
 #[test]
@@ -891,11 +913,42 @@ fn omitted_child_and_ordinary_scope_require_exact_historical_evidence() {
         vec![content.clone()],
         true,
     );
-    retained_commit(&mut state, 90, vec![a.clone(), child.clone(), content]);
-    assert!(
-        matches!(plan_root(&state, &root(), &a.entry_id, ".zxs-extra"),
-        Err(LayoutError::UnplacedRepository { directory_id }) if directory_id == child.entry_id)
+    retained_commit(
+        &mut state,
+        90,
+        vec![a.clone(), child.clone(), content.clone()],
     );
+    let (registered, roots) = forest_roots(&state, &root()).unwrap();
+    assert_eq!(
+        registered,
+        BTreeSet::from([a.entry_id.as_str(), child.entry_id.as_str()])
+    );
+    assert_eq!(roots.iter().copied().collect::<BTreeSet<_>>(), registered);
+    let parent = plan_root(&state, &root(), &a.entry_id, ".zxs-extra").unwrap();
+    assert_eq!(parent.repositories().len(), 1);
+    assert!(
+        parent.repositories()[a.entry_id.as_str()]
+            .children
+            .is_empty()
+    );
+    assert!(parent.files().is_empty());
+    assert_eq!(parent.outside_files().len(), 1);
+    assert_eq!(
+        parent.outside_files()[&key(&state, &content).unwrap()].owners,
+        BTreeSet::from([LayoutOwner::Repository(child.entry_id.as_str())])
+    );
+    let child_plan = plan_root(&state, &root(), &child.entry_id, ".zxs-extra").unwrap();
+    assert_eq!(child_plan.repositories().len(), 1);
+    assert!(
+        child_plan.repositories()[child.entry_id.as_str()]
+            .root
+            .is_none()
+    );
+    assert_eq!(child_plan.files().len(), 1);
+    let file = &child_plan.files()[&key(&state, &content).unwrap()];
+    assert_eq!(file.directory_id, child.entry_id);
+    assert_eq!(file.path.as_str(), "content");
+    assert!(child_plan.outside_files().is_empty());
 
     let mut state = fixture_state();
     let ordinary = directory(12, "a/ordinary");
