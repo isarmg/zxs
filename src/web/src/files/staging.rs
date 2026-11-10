@@ -53,6 +53,7 @@ struct Model {
     draft_scope: Option<(u64, String, String)>,
     status: Option<DirectoryGitStatus>,
     message: String,
+    submitted_message: Option<(String, String)>,
     error: Option<api::Error>,
     cancellation: Option<api::ReadCancellation>,
     reading: bool,
@@ -69,8 +70,11 @@ impl Model {
         let scope = target
             .as_ref()
             .map(|target| (target.epoch, target.repository.clone(), target.path.clone()));
-        if self.draft_scope != scope {
+        // A listing refresh temporarily has no target. Keep this folder's
+        // commit text while its namespace and staging state are read again.
+        if scope.is_some() && self.draft_scope != scope {
             self.message.clear();
+            self.submitted_message = None;
             self.status = None;
             self.review_target = None;
             self.draft_scope = scope;
@@ -415,7 +419,7 @@ fn child_review(state: &State, model: &Model, id: &str) -> Option<Review> {
         head: child.head_tree_id.clone()?,
     })
 }
-fn submit(state: RwSignal<State>, review: Option<Review>) {
+fn submit(state: RwSignal<State>, model: RwSignal<Model>, review: Option<Review>) {
     match review {
         Some(Review::Initialize {
             repository,
@@ -431,7 +435,12 @@ fn submit(state: RwSignal<State>, review: Option<Review>) {
             index_generation,
             message,
         }) => {
-            actions::commit_directory(state, repository, branch, tree, index_generation, message);
+            let submitted = message.clone();
+            if let Some(operation) =
+                actions::commit_directory(state, repository, branch, tree, index_generation, message)
+            {
+                model.update(|model| model.submitted_message = Some((operation, submitted)));
+            }
         }
         Some(Review::StageChild {
             repository,
@@ -540,7 +549,7 @@ fn child_view(
         <Show when=move ||child.needs_restage><p class="zxs-row">{t("子仓库自身的边界有变化，需进入该子仓库重新暂存。父级仍只引用其已提交内容。","The child's repository boundaries changed. Restage inside that child; the parent still references only its committed content.")}</p></Show>
         <button type="button" class="zxs-button" data-stage-directory-child=id.get_value()
             disabled=move ||state.with(|state|model.with(|model|child_review(state,model,&id.get_value()).is_none()))
-            on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|child_review(state,model,&id.get_value())));submit(state,review);}>{t("暂存此子仓库的当前提交引用","Stage this child's current commit reference")}</button>
+            on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|child_review(state,model,&id.get_value())));submit(state,model,review);}>{t("暂存此子仓库的当前提交引用","Stage this child's current commit reference")}</button>
     </section>}
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
@@ -572,6 +581,35 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         })
     });
     Effect::new(move |_| load(state, model, target.get()));
+    Effect::new(move |_| {
+        let operation = model.with(|model| {
+            model
+                .submitted_message
+                .as_ref()
+                .map(|(operation, _)| operation.clone())
+        });
+        let Some(operation) = operation else {
+            return;
+        };
+        let status = state.with(|state| {
+            state
+                .files
+                .operations
+                .iter()
+                .find(|item| item.id() == operation)
+                .map(|item| item.status())
+        });
+        if let Some(status) = status.filter(|status| *status != super::SaveStatus::Unknown) {
+            model.update(|model| {
+                if let Some((_, submitted)) = model.submitted_message.take()
+                    && matches!(status, super::SaveStatus::Published | super::SaveStatus::Degraded)
+                    && model.message == submitted
+                {
+                    model.message.clear();
+                }
+            });
+        }
+    });
     on_cleanup(move || {
         let _ = model.try_update(Model::cancel);
     });
@@ -603,7 +641,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|!status.initialized))>
                 <p class="zxs-row">{t("手动初始化后，当前目录成为独立仓库；已有工作内容不会自动提交。","Manual initialization makes this directory independent. Existing working content is not committed automatically.")}</p>
                 <button type="button" class="zxs-button" data-initialize-directory-git="" disabled=move ||state.with(|state|model.with(|model|initialize_review(state,model).is_none()))
-                    on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|initialize_review(state,model)));submit(state,review);}>{t("初始化此目录仓库","Initialize this directory repository")}</button>
+                    on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|initialize_review(state,model)));submit(state,model,review);}>{t("初始化此目录仓库","Initialize this directory repository")}</button>
             </Show>
             <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.initialized))>
                 <div class="zxs-file-toolbar zxs-flow">
@@ -620,7 +658,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|status.unstaged||status.needs_restage))>
                     <p class="zxs-row" role="status">{t("工作内容尚未暂存，或独立子仓库边界有变化。暂存将固定本仓库当前工作内容，不会自动跟随子仓库的新提交；之后保存的更改保留在工作区。","Working contents are unstaged, or independent child boundaries changed. Staging freezes this repository’s current work without following child commits. Later saves remain in the working tree.")}</p>
                     <button type="button" class="zxs-button" data-stage-directory-owned="" disabled=move ||state.with(|state|model.with(|model|owned_review(state,model).is_none()))
-                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|owned_review(state,model)));submit(state,review);}>{t("暂存本仓库工作内容","Stage this repository’s work")}</button>
+                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|owned_review(state,model)));submit(state,model,review);}>{t("暂存本仓库工作内容","Stage this repository’s work")}</button>
                 </Show>
                 <For each=move ||children.get() key=|child|(child.directory_id.clone(),child.path.clone(),child.directory_branch_id.clone(),child.head_tree_id.clone(),child.staged_tree_id.clone(),child.committed_tree_id.clone(),child.dirty,child.reference_changed,child.staged,child.needs_restage)
                     children=move |child|child_view(state,model,child)/>
@@ -629,11 +667,12 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     <input class="zxs-input zxs-input--compact" aria-label=t("目录提交说明","Folder commit message") placeholder=t("填写本次提交说明","Describe this commit")
                         prop:value=move ||model.with(|model|model.message.clone()) disabled=move ||!state.with(actions::write_allowed)||model.with(|model|model.reading||model.error.is_some())
                         on:input=move |event|{if state.with_untracked(|state|model.with_untracked(|model|model.ready(state).is_some())){model.update(|model|model.message=event_target_value(&event));}}
-                        on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing()&&!event.repeat(){event.prevent_default();let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,review);}}/>
+                        on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing()&&!event.repeat(){event.prevent_default();let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,model,review);}}/>
                     <button type="button" class="zxs-button" data-commit-directory="true" disabled=move ||state.with(|state|model.with(|model|commit_review(state,model).is_none()))
-                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,review);}>{t("提交当前仓库更改","Commit this repository's changes")}</button>
+                        on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,model,review);}>{t("提交当前仓库更改","Commit this repository's changes")}</button>
                 </div>
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
+                <Show when=move ||model.with(|model|model.message.len()>storage_contract::MAX_NOTE_BYTES)><p class="zxs-row zxs-inline-error" role="status">{t("提交说明超过长度限制，请缩短后提交。","The commit message exceeds the byte limit. Shorten it before committing.")}</p></Show>
             </Show>
             {super::directory_history::current_directory_view(state, history_target)}
             {layout::view(state, model)}
