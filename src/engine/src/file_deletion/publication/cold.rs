@@ -155,8 +155,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
             }
         }
     }
-    if directories.iter().ne(retained.into_iter()) || active.iter().ne(state.file_deletions.iter())
-    {
+    if directories.iter().ne(retained) || active.iter().ne(state.file_deletions.iter()) {
         return Err(invalid());
     }
     Ok(())
