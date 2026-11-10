@@ -111,6 +111,15 @@ fn established_rpc_authority_revocation_precedes_disabled_binding() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires isolated Debian system Samba and real smbclient driver"]
 async fn system_samba_real_engine_fixture() {
+    // This fixture runs alone in its own process. Retain the production RPC
+    // boundary's complete local error source in engine.log, not the wire reply.
+    let subscriber = tracing::collector::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let root = PathBuf::from(
         std::env::var_os("ZXS_SMB_E2E_DIR").expect("explicit isolated driver directory required"),
     );

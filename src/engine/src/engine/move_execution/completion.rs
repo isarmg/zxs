@@ -46,6 +46,18 @@ fn read(root: &DiskRoot, path: &std::path::Path) -> Result<Option<CompletionBind
     root.read_json_observed(path, &mut |_| Ok(())).map(Some)
 }
 
+/// A first move or reconstructed SYSTEM may have no completion archive yet.
+/// Only that named directory's absence is optional; existing archives still
+/// require a held private directory and strict bounded record decoding.
+fn read_completed(root: &DiskRoot, operation: OperationId) -> Result<Option<CompletionBinding>> {
+    let directory = root.path().join(COMPLETED);
+    if root.optional_metadata(&directory)?.is_none() {
+        return Ok(None);
+    }
+    let archive = root.private_child(&directory)?;
+    read(&archive, &archive.path().join(format!("{operation}.json")))
+}
+
 impl CompletionBinding {
     pub(in crate::engine) fn new(engine: &Engine, candidate: &Candidate, hash: &str) -> Result<Self> {
         engine.verify_candidate_membership(candidate)?;
@@ -109,7 +121,7 @@ impl CompletionBinding {
 
     fn retain_at(&self, root: &DiskRoot) -> Result<()> {
         let active = root.path().join(ACTIVE);
-        match (read(root, &active)?, read(root, &self.archive(root))?) {
+        match (read(root, &active)?, read_completed(root, self.operation)?) {
             (Some(original), None) | (None, Some(original)) => self.same(&original),
             (None, None) => root.write_json(&active, self, false),
             (Some(_), Some(_)) => Err(invalid("move completion has both active and retired names")),
@@ -189,8 +201,7 @@ impl CompletionBinding {
     /// only after the common completion barrier was retired successfully.
     pub(in crate::engine) fn require_completed(engine: &Engine, candidate: &Candidate, hash: &str) -> Result<()> {
         let root = system_root(engine)?;
-        let path = root.path().join(COMPLETED).join(format!("{}.json", candidate.operation_id));
-        if let Some(original) = read(&root, &path)? {
+        if let Some(original) = read_completed(&root, candidate.operation_id)? {
             return original.require_candidate(candidate, hash);
         }
         // A reconstructed SYSTEM has no former private archive. Read only this
@@ -206,8 +217,7 @@ impl CompletionBinding {
                     return Err(invalid("original move still has an active completion binding"));
                 }
             }
-            let path = owner.root.path().join(COMPLETED).join(format!("{}.json", candidate.operation_id));
-            if let Some(retired) = read(&owner.root, &path)? {
+            if let Some(retired) = read_completed(&owner.root, candidate.operation_id)? {
                 retired.require_candidate(candidate, hash)?;
                 if let Some(previous) = &original { previous.same(&retired)?; }
                 else { original = Some(retired); }
@@ -217,3 +227,7 @@ impl CompletionBinding {
             .require_candidate(candidate, hash)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/move_completion_tests.rs"]
+mod tests;

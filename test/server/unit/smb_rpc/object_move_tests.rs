@@ -1,7 +1,115 @@
-//! One real directory rename through the framed default-share protocol.
+//! Real file and directory moves through the framed default-share protocol.
 //! Directory member/history semantics belong to the public engine scenarios.
 use super::*;
 use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
+
+#[test]
+fn first_default_file_rename_keeps_bytes_and_original_operation() {
+    for named_repository in [false, true] {
+        let (temp, shared, backend) = if named_repository {
+            let (temp, shared, backend, _branch) = fixture();
+            (temp, shared, backend)
+        } else {
+            empty_fixture(false)
+        };
+        let (mut stream, worker, hello) = wire(shared.clone(), "alice");
+        assert!(matches!(hello, Response::Ok { .. }), "{hello:?}");
+        let (opened, file) = open(&mut stream, "p/default-upload.txt", true, true);
+        save(&mut stream, &opened, &file, b"first default upload");
+        let (reader, _file) = open(&mut stream, "p/default-upload.txt", false, false);
+        assert_eq!(
+            read_rpc(&mut stream, reader.handle, 0, 4096),
+            b"first default upload"
+        );
+        okay(
+            &mut stream,
+            Request::Close {
+                handle: reader.handle,
+            },
+        );
+        // No earlier native move has created the optional completion archive.
+        for root in ["state", "p", "b"] {
+            assert!(!temp.path().join(root).join("move-completion").exists());
+        }
+        let operation = OperationId::generate().unwrap();
+        let request = || Request::Namespace {
+            kind: smb_protocol::protocol::NamespaceOperation::Rename,
+            path: "p/default-upload.txt".into(),
+            destination: Some("p/default-kept.txt".into()),
+            replace: true,
+            operation_id: operation.to_string(),
+        };
+        let (published, descriptor) = okay(&mut stream, request());
+        assert!(descriptor.is_none());
+        assert_eq!(published["operation_id"], operation.to_string());
+        assert_eq!(published["operation_kind"], OBJECT_MOVE_KIND);
+        let (missing, descriptor) = binding_tests::exchange(
+            &mut stream,
+            Request::Stat {
+                path: "p/default-upload.txt".into(),
+            },
+        );
+        assert!(descriptor.is_none());
+        assert!(
+            matches!(
+                missing,
+                Response::Error {
+                    code: storage_contract::ErrorCode::NotFound,
+                    ..
+                }
+            ),
+            "{missing:?}"
+        );
+        let (reader, _file) = open(&mut stream, "p/default-kept.txt", false, false);
+        assert_eq!(
+            read_rpc(&mut stream, reader.handle, 0, 4096),
+            b"first default upload"
+        );
+        okay(
+            &mut stream,
+            Request::Close {
+                handle: reader.handle,
+            },
+        );
+        if named_repository {
+            let (reader, _file) = open(&mut stream, "p/资料/report.txt", false, false);
+            assert_eq!(read_rpc(&mut stream, reader.handle, 0, 4096), b"old");
+            okay(
+                &mut stream,
+                Request::Close {
+                    handle: reader.handle,
+                },
+            );
+        }
+        close_wire(stream, worker);
+        let (mut stream, worker, hello) = wire(shared.clone(), "alice");
+        assert!(matches!(hello, Response::Ok { .. }), "{hello:?}");
+        // A successful reply retires its spool record. Reconnect must query the
+        // original receipt instead of staging the now-missing source again.
+        let (replayed, descriptor) = binding_tests::exchange(&mut stream, request());
+        assert!(descriptor.is_none());
+        assert!(
+            matches!(replayed, Response::Error {
+            code: storage_contract::ErrorCode::OperationIdConflict,
+            operation_id: Some(ref id), retryable: false, ..
+        } if id == &operation.to_string()),
+            "{replayed:?}"
+        );
+        backend.inner.test_with_engine_locked(|engine| {
+            assert!(!engine.is_read_only());
+            let receipt = engine.state().operations.get(&operation).unwrap();
+            assert_eq!(receipt.kind, OBJECT_MOVE_KIND);
+            assert_eq!(receipt.result, published["result"]);
+        });
+        assert!(
+            !shared
+                .spool
+                .join(format!("{operation}.namespace.json"))
+                .exists()
+        );
+        close_wire(stream, worker);
+    }
+}
 
 fn rename(operation: OperationId) -> Request {
     Request::Namespace {
@@ -50,7 +158,10 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
         )
         .unwrap()
         .unwrap();
-    assert_eq!(original.kind, storage_contract::NamespaceEntryKind::Directory);
+    assert_eq!(
+        original.kind,
+        storage_contract::NamespaceEntryKind::Directory
+    );
     let operation = OperationId::generate().unwrap();
     backend.fail.store(true, Ordering::SeqCst);
     let (reply, descriptor) = binding_tests::exchange(&mut stream, rename(operation));
@@ -73,11 +184,21 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     );
     assert_eq!(directory(&mut stream, "p"), vec!["renamed"]);
     let (reader, _file) = open(&mut stream, "p/renamed/note.txt", false, false);
-    assert_eq!(read_rpc(&mut stream, reader.handle, 0, 4096), b"saved child");
-    okay(&mut stream, Request::Close { handle: reader.handle });
+    assert_eq!(
+        read_rpc(&mut stream, reader.handle, 0, 4096),
+        b"saved child"
+    );
+    okay(
+        &mut stream,
+        Request::Close {
+            handle: reader.handle,
+        },
+    );
     close_wire(stream, worker);
 
-    let published = backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    let published = backend
+        .inner
+        .test_with_engine_locked(|engine| engine.state().clone());
     let original_receipt = published.operations.get(&operation).unwrap();
     assert_eq!(original_receipt.kind, OBJECT_MOVE_KIND);
     let fact: ObjectMoveFact =
@@ -93,7 +214,9 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     assert_eq!(reply["operation_kind"], OBJECT_MOVE_KIND);
     assert_eq!(reply["result"], original_receipt.result);
     assert!(!record.exists());
-    backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+    backend
+        .inner
+        .test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
     let calls = backend.move_requests.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0], calls[1]);
@@ -101,9 +224,15 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     assert_eq!(calls[0]["source_entry_id"], original.entry_id);
     assert_eq!(calls[0]["source_slot_id"], intent["source_slot_id"]);
     assert_eq!(calls[0]["source_disk_id"], intent["source_disk"]["disk_id"]);
-    assert_eq!(calls[0]["source_disk_generation"], intent["source_disk"]["binding_generation"]);
+    assert_eq!(
+        calls[0]["source_disk_generation"],
+        intent["source_disk"]["binding_generation"]
+    );
     assert_eq!(calls[0]["target_disk_id"], intent["target_disk"]["disk_id"]);
-    assert_eq!(calls[0]["target_disk_generation"], intent["target_disk"]["binding_generation"]);
+    assert_eq!(
+        calls[0]["target_disk_generation"],
+        intent["target_disk"]["binding_generation"]
+    );
     assert!(shared.file_writers.lock().unwrap().is_empty());
     drop(calls);
     close_wire(stream, worker);
