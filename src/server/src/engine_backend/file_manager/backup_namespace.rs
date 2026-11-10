@@ -530,6 +530,7 @@ impl ListingScope {
         for namespace in self.namespaces.values() {
             for (index, entry) in namespace.namespace.entries().iter().enumerate() {
                 if entry.kind != storage_contract::NamespaceEntryKind::File
+                    || namespace.namespace.tree().visible_entry(index).is_none()
                     || !latest.contains_key(entry.file_id.as_str())
                 {
                     continue;

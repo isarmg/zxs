@@ -256,6 +256,14 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         );
     }
     manager_namespace(&app, &admin, "delete", "archive/nested/renamed.txt", None).await;
+    let hidden = listing(&app, &admin, "P01", "archive/nested").await;
+    assert!(
+        hidden["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["file_id"] != file)
+    );
     let retained = listing(&app, &admin, "B01", "WorkBackup/nested").await;
     read_only_listing(&retained);
     assert_eq!(retained["entries"][0]["historical_only"], true);
@@ -291,6 +299,21 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         "WorkBackup/nested/report.txt"
     );
     assert_eq!(engine.file_history(file).unwrap().len(), 3);
+    assert!(engine.state().file_deletions.contains_key(file));
+    let namespace = engine
+        .namespace_snapshot(&engine.state().repositories[repo].main_branch_id)
+        .unwrap();
+    assert!(
+        namespace
+            .entries()
+            .iter()
+            .any(|entry| entry.file_id == file && entry.path == "archive/nested/renamed.txt"),
+        "reversible deletion retains the original namespace row"
+    );
+    assert!(
+        namespace.tree().get("archive/nested/renamed.txt").is_none(),
+        "a retained deleted row is not a live backup alias"
+    );
 }
 
 #[tokio::test]
