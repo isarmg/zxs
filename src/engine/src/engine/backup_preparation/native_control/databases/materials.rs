@@ -11,12 +11,21 @@ use std::{
     path::Path,
 };
 
-/// A borrowed root record recipe. Reading it does not admit its related data
-/// or establish that any other participant completed the publication stage.
+/// Exact root record bytes, borrowed or owned by their preparation plan.
+/// Reading them does not admit related data or prove another participant's completion.
 pub(super) struct RootRecord<'a> {
     pub(super) name: &'a str,
-    pub(super) bytes: &'a [u8],
+    pub(super) bytes: Cow<'a, [u8]>,
     pub(super) maximum: usize,
+}
+impl RootRecord<'static> {
+    pub(super) fn owned(name: &'static str, maximum: usize, bytes: Vec<u8>) -> Self {
+        Self {
+            name,
+            bytes: Cow::Owned(bytes),
+            maximum,
+        }
+    }
 }
 impl RootRecord<'_> {
     pub(super) fn check_existing(&self, root: &DiskRoot) -> Result<()> {
@@ -34,7 +43,7 @@ impl RootRecord<'_> {
         )
     }
     fn compare(&self, root: &DiskRoot, path: &std::path::Path, code: ErrorCode) -> Result<()> {
-        if root.read_bytes(path, self.maximum)? != self.bytes {
+        if root.read_bytes(path, self.maximum)? != self.bytes.as_ref() {
             return Err(Error::new(
                 code,
                 format!(
@@ -46,7 +55,7 @@ impl RootRecord<'_> {
         Ok(())
     }
     pub(super) fn install(&self, root: &DiskRoot) -> Result<()> {
-        install_preparation_bytes(root, &root.path().join(self.name), self.bytes)
+        install_preparation_bytes(root, &root.path().join(self.name), &self.bytes)
     }
 }
 

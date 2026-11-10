@@ -600,3 +600,67 @@ fn live_completed_bootstrap_never_recreates_a_missing_target_selector() {
     assert!(!selector.exists());
     assert_eq!(fs::read(retained).unwrap(), bytes);
 }
+
+#[test]
+fn successful_backup_inspection_does_not_cache_any_target_completion() {
+    let (temp, mut engine, repository) = full_route();
+    save(&mut engine, &repository, "kept", b"complete original body");
+    let request = transaction(
+        &engine,
+        vec![
+            target(temp.path(), "completion-one"),
+            target(temp.path(), "completion-two"),
+        ],
+    );
+    let operation = request.preparation.operation_id;
+    prepared(&mut engine, &request);
+    engine
+        .inspect_backup_published_registry(operation, "admin")
+        .unwrap();
+    for name in [
+        "generation-inputs-prepared.json",
+        "generation-control-prepared.json",
+        "generation-authority-prepared.json",
+        "generation-first-candidate-prepared.json",
+        "generation-first-publication-retained.json",
+        "published-registry-installed.json",
+    ] {
+        let first = request.preparation.target_paths[0].join(name);
+        let second = request.preparation.target_paths[1].join(name);
+        let original = fs::read(&second).unwrap();
+        assert_eq!(fs::read(&first).unwrap(), original);
+        let mut corrupt = original.clone();
+        corrupt[0] ^= 1;
+        fs::write(&second, &corrupt).unwrap();
+        assert_eq!(
+            engine
+                .inspect_backup_published_registry(operation, "admin")
+                .unwrap_err()
+                .code(),
+            ErrorCode::ConfigConflict,
+            "{name}"
+        );
+        assert_eq!(fs::read(&second).unwrap(), corrupt);
+        assert_eq!(fs::read(&first).unwrap(), original);
+        fs::write(&second, &original).unwrap();
+        engine
+            .inspect_backup_published_registry(operation, "admin")
+            .unwrap();
+        fs::remove_file(&second).unwrap();
+        assert!(
+            engine
+                .inspect_backup_published_registry(operation, "admin")
+                .is_err(),
+            "{name}"
+        );
+        assert!(!second.exists());
+        assert_eq!(fs::read(&first).unwrap(), original);
+        assert!(engine.is_read_only());
+        fs::write(&second, &original).unwrap();
+        engine
+            .inspect_backup_published_registry(operation, "admin")
+            .unwrap();
+    }
+    assert!(engine.is_read_only());
+    assert!(!engine.state().operations.contains_key(&operation));
+}

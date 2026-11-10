@@ -62,7 +62,7 @@ struct Completion<'a> {
 struct Inputs {
     files: BTreeMap<PathBuf, Vec<u8>>,
     manifest: Vec<u8>,
-    complete: Vec<u8>,
+    complete: materials::RootRecord<'static>,
     report: BackupGenerationPreparationReport,
 }
 impl Inputs {
@@ -166,7 +166,7 @@ impl Inputs {
         Ok(Self {
             files,
             manifest,
-            complete,
+            complete: materials::RootRecord::owned(COMPLETE, complete.len(), complete),
             report,
         })
     }
@@ -181,21 +181,14 @@ impl Inputs {
     }
     fn require_capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        self.completion().check_existing(root)?;
+        self.complete.check_existing(root)?;
         // The material store retains 16 MiB of headroom; completion is bounded
         // to 1 MiB and is installed only after every complete copy reads back.
         Ok(())
     }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.complete,
-            maximum: self.complete.len(),
-        }
-    }
     fn verify(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::verify(root, &self.files()?, stop)?;
-        self.completion().require(root)
+        self.complete.require(root)
     }
 }
 
@@ -217,7 +210,7 @@ fn capture_all(
         // Never fill one target from another target's decoded State. Its own
         // source proof reconstructs the same entire unpublished write set.
         let current = Inputs::capture(prepared, decision, &routes, index, stop)?;
-        if current.manifest != first.manifest || current.complete != first.complete {
+        if current.manifest != first.manifest || current.complete.bytes != first.complete.bytes {
             return Err(invalid(
                 "selected targets derive different complete generation inputs",
             ));
@@ -237,23 +230,17 @@ pub(super) fn prepare(
         preparation_checkpoint(stop)?;
         inputs.require_capacity(&target.root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &inputs.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &inputs.files()?, stop)
+    })?;
     decision.verify_targets(prepared, stop)?;
     for target in &prepared.targets {
         materials::verify(&target.root, &inputs.files()?, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        inputs.completion().install(&target.root)?;
-        inputs.verify(&target.root, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        inputs.complete.install(&target.root)?;
+        inputs.verify(&target.root, stop)
+    })?;
     recovery::require_isolated(&prepared.targets)?;
     prepared.recheck_names()?;
     Ok(inputs.report)

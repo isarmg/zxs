@@ -57,7 +57,7 @@ struct Completion<'a> {
 struct Plan {
     candidate: PreparedBackupFirstCandidate,
     manifest: Vec<u8>,
-    completion: Vec<u8>,
+    completion: materials::RootRecord<'static>,
     report: BackupFirstCandidateReport,
 }
 impl Plan {
@@ -119,7 +119,7 @@ impl Plan {
         Ok(Self {
             candidate,
             manifest,
-            completion,
+            completion: materials::RootRecord::owned(COMPLETE, completion.len(), completion),
             report,
         })
     }
@@ -134,7 +134,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        self.completion().check_existing(root)?;
+        self.completion.check_existing(root)?;
         // Material-store 16 MiB reserve covers the bounded completion as well.
         Ok(())
     }
@@ -142,13 +142,6 @@ impl Plan {
         materials::verify(root, &self.files()?, stop)?;
         self.candidate
             .verify_at(&root.private_child(&root.path().join(DIRECTORY))?, stop)
-    }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.completion,
-            maximum: self.completion.len(),
-        }
     }
 }
 
@@ -175,22 +168,13 @@ pub(super) fn prepare(
     }
     // Every target independently supplied the original complete State and
     // actual archive before the first no-clobber write of the new candidate.
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &first.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &first.files()?, stop)
+    })?;
     for target in &prepared.targets {
         first.verify(&target.root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        first.completion().install(&target.root)?;
-        first.completion().require(&target.root)?;
-    }
+    prepared.write_completions(&first.completion, stop)?;
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
     Ok(first.report)
@@ -218,7 +202,7 @@ pub(super) fn read_verified(
         preparation_checkpoint(stop)?;
         let plan = Plan::capture(prepared, decision, &inputs, index, stop)?;
         plan.verify(&prepared.targets[index].root, stop)?;
-        plan.completion().require(&prepared.targets[index].root)?;
+        plan.completion.require(&prepared.targets[index].root)?;
         if manifest
             .as_ref()
             .is_some_and(|expected| *expected != plan.manifest)

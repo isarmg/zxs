@@ -83,17 +83,14 @@ fn install(
     bytes: &[u8],
     stop: &AtomicBool,
 ) -> Result<()> {
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
+    prepared.write_isolated_targets(stop, |_, target| {
         inventory(&target.root)?;
         install_preparation_bytes(
             &target.root,
             &target.root.path().join(DIRECTORY).join(name),
             bytes,
-        )?;
-    }
+        )
+    })?;
     read_back(prepared, name, bytes, stop)
 }
 

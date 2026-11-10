@@ -15,7 +15,7 @@ fn absent_record_is_only_allowed_during_preflight() {
     let (_temp, root) = root();
     let record = RootRecord {
         name: "completion.json",
-        bytes: b"complete",
+        bytes: b"complete".as_slice().into(),
         maximum: 8,
     };
     record.check_existing(&root).unwrap();
@@ -33,7 +33,7 @@ fn installation_is_idempotent_and_survives_reopen() {
     let (_temp, root) = root();
     let record = RootRecord {
         name: "completion.json",
-        bytes: b"complete",
+        bytes: b"complete".as_slice().into(),
         maximum: 8,
     };
     record.install(&root).unwrap();
@@ -49,7 +49,7 @@ fn mismatches_keep_preflight_and_observation_error_codes() {
     let (_temp, root) = root();
     let record = RootRecord {
         name: "completion.json",
-        bytes: b"new",
+        bytes: b"new".as_slice().into(),
         maximum: 3,
     };
     let path = root.path().join(record.name);
@@ -71,35 +71,39 @@ fn mismatches_keep_preflight_and_observation_error_codes() {
 
 #[test]
 fn reader_budget_is_not_replaced_by_expected_length() {
-    let (_temp, root) = root();
-    let record = RootRecord {
-        name: "completion.json",
-        bytes: b"new",
-        maximum: 8,
-    };
-    let path = root.path().join(record.name);
-    root.write_atomic(&path, b"old-long", false).unwrap();
-    assert_eq!(
-        record.require(&root).unwrap_err().code(),
-        ErrorCode::ConfigConflict
-    );
-    assert_eq!(
-        record.check_existing(&root).unwrap_err().code(),
-        ErrorCode::ObjectCollision
-    );
-    let exact = RootRecord {
-        maximum: record.bytes.len(),
-        ..record
-    };
-    assert_eq!(
-        exact.require(&root).unwrap_err().code(),
-        ErrorCode::ResourceLimit
-    );
-    assert_eq!(
-        exact.check_existing(&root).unwrap_err().code(),
-        ErrorCode::ResourceLimit
-    );
-    assert_eq!(root.read_bytes(&path, 8).unwrap(), b"old-long");
+    for record in [
+        RootRecord {
+            name: "completion.json",
+            bytes: b"new".as_slice().into(),
+            maximum: 8,
+        },
+        RootRecord::owned("completion.json", 8, b"new".to_vec()),
+    ] {
+        let (_temp, root) = root();
+        let path = root.path().join(record.name);
+        root.write_atomic(&path, b"old-long", false).unwrap();
+        assert_eq!(
+            record.require(&root).unwrap_err().code(),
+            ErrorCode::ConfigConflict
+        );
+        assert_eq!(
+            record.check_existing(&root).unwrap_err().code(),
+            ErrorCode::ObjectCollision
+        );
+        let exact = RootRecord {
+            maximum: record.bytes.len(),
+            ..record
+        };
+        assert_eq!(
+            exact.require(&root).unwrap_err().code(),
+            ErrorCode::ResourceLimit
+        );
+        assert_eq!(
+            exact.check_existing(&root).unwrap_err().code(),
+            ErrorCode::ResourceLimit
+        );
+        assert_eq!(root.read_bytes(&path, 8).unwrap(), b"old-long");
+    }
 }
 
 #[test]
@@ -107,7 +111,7 @@ fn unsafe_record_path_is_rejected_without_touching_its_target() {
     let (_temp, root) = root();
     let record = RootRecord {
         name: "completion.json",
-        bytes: b"new",
+        bytes: b"new".as_slice().into(),
         maximum: 3,
     };
     let target = root.path().join("preserved.json");
@@ -344,4 +348,72 @@ fn preparation_plan_matches_the_original_closed_inventory_for_path_combinations(
             }
         }
     }
+}
+
+#[test]
+fn owned_root_record_moves_the_canonical_buffer_without_copying_or_reencoding() {
+    let bytes = br#"{"format":"native-completion","targets":2}"#.to_vec();
+    let address = bytes.as_ptr();
+    let record = RootRecord::owned("completion.json", 128, bytes);
+    assert!(matches!(&record.bytes, Cow::Owned(_)));
+    assert_eq!(record.bytes.as_ptr(), address);
+    assert_eq!(record.maximum, 128);
+    let borrowed = RootRecord {
+        name: record.name,
+        bytes: record.bytes.as_ref().into(),
+        maximum: record.maximum,
+    };
+    assert!(matches!(&borrowed.bytes, Cow::Borrowed(_)));
+    assert_eq!(borrowed.bytes.as_ptr(), address);
+    let (_temp, root) = root();
+    record.check_existing(&root).unwrap();
+    assert!(record.require(&root).is_err());
+    assert!(!root.path().join(record.name).exists());
+    record.install(&root).unwrap();
+    borrowed.require(&root).unwrap();
+    assert_eq!(
+        root.read_bytes(&root.path().join(record.name), record.maximum)
+            .unwrap(),
+        record.bytes.as_ref()
+    );
+    record
+        .require(&DiskRoot::open(root.path()).unwrap())
+        .unwrap();
+    root.write_atomic(&root.path().join(record.name), b"changed", true)
+        .unwrap();
+    for expected in [&record, &borrowed] {
+        assert_eq!(
+            expected.check_existing(&root).unwrap_err().code(),
+            ErrorCode::ObjectCollision
+        );
+        assert_eq!(
+            expected.require(&root).unwrap_err().code(),
+            ErrorCode::ConfigConflict
+        );
+    }
+}
+
+#[test]
+fn owned_completion_cannot_replace_the_actual_material_readback() {
+    let files = PreparedFiles::new(
+        Namespace::Objects,
+        b"manifest".as_slice(),
+        [(PathBuf::from("payload"), b"complete bytes".as_slice())],
+    )
+    .unwrap();
+    let record = RootRecord::owned("completion.json", 8, b"complete".to_vec());
+    let (_temp, root) = root();
+    let stop = AtomicBool::new(false);
+    install(&root, &files, &stop).unwrap();
+    record.install(&root).unwrap();
+    record.require(&root).unwrap();
+    verify(&root, &files, &stop).unwrap();
+    let payload = root.path().join("object-databases/payload");
+    root.remove_file_synced(&payload).unwrap();
+    record.require(&root).unwrap();
+    assert_eq!(
+        verify(&root, &files, &stop).unwrap_err().code(),
+        ErrorCode::ConfigConflict
+    );
+    assert!(!payload.exists());
 }

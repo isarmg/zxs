@@ -57,7 +57,7 @@ pub(super) struct Plan {
     resolved: configuration::ResolvedConfiguration,
     files: BTreeMap<PathBuf, Vec<u8>>,
     manifest: Vec<u8>,
-    completion: Vec<u8>,
+    completion: materials::RootRecord<'static>,
     bytes: u64,
 }
 fn budget() -> Error {
@@ -151,7 +151,7 @@ impl Plan {
             resolved,
             files,
             manifest,
-            completion,
+            completion: materials::RootRecord::owned(COMPLETE, MAX_MANIFEST, completion),
             bytes: bytes as u64,
         })
     }
@@ -180,7 +180,7 @@ impl Plan {
         // fault, not permission to repair by synthesizing a new graph.
         if preparation_path_exists(&target.root, &target.root.path().join(COMPLETE))? {
             self.verify(target, stop)?;
-            self.completion().require(&target.root)?;
+            self.completion.require(&target.root)?;
         }
         materials::require_capacity(&target.root, &self.files()?, stop)
     }
@@ -215,13 +215,6 @@ impl Plan {
         })?;
         registry.require_config(&self.resolved.config)?;
         Ok(registry)
-    }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.completion,
-            maximum: MAX_MANIFEST,
-        }
     }
     pub(super) fn state_at(
         &self,
@@ -363,23 +356,14 @@ pub(super) fn install(
     for target in &prepared.targets {
         plan.preflight(target, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &plan.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &plan.files()?, stop)
+    })?;
     for target in &prepared.targets {
         plan.verify(target, stop)?;
     }
     first_publication::observe(prepared, decision, expected, stop)?;
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        plan.completion().install(&target.root)?;
-        plan.completion().require(&target.root)?;
-    }
+    prepared.write_completions(&plan.completion, stop)?;
     first_publication::observe(prepared, decision, expected, stop)?;
     observe_with_plan(prepared, decision, &plan, stop)
 }
@@ -392,7 +376,7 @@ pub(super) fn observe_with_plan(
 ) -> Result<BackupPublishedRegistryReport> {
     for target in &prepared.targets {
         plan.verify(target, stop)?;
-        plan.completion().require(&target.root)?;
+        plan.completion.require(&target.root)?;
     }
     let state = plan.state_at(&prepared.targets[0], stop)?;
     decision.verify_targets(prepared, stop)?;

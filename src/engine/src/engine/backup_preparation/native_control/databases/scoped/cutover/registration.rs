@@ -2,6 +2,7 @@
 //! committed by original native decision slots, never by this target JSON alone.
 use super::*;
 use crate::container_storage::backup_entities::EntityPlacement;
+use crate::engine::backup_preparation::native_control::databases::materials;
 use crate::engine::membership_transition::BackupChoiceContext;
 use installation::{Target, Task as InstallationTask};
 
@@ -322,6 +323,31 @@ impl PreparedBackupRegistry {
         }
         self.recheck_names()?;
         Ok(Some((&self.targets[index].root, identity)))
+    }
+    /// Recheck the entire selected set before each isolated target mutation.
+    /// Native publication and stage readback barriers remain with the caller.
+    fn write_isolated_targets(
+        &self,
+        stop: &AtomicBool,
+        mut write: impl FnMut(usize, &Target) -> Result<()>,
+    ) -> Result<()> {
+        for (index, target) in self.targets.iter().enumerate() {
+            preparation_checkpoint(stop)?;
+            recovery::require_isolated(&self.targets)?;
+            self.recheck_names()?;
+            write(index, target)?;
+        }
+        Ok(())
+    }
+    fn write_completions(
+        &self,
+        record: &materials::RootRecord<'_>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.write_isolated_targets(stop, |_, target| {
+            record.install(&target.root)?;
+            record.require(&target.root)
+        })
     }
     pub(in crate::engine) fn recheck_names(&self) -> Result<()> {
         for (target, job) in self.targets.iter().zip(self.task.selection().jobs()) {

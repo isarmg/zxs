@@ -193,7 +193,7 @@ impl Plan {
     fn record<'a>(&'a self, name: &'a str) -> materials::RootRecord<'a> {
         materials::RootRecord {
             name,
-            bytes: &self.common,
+            bytes: self.common.as_slice().into(),
             maximum: MAX_DESCRIPTOR,
         }
     }

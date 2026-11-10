@@ -54,7 +54,7 @@ struct Plan {
     authority: PreparedBackupAuthority,
     object_path: PathBuf,
     manifest: Vec<u8>,
-    completion: Vec<u8>,
+    completion: materials::RootRecord<'static>,
     report: BackupGenerationAuthorityReport,
 }
 impl Plan {
@@ -135,7 +135,7 @@ impl Plan {
                 authority,
                 object_path,
                 manifest,
-                completion,
+                completion: materials::RootRecord::owned(COMPLETE, completion.len(), completion),
                 report,
             },
             source,
@@ -150,7 +150,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        self.completion().check_existing(root)?;
+        self.completion.check_existing(root)?;
         // The material store's 16 MiB reserve also covers this <=1 MiB marker.
         Ok(())
     }
@@ -161,13 +161,6 @@ impl Plan {
             self.authority.bytes().len(),
         )?;
         self.authority.verify_saved(&bytes)
-    }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.completion,
-            maximum: self.completion.len(),
-        }
     }
 }
 
@@ -192,22 +185,13 @@ pub(super) fn prepare(
         }
         first.capacity(&prepared.targets[index].root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &first.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &first.files()?, stop)
+    })?;
     for target in &prepared.targets {
         first.verify(&target.root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        first.completion().install(&target.root)?;
-        first.completion().require(&target.root)?;
-    }
+    prepared.write_completions(&first.completion, stop)?;
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
     Ok(first.report)
@@ -226,7 +210,7 @@ pub(super) fn observe(
         preparation_checkpoint(stop)?;
         let plan = Plan::capture(prepared, decision, &inputs, index, stop)?;
         plan.verify(&prepared.targets[index].root, stop)?;
-        plan.completion().require(&prepared.targets[index].root)?;
+        plan.completion.require(&prepared.targets[index].root)?;
         if first
             .as_ref()
             .is_some_and(|first| first.authority_hash != plan.report.authority_hash)
@@ -253,6 +237,6 @@ pub(super) fn read_candidate_input(
 ) -> Result<(PreparedBackupAuthority, AdmittedState)> {
     let (plan, source) = Plan::capture_input(prepared, decision, inputs, index, stop)?;
     plan.verify(&prepared.targets[index].root, stop)?;
-    plan.completion().require(&prepared.targets[index].root)?;
+    plan.completion.require(&prepared.targets[index].root)?;
     Ok((plan.authority, source))
 }

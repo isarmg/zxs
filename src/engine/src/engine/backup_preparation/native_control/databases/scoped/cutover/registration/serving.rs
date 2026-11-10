@@ -262,29 +262,23 @@ pub(super) fn install(
             image.require_capacity(&target.root, stop)
         })?;
     }
-    for (index, target) in prepared.targets.iter().enumerate() {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
+    prepared.write_isolated_targets(stop, |index, target| {
         plan.with_image(prepared, index, stop, |image, _| {
             image.install(&target.root, stop)
-        })?;
-    }
+        })
+    })?;
     for index in 0..prepared.targets.len() {
         plan.verify_target(prepared, index, stop)?;
     }
     first_publication::observe(prepared, decision, expected, stop)?;
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
+    prepared.write_isolated_targets(stop, |_, target| {
         install_preparation_bytes(
             &target.root,
             &target.root.path().join(COMPLETE),
             &plan.completion,
         )?;
-        plan.require_completion(target)?;
-    }
+        plan.require_completion(target)
+    })?;
     plan.observe(prepared, decision, expected, stop)
 }
 

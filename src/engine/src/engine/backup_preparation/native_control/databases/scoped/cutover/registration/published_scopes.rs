@@ -114,7 +114,7 @@ impl Plan {
     fn completion(&self) -> materials::RootRecord<'_> {
         materials::RootRecord {
             name: COMPLETE,
-            bytes: &self.completion,
+            bytes: self.completion.as_slice().into(),
             maximum: MAX_COMPLETION,
         }
     }
@@ -204,10 +204,7 @@ pub(super) fn install(
             require_capacity(root, scopes, stop)
         })?;
     }
-    for index in 0..prepared.targets.len() {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
+    prepared.write_isolated_targets(stop, |index, _| {
         plan.with_scopes(prepared, index, stop, |root, scopes| {
             require_capacity(root, scopes, stop)?;
             materials::install(root, &scopes.prepared()?, stop)?;
@@ -218,21 +215,15 @@ pub(super) fn install(
                 install_preparation_bytes(root, &root.path().join(name), bytes)?;
             }
             verify(root, scopes, stop)
-        })?;
-    }
+        })
+    })?;
     for index in 0..prepared.targets.len() {
         plan.with_scopes(prepared, index, stop, |root, scopes| {
             verify(root, scopes, stop)
         })?;
     }
     serving::observe(prepared, decision, expected, stop)?;
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        plan.completion().install(&target.root)?;
-        plan.completion().require(&target.root)?;
-    }
+    prepared.write_completions(&plan.completion(), stop)?;
     plan.observe(prepared, decision, expected, stop)
 }
 pub(super) fn observe(

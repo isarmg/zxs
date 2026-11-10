@@ -57,7 +57,7 @@ struct Complete<'a> {
 struct Plan {
     archive: PreparedBackupControl,
     manifest: Vec<u8>,
-    completion: Vec<u8>,
+    completion: materials::RootRecord<'static>,
     inputs_hash: String,
 }
 impl Plan {
@@ -116,7 +116,7 @@ impl Plan {
         Ok(Self {
             archive,
             manifest,
-            completion,
+            completion: materials::RootRecord::owned(COMPLETE, completion.len(), completion),
             inputs_hash,
         })
     }
@@ -131,7 +131,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        self.completion().check_existing(root)?;
+        self.completion.check_existing(root)?;
         // Existing material-store reserve is 16 MiB; completion <=4 MiB.
         Ok(())
     }
@@ -141,13 +141,6 @@ impl Plan {
             root.private_child(&root.path().join(DIRECTORY).join("archive"))?,
             stop,
         )
-    }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.completion,
-            maximum: self.completion.len(),
-        }
     }
     fn report(
         &self,
@@ -190,12 +183,9 @@ pub(super) fn prepare(
         }
         first.capacity(&prepared.targets[index].root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &first.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &first.files()?, stop)
+    })?;
     let mut inspected = Vec::with_capacity(prepared.targets.len());
     for target in &prepared.targets {
         inspected.push(first.verify(&target.root, stop)?);
@@ -203,13 +193,7 @@ pub(super) fn prepare(
     choices.observe_decision(prepared, stop)?;
     // These bytes are diagnostics only. A crash between completion writes can
     // resume the same original task; never infer all-target success from one.
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        first.completion().install(&target.root)?;
-        first.completion().require(&target.root)?;
-    }
+    prepared.write_completions(&first.completion, stop)?;
     decision.verify_targets(prepared, stop)?;
     choices.observe_decision(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
@@ -232,7 +216,7 @@ pub(super) fn observe(
         let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
         let plan = Plan::capture(prepared, decision, &frozen, &generation, index, stop)?;
         let inspection = plan.verify(&target.root, stop)?;
-        plan.completion().require(&target.root)?;
+        plan.completion.require(&target.root)?;
         if report
             .as_ref()
             .is_some_and(|first| first.inputs_hash != plan.inputs_hash)
@@ -266,7 +250,7 @@ pub(super) fn read_authority_input(
     let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
     let plan = Plan::capture(prepared, decision, &frozen, generation, index, stop)?;
     let inspection = plan.verify(&target.root, stop)?;
-    plan.completion().require(&target.root)?;
+    plan.completion.require(&target.root)?;
     let report = plan.report(decision, prepared.targets.len(), &inspection);
     Ok((plan.archive, report))
 }

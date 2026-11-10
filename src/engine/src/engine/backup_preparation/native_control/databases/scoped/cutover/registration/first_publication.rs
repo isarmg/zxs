@@ -52,7 +52,7 @@ struct Completion<'a> {
 struct Plan {
     evidence: PreparedBackupFirstPublication,
     manifest: Vec<u8>,
-    completion: Vec<u8>,
+    completion: materials::RootRecord<'static>,
     report: BackupTargetPublicationReport,
 }
 impl Plan {
@@ -103,7 +103,7 @@ impl Plan {
         Ok(Self {
             evidence,
             manifest,
-            completion,
+            completion: materials::RootRecord::owned(COMPLETE, MAX_DESCRIPTOR, completion),
             report,
         })
     }
@@ -138,19 +138,12 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        self.completion().check_existing(root)?;
+        self.completion.check_existing(root)?;
         Ok(())
-    }
-    fn completion(&self) -> materials::RootRecord<'_> {
-        materials::RootRecord {
-            name: COMPLETE,
-            bytes: &self.completion,
-            maximum: MAX_DESCRIPTOR,
-        }
     }
     fn verify(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::verify(root, &self.files()?, stop)?;
-        self.completion().require(root)
+        self.completion.require(root)
     }
 }
 
@@ -169,22 +162,16 @@ fn install(
     for target in &prepared.targets {
         plan.capacity(&target.root, stop)?;
     }
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        materials::install(&target.root, &plan.files()?, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        materials::install(&target.root, &plan.files()?, stop)
+    })?;
     // Re-read the actual per-target body and existing native proofs, not just
     // the copied descriptor. This is also enforced for detached continuation.
     plan.evidence.verify_targets(prepared, candidate, stop)?;
-    for target in &prepared.targets {
-        preparation_checkpoint(stop)?;
-        recovery::require_isolated(&prepared.targets)?;
-        prepared.recheck_names()?;
-        plan.completion().install(&target.root)?;
-        plan.verify(&target.root, stop)?;
-    }
+    prepared.write_isolated_targets(stop, |_, target| {
+        plan.completion.install(&target.root)?;
+        plan.verify(&target.root, stop)
+    })?;
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
     Ok(plan.report)
