@@ -291,6 +291,12 @@ fn failed_new_generation_record_is_retried_without_another_workspace() {
     assert_eq!(fs::read(&source).unwrap(), b"two");
     fs::remove_dir(&record_path).unwrap();
     client.dirty(opened.handle).unwrap();
+    let Handle::Write(writer) = &client.handles[&opened.handle] else {
+        panic!("writer must remain owned by its original handle");
+    };
+    assert_eq!(writer.workspace.workspace_id, workspace);
+    assert_eq!(writer.operation_id, operation);
+    assert!(writer.dirty && !writer.committed);
     let record: Value = json_codec::from_slice(&fs::read(&record_path).unwrap()).unwrap();
     assert_eq!(record["workspace_id"], workspace);
     assert_eq!(record["operation_id"], operation.to_string());

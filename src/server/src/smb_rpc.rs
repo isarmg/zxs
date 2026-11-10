@@ -82,6 +82,18 @@ struct Shared {
     namespace_operations: Mutex<BTreeSet<OperationId>>,
 }
 
+impl Shared {
+    fn workspace(&self, identity: &Identity, branch: &str) -> Result<Workspace, ApiError> {
+        self.backend.create_workspace(
+            identity,
+            crate::CreateWorkspace {
+                branch_id: branch.to_owned(),
+                source_commit_id: None,
+            },
+        )
+    }
+}
+
 enum Handle {
     Read(Content, String),
     Directory(DirectoryHandle),

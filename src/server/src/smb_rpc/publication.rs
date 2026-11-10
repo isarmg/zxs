@@ -211,20 +211,11 @@ impl Session {
     pub(super) fn dirty(&mut self, handle: u64) -> Result<Value, ApiError> {
         // The FD has already been modified. Preserve it even when current
         // authorization or rebase validation rejects the operation.
-        let (needs_workspace, path, last_head, captured_workspace) =
-            match self.handles.get_mut(&handle) {
-                Some(Handle::Write(writer)) => {
-                    writer.dirty = true;
-                    recovery_record(writer, &self.identity.principal, &self.branch)?;
-                    (
-                        writer.committed,
-                        writer.path.clone(),
-                        writer.last_head.clone(),
-                        writer.workspace.workspace_id.clone(),
-                    )
-                }
-                _ => return Err(ApiError::forbidden()),
-            };
+        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
+            return Err(ApiError::forbidden());
+        };
+        writer.dirty = true;
+        recovery_record(writer, &self.identity.principal, &self.branch)?;
         self.shared
             .backend
             .authorize_current(&self.identity, &self.branch)?;
@@ -232,18 +223,18 @@ impl Session {
         // opened. A same-content default switch must not retarget this FD.
         self.shared.backend.authorize_workspace_selection(
             &self.identity,
-            &captured_workspace,
-            &path,
+            &writer.workspace.workspace_id,
+            &writer.path,
         )?;
-        let new_workspace = if needs_workspace {
+        if writer.committed {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
-            let workspace = self.workspace()?;
+            let workspace = self.shared.workspace(&self.identity, &self.branch)?;
             let validate = (|| {
-                let lookup = name_policy::LookupPath::from(&path);
+                let lookup = name_policy::LookupPath::from(&writer.path);
                 let previous = self.shared.backend.lookup_at(
                     &self.identity,
                     &self.branch,
-                    &last_head,
+                    &writer.last_head,
                     &lookup,
                 )?;
                 let current = self.shared.backend.lookup_at(
@@ -276,31 +267,28 @@ impl Session {
                 }
                 return Err(error);
             }
-            Some((workspace, operation_id))
-        } else {
-            if let Some(Handle::Write(writer)) = self.handles.get(&handle) {
-                self.shared.backend.authorize_upload(
-                    &self.identity,
-                    &writer.workspace.workspace_id,
-                    None,
-                )?;
-            }
-            None
-        };
-        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
-            return Err(ApiError::forbidden());
-        };
-        if let Some((workspace, operation_id)) = new_workspace {
             writer.workspace = workspace;
             writer.committed = false;
             writer.operation_id = operation_id;
             recovery_record(writer, &self.identity.principal, &self.branch)?;
+        } else {
+            self.shared.backend.authorize_upload(
+                &self.identity,
+                &writer.workspace.workspace_id,
+                None,
+            )?;
         }
         if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {
             return Err(ApiError::limit("file exceeds SMB byte limit"));
         }
         if writer.write_through {
-            self.flush(handle)
+            flush_writer(
+                &self.shared,
+                &self.identity,
+                &self.branch,
+                self.max_file_bytes,
+                writer,
+            )
         } else {
             Ok(json!({"dirty":true}))
         }

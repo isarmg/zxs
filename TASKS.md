@@ -2,6 +2,13 @@
 
 状态核对时间：2026-11-10。当前源码父基线：`d0f46798`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
+## 本轮 SMB Writer 所有权收敛
+
+- Dirty 从入口到恢复记录、授权、继任 workspace 和 write-through 始终借用同一 Writer；删除重复句柄查找、path/head/workspace 三份临时克隆和 Option 中转。SMB 的三处 workspace 创建继续共用同一个方法，只将其接收者由整 Session 缩小为 Shared；Dirty、Flush、Close 继续复用唯一 flush_writer 发布／对账入口，不新增跨层业务 API。
+- 原记录先落盘、实时账户／绑定／上传授权、版本基线比较、失败新 workspace 的 abort、代次安装与记录失败后的原请求重试顺序保持。不可变 Open 直接复用已取得的 version_id，删掉同一 Option 的第二个不可能缺失分支；外部版本和manifest准入不变。
+- 根测试补充新代次记录失败后重试仍由原 handle 持有相同 workspace／operation 的断言，既有撤权、默认选择变化、write-through 和保存正文回归继续接线。六文件 rustfmt 与补丁检查通过；未本地编译或运行Rust，运行和真实Samba结果待准确提交CI。
+
+
 ## 本轮单 ELF 首存储验收前置修复
 
 - CI #1027 的准确提交 `8a253039` 已通过真实 Samba，但单 ELF 在空运行环境缺少 `/zxs` 而退出，未生成安装候选。继续核查确认仅补 host root 仍缺 PreparedService 要求的初始存储，原 development flag 不代替 helper 初始化。

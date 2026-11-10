@@ -181,7 +181,7 @@ impl Session {
             let mut pending_source = None;
             let mut pending_reservation = None;
             let result = (|| {
-                let workspace = self.workspace()?;
+                let workspace = self.shared.workspace(&self.identity, &self.branch)?;
                 pending_workspace = Some(workspace.workspace_id.clone());
                 // Bind the observed file to the workspace's immutable baseline.
                 // An HTTP writer can commit between find() and workspace creation,
@@ -346,17 +346,7 @@ impl Session {
             let fd = OwnedFd::from(
                 File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?,
             );
-            (
-                Handle::Read(
-                    content,
-                    version
-                        .clone()
-                        .ok_or_else(|| ApiError::invalid("read version missing"))?,
-                ),
-                fd,
-                size,
-                None,
-            )
+            (Handle::Read(content, version_id.to_owned()), fd, size, None)
         };
         self.handles.insert(handle_id, handle);
         let result = OpenResult {

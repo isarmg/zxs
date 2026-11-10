@@ -437,7 +437,7 @@ impl Session {
         let mut submission_started = false;
         let mut record_durable = false;
         let result = (|| {
-            let workspace = self.workspace()?;
+            let workspace = self.shared.workspace(&self.identity, &self.branch)?;
             pending_workspace = Some(workspace.workspace_id.clone());
             let commit = crate::CommitWorkspace {
                 workspace_id: workspace.workspace_id.clone(),
