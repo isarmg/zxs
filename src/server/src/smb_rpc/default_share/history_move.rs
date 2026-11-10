@@ -62,7 +62,8 @@ impl MoveReceipt {
     fn object(request: &crate::MoveCurrentObject) -> Result<Self, ApiError> {
         let same_entry = request.movement.target_repository_id.as_ref()
             == Some(&request.movement.source_repository_id)
-            && request.movement.target_entry_id.as_ref() == Some(&request.movement.source_entry_id);
+            && request.movement.target_entry_id.as_ref() == Some(&request.movement.source_entry_id)
+            && request.movement.target_path.key() == request.movement.source_path.key();
         if same_entry && request.expected_target_file_id.as_ref().is_some_and(|target| {
             request.expected_source_file_id.as_ref() != Some(target)
         }) {
