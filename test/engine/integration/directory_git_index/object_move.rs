@@ -183,6 +183,15 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
                 OperationId::generate().unwrap(),
             )
             .unwrap();
+        save(&mut engine, &source, "project/owned", b"reviewed parent");
+        stage_owned(&mut engine, &source, "project");
+        let reviewed = status(&engine, &source, "project");
+        let reviewed_git = &engine.state().directory_git_repositories[&reviewed.directory_id];
+        let reviewed_files = snapshot_files(
+            &engine,
+            &reviewed_git.branches[&reviewed_git.current_branch_id].index_tree_id,
+        );
+        assert_eq!(reviewed_files["owned"], b"reviewed parent");
         // These are real saves after the user commit, not staged fixture edits.
         save(&mut engine, &source, "project/owned", b"saved parent");
         save(&mut engine, &source, "project/child/file", b"saved child");
@@ -210,8 +219,9 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         let before = status(&engine, &source, "project");
         let child_before = status(&engine, &source, "project/child");
         let committed = snapshot_files(&engine, &parent_head);
+        assert_eq!(committed["owned"], b"committed parent");
         assert!(!committed.contains_key("added"));
-        assert!(!before.staged && before.unstaged && before.children[0].dirty);
+        assert!(before.staged && before.unstaged && before.children[0].dirty);
         assert!(!child_before.staged && child_before.unstaged);
 
         let target = move_to(&mut engine, &source, &destination, "project", "moved");
@@ -232,7 +242,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         );
         let after = status(&engine, &target, "moved");
         let child_after = status(&engine, &target, "moved/child");
-        assert!(!after.staged && after.unstaged, "{route:?}");
+        assert!(after.staged && after.unstaged, "{route:?}");
         assert!(!child_after.staged && child_after.unstaged, "{route:?}");
         assert_eq!(after.children.len(), 1);
         assert_eq!(after.children[0].directory_id, child_after.directory_id);
@@ -267,6 +277,11 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             );
         }
         let git = &engine.state().directory_git_repositories[&after.directory_id];
+        assert_eq!(after.index_generation, before.index_generation);
+        assert_eq!(
+            snapshot_files(&engine, &git.branches[&git.current_branch_id].index_tree_id),
+            reviewed_files
+        );
         let main = git.main_branch_id.clone();
         let names = git
             .branches
