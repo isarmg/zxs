@@ -33,6 +33,11 @@
 - 首次安装保存原计划后临时禁止 Debian 包脚本启动服务，完成后取消本次新 Samba 默认单元自启并清理本次策略；已有单元不接管。复用固定 ELF 程序、任务 owner 与退出回收，APT 写操作预算 20 分钟。未知结果只查询原状态，明确收尾不重复 APT；部分 dpkg 状态仍须检查处理。
 - 三组 JS 实际处理器／Python 接线、十个 Rust 文件格式、JS 语法、CLI golden 对源码及补丁检查通过。新增原生回归只有源码，未本地编译或运行 APT／systemd。Debian 隔离 root 安装、断电恢复、真实浏览器／SMB 与完整离线包闭包仍待验证；本片保留已恢复的普通注释，未修改真实主机。
 
+## 本轮服务启动隔离脚本路径清单
+
+- CI #1037 的 846 项 Python 回归仅静态路径清单失败：service_startup 新增的真实 manifest-relative service_namespace.py 引用尚未登记。本片在 reviewed inventory 精确增加该文件引用，并将固定计数 11 改为 12、补齐来源集合；保留逐字段完整比较和目标存在性检查。
+- 当前 service_startup Cargo 目标及实际脚本的隔离路径解析、原 11 条清单一致性核对、4 项 Python 回归通过。未本地编译或执行 Rust 测试，生产入口与 namespace 夹具不改；全量 CI 结果待准确提交验证。
+
 ## 本轮恢复共同根因快速回归
 
 - 一期 core 复用本轮 Cargo 构建出的 storage_engine libtest，精确追加 terminal selector 重入、原 seal/写者隔离、membership 部分 seal/发布恢复三项回归；当前清单由 103 增为 106。构建次数、全量 workspace、既有业务与挂载检查保持不变。

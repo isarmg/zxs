@@ -90,6 +90,16 @@
     "destination_kind": "directory"
   },
   {
+    "manifest": "src/server/Cargo.toml",
+    "kind": "test",
+    "name": "service_startup",
+    "source": "test/server/integration/service_startup.rs",
+    "form": "concat",
+    "literal": "/../../test/server/service_namespace.py",
+    "destination": "test/server/service_namespace.py",
+    "destination_kind": "file"
+  },
+  {
     "manifest": "tools/contract-check/Cargo.toml",
     "kind": "test",
     "name": "gitignore",
