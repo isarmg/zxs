@@ -1,8 +1,8 @@
 //! Native move advances both namespace admission and its single source D.
 //! Replaying an authenticated snapshot never treats a receipt map as authority.
 use super::*;
+use crate::OperationResult;
 use crate::business::{FILE_HISTORY_MOVE_KIND, verify_current_move_transition};
-use crate::{OperationId, OperationResult};
 use storage_contract::file_relocation::OBJECT_MOVE_KIND;
 
 fn invalid() -> Error {
@@ -13,50 +13,22 @@ fn invalid() -> Error {
 }
 
 fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
-    let mut found = None;
-    let mut inspect = |id: &OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before == after {
-            return Ok(());
-        }
-        if before.into_iter().chain(after).any(|op| {
+    let selected = publication_delta::new_receipt(
+        previous,
+        next,
+        |op| {
             matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
                 || op.result.get("move_request").is_some()
                 || op.result.get("movement").is_some()
-        }) {
-            let current = after.ok_or_else(invalid)?;
-            if before.is_some()
-                || current.operation_id != *id
-                || !matches!(
-                    current.kind.as_str(),
-                    FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND
-                )
-                || found.replace(current).is_some()
-            {
-                return Err(invalid());
-            }
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        storage_contract::MapChanges::Keys(keys) => {
-            for id in keys.iter() {
-                inspect(id)?;
-            }
-        }
-        storage_contract::MapChanges::All => {
-            for id in previous
-                .operations
-                .keys()
-                .chain(next.operations.keys())
-                .collect::<BTreeSet<_>>()
-            {
-                inspect(id)?;
-            }
-        }
+        },
+        invalid,
+    )?;
+    if selected
+        .is_some_and(|op| !matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND))
+    {
+        return Err(invalid());
     }
-    Ok(found)
+    Ok(selected)
 }
 
 impl CurrentNamespaces {

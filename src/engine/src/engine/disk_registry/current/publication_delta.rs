@@ -10,6 +10,33 @@ pub(super) fn receipt<'a>(
     accepts: impl Fn(&OperationResult) -> bool,
     invalid: fn() -> Error,
 ) -> Result<Option<&'a OperationResult>> {
+    let receipt = new_receipt(previous, next, &accepts, invalid)?;
+    let preserved_owner = |id: &OperationId| {
+        previous.operations.get(id).is_none_or(|old| {
+            !accepts(old)
+                || previous.operation_principals.get(id) == next.operation_principals.get(id)
+        })
+    };
+    let owners_unchanged = match next
+        .operation_principals
+        .changes_since(&previous.operation_principals)
+    {
+        MapChanges::Keys(ids) => ids.iter().all(preserved_owner),
+        MapChanges::All => previous.operations.keys().all(preserved_owner),
+    };
+    if !owners_unchanged {
+        return Err(invalid());
+    }
+    Ok(receipt)
+}
+
+/// Select one newly appended family receipt while preserving existing members.
+pub(super) fn new_receipt<'a>(
+    previous: &State,
+    next: &'a State,
+    accepts: impl Fn(&OperationResult) -> bool,
+    invalid: fn() -> Error,
+) -> Result<Option<&'a OperationResult>> {
     let mut receipt = None;
     let mut inspect = |id: &OperationId| -> Result<()> {
         let before = previous.operations.get(id);
@@ -39,22 +66,6 @@ pub(super) fn receipt<'a>(
                 inspect(id)?;
             }
         }
-    }
-    let preserved_owner = |id: &OperationId| {
-        previous.operations.get(id).is_none_or(|old| {
-            !accepts(old)
-                || previous.operation_principals.get(id) == next.operation_principals.get(id)
-        })
-    };
-    let owners_unchanged = match next
-        .operation_principals
-        .changes_since(&previous.operation_principals)
-    {
-        MapChanges::Keys(ids) => ids.iter().all(preserved_owner),
-        MapChanges::All => previous.operations.keys().all(preserved_owner),
-    };
-    if !owners_unchanged {
-        return Err(invalid());
     }
     Ok(receipt)
 }

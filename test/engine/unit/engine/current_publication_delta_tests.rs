@@ -210,3 +210,115 @@ fn only_added_rejects_replacements_removals_and_unrelated_writes() {
         }
     }
 }
+
+#[test]
+fn receipt_selection_leaves_principal_policy_with_its_caller() {
+    let before = before();
+    let mut next = candidate(&before);
+    next.operation_principals.insert(id(1), "changed".into());
+    for next in [next.clone(), cold(&next)] {
+        assert!(
+            new_receipt(&before, &next, accepts, invalid)
+                .unwrap()
+                .is_none()
+        );
+        assert!(receipt(&before, &next, accepts, invalid).is_err());
+    }
+}
+
+fn original_history_receipt<'a>(
+    previous: &State,
+    next: &'a State,
+    accepts: impl Fn(&OperationResult) -> bool,
+) -> Result<Option<&'a OperationResult>> {
+    let mut found = None;
+    for id in previous
+        .operations
+        .keys()
+        .chain(next.operations.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        let before = previous.operations.get(id);
+        let after = next.operations.get(id);
+        if before == after {
+            continue;
+        }
+        if before.into_iter().chain(after).any(&accepts) {
+            let current = after.ok_or_else(invalid)?;
+            if before.is_some()
+                || current.operation_id != *id
+                || current.kind != KIND
+                || found.replace(current).is_some()
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(found)
+}
+
+#[test]
+fn history_receipt_selection_matches_original_markers_and_append_rules() {
+    for marker in ["history_copy_request", "move_request", "movement"] {
+        let family = |row: &OperationResult| row.kind == KIND || row.result.get(marker).is_some();
+        for original in 0..3 {
+            let mut before = before();
+            if original == 1 {
+                before.operations.get_mut(&id(1)).unwrap().kind = "unrelated".into();
+            } else if original == 2 {
+                let row = before.operations.get_mut(&id(1)).unwrap();
+                row.kind = "retagged".into();
+                row.result[marker] = json!({});
+            }
+            for change in 0..9 {
+                let mut next = candidate(&before);
+                match change {
+                    0 => {}
+                    1 => {
+                        next.operations.remove(&id(1));
+                    }
+                    2 => next.operations.get_mut(&id(1)).unwrap().kind = "rewritten".into(),
+                    3 => next.operations.get_mut(&id(1)).unwrap().result[marker] = json!({}),
+                    4 => {
+                        next.operations.insert(id(3), result(3, KIND));
+                    }
+                    5 => {
+                        next.operations.insert(id(3), result(4, KIND));
+                    }
+                    6 => {
+                        next.operations.insert(id(3), result(3, KIND));
+                        next.operations.insert(id(4), result(4, KIND));
+                    }
+                    7 => {
+                        let mut row = result(3, "retagged");
+                        row.result[marker] = json!({});
+                        next.operations.insert(id(3), row);
+                    }
+                    8 => next.operations.get_mut(&id(1)).unwrap().kind = KIND.into(),
+                    _ => unreachable!(),
+                }
+                for next in [next.clone(), cold(&next)] {
+                    let expected = original_history_receipt(&before, &next, family);
+                    let actual =
+                        new_receipt(&before, &next, family, invalid).and_then(|selected| {
+                            if selected.is_some_and(|row| row.kind != KIND) {
+                                Err(invalid())
+                            } else {
+                                Ok(selected)
+                            }
+                        });
+                    let outcome = |result: Result<Option<&OperationResult>>| {
+                        result
+                            .map(|row| row.map(|row| row.operation_id))
+                            .map_err(|error| error.code())
+                    };
+                    assert_eq!(
+                        outcome(actual),
+                        outcome(expected),
+                        "{marker}/{original}/{change}"
+                    );
+                }
+            }
+        }
+    }
+}

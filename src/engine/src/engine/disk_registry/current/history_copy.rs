@@ -6,45 +6,16 @@ use crate::{CommitState, CurrentHealth, Event, OperationResult, ProtectionAtPubl
 use json_codec::json;
 
 fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
-    let mut found = None;
-    let mut inspect = |id: &crate::OperationId| -> Result<()> {
-        let before = previous.operations.get(id);
-        let after = next.operations.get(id);
-        if before == after {
-            return Ok(());
-        }
-        if before.into_iter().chain(after).any(|op| {
-            history_copy::is_kind(&op.kind) || op.result.get("history_copy_request").is_some()
-        }) {
-            let current = after.ok_or_else(invalid)?;
-            if before.is_some()
-                || current.operation_id != *id
-                || !history_copy::is_kind(&current.kind)
-                || found.replace(current).is_some()
-            {
-                return Err(invalid());
-            }
-        }
-        Ok(())
-    };
-    match next.operations.changes_since(&previous.operations) {
-        storage_contract::MapChanges::Keys(keys) => {
-            for id in keys.iter() {
-                inspect(id)?;
-            }
-        }
-        storage_contract::MapChanges::All => {
-            for id in previous
-                .operations
-                .keys()
-                .chain(next.operations.keys())
-                .collect::<BTreeSet<_>>()
-            {
-                inspect(id)?;
-            }
-        }
+    let selected = publication_delta::new_receipt(
+        previous,
+        next,
+        |op| history_copy::is_kind(&op.kind) || op.result.get("history_copy_request").is_some(),
+        invalid,
+    )?;
+    if selected.is_some_and(|op| !history_copy::is_kind(&op.kind)) {
+        return Err(invalid());
     }
-    Ok(found)
+    Ok(selected)
 }
 
 // Compare the complete schema, using exact tracked keys on the live path.
@@ -174,7 +145,6 @@ impl CurrentNamespaces {
             || op.commit_state != CommitState::Published
             || op.current_health != CurrentHealth::Healthy
             || op.protection_at_publish != ProtectionAtPublish::TargetMet
-            || previous.operations.contains_key(&op.operation_id)
             || previous.operation_principals.contains_key(&op.operation_id)
         {
             return Err(invalid());

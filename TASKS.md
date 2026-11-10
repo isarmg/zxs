@@ -2,6 +2,14 @@
 
 状态核对时间：2026-11-10。当前源码父基线：`a6d2d08c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
+## 本轮 Current 回执扫描精简
+
+- 历史复制、原生移动与已有七类 Current 回执复用现有 publication_delta 中的一份新增回执扫描，删除两份旧扫描及冷态临时 BTreeSet。家族标记与有效 kind 仍由各原入口决定；仅需要主体不可变规则的调用继续检查主体，复制／移动不扩大该策略。
+- 历史复制的重复 operation 存在性检查移除：同一不可变 previous／next 上，扫描已保证旧值不存在且 map key 等于 receipt.operation_id。冷态仍遍历全部旧键和真正新增键；热态仍按 tracked keys，永不改写原回执或事件。
+- 基于 `0cecbed0`，3 个生产文件实际净删 47 行；根测试补充主体策略分离与 162 组冷热标记／追加规则差分场景。目录代理独立静态审阅未见确定阻断；固定 rustfmt 与精确补丁检查通过。未本地编译或执行 Rust 测试，实际运行结果待统一 CI。普通文档注释、磁盘格式与 I/O 顺序保持。
+
+
+
 ## 本轮 SMB 路径类型贯穿
 
 - ResolveSmbPath 的 LookupPath 经引擎路由后继续保留类型和缓存 key；SmbPathLocation 明确区分 repository root 与非空相对路径，删除空串哨兵及 DefaultShare／Session 的重复解析。命名仓库后缀从已验证路径裁取，默认根保留完整路径。
