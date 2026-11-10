@@ -169,7 +169,7 @@ pub(crate) fn verify_current_move_transition(
     });
     history_copy::retained::bounded(&expected)?;
     history_copy::retained::bounded(next)?;
-    if &expected != next {
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
     Ok(())

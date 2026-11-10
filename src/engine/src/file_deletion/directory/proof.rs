@@ -408,7 +408,7 @@ pub(crate) fn verify_publication(
         kind: receipt.kind.clone(),
         object_id: receipt.operation_id.to_string(),
     });
-    if expected != *next {
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
     Ok(true)

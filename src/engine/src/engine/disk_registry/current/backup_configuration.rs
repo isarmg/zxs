@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::{Prepared, ReadSource};
 use crate::journal::Candidate;
 use crate::protection::RecursiveBackupMode;
+use crate::publication_shape::Table;
 use crate::{
     CommitState, CurrentHealth, Event, FileVersion, HistoricalDiskDefinition, OperationResult,
     Placement, ProtectionAtPublish, RecursiveBackupCapture, RecursiveBackupConfigurationRequest,
@@ -475,6 +476,8 @@ impl CurrentNamespaces {
             sequence: next.sequence,
             result,
         };
+        // Every State field must be classified. In particular physical file_names and
+        // file_locations are immutable inputs here, never cache-repair permissions.
         if receipt != &expected
             || next.sequence <= previous.sequence
             || previous.business_generation.checked_add(1) != Some(next.business_generation)
@@ -507,7 +510,18 @@ impl CurrentNamespaces {
                 principal,
             )
             || !one_event(previous, next, receipt)
-            || !unchanged_state(previous, next)
+            || !crate::publication_shape::unchanged_except(
+                previous,
+                next,
+                &[
+                    Table::ProtectionPolicies,
+                    Table::FileBackupPaths,
+                    Table::FileBackupPolicies,
+                    Table::Placements,
+                ],
+            )
+            || next.topology_generation != previous.topology_generation
+            || next.control_auth != previous.control_auth
         {
             return Err(invalid());
         }
@@ -640,45 +654,6 @@ fn one_event(previous: &State, next: &State, receipt: &OperationResult) -> bool 
             .expect("invariant: verified backup receipt has its history"),
     };
     publication_delta::one_event(previous, next, &expected)
-}
-
-// Every State field must be classified. In particular physical file_names and
-// file_locations are immutable inputs here, never cache-repair permissions.
-macro_rules! unchanged_fields {
-    ($($field:ident),* $(,)?) => {
-        fn unchanged_state(previous: &State, next: &State) -> bool {
-            let State {
-                sequence: _,
-                business_generation: _,
-                operations: _,
-                operation_principals: _,
-                events: _,
-                protection_policies: _,
-                file_backup_paths: _,
-                file_backup_policies: _,
-                placements: _,
-                topology_generation,
-                control_auth,
-                $($field,)*
-            } = next;
-            topology_generation == &previous.topology_generation
-                && control_auth == &previous.control_auth
-                $(&& match $field.changes_since(&previous.$field) {
-                    MapChanges::Keys(keys) => keys
-                        .iter()
-                        .all(|id| $field.get(id) == previous.$field.get(id)),
-                    MapChanges::All => $field == &previous.$field,
-                })*
-        }
-    };
-}
-unchanged_fields! {
-    repositories, histories, branches, file_selections, directory_branches, directory_git_repositories, directory_trees,
-    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes, file_deletions, file_branch_merges,
-    file_branch_aliases, file_node_parents, file_path_notes, directory_tree_selections, file_locations,
-    directory_selections, directory_selection_generations, file_selection_generations, file_notes,
-    version_notes, file_names, commits, versions, merge_links, history_boundaries, content_states,
-    plans, placement_rules,
 }
 
 #[cfg(test)]

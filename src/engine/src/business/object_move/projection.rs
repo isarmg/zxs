@@ -923,7 +923,9 @@ pub(crate) fn verify_transition(
         receipt.operation_id,
         receipt.sequence,
     )?;
-    if &expected != next || expected_receipt != *receipt {
+    if !crate::publication_shape::same_transition(previous, &expected, next)
+        || expected_receipt != *receipt
+    {
         return Err(invalid());
     }
     Ok(())

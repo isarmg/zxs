@@ -3,6 +3,7 @@
 //! A cold publication may therefore add a Cancelled record with no published
 //! Ready predecessor; it gains no namespace, payload or cleanup authority.
 use super::*;
+use crate::publication_shape::Table;
 use crate::{
     CommitState, CurrentHealth, Event, OperationResult, Plan, PlanState, ProtectionAtPublish,
 };
@@ -76,6 +77,9 @@ impl CurrentNamespaces {
                 "version_protection": []
             }),
         };
+        // An exhaustive State pattern forces new fields to choose their cancellation
+        // semantics. In particular physical file_names/file_locations stay exact, even
+        // when a restored State lost mutation tracking; neither is repaired from HEAD.
         if receipt != &expected
             || next.sequence <= previous.sequence
             || previous.business_generation.checked_add(1) != Some(next.business_generation)
@@ -93,7 +97,9 @@ impl CurrentNamespaces {
                 principal,
             )
             || !one_cancellation_event(previous, next, receipt)
-            || !unchanged_cancellation_state(previous, next)
+            || !crate::publication_shape::unchanged_except(previous, next, &[Table::Plans])
+            || next.topology_generation != previous.topology_generation
+            || next.control_auth != previous.control_auth
         {
             return Err(invalid());
         }
@@ -184,39 +190,6 @@ fn one_cancellation_event(previous: &State, next: &State, receipt: &OperationRes
         object_id: receipt.operation_id.to_string(),
     };
     publication_delta::one_event(previous, next, &expected)
-}
-
-// An exhaustive State pattern forces new fields to choose their cancellation
-// semantics. In particular physical file_names/file_locations stay exact, even
-// when a restored State lost mutation tracking; neither is repaired from HEAD.
-macro_rules! unchanged_cancellation_fields {
-    ($($field:ident),* $(,)?) => {
-        fn unchanged_cancellation_state(previous: &State, next: &State) -> bool {
-            let State {
-                sequence: _, business_generation: _, plans: _, operations: _,
-                operation_principals: _, events: _, topology_generation, control_auth,
-                $($field,)*
-            } = next;
-            topology_generation == &previous.topology_generation
-                && control_auth == &previous.control_auth
-                $(&& match $field.changes_since(&previous.$field) {
-                    MapChanges::Keys(keys) => keys.iter().all(|id| {
-                        $field.get(id) == previous.$field.get(id)
-                    }),
-                    MapChanges::All => $field.len() == previous.$field.len()
-                        && $field.iter().all(|(id, value)| previous.$field.get(id) == Some(value)),
-                })*
-        }
-    };
-}
-unchanged_cancellation_fields! {
-    repositories, histories, branches, file_selections, directory_branches, directory_git_repositories, directory_trees,
-    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes, file_deletions,
-    file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
-    directory_tree_selections, file_locations, file_backup_paths, file_backup_policies,
-    directory_selections, directory_selection_generations, file_selection_generations,
-    file_notes, version_notes, file_names, commits, versions, placements, merge_links,
-    history_boundaries, content_states, placement_rules, protection_policies,
 }
 
 #[cfg(test)]

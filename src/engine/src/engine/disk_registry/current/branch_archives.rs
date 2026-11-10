@@ -2,6 +2,7 @@
 //! Reconstruct its permanent request before the unchanged-head fast path, both
 //! in live publication and when replay has lost transaction-local tracking.
 use super::*;
+use crate::publication_shape::Table;
 use crate::{
     Branch, CommitState, CurrentHealth, Event, OperationId, OperationResult, ProtectionAtPublish,
 };
@@ -252,56 +253,9 @@ fn verify_write_set(
 ) -> Result<()> {
     // Exhaustive State destructuring keeps additions an explicit write-set
     // decision. Valid provenance avoids comparing unrelated historical records.
-    macro_rules! preserve {
-        ($($field:ident),* $(,)?) => {{
-            let State {
-                sequence: _, business_generation: _, topology_generation: _,
-                control_auth: _, branches: _, operations: _, operation_principals: _,
-                events: _, $($field,)*
-            } = previous;
-            $(let unchanged = match next.$field.changes_since($field) {
-                MapChanges::Keys(keys) => keys.iter().all(|key| next.$field.get(key) == $field.get(key)),
-                MapChanges::All => &next.$field == $field,
-            };
-            if !unchanged { return Err(invalid()); })*
-        }};
+    if !crate::publication_shape::unchanged_except(previous, next, &[Table::Branches]) {
+        return Err(invalid());
     }
-    preserve!(
-        repositories,
-        histories,
-        file_names,
-        file_locations,
-        file_selections,
-        directory_branches,
-        directory_git_repositories,
-        directory_trees,
-        file_write_origins,
-        file_contexts,
-        file_path_nodes,
-        file_metadata_nodes,
-        file_deletions,
-        file_branch_merges,
-        file_branch_aliases,
-        file_node_parents,
-        file_path_notes,
-        directory_tree_selections,
-        file_backup_paths,
-        file_backup_policies,
-        directory_selections,
-        directory_selection_generations,
-        file_selection_generations,
-        file_notes,
-        version_notes,
-        commits,
-        versions,
-        placements,
-        merge_links,
-        history_boundaries,
-        content_states,
-        plans,
-        placement_rules,
-        protection_policies,
-    );
     macro_rules! only_change {
         ($field:ident, $key:expr) => {{
             let same = |key| key == $key || previous.$field.get(key) == next.$field.get(key);

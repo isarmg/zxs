@@ -181,7 +181,7 @@ impl CurrentNamespaces {
         });
         // The comparison covers every State field, including unchanged bodies,
         // placements, old history, owners and receipts. Tracking is no authority.
-        if expected != *next {
+        if !crate::publication_shape::same_transition(previous, &expected, next) {
             return Err(invalid());
         }
         Ok(())

@@ -2,6 +2,7 @@
 //! The permanent native receipt and closed State write set are rechecked before
 //! the unchanged-namespace fast path, including replay without change tracking.
 use super::*;
+use crate::publication_shape::Table;
 use crate::{
     Branch, CommitState, CurrentHealth, Event, OperationResult, ProtectionAtPublish, Repository,
 };
@@ -158,6 +159,9 @@ impl CurrentNamespaces {
             sequence: next.sequence,
             result: expected_result,
         };
+        // file_names/file_locations also drive physical container paths. Published
+        // States already captured them; a cold decode loses tracking, not these values.
+        // Rebinding must not repair missing names from a raw, possibly hidden HEAD.
         if receipt != &expected_receipt
             || next.sequence <= previous.sequence
             || previous.business_generation.checked_add(1) != Some(next.business_generation)
@@ -186,7 +190,13 @@ impl CurrentNamespaces {
                 principal,
             )
             || !one_binding_event(previous, next, receipt)
-            || !unchanged_binding_state(previous, next)
+            || !crate::publication_shape::unchanged_except(
+                previous,
+                next,
+                &[Table::Repositories, Table::Histories],
+            )
+            || next.topology_generation != previous.topology_generation
+            || next.control_auth != previous.control_auth
         {
             return Err(invalid());
         }
@@ -260,33 +270,6 @@ fn one_binding_event(previous: &State, next: &State, receipt: &OperationResult) 
 // One exhaustive State pattern owns the closed write set. Adding a field to
 // State forces an explicit choice here; no namespace, placement, physical owner,
 // authentication or historical record is implicitly authorized by a rebind.
-// file_names/file_locations also drive physical container paths. Published
-// States already captured them; a cold decode loses tracking, not these values.
-// Rebinding must not repair missing names from a raw, possibly hidden HEAD.
-macro_rules! unchanged_binding_fields {
-    ($($field:ident),* $(,)?) => {
-        fn unchanged_binding_state(previous: &State, next: &State) -> bool {
-            let State {
-                sequence: _, business_generation: _, repositories: _, histories: _,
-                operations: _, operation_principals: _, events: _,
-                topology_generation, control_auth, $($field,)*
-            } = next;
-            topology_generation == &previous.topology_generation
-                && control_auth == &previous.control_auth
-                $(&& ($field.changes_since(&previous.$field).is_empty() || $field == &previous.$field))*
-        }
-    };
-}
-unchanged_binding_fields! {
-    branches, file_selections, directory_branches, directory_git_repositories, directory_trees,
-    file_write_origins, file_contexts, file_path_nodes, file_metadata_nodes, file_deletions,
-    file_branch_merges, file_branch_aliases, file_node_parents, file_path_notes,
-    directory_tree_selections, file_locations, file_backup_paths, file_backup_policies,
-    directory_selections, directory_selection_generations, file_selection_generations,
-    file_notes, version_notes, file_names, commits, versions, placements, merge_links,
-    history_boundaries, content_states, plans, placement_rules, protection_policies,
-}
-
 #[cfg(test)]
 #[path = "../../../../../../test/engine/unit/engine/current_smb_binding_tests.rs"]
 mod tests;

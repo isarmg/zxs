@@ -18,72 +18,6 @@ fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Operation
     Ok(selected)
 }
 
-// Compare the complete schema, using exact tracked keys on the live path.
-// Cold deserialization has no tracking authority and compares full maps.
-fn same_write_set(previous: &State, expected: &State, actual: &State) -> bool {
-    macro_rules! maps {
-        ($($field:ident),* $(,)?) => {{
-            let State { sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _, $($field: _,)* } = actual;
-            $(let same = match (expected.$field.changes_since(&previous.$field), actual.$field.changes_since(&previous.$field)) {
-                (storage_contract::MapChanges::Keys(left), storage_contract::MapChanges::Keys(right)) => left.iter().chain(right.iter()).all(|key| expected.$field.get(key) == actual.$field.get(key)),
-                _ => expected.$field == actual.$field,
-            };
-            if !same { return false; })*
-        }};
-    }
-    maps!(
-        repositories,
-        histories,
-        branches,
-        file_selections,
-        directory_branches,
-        directory_git_repositories,
-        directory_trees,
-        file_write_origins,
-        file_contexts,
-        file_path_nodes,
-        file_metadata_nodes,
-        file_deletions,
-        file_branch_merges,
-        file_branch_aliases,
-        file_node_parents,
-        file_path_notes,
-        directory_tree_selections,
-        file_locations,
-        file_backup_paths,
-        file_backup_policies,
-        directory_selections,
-        directory_selection_generations,
-        file_selection_generations,
-        file_notes,
-        version_notes,
-        file_names,
-        commits,
-        versions,
-        placements,
-        merge_links,
-        history_boundaries,
-        content_states,
-        operations,
-        plans,
-        placement_rules,
-        protection_policies,
-        operation_principals
-    );
-    let events = match actual.events.changes_since(&previous.events) {
-        storage_contract::SequenceChanges::Append { start } if start == previous.events.len() => {
-            actual.events.len() == expected.events.len()
-                && actual.events.last() == expected.events.last()
-        }
-        _ => actual.events == expected.events,
-    };
-    events
-        && actual.sequence == expected.sequence
-        && actual.business_generation == expected.business_generation
-        && actual.topology_generation == expected.topology_generation
-        && actual.control_auth == expected.control_auth
-}
-
 impl CurrentNamespaces {
     pub(crate) fn reject_degraded_history_copy(
         candidate: &crate::journal::Candidate,
@@ -202,7 +136,7 @@ impl CurrentNamespaces {
             kind: op.kind.clone(),
             object_id: op.commit_id.clone().ok_or_else(invalid)?,
         });
-        if !same_write_set(previous, &expected, next) {
+        if !crate::publication_shape::same_transition(previous, &expected, next) {
             return Err(invalid());
         }
         let mut view = self.clone();

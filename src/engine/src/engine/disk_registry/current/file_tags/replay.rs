@@ -1,5 +1,6 @@
 //! Rebuild exactly the authenticated tag request before any publication effects.
 use super::*;
+use crate::publication_shape::Table;
 use storage_contract::{MapChanges, SequenceChanges};
 
 fn is_tag(receipt: &OperationResult) -> bool {
@@ -305,90 +306,22 @@ impl Plan {
                 }
             }};
         }
-        macro_rules! unchanged {
-            ($($field:ident),* $(,)?) => { $(
-                let same = match next.$field.changes_since(&previous.$field) {
-                    MapChanges::Keys(ids) => ids.iter().all(|id| previous.$field.get(id) == next.$field.get(id)),
-                    MapChanges::All => next.$field == previous.$field,
-                };
-                if !same { return Err(invalid()); }
-            )* };
-        }
         // Exhaustive coverage: adding a State field requires a write-set decision.
-        let State {
-            sequence: _,
-            business_generation: _,
-            topology_generation: _,
-            control_auth: _,
-            events: _,
-            repositories: _,
-            histories: _,
-            branches: _,
-            file_selections: _,
-            directory_branches: _,
-            directory_git_repositories: _,
-            directory_trees: _,
-            file_write_origins: _,
-            file_contexts: _,
-            file_path_nodes: _,
-            file_metadata_nodes: _,
-            file_deletions: _,
-            file_branch_merges: _,
-            file_branch_aliases: _,
-            file_node_parents: _,
-            file_path_notes: _,
-            directory_tree_selections: _,
-            file_locations: _,
-            file_backup_paths: _,
-            file_backup_policies: _,
-            directory_selections: _,
-            directory_selection_generations: _,
-            file_selection_generations: _,
-            file_notes: _,
-            version_notes: _,
-            file_names: _,
-            commits: _,
-            versions: _,
-            placements: _,
-            merge_links: _,
-            history_boundaries: _,
-            content_states: _,
-            operations: _,
-            plans: _,
-            placement_rules: _,
-            protection_policies: _,
-            operation_principals: _,
-        } = next;
-        unchanged!(
-            repositories,
-            directory_git_repositories,
-            histories,
-            file_selections,
-            file_write_origins,
-            file_path_nodes,
-            file_deletions,
-            file_branch_merges,
-            file_branch_aliases,
-            file_node_parents,
-            file_path_notes,
-            file_locations,
-            file_backup_paths,
-            file_backup_policies,
-            directory_selections,
-            directory_selection_generations,
-            file_selection_generations,
-            file_notes,
-            version_notes,
-            file_names,
-            versions,
-            placements,
-            merge_links,
-            history_boundaries,
-            content_states,
-            plans,
-            placement_rules,
-            protection_policies
-        );
+        if !crate::publication_shape::unchanged_except(
+            previous,
+            next,
+            &[
+                Table::Branches,
+                Table::Commits,
+                Table::FileMetadataNodes,
+                Table::DirectoryBranches,
+                Table::DirectoryTrees,
+                Table::FileContexts,
+                Table::DirectoryTreeSelections,
+            ],
+        ) {
+            return Err(invalid());
+        }
         verify_patch!(branches, &self.branches);
         verify_patch!(commits, &self.commits);
         verify_patch!(file_metadata_nodes, &self.file_metadata_nodes);

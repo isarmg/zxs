@@ -197,3 +197,114 @@ fn event_prefix_and_exact_new_event_remain_bound() {
         rejects(&previous, &next);
     }
 }
+
+fn replay_outcome(previous: &State, change: usize) -> State {
+    let mut next = previous.clone();
+    next.begin_tracking();
+    match change {
+        0 => {}
+        1 => {
+            next.file_notes.insert("file".into(), "note".into());
+        }
+        2 => {
+            next.file_notes.insert("file".into(), "note".into());
+            next.file_notes.remove("file");
+        }
+        3 => {
+            next.operations.insert(id(2), receipt(2));
+        }
+        4 => next.operations.get_mut(&id(1)).unwrap().kind = "changed".into(),
+        5 => {
+            next.operation_principals.insert(id(1), "changed".into());
+        }
+        6 => next.events.push(event(2)),
+        7 => next.events[0].kind = "changed".into(),
+        8 => next.sequence += 1,
+        9 => next.business_generation += 1,
+        10 => next.topology_generation += 1,
+        11 => next.control_auth = Some(json!({"state": "changed"})),
+        12 => {
+            next.directory_selection_generations
+                .insert("directory".into(), 3);
+        }
+        13 => {
+            next.file_node_parents
+                .insert("node".into(), vec!["parent".into()]);
+        }
+        14 | 15 => {
+            let mut first = event(2);
+            if change == 15 {
+                first.kind = "different first appended event".into();
+            }
+            next.events.extend([first, event(3)]);
+        }
+        16 => next.file_notes = [("file".into(), "note".into())].into(),
+        17 => next.events.clear(),
+        18 => return cold(&next),
+        _ => unreachable!(),
+    }
+    next
+}
+
+#[test]
+fn replay_comparison_matches_full_state_for_independent_hot_and_cold_outcomes() {
+    let previous = previous();
+    let outcomes = (0..19)
+        .flat_map(|change| {
+            let hot = replay_outcome(&previous, change);
+            [cold(&hot), hot]
+        })
+        .collect::<Vec<_>>();
+    for (left, expected) in outcomes.iter().enumerate() {
+        for (right, actual) in outcomes.iter().enumerate() {
+            assert_eq!(
+                same_transition(&previous, expected, actual),
+                expected == actual,
+                "outcomes {left} and {right}"
+            );
+        }
+    }
+}
+
+#[test]
+fn table_permissions_preserve_unrelated_rows_for_hot_and_cold_changes() {
+    let mutations: [(Table, fn(&mut State)); 5] = [
+        (Table::FileNotes, |state| {
+            state.file_notes.insert("file".into(), "note".into());
+        }),
+        (Table::FilePathNotes, |state| {
+            state.file_path_notes.insert("node".into(), "note".into());
+        }),
+        (Table::FileBackupPolicies, |state| {
+            state
+                .file_backup_policies
+                .insert("file".into(), "policy".into());
+        }),
+        (Table::DirectorySelectionGenerations, |state| {
+            state
+                .directory_selection_generations
+                .insert("directory".into(), 1);
+        }),
+        (Table::ContentStates, |state| {
+            state
+                .content_states
+                .insert("version".into(), ContentState::Retired);
+        }),
+    ];
+    let previous = previous();
+    for (table, mutate) in mutations {
+        let mut next = previous.clone();
+        next.begin_tracking();
+        mutate(&mut next);
+        for next in [cold(&next), next] {
+            assert!(!unchanged_except(&previous, &next, &[]));
+            assert!(unchanged_except(&previous, &next, &[table]));
+            for (other, _) in mutations {
+                assert_eq!(unchanged_except(&previous, &next, &[other]), table == other);
+            }
+        }
+    }
+    let no_net_change = replay_outcome(&previous, 2);
+    assert!(unchanged_except(&previous, &no_net_change, &[]));
+    assert!(unchanged_except(&previous, &cold(&no_net_change), &[]));
+}

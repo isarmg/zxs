@@ -78,7 +78,7 @@ pub(crate) fn verify_plan(
     let expected = expected_draft(previous, next, current, &node, &evidence, request)?;
     // Includes every schema field, old receipt, event, frozen file, Git index
     // and unrelated namespace. This exception cannot authorize arbitrary writes.
-    if expected != *next {
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
     Ok(true)
@@ -173,7 +173,7 @@ pub(crate) fn verify_publication(
         kind: receipt.kind.clone(),
         object_id: receipt.operation_id.to_string(),
     });
-    if expected != *next {
+    if !crate::publication_shape::same_transition(previous, &expected, next) {
         return Err(invalid());
     }
     let repository = &previous.repositories[&node.repository_id];
