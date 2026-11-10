@@ -866,11 +866,13 @@ pub trait Backend: Send + Sync {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
+    /// Delete an exact current file through its reversible lifecycle. `None`
+    /// identifies a legacy structural namespace without publishing a deletion.
     fn delete_current_file(
         &self,
         _identity: &Identity,
         _command: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
         Err(ApiError::unsupported())
     }
     fn prepare_current_directory_deletion(
@@ -1794,7 +1796,7 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &Identity,
         command: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
         self.backend
             .delete_current_file(&self.current(identity)?, command)
     }

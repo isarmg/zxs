@@ -296,7 +296,7 @@ fn public_http_deletion_is_discoverable_and_undo_is_exact_authenticated_and_dura
                 file_id: HistoryFileId::parse(&entry.file_id).unwrap(),
                 operation_id: OperationId::generate().unwrap(),
             },
-        ).unwrap();
+        ).unwrap().expect("native file deletion");
         let (_, second) = request(&app, Some(token), "GET", &path, json!({})).await;
         assert_ne!(second["node_id"], deleted.node_id);
         // Re-reading the original undo receipt must not undo a later deletion.
@@ -484,7 +484,8 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         .unwrap();
     backend
         .delete_current_file(&smb, command(a.entry_id.clone()))
-        .unwrap();
+        .unwrap()
+        .expect("native file deletion");
     assert_eq!(
         backend
             .authorize_listing_snapshot(&smb, &listed_before)

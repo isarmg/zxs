@@ -77,7 +77,7 @@ impl EngineBackend {
         &self,
         identity: &Identity,
         command: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
         let mut engine = self
             .engine
             .lock()
@@ -91,8 +91,8 @@ impl EngineBackend {
             return Err(ApiError::forbidden());
         }
         let repository = repo_for_branch(&engine, &command.branch_id)?;
-        if !repository.file_manager_root || repository.main_branch_id != command.branch_id {
-            return Err(ApiError::unsupported());
+        if repository.main_branch_id != command.branch_id {
+            return Ok(None);
         }
         let repository_id = HistoryRepositoryId::parse(&repository.repository_id)
             .map_err(|source| error(source.into()))?;
@@ -113,7 +113,7 @@ impl EngineBackend {
             // The entry ID guards a new path resolution. A retained receipt is
             // checked by its canonical repository/file/path/actor before current
             // visibility, including after undo or another later deletion.
-            return engine.soft_delete_file(request).map_err(error);
+            return engine.soft_delete_file(request).map(Some).map_err(error);
         }
         let object = engine
             .locate_object(&command.branch_id, &command.path)
@@ -139,10 +139,15 @@ impl EngineBackend {
                 "delete target identity changed",
             ));
         }
+        // Legacy named namespaces still use structural deletion. An initialized
+        // owner requires the same reversible lifecycle as a disk-root file.
+        if !repository.file_manager_root && object.initialized_repository_id().is_none() {
+            return Ok(None);
+        }
         // SMB must not publish a D that the management recovery entrance cannot
         // read. Preserve the captured entry guard above and do not trim parents.
         admit_new_deletion(&engine, request.target)?;
-        engine.soft_delete_file(request).map_err(error)
+        engine.soft_delete_file(request).map(Some).map_err(error)
     }
 
     pub(super) fn current_file_deletion_admitted(

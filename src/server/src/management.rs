@@ -1471,7 +1471,7 @@ impl Backend for ManagementBackend {
         &self,
         identity: &crate::auth::Identity,
         command: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
         self.inner.backend()?.delete_current_file(identity, command)
     }
     fn prepare_current_directory_deletion(

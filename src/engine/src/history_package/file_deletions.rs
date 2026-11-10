@@ -19,7 +19,6 @@ impl HistoryManifest {
                 || node.repository_id != self.repository.repository_id
                 || node.history_tree_id != self.history.history_tree_id
                 || node.author.is_empty()
-                || !self.repository.file_manager_root
             {
                 return Err(invalid());
             }

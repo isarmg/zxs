@@ -585,3 +585,151 @@ fn deleted_same_body_branches_cannot_change_selection_or_default_but_other_files
     assert_eq!(engine.state().file_selections[&entry.file_id], second);
     assert_eq!(engine.state().file_selections[&other.file_id], other_branch);
 }
+
+#[test]
+fn named_initialized_file_deletion_and_undo_survive_restart() {
+    for directory in ["", "nested"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("system");
+        let mut engine = Engine::initialize(
+            &root,
+            Config::development([temp.path().join("disk")]).unwrap(),
+        )
+        .unwrap();
+        let repository = engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("named").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        let path = if directory.is_empty() {
+            "file.txt"
+        } else {
+            "nested/file.txt"
+        };
+        let workspace = engine
+            .create_workspace(&repository.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, path, b"retained named content")
+            .unwrap();
+        engine.commit_workspace(request(workspace)).unwrap();
+        let head = engine.state().branches[&repository.main_branch_id]
+            .head_commit_id
+            .clone();
+        engine
+            .initialize_directory_git(
+                &repository.repository_id,
+                &storage_contract::directory_git::DirectoryGitInitializeBody {
+                    path: directory.into(),
+                    expected_namespace_head: head,
+                    operation_id: OperationId::generate().unwrap(),
+                },
+                "admin",
+            )
+            .unwrap();
+        let original = engine
+            .namespace_tree(&repository.main_branch_id)
+            .unwrap()
+            .get(path)
+            .unwrap()
+            .clone();
+        let repository_id = HistoryRepositoryId::parse(&repository.repository_id).unwrap();
+        let file_id = HistoryFileId::parse(&original.file_id).unwrap();
+        let lookup = name_policy::LookupPath::parse(path).unwrap();
+        let operation = OperationId::generate().unwrap();
+        let target = FileDeletionTarget {
+            repository_id: &repository_id,
+            file_id: &file_id,
+            path: &lookup,
+        };
+        let before = engine.state().clone();
+        let receipt = engine
+            .soft_delete_file(DeleteFileRequest {
+                target,
+                principal: "admin",
+                operation_id: operation,
+            })
+            .unwrap();
+        let deleted = engine.file_deletion(&original.file_id).unwrap().clone();
+        assert!(!deleted.branch_heads.is_empty());
+        assert_eq!(engine.state().branches, before.branches);
+        assert_eq!(engine.state().commits, before.commits);
+        assert_eq!(engine.state().versions, before.versions);
+        assert_eq!(
+            engine.state().directory_git_repositories,
+            before.directory_git_repositories
+        );
+        assert!(
+            engine
+                .namespace_tree(&repository.main_branch_id)
+                .unwrap()
+                .get(path)
+                .is_none()
+        );
+        drop(engine);
+        let mut engine = Engine::open(&root).unwrap();
+        assert_eq!(engine.file_deletion(&original.file_id), Some(&deleted));
+        assert!(
+            engine
+                .namespace_tree(&repository.main_branch_id)
+                .unwrap()
+                .get(path)
+                .is_none()
+        );
+        assert_eq!(
+            engine
+                .soft_delete_file(DeleteFileRequest {
+                    target,
+                    principal: "admin",
+                    operation_id: operation,
+                })
+                .unwrap(),
+            receipt
+        );
+        let export = temp.path().join("retained.bin");
+        engine
+            .export_version(&original.version_id, &export)
+            .unwrap();
+        assert_eq!(std::fs::read(export).unwrap(), b"retained named content");
+        engine
+            .undo_file_deletion(UndoFileDeletionRequest {
+                file_id: &file_id,
+                deletion_node_id: &deleted.node_id,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        assert_eq!(
+            engine
+                .namespace_tree(&repository.main_branch_id)
+                .unwrap()
+                .get(path),
+            Some(&original)
+        );
+        assert_eq!(
+            engine
+                .soft_delete_file(DeleteFileRequest {
+                    target,
+                    principal: "admin",
+                    operation_id: operation,
+                })
+                .unwrap(),
+            receipt
+        );
+        assert!(engine.file_deletion(&original.file_id).is_none());
+        drop(engine);
+        let engine = Engine::open(&root).unwrap();
+        assert!(engine.file_deletion(&original.file_id).is_none());
+        assert_eq!(
+            engine
+                .namespace_tree(&repository.main_branch_id)
+                .unwrap()
+                .get(path),
+            Some(&original)
+        );
+    }
+}

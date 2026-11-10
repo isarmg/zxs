@@ -120,7 +120,7 @@ fn http_whole_file_deletion_retains_all_branches_replays_after_undo_and_cold_ope
             branch_id:repo.main_branch_id.clone(),file_id:HistoryFileId::parse(&a.file_id).unwrap(),
             expected_entry_id:a.entry_id.clone(),path:name_policy::LookupPath::parse("A.txt").unwrap(),operation_id:operation,
         }).unwrap();
-        assert_eq!(replay.result["deletion_node"],*node);
+        assert_eq!(replay.unwrap().result["deletion_node"],*node);
         assert!(backend.current_file_deletion(&identity,&HistoryFileId::parse(&a.file_id).unwrap()).unwrap().is_none());
     });
     runtime.shutdown_timeout(Duration::from_secs(2));
@@ -187,7 +187,7 @@ fn soft_delete_adapter_checks_current_auth_and_preserves_cross_interface_receipt
         backend
             .soft_delete_file(&identity, command(&repo, &a, operation))
             .unwrap(),
-        first
+        first.unwrap()
     );
     let file = HistoryFileId::parse(&a.file_id).unwrap();
     let node = backend

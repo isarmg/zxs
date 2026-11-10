@@ -19,13 +19,6 @@ fn limit() -> Error {
     )
 }
 
-fn scope() -> Error {
-    Error::new(
-        ErrorCode::FileBranchScope,
-        "file deletion requires a disk-root history with independently recorded file branches",
-    )
-}
-
 fn entry_at<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
     entries
         .binary_search_by(|entry| entry.lookup_key().cmp(key))
@@ -240,9 +233,6 @@ pub(crate) fn capture<'a>(
                 "file is not present at this logical path",
             )
         })?;
-    if !repository.file_manager_root {
-        return Err(scope());
-    }
     let occurrences = occurrences(entries, &selected.file_id, maximum, cancellation)?;
     let branches = branch_heads(state, repository, &selected.file_id, maximum, cancellation)?;
     let mut parents = BTreeSet::new();

@@ -729,7 +729,7 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
         self.inner.delete_current_file(identity, request)
     }
     fn current_file_deletion(
@@ -1237,6 +1237,101 @@ fn typed_removal_succeeds_and_successful_namespace_records_are_cleaned() {
             .to_string_lossy()
             .ends_with(".namespace.json")
     }));
+}
+
+#[test]
+fn named_initialized_unlink_retains_history_and_can_be_restored() {
+    for directory in ["", "nested"] {
+        let (_temp, shared, backend, branch) = fixture();
+        let path = if directory.is_empty() {
+            "report.txt"
+        } else {
+            "nested/report.txt"
+        };
+        if !directory.is_empty() {
+            let mut client = session(shared.clone(), &branch);
+            let (opened, fd) = client
+                .open(path.into(), true, true, false, false, false)
+                .unwrap();
+            let opened: OpenResult = json_codec::from_value(opened).unwrap();
+            File::from(fd.unwrap()).write_all_at(b"old", 0).unwrap();
+            client.dirty(opened.handle).unwrap();
+            client.close(opened.handle, false).unwrap();
+        }
+        checkpoint_directory_fixture(&backend, &repository(&shared), directory);
+        let source = session(shared.clone(), &branch)
+            .find(&name_policy::LookupPath::parse(path).unwrap())
+            .unwrap()
+            .unwrap();
+        let (mut wire, worker) = connect(shared.clone());
+        let operation = storage_contract::OperationId::generate().unwrap();
+        let receipt = call(
+            &mut wire,
+            Request::Namespace {
+                operation_id: operation.to_string(),
+                kind: smb_protocol::protocol::NamespaceOperation::Unlink,
+                path: path.into(),
+                destination: None,
+                replace: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(receipt["operation_kind"], "file.delete");
+        assert!(
+            session(shared.clone(), &branch)
+                .find(&name_policy::LookupPath::parse(path).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        let file = storage_contract::history_window::HistoryFileId::parse(&source.file_id).unwrap();
+        let node = backend
+            .inner
+            .current_file_deletion(&identity(&shared), &file)
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.file_id, source.file_id);
+        assert!(!node.branch_heads.is_empty());
+        let content = backend
+            .inner
+            .content(&identity(&shared), &source.version_id)
+            .unwrap();
+        let mut bytes = [0; 3];
+        content.file.read_exact_at(&mut bytes, 0).unwrap();
+        assert_eq!(&bytes, b"old");
+        backend
+            .inner
+            .restore_deleted_file(
+                &identity(&shared),
+                crate::RestoreDeletedFile {
+                    file_id: file,
+                    deletion_node_id: node.node_id,
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session(shared.clone(), &branch)
+                .find(&name_policy::LookupPath::parse(path).unwrap())
+                .unwrap(),
+            Some(source)
+        );
+        let queried = crate::operation_wire::operation_wire(
+            backend
+                .inner
+                .operation_outcome(&identity(&shared), operation)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(queried, receipt);
+        assert!(
+            !shared
+                .spool
+                .join(format!("{operation}.namespace.json"))
+                .exists()
+        );
+        drop(wire);
+        worker.join().unwrap();
+    }
 }
 
 #[test]
@@ -1778,7 +1873,7 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
         self.inner.delete_current_file(identity, request)
     }
     fn current_file_deletion(

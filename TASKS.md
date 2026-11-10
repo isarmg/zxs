@@ -12,6 +12,12 @@
 
 状态含义：**已合入**仅指列明切片；**进行中**尚未交付或尚在验证；**阻塞**须先满足明确前提；**未完成**仍有目标缺口；**撤销**不得继续按旧方案实现。
 
+## 本轮命名共享真实 Unlink 修复
+
+- CI #1018（`540a84d1`）已执行真实 Samba 默认与命名共享上传、下载、改名及撤权检查；最后命名共享 `kept.txt` 的删除在 close/unlink 返回 `NT_STATUS_NOT_SUPPORTED`。根因是命名初始化 owner 仍走结构删除，而可撤销文件 D 入口和历史包被 `file_manager_root` 限制挡住；保留原系统 Samba 最终权威状态断言。
+- 文件 D 以同仓完整独立分支 frontier 准入，不再以仓库显示类型筛选；selected owner 写权限、当前 entry/file 身份、branch binding、完整 frontier 预算、永久收据、冷恢复和准确撤销保持。SMB 在引擎锁内区分初始化 owner 与 legacy namespace，只有明确未发布的 legacy 返回 `None` 进入原 workspace 删除，错误继续保留恢复记录。
+- 新增命名根／嵌套目录的真实 RPC 删除、正文保留与撤销测试，以及引擎删后冷开、原请求重放、撤销后冷开测试；更新适配器返回类型与原 scope 用例。rustfmt 与补丁检查通过；遵照用户要求未本地编译或执行 Rust 测试，实际通过情况待准确提交的 CI，尚不宣称完整系统 Samba 验收成功。
+
 ## 本轮一期目录分支 HTTP 用例更新
 
 - CI #1016 的 dirty_work_blocks_branch_changes_until_explicit_checkpoint_and_checkout 仍发送缺少 source 的旧目录分支请求。两处请求改为从实际目录状态与最新 listing 捕获完整七字段来源，分别覆盖正常创建与脏工作区拒绝；正常 Web 已使用该契约，服务端及引擎业务不改。

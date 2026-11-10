@@ -1463,7 +1463,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         command: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
         self.delete_current_file_admitted(identity, command)
     }
     fn prepare_current_directory_deletion(

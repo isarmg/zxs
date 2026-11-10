@@ -449,7 +449,7 @@ impl Backend for CloseFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::DeleteCurrentFile,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
         self.inner.delete_current_file(identity, request)
     }
     fn current_file_deletion(

@@ -321,7 +321,7 @@ fn no_file_branch_is_an_explicit_gap_not_a_synthetic_main() {
 }
 
 #[test]
-fn named_and_initialized_directory_repositories_are_not_file_deletions() {
+fn named_and_initialized_scopes_keep_the_complete_independent_frontier() {
     let cancel = HistoryWindowCancellation::new();
     let mut named = Fixture::new();
     named
@@ -330,22 +330,23 @@ fn named_and_initialized_directory_repositories_are_not_file_deletions() {
         .get_mut(named.repository_id.as_str())
         .unwrap()
         .file_manager_root = false;
+    let expected = named
+        .capture(4, &cancel)
+        .unwrap()
+        .parent_node_ids()
+        .to_vec();
+    for directory in [named.repository_id.as_str().to_owned(), id("entry", 10)] {
+        named.initialized(directory);
+        let capture = named.capture(4, &cancel).unwrap();
+        assert_eq!(capture.parent_node_ids(), expected);
+        assert_eq!(capture.branches().len(), 4);
+        assert_eq!(capture.occurrences().len(), 2);
+    }
+    named.state.branches.clear();
+    named.state.file_branch_aliases.clear();
     assert_eq!(
         named.capture(4, &cancel).unwrap_err().code(),
-        ErrorCode::FileBranchScope
-    );
-    let mut root = Fixture::new();
-    root.initialized(root.repository_id.as_str().into());
-    assert_eq!(
-        root.capture(4, &cancel).unwrap_err().code(),
-        ErrorCode::FileBranchScope
-    );
-    let mut nested = Fixture::new();
-    nested.initialized(id("entry", 10));
-    // The selected occurrence is outside copies. Its second alias is not.
-    assert_eq!(
-        nested.capture(4, &cancel).unwrap_err().code(),
-        ErrorCode::FileBranchScope
+        ErrorCode::FileBranchRequired
     );
 }
 

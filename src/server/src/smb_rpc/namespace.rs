@@ -262,7 +262,7 @@ impl Session {
         path: &name_policy::LookupPath,
         operation_id: OperationId,
         record: &Path,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<Option<Value>, ApiError> {
         let entry = self.find(path)?.ok_or_else(|| {
             ApiError::new(
                 http::StatusCode::NOT_FOUND,
@@ -303,7 +303,11 @@ impl Session {
                     operation_id,
                 },
             )
-            .and_then(|result| crate::operation_wire::operation_wire(result.into()));
+            .and_then(|result| {
+                result
+                    .map(|result| crate::operation_wire::operation_wire(result.into()))
+                    .transpose()
+            });
         if result.is_ok() {
             cleanup_namespace_record(record);
         }
@@ -385,11 +389,7 @@ impl Session {
         if let Some(target) = destination.as_deref() {
             affected.push(target);
         }
-        // Disk-root files and ordinary directories inside initialized owners
-        // use their native reversible lifecycle. Named legacy shares retain
-        // their policy; no failed lifecycle request falls back to hard delete.
-        let soft_delete = if matches!(kind, NamespaceOperation::Unlink | NamespaceOperation::Rmdir)
-        {
+        let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
             match &self.identity.smb_binding {
                 Some(binding) => {
                     self.shared
@@ -415,7 +415,7 @@ impl Session {
                 }
             }
         }
-        if soft_delete && kind == NamespaceOperation::Rmdir {
+        if soft_delete_directory {
             match self.soft_delete_rmdir(&source_path, operation_id, record) {
                 Ok(None) => {}
                 result => {
@@ -424,10 +424,14 @@ impl Session {
                 }
             }
         }
-        if soft_delete && kind == NamespaceOperation::Unlink {
-            let result = self.soft_delete_unlink(&source_path, operation_id, record);
-            self.release_paths(&reserved);
-            return result;
+        if kind == NamespaceOperation::Unlink {
+            match self.soft_delete_unlink(&source_path, operation_id, record) {
+                Ok(None) => {}
+                result => {
+                    self.release_paths(&reserved);
+                    return result.map(|reply| reply.expect("invariant: None was handled"));
+                }
+            }
         }
         let mut pending_workspace = None;
         let mut submission_started = false;

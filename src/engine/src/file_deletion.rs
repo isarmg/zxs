@@ -92,13 +92,13 @@ impl<'a> FileDeletionPreflight<'a> {
 }
 
 impl Engine {
-    /// Observe one disk-root file without changing its state or namespace.
+    /// Observe one independently branched file without changing its state or namespace.
     ///
     /// The caller authenticates before using this trusted local API. The current
     /// namespace uses ordinary repository/history and published-view admission.
-    /// Named repositories and files without independent branches remain outside
-    /// this entrance. Initialized directory occurrences retain their exact working
-    /// composition and are admitted only under the selected writable owners.
+    /// Disk-root and named repositories use the same complete file frontier.
+    /// Initialized directory occurrences retain their exact working composition
+    /// and are admitted only under the selected writable owners.
     /// A missing path/file, foreign retained branch, cancellation or exceeded
     /// current entry budget is an error; partial branch lists are never returned.
     ///
