@@ -1,3 +1,5 @@
+//! Immutable bounded-page projections. Ordering and filtering belong to the
+//! server before pagination; selection never rebuilds display metadata.
 use super::model::{entry_key, file_kind};
 use super::page::Entry;
 use crate::ui::State;
@@ -38,6 +40,8 @@ impl Row {
         if !self.current_context(state) {
             return None;
         }
+        // Event-time identity lookup intentionally reads the current snapshot.
+        // Rows hold display data only, never old entries or whole listing snapshots.
         state
             .files
             .entries
@@ -100,6 +104,8 @@ impl Listing {
 }
 
 pub(super) fn visible_rows(state: RwSignal<State>) -> Memo<Vec<Arc<Row>>> {
+    // Arc equality short-circuits identical allocations. An unrelated State
+    // notification does not traverse or clone any entry metadata.
     let listing = Memo::new(move |_| state.with(Listing::capture));
     Memo::new(move |_| listing.with(Listing::project))
 }

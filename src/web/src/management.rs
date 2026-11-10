@@ -1,3 +1,5 @@
+//! Management health is independent of the data backend. Unknown is fail-closed,
+//! and no storage/authentication error is ever interpreted as a fresh install.
 use crate::{
     api, files,
     ui::{State, feedback},
@@ -76,6 +78,9 @@ pub(crate) struct Model {
     generation: u64,
 }
 impl Model {
+    /// A mutation can invalidate a health read admitted before it settled.
+    /// Keep the occupied read slot until completion; its response cannot make
+    /// storage writable again and will schedule a fresh observation.
     pub(crate) fn invalidate_storage(&mut self) {
         self.storage = Storage::Unknown;
         self.generation += 1;
@@ -113,6 +118,8 @@ fn invalidate_restored_disks(state: &mut State, was_readable: bool) {
 fn needs_disk_refresh(state: &State, was_readable: bool) -> bool {
     state.session_active()
         && state.management.storage.readable()
+        // An authorized account may legitimately have no visible disks.
+        // Only an unfetched listing or restored storage needs an automatic read.
         && (!was_readable || !state.files.disks_loaded)
 }
 
@@ -120,8 +127,12 @@ fn accept_status(s: &mut State, status: response::Status) -> bool {
     let was_readable = s.management.storage.readable();
     accept(&mut s.management, status);
     invalidate_restored_disks(s, was_readable);
+    // A successful status check resolves the retry admission fence,
+    // not any outstanding data mutation's outcome.
     s.management.retry_unknown = false;
     let load_files = needs_disk_refresh(s, was_readable);
+    // Recovery remains available in Administration and above blocked pages.
+    // A global status refresh never replaces the current page or its draft owners.
     load_files
 }
 
@@ -149,6 +160,8 @@ struct StatusRead {
     folder: Option<FolderRefresh>,
 }
 fn begin_load(state: &mut State, refresh: Refresh) -> Option<StatusRead> {
+    // Never let a pre-retry snapshot resolve the retry outcome fence.
+    // The completion path starts a fresh read after the POST settles.
     if state.management.loading
         || state.management.retrying
         || state.logout_pending()
@@ -170,6 +183,8 @@ fn begin_load(state: &mut State, refresh: Refresh) -> Option<StatusRead> {
             {
                 return None;
             }
+            // A fresh health read, not the cached Ready value, precedes the
+            // requested directory read. This does not settle the prior mutation.
             state.management.storage = Storage::Unknown;
             Some(FolderRefresh::capture(state))
         }
@@ -225,6 +240,7 @@ pub(crate) fn load(state: RwSignal<State>) {
     load_with(state, Refresh::Status);
 }
 
+/// Explicit read-only recovery step. Never retries a mutation or opens storage.
 pub(crate) fn refresh_storage_and_folder(state: RwSignal<State>) {
     load_with(state, Refresh::CurrentFolder);
 }
@@ -295,6 +311,8 @@ fn complete_retry(state: &mut State, result: Result<response::StorageStatus, api
         Ok(status) => {
             let was_readable = state.management.storage.readable();
             status.apply(&mut state.management);
+            // Fast recovery may already be ready in the POST response.
+            // Keep its refresh demand for the following status read too.
             invalidate_restored_disks(state, was_readable);
         }
         Err(error) => {

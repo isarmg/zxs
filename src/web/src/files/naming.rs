@@ -1,3 +1,4 @@
+//! Naming failures retain the original input and authoritative policy source.
 use web_interface::i18n::t;
 
 #[derive(Debug, PartialEq, Eq, error_definition::Error)]

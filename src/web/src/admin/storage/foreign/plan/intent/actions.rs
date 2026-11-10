@@ -95,6 +95,7 @@ pub(super) fn save(state: RwSignal<State>) {
     let Some((epoch, submission)) = captured else {
         return;
     };
+    // A save is not a cancellable read. Navigation retains the original request.
     spawn_local(async move {
         let result = api::validated_request(
             "POST",

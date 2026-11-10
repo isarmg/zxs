@@ -1,3 +1,5 @@
+//! First-time management setup never selects or initializes data storage.
+//! The one-time account endpoint is open only while no account or prior authority exists.
 use crate::api;
 use data_serialization::Deserialize;
 use json_codec::{Value, json};

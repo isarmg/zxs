@@ -1,3 +1,4 @@
+//! Bounded notices keyed by the work that failed, never by a request attempt.
 use super::{State, feedback};
 use crate::api;
 use web_interface::{components::Feedback, prelude::*};
@@ -77,6 +78,7 @@ impl State {
     }
 }
 
+/// Without an explicit work identity, distinct user actions must stay distinct.
 pub(crate) fn fail(state: RwSignal<State>, error: api::Error) {
     state.update(|state| state.report_error(error, None));
 }

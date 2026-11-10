@@ -1,3 +1,4 @@
+//! Strict ingress for disk observation classifications; other live metrics remain JSON.
 use data_serialization::{Deserialize, Deserializer};
 use json_codec::Value;
 use std::collections::BTreeMap;
@@ -6,6 +7,7 @@ pub(super) use storage_contract::DiskObservationIssue;
 
 pub(super) type DiskIssues = BTreeMap<String, Option<DiskObservationIssue>>;
 
+// Project disk observation classifications; the issue object rejects unknown fields.
 #[derive(Deserialize)]
 struct Snapshot {
     disks: Vec<Disk>,

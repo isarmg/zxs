@@ -1,3 +1,5 @@
+//! Current server backend_activity response, kept private to the browser boundary.
+//! The server owns this DTO and is not a permitted WASM dependency.
 use data_serialization::{Deserialize, Deserializer};
 
 #[derive(Deserialize)]
@@ -29,6 +31,7 @@ pub(super) struct Event {
     detail: Detail,
 }
 
+// Optional values are always serialized by the server, including explicit null.
 fn nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,

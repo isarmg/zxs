@@ -1,3 +1,4 @@
+//! Page-owned lookup positions borrow records from the existing immutable snapshot.
 use super::history::{FileHistory, FileNode};
 use crate::{snapshot::Snapshot, ui::State};
 use std::collections::BTreeMap;

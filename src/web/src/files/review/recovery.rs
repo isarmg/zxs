@@ -1,3 +1,4 @@
+//! Keep an unconfirmed tag request recoverable after leaving its file.
 use super::{can_retry_tags, has_tag_replay, retry_tags};
 use crate::ui::State;
 use web_interface::{i18n::t, prelude::*};

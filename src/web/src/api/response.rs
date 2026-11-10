@@ -1,3 +1,4 @@
+//! Browser adapter for the shared client protocol.
 use super::Error;
 use json_codec::Value;
 

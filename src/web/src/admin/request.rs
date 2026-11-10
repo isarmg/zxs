@@ -1,3 +1,4 @@
+//! Exact HTTP contracts for daily administration.
 use super::response::Contract;
 use json_codec::{Value, json};
 use std::collections::BTreeMap;

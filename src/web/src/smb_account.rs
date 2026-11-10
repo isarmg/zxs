@@ -1,3 +1,4 @@
+//! SMB credentials are separate from the Web administrator's credentials.
 use crate::{
     api,
     ui::{State, current_session, feedback},

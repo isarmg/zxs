@@ -1,3 +1,5 @@
+//! One explicit file or directory request. Navigation cancels only an unsubmitted
+//! review; the original in-flight/unknown attempt is owned by the session ledger.
 use super::*;
 use crate::files::{FileOperation, SaveStatus, model::entry_key, page::Entry};
 use json_codec::{Value, json};
@@ -65,6 +67,7 @@ fn chosen<'a>(state: &'a State, explicit: Option<&'a Entry>) -> Option<&'a Entry
             .iter()
             .find(|entry| model.checked_entries.contains(&entry_key(entry)))?
     };
+    // A stale row callback cannot target an entry that left the admitted page.
     if !eligible(entry)
         || !model
             .entries
@@ -245,6 +248,9 @@ impl Intent {
                     return false;
                 };
                 let value = &receipt["result"]["deletion_node"];
+                // Complete bodyless frontier validation is shared with the read
+                // boundary. Neither a different file nor a generic receipt can
+                // release this exact request's unknown-outcome fence.
                 let Some(deletion_id) = value["node_id"].as_str() else {
                     return false;
                 };
@@ -276,6 +282,8 @@ impl Intent {
     }
 }
 pub(super) fn submit(state: RwSignal<State>, intent: Intent) {
+    // Admission is checked before generating an operation ID or touching storage.
+    // A review alone does not authorize bypassing the restored-request queue.
     if !state.with_untracked(|s| s.files.deletion.recovery.ready_for_new(s)) {
         return;
     }
@@ -298,6 +306,8 @@ pub(super) fn submit(state: RwSignal<State>, intent: Intent) {
         request_digest,
         in_flight: false,
     };
+    // Saving and reading back the exact original is a prerequisite, not a
+    // best-effort side effect after a server mutation has already started.
     if recovery::save(state, &attempt) {
         send(state, attempt, Submission::First);
     }
@@ -329,6 +339,8 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
         s.files.mutation_pending = true;
         s.files.deletion.attempt = Some(attempt);
     });
+    // Record the original ID before starting network work, including when the
+    // review or deleted-files panel closes while the request is outstanding.
     actions::record_operation(state, FileOperation::unknown(&id));
     spawn_local(async move {
         if !current_session(state, epoch) {
@@ -365,6 +377,8 @@ fn failed(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error, submi
     match submission {
         Submission::First => actions::record_failure(state, epoch, id, error),
         Submission::OriginalRetry => {
+            // A rejected retry says nothing about the original attempt.
+            // Keep its immutable record, ID and unknown-outcome fence.
             actions::record_operation(state, FileOperation::unknown(id));
             crate::ui::fail_in(
                 state,
@@ -424,6 +438,7 @@ pub(crate) fn settle(model: &mut super::super::model::Model, id: &str, status: S
     if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         model.checked_entries.clear();
         model.deletion.directory.invalidate();
+        // Cached D is not restoration authority after another lifecycle event.
         model.deletion.generation += 1;
         model.deletion.loading = false;
         model.deletion.node = None;

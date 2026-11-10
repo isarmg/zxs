@@ -22,6 +22,7 @@ pub(super) struct Draft {
     pub(super) empty_target: Option<CandidateSelection>,
     pub(super) primary: Option<PrimaryChoice>,
 }
+/// Local design intents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Intent {
     ReconstructExistingPrimary(ForeignPlanTarget),

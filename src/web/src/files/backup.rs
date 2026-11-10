@@ -1,3 +1,4 @@
+//! Per-scope custom prefixes and explicit recursive disk-name protection.
 pub(crate) mod recursive;
 use super::{actions, model::file_context, review};
 use crate::{
@@ -20,6 +21,8 @@ pub(crate) struct Draft {
     loading: bool,
 }
 
+// Only the projection used by this editor is decoded here. Unused server
+// fields, including nullable policy IDs, do not affect this read/save boundary.
 #[derive(Clone, Deserialize)]
 struct Configuration {
     scope: Scope,

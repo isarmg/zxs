@@ -1,3 +1,5 @@
+//! Explicit read-only inspection of an observed foreign source. No admission
+//! action exists here; missing content remains visible history.
 use super::*;
 
 mod independent;

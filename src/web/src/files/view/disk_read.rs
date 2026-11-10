@@ -1,3 +1,4 @@
+//! Read freshness is separate from each returned disk's access and health.
 use web_interface::i18n::t;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +40,7 @@ impl DiskRead {
         }
     }
 
+    /// Only the current owner can start an actual read; this controls visibility.
     pub(super) fn can_retry(self) -> bool {
         matches!(self, Self::Unconfirmed | Self::UnconfirmedCached)
     }

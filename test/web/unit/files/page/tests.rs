@@ -26,6 +26,7 @@ fn overlay(mut value: Value, patch: &Value) -> Value {
     value
 }
 
+/// Test fixtures complete the current wire shape, then enter the real parser.
 pub(crate) fn entry_wire(patch: Value) -> Value {
     let directory = patch["kind"] == "directory";
     let path = patch["path"]
@@ -438,6 +439,7 @@ fn filtered_empty_page_preserves_an_independent_selected_file() {
             selected["content_state"] = "PENDING".into();
         }
         let requested = parse_entry(selected.clone()).unwrap();
+        // Search filters the page count, not the independent selection or directory file count.
         let value = json!({"slot_id":"P01", "path":"", "writable":true, "entries":[],
             "selected_entry":selected.clone(), "total_entries":"0", "snapshot":"snapshot",
             "next_cursor":null, "previous_cursor":null,
@@ -646,6 +648,8 @@ fn independent_selection_and_page_share_entity_identity_and_count_constraints() 
 fn preview_pages_preserve_body_identity_and_never_grant_write_authority() {
     let mut value = response(1);
     value["writable"] = false.into();
+    // Read-only primary listings must declare their preview mode, not silently
+    // change the ordinary primary page's authority contract.
     assert!(parse(value.clone()).is_err());
     value["preview"] = true.into();
     value["entries"][0]["read_only"] = true.into();

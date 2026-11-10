@@ -1,3 +1,4 @@
+//! A fixed number of owned reads; every relation kind shares one slot.
 use crate::api::ReadCancellation;
 use crate::files::review::Kind;
 
@@ -71,6 +72,8 @@ impl Reads {
         slot.loading && slot.generation == generation
     }
 
+    /// A sequential review gets a fresh controller for each fetch: the API
+    /// request guard aborts its controller when that one fetch is released.
     pub(crate) fn replace_owner(
         &mut self,
         resource: Resource,

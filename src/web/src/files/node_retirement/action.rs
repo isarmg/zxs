@@ -162,6 +162,8 @@ fn send(state: RwSignal<State>, resume: bool, first: bool) {
     let Some(attempt) = attempt else {
         return;
     };
+    // A new observation replaces the previous interval observation. In particular,
+    // an unreachable retry must not leave an old absence result looking current.
     state.update(|s| {
         if let Some(attempt) = &mut s.files.node_retirement.attempt {
             attempt.cleanup = None;
@@ -192,6 +194,8 @@ fn send(state: RwSignal<State>, resume: bool, first: bool) {
         match result {
             Ok(value) => receive(state, &attempt, value),
             Err(error) => {
+                // A rejected retry cannot prove an earlier uncertain attempt
+                // did not publish. Never mint a new ID or clear that fence.
                 let uncertain = !first || attempt.uncertain || error.mutation_outcome_unknown();
                 if !resume {
                     actions::record_operation(
@@ -240,6 +244,7 @@ fn send(state: RwSignal<State>, resume: bool, first: bool) {
     });
 }
 fn receive(state: RwSignal<State>, attempt: &Attempt, value: Value) {
+    // Retain a valid publication even if the separate cleanup response is bad.
     let receipt = value.get("operation").cloned().unwrap_or(Value::Null);
     let response_status = FileOperation::from_receipt(&attempt.operation, &receipt).status();
     let response_matches =

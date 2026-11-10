@@ -1,3 +1,4 @@
+//! One reviewed ordinary directory, carried by the existing deletion ledger.
 use crate::api;
 use data_serialization::{
     Deserialize, Deserializer, Serialize,
@@ -154,6 +155,8 @@ impl Request {
             && node.operation_id.to_string() == id
             && node.author == principal
             && node.sequence == sequence
+            // Current's selected tree can differ from the branch CAS baseline.
+            // Core verifies that relation; the browser never invents equality.
             && super::wire::files_match(&node, &result["deletion_nodes"])
     }
 

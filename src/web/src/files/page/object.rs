@@ -1,3 +1,4 @@
+//! Raw JSON exists only while checking the exact response shape.
 use super::{DecodeError, DisplayPath};
 use json_codec::{Map, Value};
 
@@ -37,6 +38,8 @@ impl Object {
             _ => Err(field_error(field, "a boolean")),
         }
     }
+    // The current server omits false backup markers; this is not a default for
+    // required fields or a compatibility format.
     pub(super) fn backup(&mut self) -> Result<bool, DecodeError> {
         match self.0.remove("backup") {
             None => Ok(false),
@@ -120,6 +123,8 @@ pub(super) fn portable_path(
         .map_err(|source| DecodeError::Path { field, source })
 }
 pub(super) fn display_path(text: String) -> Result<DisplayPath, DecodeError> {
+    // Primary listings may prepend a repository name to a bounded namespace
+    // path. Validate every component without imposing the namespace-only budget.
     for component in text.split('/') {
         name_policy::validate_name(component).map_err(|source| DecodeError::Path {
             field: "path",

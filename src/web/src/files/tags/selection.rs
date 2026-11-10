@@ -1,3 +1,4 @@
+//! Only explicitly checked nodes survive replacement of their history page.
 use crate::files::history::FileNode;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,6 +82,8 @@ impl Selection {
         Ok(())
     }
 
+    /// The caller has resolved every retained identity under the new admitted
+    /// root and the user has explicitly accepted that complete review.
     pub(crate) fn accept_review(
         &mut self,
         root: String,

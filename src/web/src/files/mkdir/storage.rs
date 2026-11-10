@@ -1,3 +1,4 @@
+//! Immutable browser hints.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::history_window::HistoryRepositoryId;
@@ -28,6 +29,8 @@ enum Namespace {
         request: DirectoryRequest,
     },
     UninitializedRoot,
+    // Already retained originals keep their exact request and receipt binding.
+    // New moves are captured only as ObjectMove below.
     FileRelocation {
         relocation: storage_contract::file_relocation::FileRelocation,
     },
@@ -198,6 +201,9 @@ impl Record {
             && receipt["result"]["path"].as_str() == Some(path)
             && match &self.digest {
                 Some(digest) => receipt["request_digest"].as_str() == Some(digest.as_str()),
+                // The first empty disk has no repository ID until the server
+                // creates its root. Only the exact original POST can bind its
+                // receipt; a generic ID lookup cannot prove the missing input.
                 None => origin == ReceiptOrigin::OriginalRequest,
             }
     }
@@ -367,6 +373,8 @@ impl Record {
                 None
             }
             Namespace::Repository { repository, path } => {
+                // A named repository removes exactly one displayed component;
+                // a disk-root repository keeps the complete displayed path.
                 if path.as_str() != display_path
                     && display_path.split_once('/').map(|(_, tail)| tail) != Some(path.as_str())
                 {
@@ -504,6 +512,7 @@ pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
     Ok(())
 }
 
+// Unlike an optional field, the root path must be explicitly present as null.
 fn required_path<'de, D>(deserializer: D) -> Result<Option<name_policy::PortablePath>, D::Error>
 where
     D: data_serialization::Deserializer<'de>,

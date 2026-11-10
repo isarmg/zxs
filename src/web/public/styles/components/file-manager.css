@@ -1,3 +1,4 @@
+/* File-specific behavior and placement. Shared roles own surface/row geometry. */
 .zxs-breadcrumb { flex: 1; font-size: 1em; overflow-wrap: anywhere; padding: 0; }
 .zxs-breadcrumb > a { color: var(--zxs-text-link); text-decoration: none; }
 .zxs-breadcrumb > a:hover { text-decoration: underline; }
@@ -11,12 +12,17 @@
 .zxs-inline-error,.zxs-branch-error { color: var(--zxs-text-danger); }
 .zxs-inline-edit > .zxs-inline-input,.zxs-inline-branch > .zxs-branch-name { flex: 0 1 16rem; width: min(16rem,100%); }
 .zxs-file-search { flex: 1 1 auto; min-width: 0; max-width: 100%; cursor: text; }
+/* The label is the one search surface. Its native input fills the content box;
+ * focus belongs to that outer surface, never an inner underline or partition. */
 .zxs-file-search > input.zxs-input,.zxs-file-search > input.zxs-input:focus-visible { border: 0; outline: 0; }
+/* Reuse the G4 outer-ring paint used by Select. A native outline stays square;
+ * clip mode would cut off shadow pixels that follow the curved corners. */
 .zxs-file-search:has(> input:focus-visible) {
   outline: 0;
   box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
   --zxs-contour-mode: paint;
 }
+/* High-contrast modes suppress shadows, so retain a native keyboard indicator. */
 @media (forced-colors: active) {
   .zxs-file-search:has(> input:focus-visible) { outline: 2px solid Highlight; outline-offset: 3px; box-shadow: none; }
 }
@@ -26,12 +32,22 @@
 .zxs-file-table :is(th,td) { box-sizing: border-box; height: var(--zxs-file-row-height); padding: 0 var(--zxs-list-content-inset); border: 0; font: inherit; font-weight: 400; text-align: inherit; vertical-align: middle; }
 .zxs-file-table th { color: var(--zxs-block-muted); white-space: nowrap; }
 .zxs-file-table td { white-space: nowrap; }
+/* Absolute decoration keeps native table sizing and hit targets unchanged.
+ * The query container is the visible scrollport, not the wider native table;
+ * one scroll offset keeps the borderless G4 fill anchored to that viewport. */
 .zxs-file-table tr { position: relative; isolation: isolate; }
+/* Clip decoration only. A stale offset during resize must not contribute to
+ * scrollWidth or prevent the native scrollport from clamping back to zero. */
 .zxs-file-row-decoration { display: block; position: absolute; inset: 0; overflow: clip; z-index: -1; pointer-events: none; }
 .zxs-app-shell .zxs-file-table tbody .zxs-button { min-height: calc(var(--zxs-file-row-height) - 2px); height: calc(var(--zxs-file-row-height) - 2px); padding: 0; font-size: inherit; white-space: nowrap; }
 .zxs-file-list-panel .zxs-entry-actions { flex-wrap: nowrap; }
 .zxs-file-table td:first-child { min-width: 10rem; overflow-wrap: anywhere; }
+/* Selection describes the checked batch rows, never the last detail viewed.
+ * Touch taps must not leave a sticky emulated hover after navigation. */
 .zxs-file-table tbody tr { background: transparent; }
+/* A block inside the first cell paints the visible row with shared G4 corners.
+ * Table rows cannot host G4 paint themselves. The layer never clips controls
+ * or intercepts clicks, and only its opacity changes on hover/selection. */
 .zxs-file-row-surface { display: block; position: absolute; inset-block: 0; left: var(--zxs-file-scroll-left); width: 100cqw; pointer-events: none; background: var(--zxs-row-hover-bg); opacity: 0; --zxs-contour-extent: var(--zxs-contour-panel); }
 .zxs-file-table tr[aria-selected=true] > td > .zxs-file-row-decoration > .zxs-file-row-surface { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
@@ -63,7 +79,11 @@
 .zxs-node-action[data-history-action=tags] { color: var(--zxs-history-tags); }
 .zxs-node-action[data-history-action=merge] { color: var(--zxs-history-merge); }
 .zxs-node-action[data-history-action=snapshot] { color: var(--zxs-history-snapshot); }
+/* The deletion glyph is designed, but current history wire has no deletion
+ * node. No renderer assigns this action without such an admitted fact. */
 .zxs-node-action[data-history-action=delete] { color: var(--zxs-history-delete); }
+/* G4 supports outer shadows. Paint mode keeps their inner-corner arcs outside
+ * the original contour; clip mode would cut those arcs out of the ring. */
 .zxs-node-card[aria-current=true] { --zxs-contour-mode: paint; box-shadow: 0 0 0 2px var(--zxs-text-link); }
 .zxs-node-card:focus-visible { outline: 3px solid var(--zxs-action-primary); outline-offset: 3px; }
 .zxs-app-shell .zxs-node-detail { margin-block-start: var(--zxs-block-gap); }
@@ -97,8 +117,11 @@
   .zxs-file-toolbar > .zxs-file-search { flex-basis: 100%; padding-inline: 0; }
   .zxs-file-toolbar > .zxs-select { flex-basis: 100%; }
   .zxs-file-toolbar:has(> .zxs-select) > p { flex-basis: 100%; }
+  /* The explanation occupies a full row after the select on phones. Its own
+   * row height already separates the control from the following list. */
   .zxs-file-toolbar:has(> .zxs-select) + .zxs-surface { margin-block-start: 0; }
 }
+/* Batch selection reuses compact rows and shared frame geometry. */
 .zxs-app-shell .zxs-file-check,.zxs-app-shell .zxs-file-select-name { gap: .5em; }
 .zxs-file-check input,.zxs-entry-checkbox,.zxs-batch-check input { flex: 0 0 1em; width: 1em; height: 1em; margin: 0; accent-color: var(--zxs-text-link); }
 .zxs-app-shell .zxs-file-select-name { flex-wrap: nowrap; }
@@ -110,6 +133,7 @@
 .zxs-review-choices { display: flex; flex-wrap: wrap; min-width: 0; margin: 0; padding: 0; border: 0; }
 .zxs-review-choices legend { width: 100%; }
 .zxs-merge-review > .zxs-inline-error:empty { display: none; }
+/* Node chips retain inherited labels without introducing another card row. */
 .zxs-version-note-row,.zxs-node-tags { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; }
 .zxs-app-shell .zxs-node-tag { display: inline-flex; align-items: center; width: auto; max-width: 100%; height: auto; min-height: var(--zxs-compact-row-height); border: 0; background: var(--zxs-bg-page); overflow-wrap: anywhere; }
 .zxs-app-shell .zxs-version-note-row:has(.zxs-node-tag) { padding-block: 0; }

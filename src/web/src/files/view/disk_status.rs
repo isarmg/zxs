@@ -1,3 +1,4 @@
+//! Labels describe the registered role and one observation.
 use crate::files::model::Disk;
 use std::num::NonZeroU32;
 use storage_contract::DiskObservationIssue;

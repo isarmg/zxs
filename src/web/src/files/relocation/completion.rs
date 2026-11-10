@@ -1,3 +1,4 @@
+//! A session-local shortcut after this editor's original move is published.
 use super::{Review, actions};
 use crate::{files::SaveStatus, ui::State};
 use web_interface::{i18n::t, prelude::*};

@@ -1,3 +1,4 @@
+//! Lossless transport evidence for the server's recursive write boundary.
 use data_serialization::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
@@ -58,6 +59,8 @@ pub(super) struct Prefix {
     pub(super) path: String,
 }
 impl Capture {
+    /// Preview only the disk-name portion. The server appends the full primary
+    /// logical path, including the named repository when it is not a disk root.
     pub(super) fn prefixes(
         &self,
         routes: &[Vec<String>],

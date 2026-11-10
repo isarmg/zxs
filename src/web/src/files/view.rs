@@ -71,8 +71,14 @@ fn disk_observation_message(
     })
 }
 
+// The interface's two supported languages use LTR scrolling. CSS supplies the
+// live scrollport width; one inherited offset anchors every row decoration
+// without changing native table scroll, focus or hit testing. The view owns
+// this listener, so it is removed with the scroll container.
 fn sync_row_viewport(event: web_sys::Event) {
     let scroll = event_target::<web_sys::HtmlElement>(&event);
+    // The stable web-sys getter returns i32, while CSSOM scrollLeft is a double.
+    // Read the native number so high-DPI/zoomed scrolling keeps subpixel offsets.
     let left = js_sys::Reflect::get(scroll.as_ref(), &"scrollLeft".into())
         .expect("invariant: an element exposes its native scrollLeft property")
         .as_f64()

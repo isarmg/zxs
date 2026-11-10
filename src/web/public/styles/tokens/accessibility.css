@@ -1,3 +1,4 @@
+/* 可单独导入的标签隐藏、键盘焦点与减弱动态效果的基础规则。 */
 .zxs-visually-hidden {
   position: absolute !important;
   width: 1px !important;

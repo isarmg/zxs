@@ -1,3 +1,4 @@
+//! Directory and repository primary selection, separate from backup protection.
 use super::{actions, model::file_context, review};
 use crate::{
     api,

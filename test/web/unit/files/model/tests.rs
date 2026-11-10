@@ -48,11 +48,14 @@ fn navigation_resets_only_location_owned_state() {
             observation_failure: None,
         }];
         let mut degraded: Value = json_codec::from_str(DEGRADED).unwrap();
+        // Derive a synthetic outcome from the captured diagnostic; navigation
+        // preserves the accepted result, not a fresh health observation.
         degraded.as_object_mut().unwrap().remove("current_health");
         let operations = vec![
             FileOperation::unknown("original"),
             FileOperation::from_receipt(degraded["operation_id"].as_str().unwrap(), &degraded),
         ];
+        // Enumerate the model so a new state owner requires an explicit choice.
         let mut model = Model {
             deletion: Default::default(),
             mkdir: Default::default(),
@@ -279,6 +282,10 @@ const DAMAGE: &str = include_str!("../fixtures/damaged-published-save-operation.
 fn captured_http_outcomes_and_diagnostics_keep_separate_consumer_contracts() {
     use storage_contract::client_protocol::{OperationStatus, operation_observation_status};
 
+    // Main-native HTTP captures: https://github.com/isarmg/zxs/actions/runs/41027119807
+    // Input: 1897756d, tree 48fcc5c7. Its retained rustfmt patch changes only
+    // unrelated Foundation whitespace, so these remain diagnostic captures.
+    // The HTTP integration scenarios also compare all six fixtures with real routes.
     for (outcome, observation, status, save_status) in [
         (
             include_str!("../fixtures/github-degraded-save-outcome.json"),
@@ -327,6 +334,8 @@ fn publication_protection_is_not_rewritten_by_later_damage() {
         FileOperation::from_receipt(damage["operation_id"].as_str().unwrap(), &damage).status(),
         SaveStatus::Unknown
     );
+    // Derive a healthy comparison from this real receipt, changing only
+    // current health. Frozen publication evidence must give the same label.
     let mut good = damage.clone();
     good["current_health"]["state"] = "HEALTHY".into();
     assert_eq!(good["result"], damage["result"]);

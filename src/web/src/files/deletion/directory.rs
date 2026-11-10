@@ -1,3 +1,5 @@
+//! Directory lifecycle controls use the existing original-request deletion ledger.
+//! Reads establish a review, never a new deletion identity or write authority.
 use super::*;
 use crate::files::{model::entry_key, page::DirectoryBranch, page::Entry};
 use json_codec::Value;
@@ -313,6 +315,7 @@ fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Selection>,
             .map_err(|source| identity_error(source.into()))?,
         display_path: entry.path().into(),
         branch: branch.id().into(),
+        // This is the branch CAS head from the listing, not Current's working tree.
         tree: branch.head_tree_id().into(),
         checked: state.files.checked_entries.clone(),
         selected: state.files.selected.as_ref().map(entry_key),
@@ -438,6 +441,8 @@ fn accepts_read(state: RwSignal<State>, location: &Location, generation: u64) ->
         .try_update(|s| {
             let current = location.current(s) && s.files.deletion.directory.accepts(generation);
             if !current && s.files.deletion.directory.accepts(generation) {
+                // A listing refresh can invalidate this read without a navigation.
+                // It must not leave the next explicit reload permanently disabled.
                 s.files.deletion.directory.loading = false;
             }
             current

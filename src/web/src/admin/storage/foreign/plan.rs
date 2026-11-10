@@ -1,3 +1,4 @@
+//! Foreign reconstruction reviews.
 use super::*;
 use storage_contract::{OperationId, storage_foreign_plan::*};
 
@@ -167,6 +168,7 @@ impl Model {
         self.reading = false;
         match result {
             Ok(status) => self.accept_saved(status),
+            // NotFound after an uncertain save is not proof of non-creation.
             Err(error) => self.read_failed(error),
         }
     }
@@ -178,6 +180,8 @@ impl Model {
         self.error = Some(error);
     }
     fn save_failed(&mut self, error: api::Error) {
+        // A failed transport or invalid success envelope does not prove that
+        // the immutable system-disk review record was not created.
         self.save = if error.mutation_outcome_unknown() {
             SaveState::Unknown
         } else {

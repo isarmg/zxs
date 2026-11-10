@@ -513,6 +513,8 @@ fn stop_native_envelope_is_required_and_does_not_allow_prepared_versions() {
 
 #[test]
 fn real_server_stopped_status_passes_browser_receipt_validation() {
+    // Captured from the real server transaction at WorkspaceCreated, including
+    // its native mutation envelope. The source and target are test TempDirs.
     let status: OrdinaryDiskConversionStatus = json_codec::from_str(include_str!(
         "../../fixtures/ordinary-conversion-stopped.json"
     ))

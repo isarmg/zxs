@@ -41,6 +41,7 @@ pub(crate) fn page(state: RwSignal<State>) -> impl IntoView {
         </section>
     }
 }
+/// Select the current directory without resetting its query, cursor or branch.
 pub(super) fn open_current_directory(state: RwSignal<State>) {
     state.update(|s| {
         if !s.session_active() || s.files.slot.is_empty() || actions::pending(s) {
@@ -51,6 +52,8 @@ pub(super) fn open_current_directory(state: RwSignal<State>) {
     });
 }
 
+/// Detail controls own browser focus and popover state. Refreshing metadata must
+/// update their signals without recreating the controls for the same entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Selection {
     epoch: u64,
@@ -91,6 +94,7 @@ impl Selection {
             .flatten()
     }
 
+    /// Event handlers must not redirect a queued old control to a new selection.
     fn action_entry<'a>(&self, state: &'a State) -> Option<&'a Entry> {
         state.session_active().then(|| self.entry(state)).flatten()
     }

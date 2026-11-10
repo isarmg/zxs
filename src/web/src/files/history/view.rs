@@ -1,3 +1,4 @@
+//! Auxiliary history reads replace their single relation page or field fragment.
 use super::{FieldFragment, FileHistory};
 use crate::{
     files::{actions, page::Entry},
@@ -13,6 +14,7 @@ use web_interface::{
     prelude::*,
 };
 
+/// Event payloads retain one bounded selection identity, never an old history page.
 #[derive(Clone, PartialEq)]
 struct HistoryOwner {
     epoch: u64,
@@ -65,6 +67,7 @@ fn field_complete(fragment: &FieldFragment) -> bool {
 }
 
 fn field_range(fragment: &FieldFragment) -> String {
+    // Admission proves this UTF-8 fragment ends at or before total bytes.
     let end = fragment.offset + fragment.text.len() as u64;
     format!(
         "{} [{}, {}) / {}",

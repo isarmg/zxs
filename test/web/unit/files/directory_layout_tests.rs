@@ -23,6 +23,8 @@ fn fixture() -> (State, Model) {
     state.files.repository_id = target.repository.clone();
     state.files.repository_path = target.path.clone();
     state.files.namespace_head = target.namespace_head.clone();
+    // A newly initialized empty repository has an index but no user commit.
+    // The production status therefore reports generation 1 and staged=true.
     let status = super::super::decode(json!({"repository_id":id("repo",1),"directory_id":id("entry",1),"path":"docs","initialized":true,"owner":{"directory_id":id("entry",1),"path":"docs"},"directory_branch_id":id("dbr",1),"working_tree_id":id("dtree",1),"head_tree_id":null,"index_generation":"1","staged":true,"unstaged":false,"needs_restage":false,"added":"0","modified":"0","deleted":"0","children":[],"legacy_history":false}), &target).unwrap();
     let mut model = Model::default();
     model.begin(Some(target.clone()));
@@ -203,6 +205,7 @@ fn layout_unknown_completion_invalidates_health_and_keeps_original_error() {
     let phase = root.with(|| RwSignal::new(Phase::Running(target.clone())));
     state.update(|state| {
         state.files.mutation_pending = true;
+        // A health read admitted before the repair still owns its slot.
         state.management.loading = true;
     });
     let mut error = api::error(

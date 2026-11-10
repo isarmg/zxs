@@ -1,3 +1,4 @@
+//! Decode the monitoring projection once.
 use data_serialization::{Deserialize, Deserializer};
 
 #[derive(Clone, Debug, Deserialize)]

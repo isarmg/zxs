@@ -423,6 +423,7 @@ fn resuming_readmission_releases_superseded_status_without_accepting_its_result(
     let reading_generation = model.generation;
     model.reading = Some(reading_generation);
 
+    // The explicit original-operation retry starts while its GET is in flight.
     model.generation += 1;
     model.sending = true;
     assert!(!model.finish_read(reading_generation));
@@ -432,6 +433,7 @@ fn resuming_readmission_releases_superseded_status_without_accepting_its_result(
     assert!(model.submitted);
     assert!(model.sending);
 
+    // A new GET can own the current generation; an old completion cannot free it.
     let current_generation = model.generation;
     model.reading = Some(current_generation);
     assert!(!model.finish_read(reading_generation));
@@ -469,6 +471,8 @@ fn superseded_registration_read_schedules_one_refresh_after_readmission() {
     model.registrations_generation = 7;
     let operation_generation = model.generation;
 
+    // The explicit submission finishes while the older registration GET owns
+    // the slot. Its completion refresh cannot start until this GET returns.
     model.generation += 1;
     assert!(finish_registrations(
         model,

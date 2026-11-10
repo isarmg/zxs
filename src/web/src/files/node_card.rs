@@ -1,3 +1,5 @@
+//! Compact labels for admitted history facts. Opening a card only reveals its
+//! existing controls; it does not select a branch or grant write access.
 use super::history::{FileNode, NodeKind};
 use crate::icons::FileIcon;
 use web_interface::{i18n::t, prelude::*};

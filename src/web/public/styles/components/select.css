@@ -6,20 +6,27 @@
   --zxs-contour-extent: calc(var(--zxs-select-row-height, 36px) / 2);
   --zxs-contour-mode: clip;
 }
+/* The trigger owns its persistent fill above the shared input reset. */
 :root .zxs-select-trigger.zxs-input { border: 0; background: var(--zxs-bg-panel); text-decoration: none; }
 .zxs-select-trigger:disabled { opacity: 1; cursor: not-allowed; }
 .zxs-select-trigger:disabled :is(.zxs-select-value, .zxs-select-arrow) { opacity: .6; }
+/* The shared G4 painter follows these shadow offsets around its exact contour.
+ * Paint mode keeps the outer ring intact at the corners; the label clips itself.
+ * The resting control has no border; keyboard focus adds a distinct outer ring. */
 :root .zxs-select .zxs-select-trigger:focus-visible {
   outline: 0;
   box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
   --zxs-contour-mode: paint;
 }
+/* Forced colors suppress box shadows. Retain the system focus indicator there. */
 @media (forced-colors: active) {
   :root .zxs-select .zxs-select-trigger:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; box-shadow: none; }
 }
 .zxs-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zxs-select-trigger .zxs-select-arrow { display: block; flex: none; width: 1em; height: 1em; fill: none; transform-origin: center; }
 .zxs-select-trigger[aria-expanded=true] .zxs-select-arrow { transform: rotate(90deg); }
+/* Only the expanded list has a decorative border. Match the shared frame
+ * specificity; G4 consumes this author color for its foreground paint. */
 .zxs-select .zxs-select-panel {
   position: fixed; inset: auto; margin: 0; padding: 0; box-sizing: border-box;
   min-width: 0; max-width: calc(100vw - 16px); overflow: visible;
@@ -30,21 +37,31 @@
   --zxs-contour-mode: clip;
   --zxs-contour-foreground: 1;
 }
+/* The card and its border stay stationary while only the options scroll. */
 .zxs-select-panel:popover-open { display: flex; flex-direction: column; }
 .zxs-select-options {
   position: relative; min-height: 0; overflow: auto;
   overscroll-behavior: contain;
 }
+/* The foreground paints the border above the options. Once that paint is ready,
+ * share its border box instead of starting a second rounded shape 2px inside it.
+ * Keep native fallback content inside its ordinary border. Text retains the
+ * original inset because the row no longer subtracts that reclaimed border. */
 .zxs-select-panel[data-zxs-contour-state=clip] > .zxs-select-options {
   margin: calc(0px - var(--zxs-select-border-width));
   --zxs-row-border: 0px;
 }
+/* Hide only unfinished paint, not a completed square fallback. Unsupported
+ * decoration must never make an otherwise usable menu invisible. */
 .zxs-select-panel:popover-open:not([data-zxs-contour-state=clip]):not([data-zxs-contour-state=fallback]) { visibility: hidden; }
+/* A closed popover was unmeasurable, not a completed visible fallback. */
 .zxs-select-panel:popover-open[data-zxs-contour-state=fallback][data-zxs-contour-reason=not-visible] { visibility: hidden; }
 .zxs-select-option {
   display: block; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   --zxs-contour-extent: 0px;
 }
+/* Pointer feedback belongs only to the enabled row under the pointer. The
+ * active descendant also remains visible during keyboard navigation. */
 @media (hover: hover) and (pointer: fine) {
   .zxs-select-panel:popover-open .zxs-select-option[data-active=true][aria-disabled=false]:hover { background: var(--zxs-row-hover-bg); color: var(--zxs-text-primary, #18181b); --zxs-contour-extent: var(--zxs-contour-control); --zxs-contour-mode: paint; }
 }

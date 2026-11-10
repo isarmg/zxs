@@ -1,3 +1,4 @@
+//! A bounded directory response is admitted once, before it enters UI state.
 use crate::api;
 use json_codec::Value;
 use storage_contract::NamespaceEntryKind;
@@ -8,8 +9,10 @@ mod object;
 
 pub(super) const PAGE_SIZE: usize = 200;
 
+/// Request identity derived from admitted navigation or a parsed destination.
 pub(super) struct DirectoryKey(String);
 impl DirectoryKey {
+    /// Navigation is root, an admitted entry path, or a breadcrumb prefix of it.
     pub(super) fn navigation(path: &str) -> Self {
         Self(name_policy::path_key(path))
     }

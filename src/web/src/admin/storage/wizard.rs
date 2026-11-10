@@ -1,3 +1,5 @@
+//! Read-only candidate discovery precedes every user-directed admission. A source
+//! observation is never converted into an empty-directory admission proof.
 use super::*;
 use std::collections::BTreeSet;
 use storage_contract::storage_directories::{DiscoveredDisk, DiscoveredDiskState, DiscoveredDisks};

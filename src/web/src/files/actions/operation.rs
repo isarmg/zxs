@@ -1,3 +1,4 @@
+//! Publication receipts and polling of unconfirmed operations.
 use super::browse::reload_entries;
 use crate::{
     api,
@@ -8,6 +9,8 @@ use json_codec::Value;
 use web_interface::prelude::*;
 use web_interface::tasks::spawn_local;
 
+/// Only a complete current receipt can settle its matching operation. Malformed
+/// success responses retain the original ID, draft and write fence for polling.
 pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> SaveStatus {
     let operation = if state.with_untracked(|s| {
         crate::files::review::receipt_kind_matches(s, id, &value)
@@ -75,6 +78,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         crate::files::batch::reload_registered_scope(state);
     }
 }
+/// Project only scheduling identities; never clone histories, drafts or State.
 fn poll_work(state: &State) -> Option<(u64, Vec<String>)> {
     if !state.session_active() {
         return None;

@@ -19,6 +19,9 @@ fn business_mutations_require_an_active_session_before_browser_work() {
                 s.files.selected =
                     Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
             });
+            // No browser ID generation or server request may start after
+            // sign-out admission closes, even while credentials are kept
+            // for a failed revocation retry.
             let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
             let _ = directory_branch(state, branch_source(), "draft".into());
             let _ = update_note(state, None, "note".into());
@@ -55,6 +58,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
             s.files.loading = true;
             s.files.selected = Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
         });
+        // These must return before generating IDs or spawning browser work.
         let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
         let _ = directory_branch(state, branch_source(), "draft".into());
         let _ = update_note(state, None, "note".into());
@@ -249,6 +253,8 @@ fn selecting_an_empty_file_branch_is_browsing_without_a_publication() {
             ..Default::default()
         });
         state.update(|s| {
+            // Empty branches have no history anchor to fetch. Any old select
+            // mutation would generate a browser ID and fail on this runner.
             s.files.file_history = crate::files::history::tests::history(json!({
                 "selected_branch_id":"default",
                 "branches":[crate::files::history::tests::branch_wire(json!({

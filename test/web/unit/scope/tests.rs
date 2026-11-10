@@ -1,3 +1,5 @@
+//! Structural guard for the management-only browser application. Behavioral
+//! metadata and session regression tests live alongside their modules.
 use std::path::Path;
 
 fn sources(directory: &Path, output: &mut Vec<(String, String)>) {
@@ -48,6 +50,7 @@ fn application_has_no_file_content_transport_or_picker_entry_points() {
         "src/files/actions/transfer.rs",
         "src/api/upload_source.rs",
     ] {
+        // An empty checkout directory is harmless; no module or file may return.
         let path = root.join(removed);
         assert!(!path.is_file(), "retired module returned: {removed}");
         if path.is_dir() {
@@ -70,6 +73,8 @@ fn retirement_recovery_request_text_stays_bounded_and_account_scoped() {
     assert!(recovery.contains("request_text::export_view(state, epoch, record)"));
     assert!(!root.join("recovery/transfer.rs").exists());
     let source = std::fs::read_to_string(root.join("recovery/request_text.rs")).unwrap();
+    // This is bounded metadata entered as text, not a file picker or body
+    // transport. Keep the whole-application forbidden list above unchanged.
     for required in [
         "wire::MAX_REQUEST_BYTES + 4096",
         "transfer.origin != origin",
@@ -145,6 +150,7 @@ fn detail_rename_has_no_path_only_namespace_fallback() {
 
 #[test]
 fn tag_input_labels_do_not_also_label_action_buttons() {
+    // Source-level HTML structure guard.
     let source = include_str!("../../../../src/web/src/files/tags/view.rs");
     let labels = source.split("<label ").skip(1).collect::<Vec<_>>();
     assert!(!labels.is_empty());

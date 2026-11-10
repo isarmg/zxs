@@ -1,3 +1,4 @@
+//! The selection-facts response has its own boundary, separate from a disk page.
 use super::*;
 use crate::files::page::DirectoryBranch;
 
@@ -13,6 +14,9 @@ impl ScopeBranch {
     pub(super) fn entries(&self) -> &[SelectedFact] {
         &self.entries
     }
+    /// Retain the user's exact occurrence. Unlike Move, Separate must never
+    /// remap a unique entry identity to a different path in another branch.
+    /// The mutation still proves this identity/path against the frozen main.
     pub(super) fn retain_selection(&mut self, entry: &Entry) {
         let path = name_policy::LookupPath::parse(selected_path(entry))
             .expect("invariant: a parsed file entry has a valid repository path");

@@ -1,3 +1,5 @@
+/* A configured backup route occupies one column. Shared grid tracks keep
+ * arrows between real node boundaries even when identifiers or notes wrap. */
 .zxs-disk-tree-scroll { container-type: inline-size; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
 .zxs-disk-tree-canvas { display: grid; grid-template-columns: repeat(var(--zxs-backup-columns),min(21rem,max(1px,calc(100cqw - var(--zxs-compact-row-height))))); justify-content: center; column-gap: var(--zxs-block-gap); box-sizing: border-box; width: max-content; min-width: 100%; padding: var(--zxs-block-gap); }
 .zxs-app-shell .zxs-disk-tree-node { align-content: center; color: inherit; font: inherit; text-align: start; cursor: pointer; }

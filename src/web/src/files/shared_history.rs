@@ -1,3 +1,4 @@
+//! Automatic same-history equality components, kept separate from editing state.
 use super::history::DecodeError;
 use crate::{
     api,
@@ -155,6 +156,7 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>) {
         let result = api::cancellable_get(&endpoint(&request), cancellation)
             .await
             .and_then(|value| decode(value, &request));
+        // A closed or superseded panel cannot hide expiry of its current session.
         if !accept_read_response(state, target.epoch, &result)
             || !state
                 .try_with_untracked(|state| Target::capture(state).as_ref() == Some(&target))

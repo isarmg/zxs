@@ -1,3 +1,5 @@
+//! Explicit inspection of the independent format. Its display-only graph cannot
+//! be passed to the managed-format plan or any disk-admission operation.
 use super::*;
 use storage_contract::{
     storage_independent_source::{IndependentIdentity, IndependentRole},
@@ -90,6 +92,7 @@ fn inspect(state: RwSignal<State>) {
         )
         .await
         .and_then(|value| read(value, &source));
+        // Authentication failure must be handled even for a superseded read.
         if !accept_read_response(state, epoch, &result) {
             return;
         }

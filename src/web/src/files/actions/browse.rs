@@ -1,3 +1,4 @@
+//! Disk/folder navigation and generation-guarded metadata reads.
 use super::{disk_path, load_file_history};
 use crate::{
     api,
@@ -18,6 +19,8 @@ fn begin_disk_load(state: &mut State) -> Option<(u64, u64)> {
     Some((state.session_epoch, state.files.disks_generation))
 }
 
+/// Return true only when recovery invalidated this read and storage is readable.
+/// Old-session completions cannot write data, release a newer read, or reload.
 fn complete_disk_load(
     state: &mut State,
     epoch: u64,
@@ -28,10 +31,12 @@ fn complete_disk_load(
         return Ok(false);
     }
     state.files.loading_disks = false;
+    // A current-session 401 revokes authentication, not just this disk snapshot.
     if state.files.disks_generation != generation
         && !matches!(&result, Err(error) if error.status == 401)
     {
         state.files.disks_loaded = false;
+        // Storage may have become unavailable again while this read was pending.
         return Ok(state.management.storage.readable());
     }
     match result {
@@ -41,6 +46,8 @@ fn complete_disk_load(
             Ok(false)
         }
         Err(error) => {
+            // Keep cached rows, but retain the demand for a fresh snapshot.
+            // Healthy management polling will retry this current-generation read.
             state.files.disks_loaded = false;
             Err(error)
         }
@@ -72,6 +79,7 @@ pub(crate) fn open_disk(state: RwSignal<State>, slot: String) {
     open_disk_directory(state, slot, String::new());
 }
 
+/// Open a known disk-relative folder with one ordinary, current listing read.
 pub(crate) fn open_disk_directory(state: RwSignal<State>, slot: String, directory: String) {
     state.update(|s| {
         s.notices.leave();
@@ -106,6 +114,7 @@ fn navigate_directory(state: RwSignal<State>, directory: String, page: crate::ui
     load_entries(state);
 }
 
+/// Explicitly read current SMB changes from page one, keeping the folder and filter.
 pub(crate) fn refresh_directory(state: RwSignal<State>) {
     if !state.with_untracked(|s| {
         s.session_active() && !s.files.slot.is_empty() && !s.files.loading && !super::pending(s)
@@ -124,6 +133,7 @@ pub(crate) fn refresh_directory(state: RwSignal<State>) {
     load_entries(state);
 }
 
+/// Refresh keeps the current cursor; stale snapshots explicitly restart at page one.
 pub(crate) fn load_entries(state: RwSignal<State>) {
     request_page(state, false);
 }
@@ -137,6 +147,7 @@ pub(crate) fn edit_search(state: RwSignal<State>, query: String) {
     state.update(|s| s.files.query_draft = query);
 }
 
+/// Enter submits immediately; only submission replaces the page and its selection.
 pub(crate) fn search(state: RwSignal<State>, query: String) {
     state.update(|s| {
         s.notices.leave();
@@ -151,6 +162,7 @@ pub(crate) fn search(state: RwSignal<State>, query: String) {
     request_page(state, false);
 }
 
+/// Choosing a branch is a read. Only the separate default action publishes it.
 pub(crate) fn preview_directory_branch(state: RwSignal<State>, id: String) {
     let branch = state.with_untracked(|s| {
         if !s.session_active() || s.files.loading || super::pending(s) {
@@ -198,6 +210,9 @@ fn begin_directory_snapshot(
     state.change_page(crate::ui::Page::Files);
     true
 }
+/// A validated current history page or child-repository status supplies
+/// the committed branch/tree pair for this immutable read target.
+/// Preview never acquires branch-checkout or staging authority.
 pub(crate) fn preview_directory_snapshot(
     state: RwSignal<State>,
     path: String,
@@ -231,6 +246,8 @@ pub(crate) fn return_to_default(state: RwSignal<State>) {
     load_entries(state);
 }
 
+/// Leave a historical subtree at its source folder, not at a child path that
+/// may exist only in that snapshot. The ordinary details read owns all writes.
 pub(crate) fn open_preview_origin(state: RwSignal<State>) {
     let root = state.with_untracked(|state| {
         if !state.session_active() || super::pending(state) {

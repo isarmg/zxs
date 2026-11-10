@@ -1,3 +1,4 @@
+//! Only the bounded fields consumed by history controls enter the UI model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NodeKind {
     Content,

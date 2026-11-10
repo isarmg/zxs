@@ -86,6 +86,8 @@ pub(super) fn node(
     Ok(Some(node))
 }
 
+/// A restore review may not silently adopt a changed D, even if the list's
+/// file/path identity still matches. Absence remains an observed absence.
 pub(super) fn unchanged_node(
     value: Value,
     summary: &Summary,
@@ -98,6 +100,8 @@ pub(super) fn unchanged_node(
     Ok(current)
 }
 
+/// Shared by HTTP ingress and the untrusted browser recovery boundary. A local
+/// record is not evidence of current deletion or permission to restore it.
 pub(super) fn validate_node(node: &FileDeletionNode) -> Result<(), api::Error> {
     if HistoryFileId::parse(&node.file_id).is_err()
         || HistoryRepositoryId::parse(&node.repository_id).is_err()
@@ -125,6 +129,8 @@ pub(super) fn validate_node(node: &FileDeletionNode) -> Result<(), api::Error> {
     Ok(())
 }
 
+/// Native metadata-only publications retain these planner fields in both POST
+/// and outcome responses. Missing fields are not an older supported receipt.
 pub(super) fn publication_sequence(receipt: &Value, fields: &[&str]) -> Option<u64> {
     let result = receipt["result"].as_object()?;
     if result.len() != fields.len() + 3

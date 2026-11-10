@@ -1,3 +1,4 @@
+//! Discovery selects a stable retained file, never invents a live directory row.
 use super::{actions, history::DecodeError, model::Navigation, page::Entry};
 use crate::{
     api,
@@ -114,6 +115,8 @@ fn open(state: RwSignal<State>, epoch: u64, file: &File) {
         s.files.selected = Some(Entry::retained(file));
         s.change_page(crate::ui::Page::Details);
     });
+    // Obtain a fresh exact history root. The discovery root is not an old-root
+    // lease, a current namespace context, or permission to submit retirement.
     actions::load_file_history(state);
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {

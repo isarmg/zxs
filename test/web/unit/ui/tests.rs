@@ -195,6 +195,7 @@ fn language_reload_waits_for_pending_or_uncertain_work() {
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "original".into();
     state.files.operations[0] = FileOperation::from_receipt("original", &receipt);
@@ -216,6 +217,8 @@ fn language_reload_preserves_storage_retry_admission_until_resolved() {
     assert!(state.reload_blocked());
     state.management.retry_unknown = false;
     assert!(!state.reload_blocked());
+    // A known asynchronous recovery is visible in server status, not a lost
+    // request outcome, and therefore does not need to prevent locale changes.
     state.management.recovering = true;
     assert!(!state.reload_blocked());
 }
@@ -236,6 +239,7 @@ fn unconfirmed_logout_cannot_be_replaced_by_login_or_restore() {
         assert_eq!(session_view(&state).phase, SessionPhase::LogoutUnconfirmed);
         assert!(!state.session_active());
     }
+    // Even stale authentication state cannot admit business work or hide retry.
     state.authenticated = true;
     assert!(!state.session_active());
     assert_eq!(session_view(&state).phase, SessionPhase::LogoutUnconfirmed);
@@ -632,6 +636,8 @@ fn password_form_stops_showing_busy_when_an_unknown_result_keeps_submission_disa
     assert!(state.password_change_blocked());
     assert!(state.reload_blocked());
 
+    // Navigation cannot turn an outcome fence into an in-flight request or
+    // unlock the non-idempotent form. Only a settled new session clears it.
     for page in [Page::Files, Page::Account] {
         state.change_page(page);
         assert!(!state.password_pending());

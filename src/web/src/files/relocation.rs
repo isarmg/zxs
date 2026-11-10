@@ -1,3 +1,4 @@
+//! Review one current object and its destination through the shared move request.
 use super::{actions, model::entry_key, page::Entry};
 use crate::{
     api,
@@ -120,6 +121,7 @@ impl Editor {
     }
 }
 
+/// Files and Details open the same editor; only its existing submit path writes.
 pub(crate) fn provide(state: RwSignal<State>) {
     let editor = Editor {
         draft: RwSignal::new(None),

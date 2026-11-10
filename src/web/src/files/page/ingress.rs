@@ -263,6 +263,8 @@ fn branches(
                 "directory branch differs from the repository context",
             ));
         }
+        // A stable directory may have moved since this historical branch was
+        // captured, so its recorded path need not equal today's context path.
         if !ids.insert(branch.id().to_owned()) || current && branch.current() {
             return Err(DecodeError::Relation(
                 "directory branches repeat an identity or current choice",

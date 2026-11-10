@@ -110,6 +110,8 @@ fn directory_details(record: &Record) -> impl IntoView + use<> {
 }
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
+    // Login/session admission hydrates before admitting more browser events.
+    // Rendering, navigation and opening this panel never perform a mutation.
     view! {
         <Show when=move ||state.with(blocks_writes)>
             <aside class="zxs-surface zxs-stack" data-zxs-file-deletion-recovery="">

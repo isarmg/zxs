@@ -1,3 +1,5 @@
+//! Document-visible background reads. Pausing never cancels an admitted request
+//! or discards its receipt: session/operation ownership still decides settlement.
 use crate::ui::State;
 use web_interface::prelude::*;
 
@@ -8,6 +10,7 @@ struct Visibility {
 }
 #[cfg(any(target_arch = "wasm32", test))]
 impl Visibility {
+    /// Return a transition only once, including repeated pageshow/visibility events.
     fn change(&mut self, visible: bool) -> Option<bool> {
         if self.running == visible {
             return None;
@@ -26,6 +29,7 @@ struct Demand {
 fn demand(state: &State, visible: bool) -> Demand {
     Demand {
         operations: visible && state.session_active(),
+        // Coarse management health is public and gates writes on every page.
         management: visible
             && !state.logout_pending()
             && !state.logout_unconfirmed()
@@ -163,6 +167,7 @@ mod browser {
                 target.add_event_listener_with_callback(name, callback.as_ref().unchecked_ref())
             {
                 web_sys::console::error_2(&"Background-read listener failed".into(), &error);
+                // Drop already-installed listeners rather than leak callbacks.
                 return;
             }
             listeners.push(Listener {

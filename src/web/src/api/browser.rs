@@ -1,3 +1,4 @@
+//! Parse browser exceptions once, retaining the original JavaScript value.
 use super::{Error, ErrorSource, error};
 use std::{
     cell::{Cell, RefCell},
@@ -55,6 +56,7 @@ impl std::fmt::Display for BrowserFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let context = match self.kind {
             FailureKind::Browser => t("浏览器操作失败", "Browser operation failed"),
+            // Fetch also rejects for browser policy failures, not only network loss.
             FailureKind::Request => t("浏览器请求失败", "Browser request failed"),
             FailureKind::ReadCancelled => t("读取已取消", "The read was cancelled"),
             FailureKind::Timeout => t("请求超时", "The request timed out"),
@@ -90,6 +92,7 @@ struct Cancellation {
     queue_waker: RefCell<Option<Waker>>,
 }
 
+/// Shared only by a read owner and its request. The first abort owns the cause.
 #[derive(Clone)]
 pub(crate) struct ReadCancellation(std::sync::Arc<send_wrapper::SendWrapper<Cancellation>>);
 
@@ -140,6 +143,8 @@ impl ReadCancellation {
 
     pub(super) fn request_error(&self, value: JsValue) -> Error {
         let signal = self.signal();
+        // An AbortError name alone cannot prove owner cancellation or timeout.
+        // A racing unrelated rejection must retain its actual browser cause.
         let kind = match (
             signal.aborted() && value == signal.reason(),
             self.0.cause.get(),
@@ -152,6 +157,7 @@ impl ReadCancellation {
     }
 }
 
+/// Poll the real abort signal while still queued, before fetch exists to reject.
 pub(super) struct QueuedRead {
     cancellation: ReadCancellation,
     admission: super::read_queue::Admission,
@@ -183,6 +189,7 @@ pub(super) struct AbortOnDrop(pub(super) ReadCancellation);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
+        // Resource cleanup is not evidence that an owner cancelled a read.
         self.0.0.controller.abort();
     }
 }

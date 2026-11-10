@@ -1,3 +1,4 @@
+//! A known original operation can recover a missing browser hint.
 use super::*;
 use std::sync::Arc;
 use storage_contract::history_window::HistoryTreeId;
@@ -48,6 +49,7 @@ impl Candidate {
             history_root: request.history_root,
             version_ids: request.version_ids,
         };
+        // Bound the complete saved hint now, not after the user accepts it.
         record.encode()?;
         Ok(Self {
             owner,
@@ -124,6 +126,8 @@ fn lookup(state: RwSignal<State>, model: RwSignal<Lookup>) {
         })
         .expect("invariant: mounted receipt lookup owns its state");
     spawn_local(async move {
+        // The existing outcome endpoint enforces exact current operation ownership.
+        // It returns publication evidence, not a new cleanup/absence observation.
         let result = api::cancellable_get(
             &format!("/api/operations/{operation}/outcome"),
             cancellation,
@@ -176,6 +180,7 @@ fn accept(state: RwSignal<State>, model: RwSignal<Lookup>, generation: u64) {
         model.update(|model| model.error = Some(error));
         return;
     }
+    // Re-admit the complete bounded queue, retaining every independent operation.
     restore(state);
     let queue_error = state.with_untracked(|s| s.files.node_retirement.recovery.error.clone());
     if let Some(error) = queue_error {

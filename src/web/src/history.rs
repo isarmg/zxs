@@ -143,6 +143,7 @@ fn action_label(action: &str) -> String {
     }
 }
 
+// Isolate immutable events and the filter from unrelated management polling.
 fn visible_events(state: RwSignal<State>) -> Memo<Vec<Event>> {
     let events = Memo::new(move |_| state.with(|s| s.activity.events.clone()));
     let disk = Memo::new(move |_| state.with(|s| s.activity.disk.clone()));

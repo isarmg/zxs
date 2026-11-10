@@ -191,6 +191,7 @@ fn delete_receipt_must_match_kind_owner_file_complete_frontier_and_request_diges
     state.session_epoch += 1;
     assert!(!receipt_matches(&state, &id, &valid));
 }
+// Keep the original operation variable readable without shadowing fixture IDs.
 fn id_from_number(prefix: &str, n: u32) -> String {
     id(prefix, n)
 }

@@ -61,6 +61,8 @@ fn merge_keeps_an_arbitrary_off_page_node_and_every_selected_branch() {
     assert_eq!(body["surviving_branch_id"], "left");
     assert_eq!(body["confirmed"], true);
     assert!(body.get("content").is_none());
+    // A draft contains no candidate page to replace or pin. Its compact result
+    // and frozen heads remain sufficient after the browser evicts those pages.
     assert_eq!(draft.chosen.as_ref().unwrap().version, "body-old");
     let inventory = draft.review_inventory();
     assert_eq!(inventory.node_ids, ["fnode-unrelated"]);

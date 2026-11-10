@@ -1,3 +1,5 @@
+/* Shared business geometry. Compose these roles with domain classes instead of
+ * copying dimensions into a page selector. The authentication shell is separate. */
 @property --zxs-contour-extent { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
 @property --zxs-contour-mode { syntax: "*"; inherits: false; initial-value: paint; }
 :root {
@@ -77,6 +79,7 @@
 }
 .zxs-app-shell .zxs-row--flush { padding: 0; }
 .zxs-app-shell .zxs-row--center { display: flex; align-items: center; padding-block: 0; }
+/* Child controls already own a full row height; flex alignment centers text. */
 .zxs-app-shell .zxs-flow.zxs-row { padding-block: 0; }
 .zxs-app-shell .zxs-row--option { height: var(--zxs-control-height); padding-block: 0; line-height: var(--zxs-control-height); }
 .zxs-app-shell .zxs-input {
@@ -99,6 +102,7 @@
 }
 .zxs-app-shell .zxs-control-group--comfortable .zxs-button {
   --zxs-control-height: var(--zxs-input-row-height);
+  /* Icon controls use the same row baseline as fields and navigation. */
   font-size: var(--zxs-compact-font-size);
   justify-content: center;
   flex-shrink: 0;
@@ -108,6 +112,9 @@
   line-height: 1;
   white-space: nowrap;
 }
+/* Rows already provide their own text clearance. Only two directly adjacent
+ * painted surfaces need separation; labels or explanatory rows break the pair.
+ * Surface roles describe a transparent wrapper's painted start/end boundary. */
 :where(.zxs-app-shell .zxs-stack) > :is(.zxs-frame, .zxs-surface, .zxs-surface-end) + :is(.zxs-frame, .zxs-surface, .zxs-surface-start) {
   margin-block-start: var(--zxs-block-gap);
 }

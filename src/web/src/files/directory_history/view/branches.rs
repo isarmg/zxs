@@ -1,3 +1,4 @@
+//! Branch operations use admitted history identities, not labels or a preview.
 use super::*;
 use crate::files::inline;
 use storage_contract::directory_history::DirectoryHistoryBranch;
@@ -34,6 +35,8 @@ pub(super) fn view(
             }
         )
     });
+    // One index for the page, not a complete listing scan for each graph row.
+    // These are the independently admitted working heads, never commit heads.
     let working_heads = Memo::new(move |_| {
         state.with(|state| {
             state

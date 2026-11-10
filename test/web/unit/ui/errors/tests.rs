@@ -69,6 +69,7 @@ fn operation_resource_session_and_error_identity_are_not_conflated() {
     );
     assert_eq!(state.errors.len(), 5);
     assert_eq!(state.errors[0].key.as_ref().unwrap().session_epoch, 8);
+    // A late old-session failure cannot evict notices or revoke its replacement.
     state.authenticated = true;
     let mut expired = failure("old-expired");
     expired.status = 401;

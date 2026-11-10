@@ -143,6 +143,8 @@ fn beginning_logout_invalidates_pending_login_without_losing_revocation_credenti
         assert_eq!(saved.token.as_deref(), Some("active-token"));
         assert_eq!(saved.csrf.as_deref(), Some("active-csrf"));
     });
+    // Transport failure locks the UI but must retain the exact credential for
+    // a later revocation retry, rather than replacing it with a new identity.
     state.session_transition = crate::ui::SessionTransition::LogoutUnconfirmed;
     state.authenticated = false;
     assert_eq!(crate::ui::begin_logout(&mut state), Some(2));
@@ -195,6 +197,7 @@ fn invalid_logout_success_preserves_credentials_and_the_revocation_retry_fence()
                 assert_eq!(saved.csrf.as_deref(), Some("original-csrf"));
                 assert_eq!(saved.generation, generation);
             });
+            // A valid retry, not a fresh login, settles the original intent.
             state.update(|s| assert_eq!(begin_logout(s), Some(2)));
             complete_logout(state, Ok(json!({"logged_out":true})));
             state.with_untracked(|s| {

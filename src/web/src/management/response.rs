@@ -1,3 +1,4 @@
+//! Admit current management observations once, before updating recovery fences.
 use super::Storage;
 use crate::api;
 use data_serialization::{Deserialize, de::IgnoredAny};
@@ -11,6 +12,7 @@ pub(super) struct Status {
     _management: Alive,
     pub(super) authentication: Authentication,
     pub(super) storage: StorageStatus,
+    // Auxiliary subsystem details are not consumed by this observation.
     #[serialization(rename = "auxiliary")]
     _auxiliary: IgnoredAny,
 }
@@ -35,6 +37,8 @@ pub(super) enum EmbeddedReady {
     Ready,
 }
 
+/// Both forms are emitted by current server backends. Only embedded Ready
+/// omits the recovery worker field; a missing managed field is not false.
 #[derive(Debug, Deserialize)]
 #[serialization(untagged, deny_unknown_fields)]
 pub(super) enum StorageStatus {

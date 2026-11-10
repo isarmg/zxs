@@ -1,3 +1,5 @@
+//! Deleted files remain discoverable outside the visible SMB namespace. Reads
+//! belong to a session/generation; undo belongs to the global operation ledger.
 mod batch;
 mod directory;
 mod recovery;

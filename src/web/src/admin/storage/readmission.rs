@@ -1,3 +1,5 @@
+//! Explicit readmission of the original Disabled registration. Read-only status
+//! polling never retries a mutation or opens the disabled target directory.
 use super::*;
 use std::collections::BTreeMap;
 use storage_contract::{OperationId, storage_readmission::*};
@@ -37,6 +39,8 @@ impl Model {
                 .as_ref()
                 .is_some_and(|status| status.state != ReadmissionState::Completed)
     }
+    /// A retry supersedes the response generation, not the outstanding read's
+    /// ownership. Its completion must release that slot without applying data.
     fn finish_read(&mut self, generation: u64) -> bool {
         if self.reading != Some(generation) {
             return false;
@@ -97,6 +101,8 @@ fn registration<'a>(state: &'a State, slot: &str, disk: &str) -> Option<&'a Regi
         .get(slot)
         .filter(|entry| entry.disk_id == disk)
 }
+/// Exit controls use the same authenticated registry as readmission, not a
+/// device's observed health or the pool status without a registration identity.
 pub(super) fn active_registration<'a>(
     state: &'a State,
     slot: &str,
@@ -215,6 +221,8 @@ fn finish_registrations(
     }
     model.registrations_loading = false;
     if model.generation != operation_generation {
+        // Completion may have requested fresh registration data while this read
+        // still occupied the slot. Discard its old view and start that refresh.
         return true;
     }
     match result {

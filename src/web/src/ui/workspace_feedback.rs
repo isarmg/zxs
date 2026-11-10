@@ -1,3 +1,5 @@
+//! Workspace feedback belongs to the current visit and admitted operation.
+//! Receipts and error diagnostics retain their independent recovery lifetimes.
 use super::{Page, State};
 use crate::files::{SaveStatus, publication_notice};
 use web_interface::{i18n::t, prelude::*};
@@ -51,6 +53,9 @@ impl Notices {
         {
             self.visible = None;
         }
+        // An unresolved outcome or reduced protection remains actionable even
+        // elsewhere. A later ordinary success settles it without reviving the
+        // previous visit's toast, including navigation away and back.
         if let Some(operation) = self.operation.as_mut() {
             operation.current_visit = false;
         }
@@ -98,6 +103,8 @@ impl Notices {
                 Kind::Success,
             )
         } else {
+            // Reduced protection is not an ordinary success. Never replace its
+            // warning with the directory-restored success copy.
             (publication_notice(status), Kind::OperationWarning)
         };
         self.show(epoch, message, kind);
@@ -193,6 +200,7 @@ fn install_expiry(state: RwSignal<State>) {
     Effect::new(move |_| {
         let id = expiry.get();
         timer.update_value(|timer| {
+            // Replacing or dismissing a notice cancels the previous timer.
             **timer = id.map(|id| {
                 Timeout::new(SUCCESS_EXPIRY_MS, move || {
                     let _ = state.try_update(|s| s.notices.dismiss(id));

@@ -1,3 +1,4 @@
+//! Namespace, branch and note transactions; writes never bypass the pending-save gate.
 use super::{
     history_write_allowed,
     operation::{record_operation, record_receipt},
@@ -355,6 +356,7 @@ pub(crate) fn create_branch(
         body,
     )
 }
+/// File branch selection changes the inspected history node only.
 pub(crate) fn select_branch(state: RwSignal<State>, branch: String) {
     let target = state.with_untracked(|s| {
         if !super::history_navigation_ready(s) || super::history_aux_loading(s) {
@@ -424,6 +426,8 @@ pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
         json!({"branch_id":branch,"repository_id":repository,"path":path,"expected_node_id":node,"expected_head":head}),
     );
 }
+/// Definite HTTP rejection releases only this operation; ambiguous transport or
+/// malformed-success responses stay tied to the original ID for polling.
 pub(crate) fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error: api::Error) {
     let unknown = error.mutation_outcome_unknown();
     let operation = if unknown {
@@ -433,6 +437,8 @@ pub(crate) fn record_failure(state: RwSignal<State>, epoch: u64, id: &str, error
     };
     record_operation(state, operation);
     if !unknown {
+        // This is a rejected HTTP request, not a server staging receipt.
+        // Present its actual error without claiming any content was retained.
         state.update(|s| s.notices.clear_operation_notice(id));
     }
     fail_in(state, epoch, ErrorContext::Operation(id.to_owned()), error);

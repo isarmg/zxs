@@ -1,3 +1,4 @@
+/* Appearance owns palette and visual state. Dimensions live in geometry.css. */
 html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   color-scheme: light;
   --zxs-bg-page: #fff;
@@ -55,10 +56,12 @@ html:not([data-zxs-appearance]), html[data-zxs-appearance="content-blocks"] {
   &:not([data-zxs-selection="custom"]) .zxs-button[aria-pressed="true"] { background: transparent; color: var(--zxs-text-primary); text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
 }
 
+/* The gap returns to its upper-right resting position when the read settles. */
 .zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: zxs-refresh-spin .8s linear infinite; transform-origin: center; }
 @keyframes zxs-refresh-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .zxs-header-refresh[aria-busy=true] > .zxs-refresh-icon { animation: none; }
 }
 
+/* Diagnostic JSON must scroll inside its panel, not widen mobile navigation. */
 .zxs-admin-result { min-width: 0; max-width: 100%; overflow: auto; }

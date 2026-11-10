@@ -2,6 +2,7 @@ use super::*;
 use actions::edit;
 use web_interface::view_renderer::html::attribute::custom::custom_attribute;
 
+// The source boundary already verified unique canonical history-group hashes.
 struct HistoryContext {
     origin: String,
     history: String,
@@ -74,6 +75,8 @@ fn primary(state: RwSignal<State>) -> impl IntoView {
             }}/>
     </Show>}
 }
+// A retiring keyed row may observe the new draft before its owner is removed.
+// An absent display value is empty; Draft::intent still rejects incomplete mappings.
 fn history_names(state: RwSignal<State>) -> impl IntoView {
     view! {<section class="zxs-stack" aria-label=t("逐历史来源映射", "Per-history origin mapping")>
         <h3 class="zxs-row">{t("3. 分别命名各份来源历史", "3. Name each source history separately")}</h3>

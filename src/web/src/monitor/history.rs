@@ -1,3 +1,4 @@
+//! One current-window projection shared by every chart. No wire JSON survives ingress.
 mod wire;
 
 use super::Metric;
@@ -126,6 +127,7 @@ fn project(value: json_codec::Value, range: &str) -> Result<History, Error> {
 fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
     let mut disks = HashMap::with_capacity(sample.disks.len());
     for disk in sample.disks {
+        // Bucket capacity averages remain valid even if its last observation is offline.
         let usage =
             percent(disk.usage_percent)?.or_else(|| ratio(disk.used_bytes, disk.total_bytes));
         let power = power(disk.power_watts)?;

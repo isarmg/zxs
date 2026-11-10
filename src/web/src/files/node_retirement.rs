@@ -1,3 +1,4 @@
+//! Detail-only irreversible admission with account-scoped original-request recovery.
 use super::{
     actions,
     history::DecodeError,

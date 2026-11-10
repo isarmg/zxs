@@ -1,3 +1,4 @@
+//! Missing samples and collection gaps stay gaps in the responsive SVG history.
 use super::{Metric, State};
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_interface::{html, i18n::t, prelude::*};
@@ -34,6 +35,8 @@ fn plot(
     let left = 38.0f64.min(width * 0.35);
     let right = (width - 5.).max(left + 1.);
     let top = 8.0f64.min(height * 0.2);
+    // Short four-column cards retain useful graph height and the same font.
+    // Their selected time range is already shown by the toolbar control.
     let bottom = (height - if height < 70. { 6. } else { 24. }).max(top + 1.);
     let mut paths = Vec::new();
     let mut dots = Vec::new();
@@ -110,6 +113,7 @@ fn series(history: &Option<super::history::History>, metric: &Metric) -> Series 
             to: history.to,
             interval: history.interval,
         },
+        // No response yet is presentation state, not a malformed response default.
         None => Series::default(),
     }
 }

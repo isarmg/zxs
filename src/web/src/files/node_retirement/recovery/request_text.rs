@@ -1,3 +1,4 @@
+//! Explicit text backup of an original intent.
 use super::*;
 
 const MAX_ORIGIN_BYTES: usize = 2048;
@@ -147,18 +148,11 @@ fn preview(state: RwSignal<State>, model: RwSignal<Import>) {
     });
 }
 fn can_import(state: &State, owner: &(u64, String), record: &Record) -> bool {
-    self::owner(state).as_ref() == Some(owner)
-        && !state.files.mutation_pending
-        && !state
-            .files
-            .node_retirement
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| attempt.in_flight)
-        && state.files.operations.iter().all(|operation| {
-            operation.id() != record.operation.to_string()
-                || operation.status() == SaveStatus::Unknown
-        })
+    self::owner(state).as_ref() == Some(owner) && !state.files.mutation_pending
+        && !state.files.node_retirement.attempt.as_ref().is_some_and(|attempt| attempt.in_flight)
+        // An ID-only cached final status cannot authenticate newly imported bytes.
+        // Use the existing record or exact published-receipt lookup instead.
+        && state.files.operations.iter().all(|operation| operation.id() != record.operation.to_string() || operation.status() == SaveStatus::Unknown)
 }
 fn accept(state: RwSignal<State>, model: RwSignal<Import>, generation: u64) {
     let captured = model.with_untracked(|model| {
@@ -187,7 +181,7 @@ fn accept(state: RwSignal<State>, model: RwSignal<Import>, generation: u64) {
             return;
         }
     };
-    restore(state);
+    restore(state); // Existing scheduling queries receipts only, never POSTs.
     if let Some(error) = state.with_untracked(|s| s.files.node_retirement.recovery.error.clone()) {
         model.update(|model| model.error = Some(error));
         return;

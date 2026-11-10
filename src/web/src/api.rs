@@ -13,6 +13,9 @@ mod response;
 use browser::AbortOnDrop;
 pub(crate) use browser::{ReadCancellation, js_error};
 
+// Token and CSRF belong to one credential generation. A response from a
+// previous login may not clear or replace the current login's credentials.
+// Deliberately no Debug: this state contains authentication secrets.
 #[derive(Clone, Default)]
 struct Credentials {
     token: Option<String>,
@@ -124,6 +127,8 @@ impl From<storage_contract::client_protocol::ResponseError> for Error {
 }
 
 impl Error {
+    /// After a mutation request, only a client-error response proves rejection.
+    /// A malformed success response can follow a completed publication.
     pub(crate) fn mutation_outcome_unknown(&self) -> bool {
         storage_contract::client_protocol::mutation_outcome_unknown(self.status)
     }
@@ -189,6 +194,8 @@ pub fn clear_session() {
     MANAGEMENT_READS.with(read_queue::Queue::invalidate);
 }
 
+// Stop later stages of in-flight operations before logout reaches the server.
+// Keep the credential until revocation is confirmed so failed logout can retry.
 pub(crate) fn invalidate_session_work() {
     CREDENTIALS.with(|saved| saved.borrow_mut().generation += 1);
     MANAGEMENT_READS.with(read_queue::Queue::invalidate);
@@ -425,6 +432,7 @@ pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Va
     decode(fetch(method, path, body).await?).await
 }
 
+/// Keep the actual HTTP status when endpoint-specific success decoding fails.
 pub(crate) async fn validated_request<T>(
     method: &str,
     path: &str,
@@ -452,6 +460,7 @@ pub(crate) async fn cancellable_request(
     decode(fetch_authorized(method, path, body, false, Some(cancellation)).await?).await
 }
 
+/// Public one-time account setup; no reusable bootstrap capability is accepted.
 pub(crate) async fn setup_request(
     method: &str,
     path: &str,
@@ -469,6 +478,7 @@ pub(crate) async fn setup_request(
     decode(fetch_authorized(method, path, body, true, None).await?).await
 }
 
+/// Public session identity. Authentication secrets never enter the UI model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Authenticated {
     pub principal: String,

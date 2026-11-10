@@ -1,3 +1,4 @@
+//! Explicit target-local intent saving.
 use super::*;
 use storage_contract::storage_foreign_intent::*;
 
@@ -121,6 +122,7 @@ impl Model {
                 self.stored = Some(status);
             }
             Err(error) => {
+                // A rejected retry cannot disprove an earlier, uncertain save.
                 self.save = if submission.previous == SaveState::Unknown
                     || error.mutation_outcome_unknown()
                 {

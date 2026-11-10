@@ -1,3 +1,4 @@
+//! Current-root history reads own bounded pages and reject obsolete completions.
 use crate::{
     api,
     files::{
@@ -281,6 +282,8 @@ fn report_local(state: RwSignal<State>, target: &Target, error: api::Error) {
 }
 
 pub(crate) fn load_file_history(state: RwSignal<State>) {
+    // This also runs after selection/listing refresh. An old editor owner may
+    // still be cleaning up, so the completion decides whether a window can move.
     let Some(target) = state.with_untracked(Target::capture) else {
         return;
     };
@@ -935,6 +938,7 @@ async fn review_page(
         return Ok(None);
     }
     let result = fetch_page(target, request, cancellation).await;
+    // Revocation belongs to the session, including an obsolete request's 401.
     if !accept_read_response(state, target.epoch, &result)
         || !state.with_untracked(|s| review_current(s, target, generation, owner))
     {
@@ -992,6 +996,7 @@ async fn collect_review(
                 tags: node.tags.into_iter().collect(),
             }),
         }
+        // All unselected node data and parent previews are released here.
     }
     if !collect_review_branches(state, target, requested, generation, owner, &mut facts).await? {
         return Ok(None);
@@ -1049,6 +1054,8 @@ async fn collect_review_branches(
         last = branches.last().map(|branch| branch.branch_id.to_string());
         let next = cursors.next_cursor.clone();
         branch_progress(cursor.as_ref(), next.as_ref())?;
+        // Reuse the admitted branch projection; only selected compact facts
+        // survive this single local page, never candidate branch catalogues.
         let mut projected = FileHistory::default();
         projected
             .install_auxiliary(page)

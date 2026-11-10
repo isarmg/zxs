@@ -1,3 +1,4 @@
+//! Check the complete native batch result, not a count or a generic operation ID.
 use super::*;
 use data_serialization::Deserialize;
 use storage_contract::client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES;
@@ -60,6 +61,8 @@ impl Request {
             {
                 return false;
             }
+            // Each node has already passed the same 4096-entry boundary. At
+            // most 100 nodes are considered; the sums cannot overflow usize.
             branches += node.branch_heads.len();
             parents += node.parent_node_ids.len();
             if branches > MAX_FILE_DELETION_FRONTIER_ENTRIES
@@ -90,6 +93,9 @@ impl Request {
             {
                 return false;
             }
+            // Current may reference an immutable selected tree distinct from
+            // the named branch's CAS head. Core authenticates that relation;
+            // the browser never fabricates or relabels a source tree.
             selected_tree = Some(tree);
         }
         true

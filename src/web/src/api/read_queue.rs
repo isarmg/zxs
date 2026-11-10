@@ -1,3 +1,5 @@
+//! One management GET per document leaves room in the server's two-slot pool.
+//! The bounded FIFO schedules first attempts only; HTTP failures are not retried.
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -58,6 +60,8 @@ impl Queue {
         })
     }
 
+    /// Credential changes invalidate queued work, never an active permit.
+    /// Old request completion can therefore release only its own occupancy.
     pub(super) fn invalidate(&self) {
         let waiting = std::mem::take(&mut self.0.borrow_mut().waiting);
         for waiter in waiting {
@@ -136,6 +140,7 @@ impl Drop for Admission {
     }
 }
 
+/// Owned until response consumption finishes, fails, or is dropped.
 pub(super) struct Permit(Queue);
 
 impl Drop for Permit {

@@ -34,6 +34,7 @@ fn wire_operation() -> Value {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
     value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "op_00000000000000000000000000000001".into();
     value
@@ -116,6 +117,7 @@ fn administration_uses_the_shared_current_wire_evidence() {
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
     content.as_object_mut().unwrap().remove("current_health");
     content["operation_id"] = "op_00000000000000000000000000000001".into();
     for valid in [wire_operation(), content] {

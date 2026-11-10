@@ -64,6 +64,7 @@ fn edited_plan_inputs_require_a_new_review_before_commit_or_cancel() {
         assert!(model.plan.is_none(), "{kind:?} retained its previous plan");
         assert!(!model.acknowledged);
         assert!(model.result.is_empty());
+        // Even a queued acknowledgment cannot make the previous target usable.
         model.acknowledged = true;
         for commit in [true, false] {
             assert!(
@@ -146,6 +147,8 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
             Some(UncertainOperation::Known("original".into()))
         );
     }
+    // The operation may not be indexed yet. A lookup error is not evidence of
+    // rejection and never enters the success reducer.
     let error = api::Error {
         code: storage_contract::ErrorCode::NotFound,
         message: "not indexed".into(),
@@ -257,6 +260,7 @@ fn storage_action_controls_reenable_after_busy_request_completes() {
             s.management.storage = Storage::Ready;
             s.admin_console.acknowledged = true;
         });
+        // Save/Create preview and Cancel share this disabled binding.
         let write = Memo::new(move |_| {
             state.with(|s| !permitted(s, true) || s.admin_console.uncertain_operation.is_some())
         });
@@ -341,6 +345,7 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "unknown".into();
     assert!(matches!(
@@ -385,6 +390,7 @@ fn operation_receipt(commit: &str, state: &str, protection: &str) -> Value {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
     value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "original".into();
     value["commit_state"] = commit.into();
@@ -434,6 +440,7 @@ fn only_the_original_terminal_operation_query_settles_the_fence() {
             };
             let request = request::operation_outcome(queried);
             let mut value = operation_receipt(commit, state, protection);
+            // A valid receipt for another lookup still cannot settle original.
             value["operation_id"] = queried.into();
             respond(&mut model, &request, value);
             let settled = terminal && queried == "original";
@@ -888,6 +895,7 @@ fn timeout_preserves_the_exact_typed_plan_and_original_operation() {
         Some(UncertainOperation::Known("original".into()))
     );
     assert!(model.reload_blocked());
+    // A valid unrelated outcome still cannot unlock the uncertain write.
     let mut value = operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE");
     value["operation_id"] = "other".into();
     respond(&mut model, &request::operation_outcome("other"), value);

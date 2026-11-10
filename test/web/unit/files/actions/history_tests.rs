@@ -477,6 +477,7 @@ fn field_response(
         end_of_field: end == total,
         next_cursor: next,
     };
+    // These inconsistent totals still satisfy the per-fragment wire ranges.
     history::admit(
         json_codec::to_value(page).unwrap(),
         request,
@@ -722,6 +723,8 @@ fn cancelled_and_reopened_identical_selections_cannot_receive_the_old_drafts_sta
 
     Owner::new().with(|| {
         let state = RwSignal::new(state);
+        // A queued old panel callback must fail its instance fence before it
+        // replaces the Review owner or attempts any browser/network operation.
         review_history_tags(state, old.instance);
         assert!(state.with_untracked(|s| s.files.history_aux.current_review(current, generation)));
         assert_eq!(

@@ -1,3 +1,4 @@
+//! Strict named browser records, separate from the admitted request.
 use super::*;
 use data_serialization::{
     Deserialize, Deserializer, Serialize,

@@ -127,6 +127,8 @@ fn metadata_completion_keeps_the_current_detail_controls_mounted() {
         });
         assert_eq!(detail.get().as_ref(), Some(&identity));
         assert_eq!(mounts.load(Ordering::SeqCst), 1);
+        // A real post-publication listing changes selected_entry.note, not just
+        // file_history. Mutable payloads must not recreate editor/tree owners.
         state.update(|s| {
             update(s.files.selected.as_mut().unwrap(), json!({"note":"saved note","read_only":true,"version_id":"v2","node_id":"v2","selected_branch_id":"other"}));
         });
@@ -215,6 +217,7 @@ fn detail_identity_uses_the_selected_entries_actual_repository_context() {
     assert_eq!(Selection::capture(&state).as_ref(), Some(&selection));
     assert!(selection.entry(&state).is_some());
 
+    // Missing primary location is rejected before a detail control can own it.
     for field in ["repository_id", "repository_path"] {
         let mut value = crate::files::test_entries::wire(state.files.selected.as_ref().unwrap());
         value.as_object_mut().unwrap().remove(field);

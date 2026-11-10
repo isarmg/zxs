@@ -1,3 +1,4 @@
+//! Resolve the displayed target parent once through the existing listing API.
 use super::*;
 use crate::files::page::{DirectoryKey, Page, PageParts};
 
@@ -39,6 +40,8 @@ pub(super) async fn review(
         if !read.current(state, editor) {
             return Ok(None);
         }
+        // A completed request drops and aborts its controller. Continue this
+        // same review generation with a new controller owned by the editor.
         let cancellation = api::ReadCancellation::new()?;
         editor.cancellation.set(Some(cancellation.clone()));
         let target = folder_page(&slot, destination.as_str(), 1, None, cancellation).await;
@@ -88,6 +91,7 @@ fn check_root_target(
     parent: Option<&crate::files::page::Context>,
     target: Result<PageParts, api::Error>,
 ) -> Result<(), api::Error> {
+    // Named repositories occupy root display names outside the root namespace.
     match target {
         Ok(target)
             if target.context.as_ref().is_some_and(|target| {
@@ -104,6 +108,8 @@ fn check_root_target(
             ))
         }
         Ok(_) => Ok(()),
+        // A file also produces DirectoryNotFound. Ordinary existence and
+        // replacement admission remain owned by the original move operation.
         Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound => Ok(()),
         Err(error) => Err(error),
     }

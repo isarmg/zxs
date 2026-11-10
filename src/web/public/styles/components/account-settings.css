@@ -1,3 +1,4 @@
+/* Shared form groups own field geometry, alignment and visible keyboard focus. */
 .zxs-header-actions .zxs-account-entry,
 .zxs-header-actions .zxs-account-entry:hover { text-decoration: none; }
 .zxs-account-page > .zxs-content-panel { min-width: 0; }

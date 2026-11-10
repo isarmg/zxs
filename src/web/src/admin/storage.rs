@@ -1,3 +1,5 @@
+//! First storage activation is independent from administrator account creation.
+//! Submitted activation survives navigation and can only settle from real evidence.
 use crate::{
     api,
     ui::{State, accept_read_response},

@@ -561,6 +561,7 @@ fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() 
     });
 }
 
+// Frozen pre-indexed layout oracle. This implementation is compiled only for tests.
 fn reference_reachable(
     start: &str,
     goal: &str,
@@ -579,8 +580,11 @@ fn reference_reachable(
     false
 }
 
+/// Only declared, visible parents produce edges. Cyclic edges are isolated
+/// rather than inventing chronology or making the traversal recurse forever.
 fn reference_layout(versions: &[Version]) -> Layout {
     let mut nodes = BTreeMap::<String, Version>::new();
+    // Stable conflict handling also makes duplicate identities harmless.
     let mut sorted = versions.to_vec();
     sorted.sort();
     for version in sorted {
@@ -605,6 +609,9 @@ fn reference_layout(versions: &[Version]) -> Layout {
             }
         }
     }
+    // Walk from all branch tips towards old ancestors. This is a reverse
+    // topological layout, not a visual reversal of the old root-first layers:
+    // tips of both short and long branches belong on the first layer.
     let mut remaining_children = nodes
         .keys()
         .map(|id| (id.clone(), 0usize))
@@ -653,6 +660,8 @@ fn reference_layout(versions: &[Version]) -> Layout {
             .enumerate()
             .map(|(index, id)| (id.as_str(), index))
             .collect::<BTreeMap<_, _>>();
+        // Group ancestors by the positions of their newer children on the
+        // preceding display layer; all cross-layer source edges remain intact.
         let centers = levels[depth]
             .iter()
             .map(|id| {
@@ -807,6 +816,8 @@ fn a_long_chain_uses_linear_graph_visits_and_no_recursive_traversal() {
         for (depth, level) in tree.levels.iter().enumerate() {
             assert_eq!(level, &[format!("node-{:05}", count - depth - 1)]);
         }
+        // The old chain did N(N-1)/2 reachability visits plus (N-1)^2
+        // center predicates. This asserts operation counts, not elapsed time.
         let old_visits = count * (count - 1) / 2 + (count - 1) * (count - 1);
         let visits = work.component_nodes
             + work.component_edges
@@ -886,6 +897,7 @@ fn equal_rational_centers_use_minimum_child_then_original_priority() {
     ];
     let tree = layout(&different_minimum);
     assert_eq!(tree, reference_layout(&different_minimum));
+    // Both means are one; {0, 2} precedes {1} even with an older sequence.
     assert_eq!(
         tree.levels,
         vec![vec!["tip-0", "tip-1", "tip-2"], vec!["outer", "middle"]]
@@ -900,12 +912,14 @@ fn equal_rational_centers_use_minimum_child_then_original_priority() {
     ];
     let tree = layout(&different_count);
     assert_eq!(tree, reference_layout(&different_count));
+    // 2/2 == 3/3 and both minima are zero, so newer_first breaks the tie.
     assert_eq!(
         tree.levels,
         vec![vec!["tip-0", "tip-1", "tip-2"], vec!["all", "outer"]]
     );
 }
 
+// Frozen pre-aggregation connector routing, compiled only for tests.
 fn reference_gap_heights(
     parent: NodeBounds,
     child: NodeBounds,

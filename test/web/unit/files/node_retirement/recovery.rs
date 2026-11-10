@@ -1,3 +1,4 @@
+//! Browser hint admission and original-operation ownership cases.
 use super::*;
 
 fn record() -> Record {
@@ -79,6 +80,7 @@ fn storage_boundary_rejects_other_accounts_keys_extra_fields_and_unsupported_for
         ),
         ("label", json!("x".repeat(MAX_LABEL_BYTES + 1))),
     ] {
+        // Each invalid value is independent of the immutable source record.
         let mut changed = json_codec::to_value(&original).unwrap();
         changed[field] = value;
         assert!(
@@ -185,6 +187,7 @@ fn stale_operation_controls_do_not_retarget_a_reauthenticated_attempt() {
         attempt.retry_confirmed = true;
         snapshot.files.node_retirement.attempt = Some(attempt);
         let state = RwSignal::new(snapshot);
+        // These stale calls must return before touching browser storage or I/O.
         super::super::action::retry(state, &saved.operation.to_string(), 8);
         super::super::action::dismiss(state, &saved.operation.to_string(), 8);
         open(state, saved.operation, 8);

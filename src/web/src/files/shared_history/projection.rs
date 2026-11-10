@@ -1,3 +1,4 @@
+//! View-only equality hubs preserve every real event and never become ancestry.
 use super::Selection;
 use std::collections::BTreeMap;
 use storage_contract::shared_history::{SharedContent, SharedHistoryGraph, SharedHistoryNodeKind};

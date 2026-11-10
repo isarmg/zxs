@@ -1,3 +1,4 @@
+//! Exact current telemetry response; the server crate cannot be linked into WASM.
 pub(super) use super::super::observations::DiskObservationIssue;
 use data_serialization::{Deserialize, Deserializer};
 
