@@ -195,6 +195,17 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
                         }
                     }/>
             </label>
+            <button class="zxs-button" data-zxs-submit-file-search=""
+                disabled=move ||!state.with(actions::search_ready)
+                on:click=move |_| {
+                    let query = state.with_untracked(|s|s.files.query_draft.clone());
+                    actions::search(state, query);
+                }>{t("搜索", "Search")}</button>
+            <Show when=move ||state.with(|s|!s.files.query.is_empty()||!s.files.query_draft.is_empty())>
+                <button class="zxs-button" data-zxs-clear-file-search=""
+                    disabled=move ||!state.with(actions::search_ready)
+                    on:click=move |_|actions::search(state,String::new())>{t("清除筛选", "Clear filter")}</button>
+            </Show>
         </div>
 
         {directory_preview::view(state)}

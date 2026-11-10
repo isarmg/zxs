@@ -80,6 +80,11 @@ pub(crate) fn pending(state: &State) -> bool {
             .any(|op| op.status() == SaveStatus::Unknown)
 }
 
+/// A newer search replaces an older read, but never interrupts a pending write.
+pub(crate) fn search_ready(state: &State) -> bool {
+    state.session_active() && !state.files.slot.is_empty() && !pending(state)
+}
+
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/actions/tests.rs"]
 mod tests;

@@ -143,6 +143,9 @@ pub(crate) fn edit_search(state: RwSignal<State>, query: String) {
 
 /// Enter submits immediately; only submission replaces the page and its selection.
 pub(crate) fn search(state: RwSignal<State>, query: String) {
+    if !state.with_untracked(super::search_ready) {
+        return;
+    }
     state.update(|s| {
         s.notices.leave();
         s.files.cancel_listing();
