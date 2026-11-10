@@ -161,7 +161,8 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
     let plan = *plan;
     let root = Root::open(input.service_user)?;
     root.check(&plan)?;
-    Ok(preview_response(plan.clone(), digest(&plan)?, false))
+    let request_digest = digest(&plan)?;
+    Ok(preview_response(plan, request_digest, false))
 }
 fn load(root: &Root, request_digest: &str) -> Result<Option<Plan>> {
     root.host

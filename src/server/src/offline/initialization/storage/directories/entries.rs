@@ -363,3 +363,7 @@ pub(super) fn publish(
     attributes(&directory, owner, false)?;
     revalidate()
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../test/server/unit/offline/initialization/storage_directory_tests.rs"]
+mod tests;

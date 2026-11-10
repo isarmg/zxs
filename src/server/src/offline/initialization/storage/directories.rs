@@ -148,14 +148,12 @@ impl Prepared {
         let plan_phase = root
             .host
             .inspect(PLAN_DIRECTORY, &[("plan.json", &encoded)])?;
-        let prepared = Self {
+        Ok(Self {
             root,
             plan,
             digest,
             plan_phase,
-        };
-        prepared.observe()?;
-        Ok(prepared)
+        })
     }
     fn recheck(&self) -> Result<()> {
         self.root.host.recheck()?;
