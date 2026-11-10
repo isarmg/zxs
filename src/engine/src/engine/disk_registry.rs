@@ -9,6 +9,7 @@ use data_serialization::{Deserialize, Serialize};
 
 pub(in crate::engine) mod current;
 mod namespace_snapshot;
+pub(in crate::engine) mod objects;
 pub use namespace_snapshot::{
     DirectoryNamespaceView, NamespaceEntries, NamespaceSnapshot, NamespaceSnapshotWitness,
 };

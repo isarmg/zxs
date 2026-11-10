@@ -2,6 +2,8 @@
 
 `storage-engine` 实现单写者、完整文件版本、不可变发布证明与离线恢复。对外入口由 `lib.rs` 导出；实现模块默认私有，不允许调用方绕过 `Engine` 的业务约束、操作幂等与发布流程。
 
+membership 的 Exit、登记续作、readmission、terminal/resume 与 retirement 信封共用 `disk_registry::objects` 的持久图对象表示，JSON 仍是摘要到 `{kind,value}` 的有序映射。合并已准备图时保留冲突分类并直接移动解码树；信封读取只解析对象地址与种类，实际 registry/mask loader 统一限制字节、校验引用域摘要及完整业务图，避免在相邻读取层重复编码哈希。磁盘信封入口、归档认证、当前身份与提交屏障保持各自职责。
+
 | 目录 / 模块 | 职责 |
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |

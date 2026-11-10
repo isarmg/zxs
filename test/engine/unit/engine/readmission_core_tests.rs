@@ -125,11 +125,13 @@ fn verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering()
     target.target_decision = core.decisions[&original[0]].clone();
     rejected_at_both_entries(&target, ErrorCode::LogFork);
 
-    let mut graph = core.clone();
-    assert!(!graph.proposal.objects.is_empty());
-    for object in graph.proposal.objects.values_mut() {
-        object.kind = "another-readmission-graph-kind".into();
+    let mut graph = json_codec::to_value(&core).unwrap();
+    let objects = graph["proposal"]["objects"].as_object_mut().unwrap();
+    assert!(!objects.is_empty());
+    for object in objects.values_mut() {
+        object["kind"] = json_codec::Value::String("another-readmission-graph-kind".into());
     }
+    let graph: ReadmissionCore = json_codec::from_value(graph).unwrap();
     rejected_at_both_entries(&graph, ErrorCode::ObjectCorrupt);
 
     let mut transition = core.clone();

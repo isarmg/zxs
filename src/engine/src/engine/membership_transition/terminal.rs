@@ -3,6 +3,7 @@
 use super::archive::persistent::PendingControlArchive;
 use super::pending::activation::PortableAuthority;
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 use crate::engine::disk_registry::published::{
     continuation::RegistryBoundary,
     occurrence::{FrozenDetachSource, ProjectionError},
@@ -21,13 +22,6 @@ enum TerminalFormat {
     Management,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
-}
-
 /// A bounded immutable control object. Its hash must be selected by the held
 /// protected system ledger, not supplied as an untrusted directory assertion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,7 +33,7 @@ pub(in crate::engine) struct TerminalAuthority {
     predecessor: Option<PortableAuthority>,
     source_registry: DiskRegistryCommitment,
     registry: DiskRegistryCommitment,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 
 pub(in crate::engine) struct VerifiedTerminalAuthority {
@@ -162,29 +156,6 @@ impl TerminalAuthority {
         }
     }
 
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let object = self.objects.get(hash).ok_or_else(|| {
-            Error::new(
-                ErrorCode::ObjectCorrupt,
-                "terminal registry graph object is missing",
-            )
-        })?;
-        if object.kind != kind {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "terminal registry object kind differs",
-            ));
-        }
-        let prepared = PreparedMetadataObject::new(kind, &object.value, MAX_METADATA)?;
-        if prepared.hash != hash {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "terminal registry object hash differs",
-            ));
-        }
-        Ok(prepared.bytes().to_vec())
-    }
-
     pub(in crate::engine::membership_transition) fn validate_intent(&self) -> Result<()> {
         let effect = self.intent.effect.as_ref().ok_or_else(|| {
             Error::new(
@@ -257,7 +228,7 @@ impl TerminalAuthority {
                     topology_generation,
                 },
                 &self.source_registry,
-                |kind, hash| self.read(kind, hash),
+                |kind, hash| read_objects(&self.objects, kind, hash),
             ),
             None => VerifiedDiskRegistry::verify_frozen_source(
                 self.original(),
@@ -266,7 +237,7 @@ impl TerminalAuthority {
                 boundary.sequence,
                 topology_generation,
                 &self.source_registry,
-                |kind, hash| self.read(kind, hash),
+                |kind, hash| read_objects(&self.objects, kind, hash),
             ),
         }
     }
@@ -288,7 +259,7 @@ impl TerminalAuthority {
         kind: &'static str,
         hash: &str,
     ) -> Result<Vec<u8>> {
-        self.read(kind, hash)
+        read_objects(&self.objects, kind, hash)
     }
 
     /// Reads only the reserved system control archive. Every historical journal,
@@ -323,8 +294,9 @@ impl TerminalAuthority {
         let (state, history) = archive.generation_base(&self.intent)?;
         let state = Arc::new(state);
         let source = self.source_registry(&state)?;
-        let registry =
-            source.verify_terminal_successor(&self.registry, |kind, hash| self.read(kind, hash))?;
+        let registry = source.verify_terminal_successor(&self.registry, |kind, hash| {
+            read_objects(&self.objects, kind, hash)
+        })?;
         let request = registry.exit();
         let transition_hash = self.transition_hash()?;
         if request.target != self.target()
@@ -386,7 +358,9 @@ impl TerminalAuthority {
             RegistryExitEffect::Detach {
                 occurrence_mask_hash,
             } => detach
-                .verify_mask(occurrence_mask_hash, |kind, hash| self.read(kind, hash))
+                .verify_mask(occurrence_mask_hash, |kind, hash| {
+                    read_objects(&self.objects, kind, hash)
+                })
                 .and_then(|mask| mask.prepare_current_namespaces(registry.verified_registry())),
         }
         .map_err(projection_error)?;
@@ -444,7 +418,7 @@ impl Engine {
         }
         let prepared = self.prepare_disk_registry_base()?;
         let mut objects = BTreeMap::new();
-        add_objects(&mut objects, prepared.objects())?;
+        add_objects(&mut objects, prepared.objects(), ErrorCode::ObjectCorrupt)?;
         let source = prepared.verify_with(|kind, hash| read_objects(&objects, kind, hash))?;
         let effect = fence
             .intent
@@ -458,7 +432,7 @@ impl Engine {
                 let detach = FrozenDetachSource::capture(self, &source, &target)
                     .map_err(projection_error)?;
                 let mask = detach.prepare_mask().map_err(projection_error)?;
-                add_objects(&mut objects, mask.objects())?;
+                add_objects(&mut objects, mask.objects(), ErrorCode::ObjectCorrupt)?;
                 RegistryExitEffect::Detach {
                     occurrence_mask_hash: mask.hash().to_owned(),
                 }
@@ -472,7 +446,7 @@ impl Engine {
             intent_hash: fence.hash.clone(),
             effect: registry_effect,
         })?;
-        add_objects(&mut objects, successor.objects())?;
+        add_objects(&mut objects, successor.objects(), ErrorCode::ObjectCorrupt)?;
         let authority = TerminalAuthority {
             format: TerminalFormat::Management,
             intent: fence.intent.clone(),
@@ -498,40 +472,4 @@ fn projection_error(error: ProjectionError) -> Error {
         ErrorCode::PublicationInvalid,
         "terminal occurrence mask does not match its exact frozen source",
     )
-}
-fn read_objects(
-    objects: &BTreeMap<String, GraphObject>,
-    kind: &'static str,
-    hash: &str,
-) -> Result<Vec<u8>> {
-    let object = objects
-        .get(hash)
-        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "terminal graph object missing"))?;
-    if object.kind != kind {
-        return Err(Error::new(
-            ErrorCode::ObjectCorrupt,
-            "terminal graph kind differs",
-        ));
-    }
-    Ok(json_codec::to_vec(&object.value)?)
-}
-fn add_objects<'a>(
-    objects: &mut BTreeMap<String, GraphObject>,
-    values: impl Iterator<Item = (&'static str, &'a str, &'a [u8])>,
-) -> Result<()> {
-    for (kind, hash, bytes) in values {
-        let object = GraphObject {
-            kind: kind.to_owned(),
-            value: decode_strict(bytes)?,
-        };
-        if let Some(previous) = objects.insert(hash.to_owned(), object.clone())
-            && (previous.kind != object.kind || previous.value != object.value)
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "terminal graph hash collision",
-            ));
-        }
-    }
-    Ok(())
 }

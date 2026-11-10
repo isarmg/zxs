@@ -2,6 +2,7 @@
 //! independently synchronized member decisions bind that exact proposal.
 use super::super::archive::persistent::abort_view::ArchivedAbortMember;
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 
 const PROPOSAL_KIND: &str = "disk-readmission-proposal";
 const ACCEPTANCE_KIND: &str = "disk-readmission-acceptance";
@@ -10,12 +11,6 @@ const ACCEPTANCE_KIND: &str = "disk-readmission-acceptance";
 enum Format {
     #[serialization(rename = "retained-directory-readmission")]
     Readmission,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -29,7 +24,7 @@ pub(super) struct Proposal {
     business_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     topology_generation: u64,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,8 +126,12 @@ impl Proposal {
             &request.target,
         )?;
         let mut objects = BTreeMap::new();
-        add_objects(&mut objects, previous.prepared_copy()?.objects())?;
-        add_objects(&mut objects, prepared.objects())?;
+        add_objects(
+            &mut objects,
+            previous.prepared_copy()?.objects(),
+            ErrorCode::ObjectCorrupt,
+        )?;
+        add_objects(&mut objects, prepared.objects(), ErrorCode::ObjectCorrupt)?;
         let (_, archive_projection) = source.abort_material()?;
         let proposal = Self {
             transition_hash: fence.hash.clone(),
@@ -149,28 +148,6 @@ impl Proposal {
     }
     pub(super) fn hash(&self) -> Result<String> {
         Ok(object_hash(PROPOSAL_KIND, self)?)
-    }
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let object = self.objects.get(hash).ok_or_else(|| {
-            Error::new(
-                ErrorCode::ObjectCorrupt,
-                "readmission graph object is missing",
-            )
-        })?;
-        if object.kind != kind {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "readmission graph object kind differs",
-            ));
-        }
-        let prepared = PreparedMetadataObject::new(kind, &object.value, MAX_METADATA)?;
-        if prepared.hash != hash {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "readmission graph object hash differs",
-            ));
-        }
-        Ok(prepared.bytes().to_vec())
     }
     fn verify(&self) -> Result<VerifiedProposal> {
         let (intent, members) = self
@@ -192,7 +169,7 @@ impl Proposal {
         }
         let previous =
             VerifiedDiskRegistry::read_graph(&request.predecessor_registry, |kind, hash| {
-                self.read(kind, hash)
+                read_objects(&self.objects, kind, hash)
             })?;
         let boundary = intent
             .boundary
@@ -212,7 +189,7 @@ impl Proposal {
             },
             &request.target,
             &self.registry,
-            |kind, hash| self.read(kind, hash),
+            |kind, hash| read_objects(&self.objects, kind, hash),
         )?;
         // Independent members mean distinct directory identities, not devices or
         // filesystems. Several registered directories may share one filesystem.
@@ -439,29 +416,6 @@ impl ReadmissionCore {
         DecisionStore::open(root, &identity, &self.proposal.transition_hash, false)?
             .verify_receipt(expected, synchronize)
     }
-}
-
-fn add_objects<'a>(
-    objects: &mut BTreeMap<String, GraphObject>,
-    values: impl Iterator<Item = (&'static str, &'a str, &'a [u8])>,
-) -> Result<()> {
-    for (kind, hash, bytes) in values {
-        let value: json_codec::Value = decode_strict(bytes)?;
-        if let Some(previous) = objects.insert(
-            hash.into(),
-            GraphObject {
-                kind: kind.into(),
-                value: value.clone(),
-            },
-        ) && (previous.kind != kind || previous.value != value)
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "readmission graph collision",
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

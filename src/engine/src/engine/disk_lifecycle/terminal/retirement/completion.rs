@@ -1,6 +1,7 @@
 //! Exact sequential management-only registry and occurrence-mask successors.
 //! Prepared namespaces are not active. No target pathname is resolved in recovery.
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 mod portable;
 mod stopped;
 use crate::{
@@ -12,7 +13,6 @@ use crate::{
 };
 pub(in crate::engine) use portable::{RetirementCheckpointProof, VerifiedRetirementCheckpoint};
 pub use portable::{TerminalRetirementArchive, TerminalRetirementCheckpoint};
-use std::collections::BTreeMap;
 pub(super) use stopped::EXISTING;
 
 pub(super) const SUCCESSOR: &str = "retirement-successor.json";
@@ -20,12 +20,6 @@ pub(super) const STOP: &str = "retirement-stop.json";
 pub(super) const COMPLETE: &str = "retirement-complete.json";
 const SUCCESSOR_KIND: &str = "terminal-retirement-registry-successor";
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum SuccessorFormat {
     #[serialization(rename = "terminal-retirement-masked-registry")]
@@ -38,7 +32,7 @@ struct Successor {
     intent_digest: String,
     registry: DiskRegistryCommitment,
     occurrence_mask_hash: String,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 struct VerifiedSuccessor {
     registry: TerminalRegistry,
@@ -100,28 +94,6 @@ impl VerifiedRetirementStopSource {
     }
 }
 impl Successor {
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let object = self.objects.get(hash).ok_or_else(|| {
-            failure(
-                ErrorCode::ObjectCorrupt,
-                "terminal retirement registry object missing",
-            )
-        })?;
-        if object.kind != kind {
-            return Err(failure(
-                ErrorCode::ObjectCorrupt,
-                "retirement registry object kind differs",
-            ));
-        }
-        let prepared = PreparedMetadataObject::new(kind, &object.value, MAX_METADATA)?;
-        if prepared.hash != hash {
-            return Err(failure(
-                ErrorCode::ObjectCorrupt,
-                "retirement registry object hash differs",
-            ));
-        }
-        Ok(prepared.bytes().to_vec())
-    }
     fn hash(&self) -> Result<String> {
         Ok(PreparedMetadataObject::new(SUCCESSOR_KIND, self, MAX_METADATA)?.hash)
     }
@@ -205,22 +177,12 @@ impl TerminalManagement {
         let prepared = self
             .registry_for_retirement_plan(plan)
             .prepare_management_retirement(registry_request(plan, mask.hash()))?;
-        let mut objects = BTreeMap::new();
-        for (kind, hash, bytes) in prepared.objects().chain(mask.objects()) {
-            let object = GraphObject {
-                kind: kind.into(),
-                value: crate::decode_strict(bytes)?,
-            };
-            if objects
-                .insert(hash.to_owned(), object.clone())
-                .is_some_and(|old| old != object)
-            {
-                return Err(failure(
-                    ErrorCode::LogFork,
-                    "terminal successor object collision",
-                ));
-            }
-        }
+        let mut objects = GraphObjects::new();
+        add_objects(
+            &mut objects,
+            prepared.objects().chain(mask.objects()),
+            ErrorCode::LogFork,
+        )?;
         let successor = Successor {
             format: SuccessorFormat::MaskedRegistry,
             intent_digest: plan.digest.clone(),
@@ -587,7 +549,7 @@ fn verify_successor(
     let registry = predecessor.verify_management_retirement(
         registry_request(plan, &successor.occurrence_mask_hash),
         &successor.registry,
-        |kind, hash| successor.read(kind, hash),
+        |kind, hash| read_objects(&successor.objects, kind, hash),
     )?;
     let source = FrozenDetachSource::capture_terminal(
         &verified.state,
@@ -599,7 +561,7 @@ fn verify_successor(
     .map_err(projection_error)?;
     let namespaces = source
         .verify_mask(&successor.occurrence_mask_hash, |kind, hash| {
-            successor.read(kind, hash)
+            read_objects(&successor.objects, kind, hash)
         })
         .and_then(|mask| mask.prepare_terminal_retirement_namespaces(&registry))
         .map_err(projection_error)?;

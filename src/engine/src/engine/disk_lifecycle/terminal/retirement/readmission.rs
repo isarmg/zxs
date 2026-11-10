@@ -1,12 +1,12 @@
 //! A complete retirement checkpoint can prepare one exact retained metadata
 //! successor. This is not ResumeCore: no decision, active Current or I/O token.
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, collect_objects, read_objects};
 use crate::{
     disk::{DiskSealFormat, MAX_METADATA},
     engine::membership_transition::terminal_resume::stopped_source,
     journal::PreparedMetadataObject,
 };
-use std::collections::BTreeMap;
 
 const KIND: &str = "terminal-chain-retained-readmission-proposal";
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,12 +24,6 @@ struct StoppedLifetime {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
 pub(in crate::engine) struct Proposal {
     format: ProposalFormat,
     operation_id: OperationId,
@@ -40,7 +34,7 @@ pub(in crate::engine) struct Proposal {
     stopped: StoppedLifetime,
     configuration: ValidatedConfig,
     registry: DiskRegistryCommitment,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,18 +87,7 @@ impl TerminalManagement {
             select_target(&self.verified, &checkpoint, disk_id, operation_id)?;
         let prepared =
             TerminalRegistry::prepare_checkpoint_readmission(&checkpoint, &configuration, &target)?;
-        let objects = prepared
-            .objects()
-            .map(|(kind, hash, bytes)| {
-                Ok((
-                    hash.to_owned(),
-                    GraphObject {
-                        kind: kind.to_owned(),
-                        value: crate::decode_strict(bytes)?,
-                    },
-                ))
-            })
-            .collect::<Result<_>>()?;
+        let objects = collect_objects(prepared.objects())?;
         let proposal = Proposal {
             format: ProposalFormat::Prepared,
             operation_id,
@@ -251,28 +234,6 @@ impl Proposal {
         self.namespaces(checkpoint)?;
         Ok(())
     }
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let value = self.objects.get(hash).ok_or_else(|| {
-            failure(
-                ErrorCode::ObjectCorrupt,
-                "chain readmission registry object missing",
-            )
-        })?;
-        if value.kind != kind {
-            return Err(failure(
-                ErrorCode::ObjectCorrupt,
-                "chain readmission registry object kind changed",
-            ));
-        }
-        let object = PreparedMetadataObject::new(kind, &value.value, MAX_METADATA)?;
-        if object.hash != hash {
-            return Err(failure(
-                ErrorCode::ObjectCorrupt,
-                "chain readmission registry object digest changed",
-            ));
-        }
-        Ok(object.bytes().to_vec())
-    }
     fn report(&self, digest: String) -> Result<TerminalChainReadmissionPreparation> {
         Ok(TerminalChainReadmissionPreparation {
             proposal_digest: digest,
@@ -330,7 +291,7 @@ impl Proposal {
             &self.configuration,
             &self.target,
             &self.registry,
-            |kind, hash| self.read(kind, hash),
+            |kind, hash| read_objects(&self.objects, kind, hash),
         )?;
         checkpoint
             .namespaces()

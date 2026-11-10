@@ -1,7 +1,7 @@
 //! Registry-bearing successor authority. Legacy Add cores omit this component
 //! completely, preserving their existing bytes and hashes.
-use super::exit::{GraphObject, add_objects, read_objects};
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 use crate::engine::disk_registry::published::continuation::RegistryBoundary;
 use crate::engine::disk_registry::{DiskRegistryCommitment, VerifiedDiskRegistry};
 
@@ -14,7 +14,7 @@ pub(in crate::engine::membership_transition) struct RegistryContinuation {
     source_business_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     source_topology_generation: u64,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 
 impl RegistryContinuation {
@@ -53,8 +53,12 @@ impl RegistryContinuation {
             },
         )?;
         let mut objects = BTreeMap::new();
-        add_objects(&mut objects, previous.prepared_copy()?.objects())?;
-        add_objects(&mut objects, prepared.objects())?;
+        add_objects(
+            &mut objects,
+            previous.prepared_copy()?.objects(),
+            ErrorCode::ObjectCorrupt,
+        )?;
+        add_objects(&mut objects, prepared.objects(), ErrorCode::ObjectCorrupt)?;
         let core = Self {
             parent: previous.commitment().clone(),
             registry: prepared.commitment().clone(),

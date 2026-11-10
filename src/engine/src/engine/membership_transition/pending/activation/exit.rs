@@ -1,6 +1,7 @@
 //! Prescribed lifecycle generations. Control decisions, registry graphs and the
 //! frozen source precede D3; the final publication never appears in its own input.
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 use crate::engine::disk_registry::published::occurrence::FrozenDetachSource;
 use crate::engine::disk_registry::{
     DiskRegistrationIdentity, DiskRegistryCommitment, RegistryExitEffect, RegistryExitRequest,
@@ -86,13 +87,6 @@ enum ExitFormat {
     DiskExit,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(super) struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
-}
-
 /// The exact graph is carried with the portable authority so recovery does not
 /// read a stopped root, trust a local cache, or reconstruct missing authority.
 /// The existing MAX_METADATA bundle limit is checked before any exit is applied.
@@ -110,7 +104,7 @@ pub(in crate::engine) struct ExitCore {
     source_business_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     source_topology_generation: u64,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
 }
 
 impl ExitCore {
@@ -151,7 +145,7 @@ impl ExitCore {
                 boundary.sequence,
                 self.source_topology_generation,
                 &self.predecessor_registry,
-                |kind, hash| self.read(kind, hash),
+                |kind, hash| read_objects(&self.objects, kind, hash),
             ),
         }
     }
@@ -159,30 +153,9 @@ impl ExitCore {
     pub(super) fn verified_registry(&self) -> Result<VerifiedDiskRegistry> {
         let intent = self.intent()?;
         self.predecessor(&intent)?
-            .verify_successor(&self.registry, |kind, hash| self.read(kind, hash))
-    }
-
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let object = self.objects.get(hash).ok_or_else(|| {
-            Error::new(
-                ErrorCode::ObjectCorrupt,
-                "exit authority graph object is missing",
-            )
-        })?;
-        if object.kind != kind {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "exit graph object kind differs",
-            ));
-        }
-        let prepared = PreparedMetadataObject::new(kind, &object.value, MAX_METADATA)?;
-        if prepared.hash != hash {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "exit graph object hash differs",
-            ));
-        }
-        Ok(prepared.bytes().to_vec())
+            .verify_successor(&self.registry, |kind, hash| {
+                read_objects(&self.objects, kind, hash)
+            })
     }
 
     pub(in crate::engine::membership_transition) fn intent(&self) -> Result<TransitionIntent> {
@@ -211,8 +184,9 @@ impl ExitCore {
             )
         })?;
         let predecessor = self.predecessor(&intent)?;
-        let successor =
-            predecessor.verify_successor(&self.registry, |kind, hash| self.read(kind, hash))?;
+        let successor = predecessor.verify_successor(&self.registry, |kind, hash| {
+            read_objects(&self.objects, kind, hash)
+        })?;
         let request = successor
             .pending_exit()
             .expect("invariant: verified successor has exit");
@@ -260,8 +234,9 @@ impl ExitCore {
         if let Some(continuation) = &self.continuation {
             continuation.verify_source(&intent, state)?;
         }
-        let successor =
-            predecessor.verify_successor(&self.registry, |kind, hash| self.read(kind, hash))?;
+        let successor = predecessor.verify_successor(&self.registry, |kind, hash| {
+            read_objects(&self.objects, kind, hash)
+        })?;
         if self.continuation.is_none()
             && let RegistryExitEffect::Detach {
                 occurrence_mask_hash,
@@ -283,7 +258,9 @@ impl ExitCore {
             )
             .map_err(projection_error)?;
             source
-                .verify_mask(occurrence_mask_hash, |kind, hash| self.read(kind, hash))
+                .verify_mask(occurrence_mask_hash, |kind, hash| {
+                    read_objects(&self.objects, kind, hash)
+                })
                 .map_err(projection_error)?;
         }
         Ok(successor)
@@ -344,7 +321,7 @@ impl ExitCore {
                 .prepared_copy()?,
             None => engine.prepare_disk_registry_base()?,
         };
-        add_objects(&mut objects, prepared.objects())?;
+        add_objects(&mut objects, prepared.objects(), ErrorCode::ObjectCorrupt)?;
         let predecessor = prepared.verify_with(|kind, hash| read_objects(&objects, kind, hash))?;
         let target = effect.identity(&engine.config.pool_id);
         let registry_effect = match effect.action {
@@ -371,7 +348,7 @@ impl ExitCore {
                         .map_err(projection_error)?,
                 };
                 let mask = source.prepare_mask().map_err(projection_error)?;
-                add_objects(&mut objects, mask.objects())?;
+                add_objects(&mut objects, mask.objects(), ErrorCode::ObjectCorrupt)?;
                 source
                     .verify_mask(mask.hash(), |kind, hash| read_objects(&objects, kind, hash))
                     .map_err(projection_error)?;
@@ -389,7 +366,7 @@ impl ExitCore {
             intent_hash: transition,
             effect: registry_effect,
         })?;
-        add_objects(&mut objects, successor.objects())?;
+        add_objects(&mut objects, successor.objects(), ErrorCode::ObjectCorrupt)?;
         let core = Self {
             format: ExitFormat::DiskExit,
             joint,
@@ -406,43 +383,6 @@ impl ExitCore {
     }
 }
 
-pub(super) fn read_objects(
-    objects: &BTreeMap<String, GraphObject>,
-    kind: &'static str,
-    hash: &str,
-) -> Result<Vec<u8>> {
-    let object = objects
-        .get(hash)
-        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "exit graph page is missing"))?;
-    if object.kind != kind {
-        return Err(Error::new(
-            ErrorCode::ObjectCorrupt,
-            "exit graph kind differs",
-        ));
-    }
-    Ok(json_codec::to_vec(&object.value)?)
-}
-pub(super) fn add_objects<'a>(
-    objects: &mut BTreeMap<String, GraphObject>,
-    values: impl Iterator<Item = (&'static str, &'a str, &'a [u8])>,
-) -> Result<()> {
-    for (kind, hash, bytes) in values {
-        let value = decode_strict(bytes)?;
-        let object = GraphObject {
-            kind: kind.to_owned(),
-            value,
-        };
-        if let Some(previous) = objects.insert(hash.to_owned(), object.clone())
-            && (previous.kind != object.kind || previous.value != object.value)
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "exit graph hash collision",
-            ));
-        }
-    }
-    Ok(())
-}
 fn projection_error(error: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::from(std::io::Error::other(error))
         .context(ErrorCode::PublicationInvalid, "exit namespace proof")

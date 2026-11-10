@@ -230,10 +230,12 @@ fn disk_exit_source_generation_and_complete_mask_are_verified_before_stop() {
     core.source_business_generation += 1;
     assert!(core.registry_from_source(&generation.base).is_err());
     let mut core = generation.portable.exit_core().unwrap().clone();
-    let key = core
-        .objects
+    let objects = json_codec::to_value(&core.objects).unwrap();
+    let key = objects
+        .as_object()
+        .unwrap()
         .iter()
-        .find(|(_, object)| object.kind == "disk-occurrence-mask")
+        .find(|(_, object)| object["kind"] == "disk-occurrence-mask")
         .unwrap()
         .0
         .clone();

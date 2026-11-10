@@ -8,6 +8,7 @@ use super::decision::DecisionReceipt;
 use super::pending::{MemberIdentity, admission};
 use super::terminal::{TerminalAuthority, VerifiedTerminalAuthority};
 use super::*;
+use crate::engine::disk_registry::objects::{GraphObjects, collect_objects, read_objects};
 use crate::engine::disk_registry::{
     DiskRegistryCommitment, VerifiedDiskRegistry, published::continuation::RegistryBoundary,
 };
@@ -29,12 +30,6 @@ enum ResumeFormat {
     #[serialization(rename = "terminal-resume-generation")]
     TerminalResume,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct GraphObject {
-    kind: String,
-    value: json_codec::Value,
-}
 
 /// A proposal names the old archive without modifying it. The old terminal
 /// intent and the new resumption intent remain distinct hash domains.
@@ -53,7 +48,7 @@ pub(in crate::engine::membership_transition) struct ResumeProposal {
     source_business_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     source_topology_generation: u64,
-    objects: BTreeMap<String, GraphObject>,
+    objects: GraphObjects,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     previous_cancellation_hash: Option<String>,
 }
@@ -112,18 +107,7 @@ impl ResumeProposal {
             &intent.target,
         )?;
         let (_, old_members) = archive.abort_material()?;
-        let objects = prepared
-            .objects()
-            .map(|(kind, hash, bytes)| {
-                Ok((
-                    hash.to_owned(),
-                    GraphObject {
-                        kind: kind.to_owned(),
-                        value: decode_strict(bytes)?,
-                    },
-                ))
-            })
-            .collect::<Result<_>>()?;
+        let objects = collect_objects(prepared.objects())?;
         let proposal = Self {
             format: ResumeFormat::TerminalResume,
             admission,
@@ -228,7 +212,7 @@ impl ResumeProposal {
             },
             &self.intent.target,
             &self.registry,
-            |kind, hash| self.read(kind, hash),
+            |kind, hash| read_objects(&self.objects, kind, hash),
         )
     }
 
@@ -290,29 +274,6 @@ impl ResumeProposal {
         }
         self.terminal.management_state(state)?;
         Ok(())
-    }
-
-    fn read(&self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
-        let value = self.objects.get(hash).ok_or_else(|| {
-            Error::new(
-                ErrorCode::ObjectCorrupt,
-                "resume registry graph object missing",
-            )
-        })?;
-        if value.kind != kind {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "resume registry graph kind differs",
-            ));
-        }
-        let object = PreparedMetadataObject::new(kind, &value.value, MAX_METADATA)?;
-        if object.hash != hash {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "resume registry graph hash differs",
-            ));
-        }
-        Ok(object.bytes().to_vec())
     }
 }
 
