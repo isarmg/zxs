@@ -145,7 +145,16 @@ impl Record {
     }
     pub(super) fn matches_receipt(&self, receipt: &Value, origin: ReceiptOrigin) -> bool {
         if let Namespace::ObjectMove { movement } = &self.stored.namespace {
-            return movement.matches_receipt(self.principal(), receipt);
+            let Some(versions) = receipt["result"]["version_mapping"].as_object() else {
+                return false;
+            };
+            let protection = if versions.is_empty() {
+                storage_contract::ProtectionAtPublish::NotApplicable
+            } else {
+                storage_contract::ProtectionAtPublish::TargetMet
+            };
+            return receipt["protection_at_publish"] == json!(protection)
+                && movement.matches_receipt(self.principal(), receipt);
         }
         if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
             return self.digest.as_deref() == receipt["request_digest"].as_str()
