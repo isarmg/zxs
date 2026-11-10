@@ -1,4 +1,4 @@
-"""Retained full-recipe map invariants, not active development coverage (no Cargo)."""
+"""Retained recipe and restored manual-CI wiring invariants; not run evidence."""
 import copy
 import importlib.util
 import json
@@ -53,20 +53,25 @@ class FoundationCoverageConsumerTests(unittest.TestCase):
 
 
 class FoundationCoverageReachabilityTests(unittest.TestCase):
-    def test_retained_routes_are_not_current_development_execution(self):
+    def test_retained_routes_match_restored_full_ci_without_claiming_execution(self):
         spec = importlib.util.spec_from_file_location(
             'development_ci_coverage', ROOT / '.github/scripts/development-ci.py')
         policy = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(policy)
+        policy.check_workflows(ROOT)
         current = policy.receipt()
+        self.assertEqual(current['mode'], 'manual-full-ci')
+        self.assertEqual(current['paused_suites'], [])
+        self.assertEqual(current['paused_jobs']['ci.yml'], [])
+        self.assertEqual(current['paused_jobs']['smb-sdk.yml'], [])
         declared = COVERAGE.retained_recipe_scripts()
         for shard in ('workspace', 'foundation-crypto', 'foundation-data',
                       'foundation-language', 'foundation-async'):
             self.assertIn(shard, declared)
-            self.assertIn(shard, current['paused_suites'])
-            self.assertNotIn(shard, current['suites'])
+            self.assertIn(shard, current['suites'])
         self.assertIn('browser-smoke', declared)
-        self.assertIn('browser-smoke', current['paused_jobs']['ci.yml'])
+        self.assertFalse(COVERAGE.SCOPE['execution_evidence'])
+        self.assertIn('publish', current['paused_jobs']['release.yml'])
         self.assertEqual(current['reused'], [])
 
     def setUp(self):
@@ -195,7 +200,7 @@ class FoundationCoverageMapTests(unittest.TestCase):
         markdown = COVERAGE.markdown(MAP)
         self.assertEqual(markdown, (ROOT / 'docs/validation/foundation-test-coverage-map.md').read_text())
         for text in ('保存的完整 CI 配方', '不是当前开发 CI 的执行覆盖或通过证明',
-                     '.github/ci/full-workflows/ci.yml', '开发期短 CI'):
+                     '.github/ci/full-workflows/ci.yml', '人工全量 CI 与暂停边界'):
             self.assertIn(text, markdown)
         self.assertNotIn('| 已执行 |', markdown)
         self.assertNotIn('## 已执行', markdown)

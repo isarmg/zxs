@@ -275,8 +275,8 @@ def retained_recipe_scripts():
     """Return exact entrypoint paths declared by the retained full CI recipe.
 
     This proves preserved recipe wiring, NOT current development coverage or
-    test success. The full recipe is not a scheduled workflow. Development CI
-    deliberately pauses long shards; development-ci.py reports its own matrix.
+    test success. The full recipe is not a scheduled workflow. The active manual
+    CI projection and complete matrix are checked by development-ci.py.
     The generated inventory remains a full-recipe design map, not a run receipt.
     """
     jobs = workflow_jobs((ROOT / '.github/ci/full-workflows/ci.yml').read_text())
@@ -436,7 +436,7 @@ def markdown(data):
         '设计与分类规则见[测试覆盖闭环](foundation-test-coverage.md)。', '',
         '**范围：保存的完整 CI 配方，不是当前开发 CI 的执行覆盖或通过证明。** '
         '工作流来源为 `.github/ci/full-workflows/ci.yml`；该目录不由 Actions 执行。'
-        '长套件在[开发期短 CI](../ci/development-short-ci.md)中暂停。'
+        '当前活动接线与实际结果须另查[人工全量 CI 与暂停边界](../ci/development-short-ci.md)。'
         '下列统计只描述完整配方中登记的门禁，`executed` 是保留的声明分类，不是本次执行回执。', '',
         '| 类别 | 数量 |', '| --- | ---: |',
         f'| 完整配方含执行门禁 | {counts["executed"]} |',

@@ -4,7 +4,7 @@
 
 本文先给出调用链、分类规则与验收设计，再记录实际执行结果。范围限于 `test/foundation/`、既有测试清单与执行入口；不修改任务 2 的升级／修复适配器，也不改动由固定证明或维护收据约束的 owner。
 
-当前处于[开发期短 CI](../ci/development-short-ci.md)。本文的调用链、分类与生成映射描述保存的完整配方；长分片当前暂停，不能把声明门禁或下文历史结果当作本次开发 CI 的执行覆盖。JSON 的 `scope.execution_evidence` 固定为 `false`，生成 Markdown 同样单独标示范围。
+当前按明确要求恢复[人工全量 CI](../ci/development-short-ci.md)，完整矩阵与长作业已启用，自动触发和 Release 仍暂停。本文的调用链、分类与生成映射描述保存的完整配方，不能把声明门禁或下文历史结果当作本次执行覆盖或通过证明。JSON 的 `scope.execution_evidence` 固定为 `false`，生成 Markdown 同样单独标示范围。
 
 ## 约束
 
@@ -17,7 +17,7 @@
 ## 调用链
 
 ```
-保存的完整 CI 配方中的 foundation 作业（当前长分片暂停）
+保存的完整 CI 配方中的 foundation 作业（当前人工全量入口已恢复，结果另查）
  └─ .github/scripts/check-foundation.sh foundation-async
      └─ python3 .github/scripts/check-foundation-behaviour.py
          ├─ 根工作区单元测试：cargo test --lib -p <包>
@@ -46,7 +46,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 完整配方的声明接线检查由 `retained_recipe_scripts()` 从 `.github/ci/full-workflows/ci.yml` 保存的 `run` 步骤、完整 selector 定义及 `check.sh` 所选分支出发，再解析 foundation 分片命令；按完整仓库相对路径和 shard 核对登记及自动生成的 behaviour 入口。`browser-smoke` 的 CSR 生产入口通过实际 `needs: web-production` 关联。登记的 `scripts` 是这些命令入口，不是入口内部导入的 helper；伴随宏也登记具体 runner 和 shard。
 
-解析器只接受保存配方的 block-mapping 结构及所涉及 shell 分支的直线命令，保留续行、引号和已审阅构建变量赋值；未支持的控制流、管道或可选步骤明确失败，须先扩展解析与负例，不能靠注释、孤立脚本或同 basename 补齐登记。它只证明保存配方的静态接线。原完整 selector 的历史复用算法仍保留，但当前活动入口使用固定七套开发矩阵，不调用该算法；`executed` 分类表示完整配方含执行门禁，不证明当前路由活动或测试通过。实际通过仍需绑定提交的运行记录与测试清单，暂停项明确为未执行。
+解析器只接受保存配方的 block-mapping 结构及所涉及 shell 分支的直线命令，保留续行、引号和已审阅构建变量赋值；未支持的控制流、管道或可选步骤明确失败，须先扩展解析与负例，不能靠注释、孤立脚本或同 basename 补齐登记。它只证明保存配方的静态接线。原完整 selector 的历史复用算法仍保留，但当前活动入口固定执行全部 13 套且不复用，不调用该算法；`executed` 分类表示完整配方含执行门禁，不证明当前路由活动或测试通过。实际通过仍需绑定提交的运行记录与测试清单；因前置失败跳过的作业明确为未执行。
 
 ## 分类
 

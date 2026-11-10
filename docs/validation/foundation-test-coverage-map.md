@@ -2,7 +2,7 @@
 
 由 `python3 tools/rust-sources/foundation_coverage.py --write` 生成，`--check` 核对；不要手工编辑。设计与分类规则见[测试覆盖闭环](foundation-test-coverage.md)。
 
-**范围：保存的完整 CI 配方，不是当前开发 CI 的执行覆盖或通过证明。** 工作流来源为 `.github/ci/full-workflows/ci.yml`；该目录不由 Actions 执行。长套件在[开发期短 CI](../ci/development-short-ci.md)中暂停。下列统计只描述完整配方中登记的门禁，`executed` 是保留的声明分类，不是本次执行回执。
+**范围：保存的完整 CI 配方，不是当前开发 CI 的执行覆盖或通过证明。** 工作流来源为 `.github/ci/full-workflows/ci.yml`；该目录不由 Actions 执行。当前活动接线与实际结果须另查[人工全量 CI 与暂停边界](../ci/development-short-ci.md)。下列统计只描述完整配方中登记的门禁，`executed` 是保留的声明分类，不是本次执行回执。
 
 | 类别 | 数量 |
 | --- | ---: |
