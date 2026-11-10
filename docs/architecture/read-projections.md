@@ -87,7 +87,7 @@ SMB RPC 入口一次解析路径并直接构造同一类型，替换目标删除
 三类计划 prepare 和磁盘在线登记已接续迁移为具名 Backend 方法，最后四个动作不再
 拥有生产调用方。`BackendAction`、`Backend::call`、HTTP 通用 call 与 handler 宏、
 Engine JSON action dispatcher 及其测试转发／空调用记录均已删除，不保留空枚举。
-源码集成与验证限制见最后动作集成。
+源码集成与验证限制见[最后动作集成](../validation/final-typed-actions-integration.md)。
 
 仍存在的 `setup_operation` 是独立管理初始化协议；`management_status`、Plan.input、
 OperationResult.result 和持久化 Value 具有各自消费者，不能因 dispatcher 退役机械删除。
@@ -152,7 +152,7 @@ Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once �
 
 ## 保留工作区容量投影
 
-contract::WorkspaceCapacity 本来就是只读容量响应契约而非持久化记录；现在 Backend::workspace_capacity 返回该投影，engine同锁复核当前身份后使用 current.principal 捕获预算，不经 Value encode。HTTP 只在真实响应边界序列化一次，保留原 management_slots、不接纳query身份选择、全局/当前主体字段及u64文本；这次类型化迁移没有更改核心计数、near-limit规则、永久证据保留或启动配置。当前 Engine 返回 automatic_retirement=true，仅指现行生命周期合同允许的受限冷存，不删除永久证据；records计驻留记录、cold_records另计冷存记录，metadata_bytes仍包含冷热清单及生命周期预留。
+contract::WorkspaceCapacity 本来就是只读容量响应契约而非持久化记录；现在 Backend::workspace_capacity 返回该投影，engine同锁复核当前身份后使用 current.principal 捕获预算，不经 Value encode。HTTP 只在真实响应边界序列化一次，保留原 management_slots、不接纳query身份选择、全局/当前主体字段及u64文本；这次类型化迁移没有更改核心计数、near-limit规则、永久证据保留或启动配置。当前 Engine 返回 automatic_retirement=true，仅指[现行生命周期合同](../19-capacity-and-performance.md)允许的受限冷存，不删除永久证据；records计驻留记录、cold_records另计冷存记录，metadata_bytes仍包含冷热清单及生命周期预留。
 
 WorkspaceCapacity action 删除，原 management_call JSON桥已无消费者并删除。授权装饰器、排队撤权、forged principal、真实panic、独立管理槽取消和原live-capacity/多session/logout/不可通过query隐藏全局预算测试均走真实typed方法；其它 FileManager/计划/通用读取仍按剩余库存继续，不据此宣称所有动作完成。
 

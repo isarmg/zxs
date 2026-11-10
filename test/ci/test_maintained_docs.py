@@ -31,6 +31,11 @@ class MaintainedDocs(unittest.TestCase):
         self.assertTrue(export.is_absolute())
         self.assertNotIn('..', export.parts)
 
+        text = (ROOT / 'docs/components/smb.md').read_text()
+        self.assertEqual(re.findall(r'^\s*path\s*=\s*(/\S+)\s*$', text, re.MULTILINE),
+                         [str(export)])
+        self.assertIn(f'`{export}`', (ROOT / 'docs/operations/deploy/systemd.md').read_text())
+
         unit = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
         unit.read(ROOT / 'deploy/systemd/zxs.service')
         service = unit['Service']
@@ -79,11 +84,27 @@ class MaintainedDocs(unittest.TestCase):
         self.assertEqual(service['User'], 'zxs')
         self.assertEqual(service['Group'], 'zxs')
         self.assertEqual(unit['Unit']['Documentation'], 'file:/zxs/INSTALL.md')
+        for relative in ('docs/operations/deploy/systemd.md', 'docs/templates/release-install.md'):
+            text = (ROOT / relative).read_text()
+            self.assertIn(service['ExecStart'], text)
+            self.assertIn('/zxs/data/management', text)
+            self.assertNotIn('/opt/zxs', text)
+            self.assertNotIn('/var/lib/zxs', text)
 
-    def test_public_listen_default_is_consistent_with_deployment(self):
+    def test_public_listen_default_is_consistent_in_deployment_docs(self):
         unit = configparser.ConfigParser(interpolation=None, delimiters=('=',), strict=False)
         unit.read(ROOT / 'deploy/systemd/zxs.service')
         self.assertIn('--listen 0.0.0.0:7400', unit['Service']['ExecStart'])
+        for relative in ('docs/components/server.md', 'docs/getting-started.md',
+                         'docs/operations/deploy/systemd.md', 'docs/21-configuration.md'):
+            with self.subTest(document=relative):
+                text = (ROOT / relative).read_text()
+                self.assertIn('0.0.0.0:7400', text)
+                self.assertNotIn('HTTP 监听地址必须是回环地址', text)
+                self.assertNotIn('默认只监听本机', text)
+        client = (ROOT / 'docs/components/client.md').read_text()
+        self.assertIn('不限制 HTTP 主机为回环', client)
+        self.assertIn('HTTPS 仍验证服务器证书', client)
 
     def test_engineering_entrypoints_and_test_layout(self):
         text = (ROOT / 'docs/20-engineering.md').read_text()

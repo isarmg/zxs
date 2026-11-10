@@ -12,4 +12,4 @@ error-definition 与 error-definition-macros 分别维护错误运行时和派�
 
 维护门禁执行原有派生回归、原生及 WASM no_std、文档示例，并显式覆盖 generic-member/backtrace 场景；实际验证补丁、次版本和主版本偏移都会被拒绝。默认产品构建不因此启用不稳定编译器能力。
 
-外置测试保留原始 source 标签，当前目标目录统一为 test/foundation/error-definition。现有合并来源的主包测试归属、历史改名/搬迁/退役记录保持不变。命名改动与来源验证由统一命名规范和当前来源清单管理。
+外置测试保留原始 source 标签，当前目标目录统一为 test/foundation/error-definition。现有合并来源的主包测试归属、历史改名/搬迁/退役记录保持不变。命名改动与来源验证由[统一命名规范](../NAMING.md)和当前来源清单管理。

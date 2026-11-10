@@ -124,7 +124,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 `foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)，活动包、完整配方门禁声明、风险分层与退役数量以该生成表为准，不在本文维护第二份总数。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json` 与本门禁套件表。登记中引用的脚本必须存在且被保存的完整配方声明调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。`executed` 只表示保存的完整配方中有针对该包的测试入口，不表示当前开发 CI 已执行，也不表示全部 API、目标或密码学性质已验证。
 
-TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tls_trust_regression` 执行，登记为 P：`rustls-webpki`、`webpki-roots`、`rustls-pki-types`、`rustls`、`hyper-rustls` 和 `tokio-rustls`。该目标的八项测试核对全部八份公告 SPKI 在叶、中间及信任锚位置的拒绝、移除根、正常链与坏签名，并通过真实本地 HTTPS 握手检查客户端的信任和发送边界；见TLS 回归范围。它们未执行这些组件的保留上游套件，不能以 P 替代 U；旧报告只描述当时范围。
+TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tls_trust_regression` 执行，登记为 P：`rustls-webpki`、`webpki-roots`、`rustls-pki-types`、`rustls`、`hyper-rustls` 和 `tokio-rustls`。该目标的八项测试核对全部八份公告 SPKI 在叶、中间及信任锚位置的拒绝、移除根、正常链与坏签名，并通过真实本地 HTTPS 握手检查客户端的信任和发送边界；见[TLS 回归范围](../security/TLS_TEST_FIXTURES.md)。它们未执行这些组件的保留上游套件，不能以 P 替代 U；旧报告只描述当时范围。
 
 需要但未执行的高风险项仍包括 `tower-http` 与 `subtle`。TLS 保留上游测试仍缺 `rcgen` 等提供者；`rustls-pki-types` 库内测试缺 `crabgrind`，不能以编译失败或零测试充当执行。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
 
@@ -188,7 +188,7 @@ crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P）。本地已�
 
 ### 真实浏览器追加执行与清单收敛
 
-[GitHub 第五组合的 browser-smoke](https://github.com/isarmg/zxs/actions/runs/41177750713/job/124470829698) 在干净 `f40f7d26`／tree `340dd2f9` 实际执行 Chrome 156.0.8078.47，沙箱未禁用，30 项检查（既有 20＋新增 10）全部通过。回执逐项、来源与夹具哈希见浏览器消费者实证。因此为剩余 10 个组件登记限定 P 消费者证据，当前清单为 **204 已执行／0 需要但未执行／18 仅参考**。此前 194／10 是本机准备阶段记录，不再是当前余量。
+[GitHub 第五组合的 browser-smoke](https://github.com/isarmg/zxs/actions/runs/41177750713/job/124470829698) 在干净 `f40f7d26`／tree `340dd2f9` 实际执行 Chrome 156.0.8078.47，沙箱未禁用，30 项检查（既有 20＋新增 10）全部通过。回执逐项、来源与夹具哈希见[浏览器消费者实证](browser-foundation-consumer-contracts.md)。因此为剩余 10 个组件登记限定 P 消费者证据，当前清单为 **204 已执行／0 需要但未执行／18 仅参考**。此前 194／10 是本机准备阶段记录，不再是当前余量。
 
 这只关闭本覆盖清单原 101 项的缺执行记录，不等于组件全部上游测试已通过、真实设备验收通过或 ZXS 所有主题全部完成；下文保留测试提供者和性质覆盖限制仍成立，也不将单个 browser job 成功推断为整条 CI 全部通过。
 
@@ -222,7 +222,7 @@ crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P）。本地已�
 
 ### 治理
 
-修改的保留测试只更新了 `compliance/external-tests/foundation.json` 的 `sha256`；`tests/support/wakers.rs` 按项目新作登记。集成时 `manage.py refresh` 暴露了任务 7 的两处违规：集成 owner `src/naming` 的原始生产文件与外置测试行不能删除，`compliance/NOTICE.md` 是布局收据固定的证据。相应文件已原样恢复为未接线材料，NOTICE 恢复原样（见命名表验证）。
+修改的保留测试只更新了 `compliance/external-tests/foundation.json` 的 `sha256`；`tests/support/wakers.rs` 按项目新作登记。集成时 `manage.py refresh` 暴露了任务 7 的两处违规：集成 owner `src/naming` 的原始生产文件与外置测试行不能删除，`compliance/NOTICE.md` 是布局收据固定的证据。相应文件已原样恢复为未接线材料，NOTICE 恢复原样（见[命名表验证](unicode-naming-tables.md#source-accounting)）。
 
 ### 未解决
 

@@ -17,7 +17,7 @@ CARGO_INCREMENTAL=0 cargo test -p contract-check \
 - OpenAPI 本地引用、路径参数、重复 operationId/参数和安全方案引用；与核心 schema 的内嵌定义完全一致。
 - 定向契约测试覆盖文件版本真实父版本数组（根、去重、多父及必填）、文件、版本及节点备注的128字节无控制字符写入规则，以及当前合法备注和非字符串拒绝的读取字段形状、监测实时/历史共用状态结构、功耗缺失值、管理员鉴权声明和361点历史上限。
 - 分支记录和不可变快照的 pending 映射 ID、文件作用域、快照条目一致性，旧 Branch/Commit 省略空映射后的规范字节及摘要兼容；文件管理继承投影区分可见父版本与自有版本，父状态独立表达，真实零字节 FULL 和目录空字符串仍可区分。
-- 文件合并、标签、作用域备份与备份命名空间的真实响应使用版本管理中的固定 fixture校验完整 OpenAPI 响应 schema；干净源码副本无需预先生成本地 evidence。
+- 文件合并、标签、作用域备份与备份命名空间的真实响应使用版本管理中的[固定 fixture](contract-check/tests/fixtures/merge-tags-backup.md)校验完整 OpenAPI 响应 schema；干净源码副本无需预先生成本地 evidence。
 - 所有正反字段向量和语义拒绝向量，覆盖路由、副本成员、发布证明、请求摘要、上传完整性和资源配额关系。
 - 操作结果核对与显式健康诊断分别使用严格 outcome/observation schema；真实客户端校验分别消费两种响应，不因当前健康变坏重写历史发布证据。pending 的 NotObserved/null 与 Checked 对象有独立正反向量；原持久化回执及规范摘要向量保持不变。
 - 固定 JCS 字节与 BLAKE3、严格 JSON 拒绝向量、空文件/短文件校验清单，以及截断和损坏变体。

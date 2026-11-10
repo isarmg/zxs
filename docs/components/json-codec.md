@@ -1,6 +1,6 @@
 # JSON 编解码
 
-[数据序列化](data-serialization.md) · 业务契约 · [来源与许可](../dependencies/data-storage.md)
+[数据序列化](data-serialization.md) · [业务契约](../contracts/README.md) · [来源与许可](../dependencies/data-storage.md)
 
 `json-codec` 提供 JSON 文本及 `Value` 与 `data-serialization` 数据模型之间的转换。当前维护策略要求经 `deserialize_struct` 解码的具名字段结构体及外部标记枚举的具名载荷使用 JSON 对象，不接受上游可选的按字段位置排列数组。流式反序列化、owned `Value` 与 borrowed `Value` 入口保持一致；嵌套字段、`Option`、列表及映射中的记录同样适用。
 

@@ -1,6 +1,6 @@
 # 21 配置规范与默认值
 
-[文档目录](README.md) · [上一章：工程结构与依赖约束](20-engineering.md) · 下一章：验收标准与证明材料
+[文档目录](README.md) · [上一章：工程结构与依赖约束](20-engineering.md) · [下一章：验收标准与证明材料](22-acceptance.md)
 
 <a id="s21"></a>
 
@@ -17,9 +17,9 @@
 
 ## 21.1 配置示例
 
-以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后由 `--storage-discovery-root`（默认 `/zxs/data/disks`）只读发现直接子目录，通过磁盘向导明确选择和确认；不提供任意路径、挂载目录或发现父目录编辑。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见服务端说明、救援配置草稿及当前限制。
+以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；Web 公开一次性首次设置只创建管理员，登录后由 `--storage-discovery-root`（默认 `/zxs/data/disks`）只读发现直接子目录，通过磁盘向导明确选择和确认；不提供任意路径、挂载目录或发现父目录编辑。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/helper.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
 
-当前守护进程的 `--listen` 默认值为 `0.0.0.0:7400`，允许非回环 IPv4/IPv6 地址；网络可达范围与传输保护由部署者管理。直接 HTTP 与 HTTPS 反向代理的 Origin 配置见服务端启动说明。下方 `remote_transport` 是 HTTPS 部署目标示例，不是禁止非回环 HTTP 的进程准入规则。
+当前守护进程的 `--listen` 默认值为 `0.0.0.0:7400`，允许非回环 IPv4/IPv6 地址；网络可达范围与传输保护由部署者管理。直接 HTTP 与 HTTPS 反向代理的 Origin 配置见[服务端启动说明](components/server.md)。下方 `remote_transport` 是 HTTPS 部署目标示例，不是禁止非回环 HTTP 的进程准入规则。
 
 Samba 配置由经版本验收的部署模板另行生成。设备清单通过登记工具产生，不在示例中填写真实设备路径。
 
@@ -311,9 +311,9 @@ queue_warning_seconds = 30
 
 本例配置三个元数据成员，所以恢复/准入多数为2；任意非空配置的多数固定为 floor(N/2)+1，N 为已配置成员数。`decision_members=2` 不能解释为本例两成员即可正常写入。正常保护、发布和确认始终要求全部已配置成员完成；不按可访问数量缩减门槛。单成员池要求该成员，双成员池要求两个成员。`maximum_target="primary-route-depth"`按具体一级来源的连续链深计算；总盘数只给出全局上界。离线、满盘或映射缺失不能擅自降低目标或使用别的来源盘。
 
-`supported_save_modes=["full"]` 约束实际内容保存；`creation_mode="record-until-write"`、`content_mode="inherit-parent-until-first-write"` 与 `materialize_all_files_on_create=false` 约束分支只登记冻结来源、首写前继承父内容。目录分支直接引用父子树，不提前创建自己的子树或后代文件分支。历史另存建立新分支，但只为实际 staged 文件生成独立 FULL，其余文件继续继承冻结来源。这些是目标配置的受检断言，不是当前 JSON `Config` 的运行开关；实际能力声明见API 能力发现。
+`supported_save_modes=["full"]` 约束实际内容保存；`creation_mode="record-until-write"`、`content_mode="inherit-parent-until-first-write"` 与 `materialize_all_files_on_create=false` 约束分支只登记冻结来源、首写前继承父内容。目录分支直接引用父子树，不提前创建自己的子树或后代文件分支。历史另存建立新分支，但只为实际 staged 文件生成独立 FULL，其余文件继续继承冻结来源。这些是目标配置的受检断言，不是当前 JSON `Config` 的运行开关；实际能力声明见[API 能力发现](15-api-and-errors.md#s15-05)。
 
-示例中 `merge_behavior="link-only"`、`merge_updates_branch_head=false` 等 `merge_*` 字段只描述旧 `MergeLink` 关系标记：端点固定、正文与HEAD不变，不是所有合并操作的全局约束。文件分支合并 `FileBranchMerge` 是另一个已实现能力，接口声明 `merge_behavior:"explicit-file-node-adoption"`，会推进归属与参与目录引用；目录分支合并待用户确认，暂不实现。两者见补充规则，不能通过修改旧字段开启或关闭新语义。`preserve_topology_after_purge=true`保留图节点，不永久锁住payload。`tree_split`要求新域对象和恢复包独立，不只是分支引用改名。
+示例中 `merge_behavior="link-only"`、`merge_updates_branch_head=false` 等 `merge_*` 字段只描述旧 `MergeLink` 关系标记：端点固定、正文与HEAD不变，不是所有合并操作的全局约束。文件分支合并 `FileBranchMerge` 是另一个已实现能力，接口声明 `merge_behavior:"explicit-file-node-adoption"`，会推进归属与参与目录引用；目录分支合并待用户确认，暂不实现。两者见[补充规则](design/file-merge-tags-backup.md)，不能通过修改旧字段开启或关闭新语义。`preserve_topology_after_purge=true`保留图节点，不永久锁住payload。`tree_split`要求新域对象和恢复包独立，不只是分支引用改名。
 
 `smb.shares` 固定历史树与主分支；Web 切换工作分支不修改该配置。普通会话不独占整个分支，按文件核对并串行发布；显式批量计划仍锁定 HEAD，维护计划处理相关工作区后才取得排他权。`auto_create_conflict_branch=false` 禁止静默处理冲突，不影响用户从历史保存时按规则登记新分支并只保存实际写入的 FULL 版本。
 
@@ -327,18 +327,18 @@ queue_warning_seconds = 30
 
 | 文档投影字段 | 当前入口及作用域 |
 | --- | --- |
-| `max_workspaces` | 引擎 JSON `Config.max_workspaces`；初始化前的受审查草稿，见救援配置草稿 |
+| `max_workspaces` | 引擎 JSON `Config.max_workspaces`；初始化前的受审查草稿，见[救援配置草稿](components/helper.md#uninitialized-configuration-drafts) |
 | `http_transfer_slots` | `--http-transfer-slots` → `ServerConfig.http_transfer_limits.slots`；上传、读取各自一池，每池默认 2，不是两池合计 2 |
 | `http_spool_bytes_per_account` / `http_spool_bytes_total` / `http_spool_recovery_reserve_bytes` | 对应 `--http-spool-*` 参数 → `ServerConfig.http_spool_limits`；只约束 HTTP spool |
 | `smb_spool_bytes_per_account` / `smb_spool_bytes_total` / `smb_spool_recovery_reserve_bytes` | 对应 `--smb-spool-*` 参数 → `SmbConfig.spool_limits`；只约束 SMB spool |
 
-两种协议的 spool 各自要求账户额至少 65536 字节、总额不低于账户额、恢复余量大于零。`per_account` 是现有入口与账本的所有者维度名称，不表示存在多账户管理；未知归属字节也不能绕过唯一主体准入。HTTP 与 SMB 的默认 100 GiB / 500 GiB 分别生效，不能解释为跨协议共享的 500 GiB 池。核心 `max_workspace_bytes` 和持久工作区证据四维额度仍独立，见当前资源边界。
+两种协议的 spool 各自要求账户额至少 65536 字节、总额不低于账户额、恢复余量大于零。`per_account` 是现有入口与账本的所有者维度名称，不表示存在多账户管理；未知归属字节也不能绕过唯一主体准入。HTTP 与 SMB 的默认 100 GiB / 500 GiB 分别生效，不能解释为跨协议共享的 500 GiB 池。核心 `max_workspace_bytes` 和持久工作区证据四维额度仍独立，见[当前资源边界](19-capacity-and-performance.md#s19-10)。
 
 普通 HTTP 后端的 8 槽是 `HTTP_BACKEND_SLOTS` 内部常量；SMB 的 64 条连接、8 条已认证会话和每会话 1024 个句柄分别由 `MAX_CONNECTIONS`、`MAX_AUTHENTICATED_SESSIONS`、`MAX_HANDLES` 限制。这些不是本 TOML 或 CLI 开关，也没有另一个 4096 全池句柄上限。HTTP 传输及后端准入池满时立即拒绝，不存在旧示例所写的 128 项应用等待队列。
 
 `default_page_items` 至 `workspace_reminder_days` 以及 `observability` 只保留设计目标约束，不声明当前分页接口、事件重放、定时提醒或这些告警器已经实现。实际 SMB 目录页固定最多 256 项，不能用这里的 200/1000 目标覆盖它。修改文档投影不会修改任何运行额度；schema 的范围和关系检查也不意味着进程已接受整份目标配置。
 
-只实现当前唯一存储格式，不提供可配置的旧格式读取列表或兼容分支。格式修改必须同步更新写入、恢复、校验和测试向量，不自动迁移真实数据。resource_limits 与 observability 的数值、计费口径和超限动作见第 19.9 节及第 19.10 节。告警秒数不是提交取消期限。
+只实现当前唯一存储格式，不提供可配置的旧格式读取列表或兼容分支。格式修改必须同步更新写入、恢复、校验和测试向量，不自动迁移真实数据。resource_limits 与 observability 的数值、计费口径和超限动作见[第 19.9 节](19-capacity-and-performance.md#s19-09)及[第 19.10 节](19-capacity-and-performance.md#s19-10)。告警秒数不是提交取消期限。
 
 <a id="s21-03"></a>
 
@@ -377,7 +377,7 @@ queue_warning_seconds = 30
 - `--http-spool-bytes-total`：默认 `536870912000`，即 500 GiB。
 - `--http-spool-recovery-reserve-bytes`：默认 `1073741824`，即 1 GiB。
 
-它们映射到 `ServerConfig.http_spool_limits`，只约束 HTTP `api-spool`。`--max-upload-bytes` 仍限制单次上传；核心工作区及 SMB 的预算独立。上文完整设计配置中的跨入口全池参数不能仅因存在于示例中就视为全部已接入运行时。启动会盘点留存数据并持有独占目录锁；不得让多个服务实例同时使用同一 spool。详见HTTP 暂存预算与恢复。
+它们映射到 `ServerConfig.http_spool_limits`，只约束 HTTP `api-spool`。`--max-upload-bytes` 仍限制单次上传；核心工作区及 SMB 的预算独立。上文完整设计配置中的跨入口全池参数不能仅因存在于示例中就视为全部已接入运行时。启动会盘点留存数据并持有独占目录锁；不得让多个服务实例同时使用同一 spool。详见[HTTP 暂存预算与恢复](components/server.md#http-spool-budget)。
 
 HTTP 传输准入及期限参数（上传/读取各自独立一池）：
 
@@ -385,12 +385,12 @@ HTTP 传输准入及期限参数（上传/读取各自独立一池）：
 - `--http-transfer-idle-seconds`：默认 `60`，无非空正文进度的期限。
 - `--http-transfer-total-seconds`：默认 `3600`，必须不低于 idle，且最多 `604800`（7 天）。
 
-映射到 `ServerConfig.http_transfer_limits`；旧 `--http-transfer-slots-total` 和 `--http-transfer-slots-per-account` 参数明确拒绝，不保留别名。额度耗尽立即 429；响应头前超时为 408 `TRANSFER_TIMEOUT`，已开始的正文以流错误终止。超时不删除留存数据，也不提前归还仍被阻塞 I/O 使用的许可/租约。详见HTTP 并发准入与传输期限。
+映射到 `ServerConfig.http_transfer_limits`；旧 `--http-transfer-slots-total` 和 `--http-transfer-slots-per-account` 参数明确拒绝，不保留别名。额度耗尽立即 429；响应头前超时为 408 `TRANSFER_TIMEOUT`，已开始的正文以流错误终止。超时不删除留存数据，也不提前归还仍被阻塞 I/O 使用的许可/租约。详见[HTTP 并发准入与传输期限](components/server.md#http-transfer-limits)。
 
 ## 当前配置应用入口
 
-`zxs-helper configuration` 只生成或编辑未初始化草稿，不直接应用配置或在线登记磁盘。当前 Web 首次激活按所选空目录建立默认逐级备份链，不应用任意 Config JSON 或本机高级预设；旧公开预设初始化路由已删除。`--setup-disk` 的本机映射只保留既有离线恢复用途。不要直接改写已有池的系统配置或磁盘锚来更改成员。详见受保护初始化。
+`zxs-helper configuration` 只生成或编辑未初始化草稿，不直接应用配置或在线登记磁盘。当前 Web 首次激活按所选空目录建立默认逐级备份链，不应用任意 Config JSON 或本机高级预设；旧公开预设初始化路由已删除。`--setup-disk` 的本机映射只保留既有离线恢复用途。不要直接改写已有池的系统配置或磁盘锚来更改成员。详见[受保护初始化](management/setup-recovery.md)。
 
 ---
 
-[文档目录](README.md) · [上一章：工程结构与依赖约束](20-engineering.md) · 下一章：验收标准与证明材料
+[文档目录](README.md) · [上一章：工程结构与依赖约束](20-engineering.md) · [下一章：验收标准与证明材料](22-acceptance.md)

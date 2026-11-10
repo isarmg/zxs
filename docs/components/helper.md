@@ -1,0 +1,315 @@
+# 辅助工具
+
+`storage-helper` 生成 `zxs-helper`。它是在本机显式运行的离线辅助工具，不是远程管理客户端，不启动 ZXS 守护进程。普通文件访问和日常账户管理仍由主服务 Web 与独立 SMB 提供。辅助工具须配备自身独立 Web 控制台，以 root 手工运行、默认监听 `0.0.0.0`、无需认证直接打开，不依赖 systemd 或自启，退出即停止；并负责首次账户/系统及必要磁盘配置初始化、ZXS 管理员与 SMB 密码重置、一条龙 ZXS 安装及 systemd/SMB 配置。发行物还须内置匹配 ZXS 载荷，用于离线首装或仅程序文件修复。已实现细项及未完成的一条龙准备、真实部署和服务启用边界以根 TASKS 为准，不能把单独原操作或本地定向检查当完整安装验收。具体接口和限制见[Web 首片](../design/helper-console.md)及[程序首装](../design/helper-program-installation.md)。
+
+独立 Web、CLI 和救援工具源码放在项目根 [`helper/`](../../helper/)，其测试集中在 `test/helper/`；服务语义的离线管理协调器位于 `src/server/src/offline/`，对应测试在 `test/server/unit/offline/`，通用平台原语测试在 `test/platform/`。各部分共享根工作区、锁文件及 ZXS 的通用格式、验证和持久化能力，管理协调器不另起网络服务。构建命令为 `cargo build --locked --offline -p storage-helper`；当前只生成 `zxs-helper`，不安装旧名称别名。
+
+已确定将**磁盘添加、注销/移除、外来磁盘接入和磁盘初始化**移入此工具，并取消用户发起的“计划下线”动作。失联、不可用和既有 Disabled 状态仍须如实展示。这是职责决策，不表示四项操作已经迁完；分项现状、原操作恢复及切换门槛见[辅助工具磁盘管理](../design/helper-disk-management.md)和[架构决策](../adr/0017-helper-disk-management.md)。当前可执行命令以下述各节及 `--help` 为准，不注册只会假报成功的磁盘管理占位命令。
+
+外来盘后继的[来源域历史图准备](../design/helper-foreign-mapped-graphs.md)目前仅有 Engine 单目标 API，未接 helper 同批协调器/线协议/Web，不修改既有对象命名阶段含义；它不安装目标数据库或启用任何磁盘。
+
+所有需要打开池的救援操作应先停止该池的服务。`--root` 指向系统状态目录，`--principal` 指定审计与操作所属主体，默认 `admin`，不是角色或 ACL 提权入口；独立 Web 已有管理员密码重置，需手动输入和独立确认；实际 SMB 密码重置已有受限本地 tdbsam 入口，真实认证仍待验收。帮助、版本与参数错误不启动服务或工作线程。失败返回非零退出码。
+
+需要打开或恢复池的命令支持[四项保留证据运行期上限](../19-capacity-and-performance.md#runtime-retained-workspace-limits)，作为全局参数同时提供；不带时使用原配置基线。`offline-check` / `offline-export` 直接核验单盘，不借这些参数改变证明或载荷规则。恢复前应配置足够额度，不能通过删除已提交清单释放名额。
+
+<a id="offline-maintenance-process-boundary"></a>
+
+## 管理语义与独立进程边界
+
+辅助 Web 的使用入口仍是独立 `zxs-helper`，不依赖已安装的守护进程或网络管理服务。首次管理员、现有密码重置、首次存储批次与磁盘成员/退役协调由 `src/server/src/offline/` 单一实现拥有，通过内嵌同版 `zxs` 的隐藏 `internal-maintenance` 入口执行。该分支先于日志初始化、普通启动准入、Tokio 与监听器退出；不会启动、启用或重新加载任何系统服务。
+
+helper 生产 Cargo 图只消费既定 authentication/platform-io/storage-engine；storage-server 仅留给真实启动集成测试。协议枚举位于可移植 contract，通过 engine 的既有契约边界导出。未知格式/操作/字段仍拒绝。HTTP origin/CSRF、停机状态、单操作槽与 64 KiB 请求上限仍由 helper 控制，ZXS 在真实 IPC 边界解析原操作的严格类型，管理权限、目录身份、lease 和永久回执语义保持原实现。需要服务 UID 的操作仍由同一 ZXS 程序再降权运行，真实/effective UID/GID 和 supplementary groups 检查不变。
+
+程序只来自经过发行绑定和 SHA-256 核验的内嵌载荷：写入匿名 memfd、设为 0555 并封住写入/增长/缩短后，通过持有 FD 执行；不选择用户提供的路径、不回退 PATH 或已安装文件、不落盘解包、不下载。宿主拒绝匿名执行时明确失败，不修改安全策略。无内嵌载荷的开发构建仍可显示控制台与做原有离线核验，但这些管理操作明确返回 `maintenance_payload_unavailable`，不会借用其他版本程序。
+
+管道头限制 16 KiB，请求正文限制 64 KiB；一般回复限制 64 KiB，完整终态链/重入提案保留原来的 128 MiB 加 64 KiB 上限。JSON 正文只在真正传输处编码，helper 转发原响应字节，不把领域对象编码再解析以调用自己。密码不进 argv/环境/日志/落盘临时文件；请求缓冲用 SecretBytes 清除，仍不宣称能清除系统/库的每一份临时拷贝。失败、过长输出与浏览器断开均排空并等待所有子进程，不自动重试或宣称回滚，原计划和实际回执继续决定恢复。
+
+额外代价是每次管理操作核验并复制最多 256 MiB 的内嵌程序到匿名内存，以及一个根协调进程；原降权工作进程与 fsync 顺序不减少。原子文件与 bundle 发布只是 platform-io 的通用文件系统原语，未把业务信封或认证政策降到底层。
+
+本轮准确组合的定向验证以 TASKS T00 为准：helper/zxs 生产目标、管道与原操作门禁、所选文件发布测试已验证；下列历史切片中“未编译/未运行”的描述不是本轮组合结论。未运行的专项、完整发行内嵌进程、真实密码/系统盘及全套验收仍不计为通过。
+
+## 原配置安装续作
+
+固定 systemd/Samba 配置安装现在先保留准确原输入，CLI/Web 只凭原摘要即可读取当前阶段并明确确认续作，不用当前表单猜回或改写原请求。已开始完成记录后丢失的配置、身份变化及不同/不完整权威材料均保留拒绝，不替代配置修复、服务激活或完整安装 ready。只读阶段识别复用 platform-io 的通用 bundle 边界，详见[原配置安装恢复](../design/helper-original-configuration-recovery.md)及 TASKS H07。
+
+## 同载荷程序修复
+
+`install repair-preview/repair-recover-preview/repair-commit` 与独立 Web 已接[同载荷程序修复](../design/helper-same-payload-program-repair.md)。首装保存不可变安装基线；修复只恢复它绑定的内置程序，先独立备份原字节并保留交换原 inode，支持准确原请求续作。不打开数据/配置，不启动服务，不升级或降级；缺基线及未知状态保留拒绝。源码未审查、编译、测试或 CI。
+
+## 内置许可与版权材料
+
+正式 helper 的程序载荷另配[准确中央许可快照](../design/helper-embedded-legal-materials.md)。`install materials --output …` 可核验后新建归档文件，`install materials-manifest` 输出准确清单；独立 Web 直接下载内置字节，不在服务器解包/落盘。它保留未关闭事项，不是法律完整性证明或完整源码/依赖包；未构建或测试，材料归档尚未实际生成。
+
+## 首装运行目录准备
+
+`initialization runtime-preview/runtime-prepare` 与独立 Web 现有[固定运行目录入口](../design/helper-runtime-directory-preparation.md)：准确本机服务账户的六个 0700 空目录和 root 所有的独立空 SMB export，原意图及完成 inode 回执、部分发布保留与原请求续作。它不清理已使用目录、不改 live owner/mode、不创建账户或启动服务，且不表示完整安装就绪。此切片未审查、编译、测试或 CI。
+
+## 恢复系统盘
+
+```sh
+zxs-helper --root /srv/zxs/new-system restore-system \
+  --disks /srv/zxs/old-metadata-1 /srv/zxs/old-metadata-2
+```
+
+上述为多成员示例。实际至少需要固定配置的 Q = floor(N/2)+1 个可信原元数据成员，N ≥ 1；单成员池可只传唯一旧盘。不能拿空盘、替换盘或任意目录替代，不能按在线数量重算成员集合。所有新初始化盘保存池配置锚；缺锚旧盘不兼容，不自动补锚或迁移。核心校验发布证据、成员与池身份并保留冲突拒绝规则。工具不格式化磁盘、不自动重置、不在多成员池中根据不足 Q 个旧成员推断整个池的最终状态。单成员盘永久丢失不具备原池恢复保证。
+
+输出中的 `credential_recovery_snapshot_available` 只表示恢复后的池中存在凭据灾备快照，不表示已创建或替换管理面权威凭据。工具不写旧 `auth.json` 缓存，也不覆盖独立系统目录中的 `management-auth.json`。随后启动守护进程或重试存储发现都不会自动导入该快照，无论是否已有权威标记。有效的本机管理凭据继续作为唯一权威；凭据缺失或损坏时保持认证关闭。需要恢复管理凭据时，保留此次恢复目录作为核验依据，停止相关服务，并在另行准备的干净系统状态目录中走受本机 bootstrap 授权保护、明确接受旧凭据风险的恢复流程。不要删除或覆盖现有管理凭据、权威标记或部分恢复目录来绕过保护；`restore-system` 不自动重置凭据；独立管理员重置须另走显式预览和确认。
+
+`restore-system` 的 `restored:true` 只表示原权威 State 恢复。新增 `restored_scope:authoritative-system-state`、`all_database_scopes_restored:false` 和逐盘当前/历史派生状态，避免把某一可选库失败或尚未实现的三范围恢复报告为全部完成。权威恢复后才维护派生盘库；错误不授权删除恢复材料或重复原决定。
+
+## 无 SYSTEM 的盘根数据库清单
+
+`zxs-helper disk-databases SELECTION [--scope both|current|history] [--records]` 根据明确物理登记读取同一盘的当前/历史 SQLite，严格折叠历史前后行，并在覆盖范围内比较当前清单。支持明确仅读仍完好的一份，另一份保留且不访问；`--records` 将已经完整读取的清单按 JSON 行输出 stdout。它不打开 SYSTEM，不写源盘，不是独立发布证明或恢复权威，不检查正文可用性；原始材料缺失/损坏不被解释为空盘。该源码尚未编译或运行。身份选择、CLI 与边界见[离线数据库材料](../design/offline-disk-database-material.md)。
+
+## 受限降级恢复
+
+```sh
+zxs-helper --root /srv/zxs/system recovery-preview OPERATION_ID --reason '经审查的原因'
+zxs-helper --root /srv/zxs/system recovery-commit RECOVERY_ID \
+  --digest REVIEWED_DIGEST --accept-permanent-loss
+```
+
+仅支持已经获得 ACCEPT 但尚未发布、所有原始数据盘都可访问且正文确已不可修复的操作。执行时必须持有池的独占锁及适当本机权限。先审查持久预览和损失范围，再提交完全匹配的摘要并明确接受永久数据损失。缺盘替换、自动重试发布、自动 reset 和任意撤销已发布历史均不属于此能力。
+
+`recovery-commit` 若在原操作已发布之后因索引重建或工作区核对失败，仍以非零退出码报告本次恢复未就绪；诊断明确包含原 operation ID、已发布事实、恢复阶段及具体来源。这个退出码不表示原操作未发生，不能换新操作号或另一恢复计划重做。保留原计划、摘要及恢复材料，排除故障后按既有严格恢复准入核对；此恢复命令尚未提供绕过 Engine 重开失败的独立收据查询。
+
+<a id="integrity-scrub"></a>
+
+## 显式完整巡检（第一阶段）
+
+```sh
+zxs-helper --root /srv/zxs/system scrub
+```
+
+先停止该池服务。此命令是完整巡检执行器的真实离线调用方，不是定期后台调度，也不替换 HTTP `/api/admin/check` 或 `offline-check` 的单盘目录诊断范围。当前 `Engine::scrub` 在整次扫描中持有 Engine 独占借用；不得把本命令改为默认周期在线任务，或据此宣布增量发布免读门禁已经满足。
+
+命令先安装 SIGINT / SIGTERM 接收器，再在一个专属本机线程中打开池；系统目录和可用磁盘的既有非阻塞写者锁拒绝同池服务或第二个巡检进程，不排队积压。打开使用 `PreservePending` 恢复入口，不自动提交未发布决定。**打开阶段仍会执行既有恢复、日志尾修复、已清除正文清理和可重建索引维护，不是整个命令只读。** 只有随后的 `scrub` 扫描是无隐式修复的观测；恢复可能先修复可恢复的元数据副本，因此报告反映打开之后的实际字节，不能当作打开之前损坏清单。无法安全打开时不运行巡检、不输出健康报告，错误写到 stderr，退出码为 1。
+
+SIGINT / SIGTERM 只请求协作取消，不终止或分离 I/O 线程。核心在对象、日志帧和正文块之间检查取消；已在执行的系统调用及打开阶段必须实际结束。命令等待线程 join 后才返回；调用 future 被取消或销毁也先取消并真实 drain。OS 强制终止、设备永久阻塞及物理断电不属于协作取消的完成保证。线程创建失败、线程 panic、信号安装失败和核心准入错误都明确失败，不伪装成完整报告。
+
+完成后 stdout 只输出一份 JSON：`state` 为 `complete_success`、`partial_failure`、`cancelled` 或 `failed`，并包含核心的发布 `sequence` / `snapshot_hash`、实际覆盖计数、至多 128 条 issue、截断数量及起止时间。时间使用 `{ "secs_since_epoch": …, "nanos_since_epoch": … }`。只有完整覆盖且无故障的 `complete_success` 返回退出码 0，并令 `last_complete_success_at` 等于本次完成时间；其它扫描结果仍输出部分覆盖报告并返回 1。输出或编码本身失败同样返回 1。
+
+`last_complete_success_at` **只属于本次调用**：命令不保存跨进程健康缓存，不读取普通写入成功时间，不宣称先前结果仍新鲜；每次启动从未检查状态重新准入。报告是扫描区间观测，不能用作未来读写许可、当前健康凭证或自动修复授权。离线阶段没有 HTTP 任务队列、在线 status/cancel 路由及自动周期策略；最终在线方案必须先完成有界锁外执行、具体后台 owner、恢复 drain 与前台资源公平性的独立设计和验证。
+
+## 单盘核验与隔离导出
+
+```sh
+zxs-helper offline-check /srv/zxs/old-disk
+zxs-helper offline-export /srv/zxs/old-disk VERSION_ID /srv/helper/new-file
+```
+
+在停止写入的可信原成员或一致的只读副本上操作。核验或导出只证明被检查的发布证据、单个版本与其数据完整性，不证明整个池可恢复、当前在线认证、最新历史或所有副本健康。导出目标不得已存在；`offline-export` 的输出路径须为有效 UTF-8，以便精确写入 JSON 收据，不可编码的路径在读取源盘或创建目标前拒绝。不要把隔离导出结果直接当作可重新加入池的磁盘。
+
+## 历史恢复包
+
+```sh
+zxs-helper --root /srv/zxs/system package export HISTORY_ID /srv/private-helper/new-package
+zxs-helper package check /srv/private-helper/new-package
+zxs-helper --root /srv/zxs/new-system package restore /srv/private-helper/new-package \
+  --primary-slot P01 --copies 3
+```
+
+保留原有完整历史包导出、独立核验和新池恢复能力，不是 Web 文件传输。导出目标不得已存在，父目录必须为当前用户拥有的私有 0700 目录；包的路径、发布证明、摘要、对象与历史结构仍由原核心实现核验。没有外部可信成员配置时，独立包检查仅证明包内证据与内容自洽，不赋予来源池成员关系权威。恢复要求目标池已安全初始化，保留目标身份、副本和新池恢复约束，导入形成目标池的新本地发布，不沿用外来发布作为本池权威，不能覆盖现有目标或绕过损坏证明；可用 `--operation-id` 指定经审查的幂等操作标识。
+
+<a id="uninitialized-configuration-drafts"></a>
+
+## 未初始化拓扑配置草稿
+
+```sh
+zxs-helper configuration template --production \
+  --disks /srv/zxs/disk1 /srv/zxs/disk2 /srv/zxs/disk3 --output /srv/private-layout/custom.json
+zxs-helper configuration register-disk --config /srv/private-layout/custom.json \
+  --slot P02 --disk-id REVIEWED_DISK_ID --path /srv/zxs/disk4 --level 1
+```
+
+此子域只生成或编辑未初始化的配置草稿，不打开池、不初始化设备、不注册在线磁盘，也不提供账号初始化或远程客户端。`template` 生成随机池/盘 ID；必须显式指定 `--production` 才是生产草稿。`register-disk` 保留原草稿到完整文件名加 `.before-registration` 的备份，再以描述符锚定的原子写入发布 0600 文件。再次编辑保留紧前一份草稿。从读取、校验到备份和发布，整个事务持有父目录的排他建议锁，而不是会被原子替换的草稿 inode；同目录并发编辑（包括父目录别名）在读取前明确失败，须待前次编辑结束后重新运行，不会静默覆盖成功编辑或保存过时备份。锁不创建边车文件；标记检查及两次发布始终使用同一已打开的父目录描述符。此锁只协调救援草稿编辑，不能替代停止守护进程及排除其他写入者。已有池或管理凭据标记、已入池盘、复制出去的在线配置、链接、重叠根目录、非法拓扑及不可信文件均被拒绝；不能用不相关的 `--root` 绕过这些检查。
+
+当前 Web 首次设置只创建管理员，登录后通过已挂载文件系统的目录浏览与检查完成首批存储激活。旧 Web 本机预设应用入口已移除，以上草稿工具不再构成可直接从 Web 应用任意 Config 的路径；仍不允许修改已初始化池。`--setup-disk` 只为既有离线恢复提供允许的原磁盘 ID。新目录选择、设备身份与中断恢复边界见[初始化与恢复](../management/setup-recovery.md)。
+
+## 副本与发布约束
+
+除系统盘外最低只需一块存储盘，后续备份层均可不配置；单盘没有冗余或故障盘容错。`configuration template --disks /absolute/primary` 可生成单盘草稿，增加路径时按顺序形成备份链；草稿本身不访问或初始化设备，实际使用仍须校验拓扑和设备。
+
+正常元数据发布要求全部已配置元数据成员持久化成功；严格多数仅用于相应恢复/准入流程，不能自动把失联成员移出配置。`package restore` 默认一个副本；需要更多副本时显式设置 `--copies N` 并预置足够的备份链。
+
+## 检查
+
+运行 `cargo test --locked --offline -p storage-helper`。`test/helper/startup.rs` 覆盖命令边界、损失确认、元数据恢复、历史包字节一致性及拒绝覆盖/损坏证明；`test/helper/unit` 覆盖草稿拓扑、权限、锁和原子备份，以及巡检的真实信号、取消、future 销毁、线程失败和 Engine 锁释放；巡检集成用例实际运行命令并检查健康、缺盘和准入失败结果。测试不替代真实设备及生产恢复演练。
+
+## 超额工作区只读库存
+
+停止守护进程后运行 `zxs-helper --root /absolute/private-system-root workspace-inventory`。
+命令读取现有配置、校验磁盘身份并持有原写锁，但不构造 Engine、检查准入额度、重放 journal 或修复数据。
+每个可用位置的物理 `workspace.json` 单独输出一行 JSON（路径、ID、主体、状态、canonical 长度），
+全部枚举结束才输出 `complete:true, authoritative:false` 和物理清单数。镜像不去重；长度不含生命周期预留，
+不能代替 capacity 计费或权威发布核验。缺盘只表示未列出相应可用根，不宣称完整物理池健康。
+格式、路径或 I/O 错误中断命令，不输出完整成功标记；已有输出仍是部分诊断，不得据此清理数据。
+枚举器只保留配置根、一个目录游标和当前受单清单上限约束的内容，无每 ID 集合；因此既有超额池也可查看。
+除原有 writer lock 文件可能被创建外，不修改配置锚、清单、正文或索引；该命令不授予超额池写入能力。
+
+### 草稿发布失败的证据与诊断
+
+草稿输出父目录可为公共目录，不会被改成 0700；文件仍为 0600、单链接普通文件，
+全部操作锚定持有目录。rename 开始尝试即解除暂存自动清理，包含 EEXIST 的失败
+回复都作为 `Unknown`，保留原 errno、目标/暂存名称及目录和文件身份。
+成功 rename 后验证或目录屏障失败为 `Published`；不得根据非零退出码删除证据
+或盲目重试。发布前写入/同步失败才清理暂存，清理失败与首要错误一并保留。
+备份失败携带具名路径/source 上下文且不继续替换草稿；这不表示备份本身未发布。
+CLI 最终诊断遍历完整来源链，并转义控制字符；不打印草稿正文或秘密。
+
+隔离门禁 `test/helper/unit/private_io/publication-io.sh <helper-libtest> <zxs-helper>`
+要求 `cargo test --locked --offline -p storage-helper --features rustix/use-libc --no-run`
+生成的当前产物。它执行真实 rename 前/后 EIO、真实 EEXIST 及文件/目录同步故障，
+核验阶段、errno、inode、暂存/目标保全、目录权限和屏障；同时核对真实 CLI 备份失败
+的完整来源链和未修改原草稿。libc 测试后端不改变生产后端，也不冒充 NFS/掉电测试。
+该修复不改变草稿两次发布的顺序或成功路径每文件一次 fsync、每发布一次目录
+fsync 的预算；新增持有文件单链接/身份检查及发布后相对 stat 身份核对，错误时
+才分配证据上下文。总工作仍为 O(草稿字节数)，没有额外全文件散列或读取。
+
+## 显式逐盘新格式
+
+`zxs-helper authority` 是独立新格式的离线存储消费者，提供先审核后确认的文件/备份发布、准确 operation 恢复、只读核验、隔离正文导出和独立 SQLite 重建。它不调用当前池 Engine，也不能转换或接纳运行池磁盘；首次创建必须显式 `--accept-new-format`，写入必须匹配审核摘要并 `--confirm-write`。具体命令、容量与故障范围见[逐盘权威切片](../design/independent-disk-journal.md)。
+
+<a id="independent-content-check"></a>
+
+### 新格式逐版本离线检查
+
+```sh
+zxs-helper authority check selection.json
+zxs-helper authority export selection.json VERIFIED_COMMIT /srv/export/new-file
+```
+
+`selection.json` 显式选择路径、完整原身份和可选已知 checkpoint，不借 `--root` 打开系统池，也不自动判断或兼容其它盘格式。先停止所有相关写者；检查只读本盘已发布元数据与本盘保留 FULL，不打开原一级、下游盘或系统 SQLite，不创建锁文件、不修复或删除材料。
+
+`check` 在完整元数据链、来源和 pin 校验成功后，分别读取各版本正文并核对声明长度及摘要。一份正文缺失或损坏不遮蔽其它版本：JSON 的 `copies` 保留原一级完整身份、history/file、commit、声明 body 摘要及长度，`content.status` 分别为 `verified`、`temporarily_unavailable` 或 `corrupt`。相同正文的不同版本不会合并。可据 verified 项选择另行执行的 `export`，导出仍重新核验，不把先前检查结果当读取许可。
+
+仅无内容问题的报告返回 0；已初始化空盘明确输出 `state:no_published_content`，不声称恢复了文件。缺失或损坏输出 `state:content_issues` 并返回 1。元数据、身份、pin、文件系统安全、I/O 或预算错误不输出成功/部分健康 JSON，保留完整错误链并返回 1。输出本身失败也失败。原 `inspect` 保持原行为，不能用其退出码代替本命令的完整内容检查结果。
+
+报告的 scope 为 `local-retained-published-content`，绑定捕获的本盘 checkpoint/sequence；它不是全盘未知文件/孤儿扫描、未发布操作清单、最新全局状态、三范围数据库一致性或完整系统恢复证明。检查仍受独立格式的对象、深度与 16 MiB 材料读取预算约束；元数据只捕获一次供本轮正文检查使用，逐份正文读完即释放，不为每个版本重新遍历整条证明链。打开选择本身仍执行原有 pin 准入，失败不产生检查报告。
+
+救援专用的检查流程、逐项诊断、输出及退出策略位于 `helper/src/authority/check.rs`；通用协议解析、身份约束与可验证正文读取复用 Engine 的只读 `ContentSnapshot`，既有单版本导出也使用同一读取路径。构建依赖 ZXS 代码，运行不需要启动 ZXS 服务或管理面。此组织不表示完整自含依赖包，也不为已存在的普通池协议增加旧格式双读。
+
+## 未激活部署配置包
+
+`deployment preview` / `deployment prepare` 与独立 Web 现有源码可准备匹配版本的 systemd/Samba 配置，精确摘要确认后仅发布到 `/zxs` 下独立新目录，不覆盖现用配置、不执行系统命令、不启动或启用服务。部署包不是已初始化交接。源码未构建或运行，实际激活仍缺全生命周期停服互斥与完整初始化证明。见[配置准备边界](../design/helper-deployment-preparation.md)。
+
+## 当前 daemon 生命周期互斥与根准备
+
+新增 `host preview` / `host prepare` 和同名 Web 页面，只原子准备缺失的固定 root 所有 `/zxs`。当前 daemon 与打开 Engine 的 helper CLI 使用同一 OS 目录租约，daemon 持有到 Tokio 阻塞池结束。源码未构建/运行，不包含旧二进制、Samba/passdb 或任意第三方写者，完整首次初始化与凭据重置仍未实现。见[准确范围](../design/helper-service-exclusion.md)。
+
+## 服务私有布局前置
+
+`initialization layout-preview/layout-prepare` 及 Web 对应卡片可按准确本机非 root 服务账户，原子准备空 `/zxs/data/{state,management,disks}`。使用当前 daemon 同一生命周期租约，固定目的地、精确摘要确认，只交接新空树所有权，不递归 chown 现用数据。没有创建管理员/数据库/磁盘，仍不是完整首次初始化。源码未构建或运行。见[私有布局边界](../design/helper-private-data-layout.md)。
+
+## 固定 systemd / Samba 文件安装
+
+`deployment install-preview/install-files` 和独立 Web 可核对实际本机服务账户、主组、独立 Samba UID 与已安装准确程序，确认后先持久化原意图，再新建或核验固定 `/etc/systemd/system/zxs.service` 和可选 `/etc/samba/zxs.conf`。不覆盖不同配置，不改默认 smb.conf，不加载/启动/启用服务，不创建密码/账户或系统就绪标记。跨目录失败可能已安装部分文件，保留原请求与证据，只按原请求重试。源码未构建/运行/审查/CI，仍不是完整首次初始化或一条龙安装。见[安装与恢复边界](../design/helper-configuration-file-installation.md)。
+
+## 已存在管理员密码重置
+
+独立 Web 新增精确预览/确认后的固定系统管理员密码重置，持有当前 daemon 生命周期租约与管理凭据锁，验证真实服务身份和原管理权威，原子发布前先保留受保护的原操作。用户手动输入新密码，撤销全部 ZXS 会话；同一原请求可通过重新输入同一新密码核对或续作，绝不以失败响应推断未改密。没有创建管理员/磁盘，没有 Samba passdb 改密或灾备副本同步，没有服务启动。源码未编译/测试/审查/CI，详见[准确边界](../design/helper-administrator-password-reset.md)。
+
+## 首次管理账户阶段
+
+独立 Web 在准确新空私有布局中可显式创建首个 ZXS 管理员，并以原摘要/同一初始密码恢复中断操作。共用当前管理意图、凭据与权威 marker 格式，保留真实 setup/auth/主服务生命周期锁、服务文件所有权和无覆盖发布。状态仅是 ManagementReady，无首批磁盘、数据库或完整系统就绪；不创建 Unix/Samba 账户，不启动服务。源码未编译/测试/审查/CI，见[首次管理账户边界](../design/helper-first-management-administrator.md)。
+
+## 首批空目录存储初始化
+
+独立 Web 可在已完成管理账户后，预览并明确初始化 `/zxs/data/disks` 下全部已存在的空直接子目录。root 编排通过内嵌同版 ZXS 的非 root 服务身份工作进程使用现有 activation/Engine 协议，完成前发布凭据灾备快照并核系统及逐盘 current/history SQLite。它不挂载、格式化、创建 Unix 账户或启动服务，不接纳外来盘；完整安装就绪与正常运行最终门禁仍未完成。原计划、生命周期交接、部分失败及未运行验证见[首批存储](../design/helper-first-storage-batch.md)。
+
+## 独立 Web 的本地 Samba 密码重置
+
+手工 root 控制台新增受支持的既有本地 tdbsam 改密，准确匹配安装配置与账户，密码只经 stdin 送给已核验的固定 `smbpasswd`。它不是 `restore-system` 或管理员改密，不创建账户，不启用服务，结果不明只查询原记录、不自动重放。源码未编译/测试/审查/CI，见[支持范围和恢复限制](../design/helper-samba-password-reset.md)。
+
+## 已有池的空目录 Add 纵切
+
+独立 Web 可预览、明确添加并初始化当前 production 池的准确空目录批次，或核对/继续原意图。root 计划与服务 UID worker 位于 ZXS 无监听协调器，由 helper 经准确内嵌程序请求；现有服务和工具共用原生 Add 控制记录、archive/joint/activation 及永久回执。只接受固定布局中完整原根集合和本批新空根，不格式化、不接纳外来盘、不提供计划下线；移除、外来完整链接纳及完整就绪仍未完成。源码未编译/测试/审查/CI，无真实系统操作，见[范围与失败语义](../design/helper-active-disk-addition.md)。
+
+## 非最终元数据成员的注销
+
+本片新增独立 Web 的真实登记读取、准确 Deregister 预览/确认和原操作查询/续作，服务与 helper 共用原生持久阶段、D3 与永久回执。不擦盘、不卸载，也不保证剩余池保有全部访问，要求明确承认当前视图影响。成功后不为查结果重新探测退役盘。最后一个元数据成员、外来完整链接纳及完整就绪仍缺；原安全出口保留。源码未编译/测试/审查/CI，无真实系统操作，见[准确边界](../design/helper-active-disk-deregistration.md)。
+
+## 最后元数据成员的终态注销
+
+独立 Web 的既有注销入口增加最后元数据成员路径，必须单独确认结束活动存储。服务 UID worker 在打开 Engine 前选择受保护的 terminal authority，以独占原生 owner 完成实际 I/O 关闭和原终态发布；冷态按同一原计划核对永久回执，不重新探测退役根，不制造零成员可写池。终态内剩余登记仍可展示，但新的后继注销、metadata resume 和外来完整链接纳未完成。源码未编译/测试/审查/CI，无实际系统操作，见[完整边界](../design/helper-terminal-disk-deregistration.md)。
+
+## 终态剩余登记检查前置
+
+独立 Web 可对终态剩余登记读取准确 authority/registry/绑定边界及直接依赖，下载明确不可执行的诊断报告。没有新 operation 或意图，`executable:false`；该诊断报告本身仍不可执行；另有下述受限首笔 successor 写入口。该检查不探测目标，不是完整内容/健康或外来接纳证明，已决定原操作的打开恢复仍可能同步。源码未审查/编译/测试/CI，见[边界](../design/helper-terminal-removal-inspection.md)。
+
+## 终态原生未完成决定
+
+核心增加 SYSTEM-only 的精确剩余登记选择/原请求恢复，最初切片只保存未完成选择；下述后继已为符合条件的首笔决定补齐 registry/Stop/D3 与 helper 确认，但仍无取消能力。既有 helper 检查可以显示其真实原 ID/摘要/阶段，仍不可执行。Server/Web 明确报告 recovery_required，metadata resume 被围栏；不是剩余成员已移除。源码未审查/编译/测试/CI，见[决定存储](../design/terminal-retirement-decision-storage.md)。
+
+## 首笔终态登记后继
+
+独立 Web 单独提供终态原生预览、明确确认、原计划查询/续作，覆盖已记录且尚未 Stop 的绑定在原终态权威下的第一笔移除。SYSTEM 原选择、精确 registry successor、Stop 计划、进程 I/O 排除及永久回执缺一不可；不从 root 计划或缓存状态推断完成。服务仍关闭，不读取退役盘路径，不擦除字节。第二笔、已 Stop/Disabled 生命周期、metadata resume、新活动命名空间和外来正式接纳均拒绝；页面须单独确认这一限制。源码未审查/编译/测试/CI，见[生产边界与恢复](../design/terminal-retirement-successor.md)。
+
+## 终态逐笔移除与原结果
+
+首笔入口现可在上一笔确实完成后重新读取剩余登记，逐笔预览/确认；中断时只继续该根计划的原操作。既有 Stop 的 Disabled 绑定可在核心核对原权威与 epoch 后移除，不把 Disabled 状态本身当证明。父链原完成、子链原未决可同时展示，历史任一原摘要都核准确永久结果。仍不支持 metadata resume/活动存储恢复、取消、外来正式接纳或完整就绪；缺根/证明、坏前驱或孤立目录均拒绝并保留。源码未验证，见[逐笔链](../design/terminal-retirement-chain.md)。
+
+## 终态原结果的命名空间证明
+
+原独立 Web 的逐笔移除/续作现由核心强制核完整 mask 和准确 Detached successor，原永久结果显示 mask hash 与 namespace_projection_verified。预览只告知这一必需条件，不是准备完成；所有 metadata/活动存储恢复标志仍 false。无新登录、自启或实际系统操作，无编译/测试/审查/CI，见[边界](../design/terminal-retirement-namespace-closure.md)。
+
+
+## 保留终态元数据目录的重新接纳
+
+独立 Web 新增原 terminal authority 下仍登记 Disabled 元数据目录的预览、明确新 epoch 确认及原操作查询/续作。helper 专用 root 计划/降权 worker/页面留在 helper，共用 native 记录、resume selector 与实际 Publication/永久回执；不启动服务，不称全池健康或安装就绪。任何已开始终态逐笔移除链、Detached/外来/替换根或缺证明均拒绝，不新增计划下线。未审查/编译/测试/CI，无真实系统操作，见[可执行范围与限制](../design/helper-terminal-retained-readmission.md)。
+
+
+## 完整终态移除链检查点下载
+
+独立 Web 可在所有逐笔移除均已完成时，通过服务 UID worker 导出准确的完整选择/Stop 快照/registry-mask 图/永久回执检查点，并显示必须另存的可信摘要。未决不导出旧前缀，损坏不补空；原完整控制归档须另外保留。它不支持整链 readmission/外来正式接纳，不转移 live I/O 排除，不启动服务。源码未审查/编译/测试/CI，见[捕获、相对来源核验及容量边界](../design/terminal-retirement-portable-checkpoint.md)。
+
+### 完整终态链后的恢复提案
+
+[原生整链恢复提案](../design/terminal-chain-readmission-proposal.md)将完整 checkpoint 验证类型接到单一原 Disabled metadata 的 registry/namespace 准备，并提供独立 Web 下载。它不保留 operation、不打开目标、没有投票或活动发布能力；正式整链 readmission 与外来完整链接纳仍拒绝。原无移除链 retained readmission 路径保持。此片未编译、测试或 CI。
+
+
+### 整链原目标决定准备
+
+[原目标决定准备](../design/terminal-chain-target-decision.md)在独立确认后保留原 SYSTEM 请求，核原 Stop/物理目录/锁，安装完整控制归档并写目标真实不可覆盖 native choice。查询只读原来源证书，显式续作才再探目标。它没有活动 writer/首笔 Publication/Current/locator，不完成 readmission 或 H03；无取消换盘，失败保留证据。此片未编译、测试、CI 或实际操作系统。
+
+### 完整终态链首笔原生输入
+
+已有原目标实际决定之后，独立控制台提供明确确认的 `POST /api/disks/terminal-chain-first-prepare`，持原请求在 SYSTEM/原目标分别保存并重验完整 core、State、registry、history 和 Candidate。见[原生输入与冷恢复边界](../design/terminal-chain-first-native-inputs.md)。不是实际 Publication 或活动 writer，不启动服务、不放开 H03；预期 Published 结果只存在隔离快照。SOURCE 查询仍不探目标，完成后材料缺损拒绝自动补造。本片未审查/编译/测试/CI、未操作实际系统。
+
+### 完整终态链真实首笔发布
+
+已有两根完整首笔输入之后，独立 `POST /api/disks/terminal-chain-first-publish` 按原请求执行实际 ACCEPT/FINALIZE/Publication 三帧、原生 seal 与双根证据，见[真实首槽与恢复边界](../design/terminal-chain-first-publication.md)。有单独不可撤销发布确认；不消费 Stop、不启用活动 Current/writer、不启动服务、不完成 H03。已完成证据丢失拒绝重建，source-only 状态不探目标。本片未审查/编译/测试/CI，无实际系统操作。
+
+### 终态链已发布冻结 Current 检查
+
+`POST /api/disks/terminal-chain-current` 从原首槽 Publication、完整 checkpoint 和实际原目标日志构造真正 `CurrentNamespaces` 只读消费者，返回经过继承 mask 投影的分支/条目统计。它不修复缺损对象或尾部，不消费 Stop/新 epoch，不安装活动 Engine Current、writer 或启动服务；helper 仍返回 `completed_readmission:false`。网络无认证 root、原 Origin/CSRF/Host、停服和 lifetime owner 边界不变。源码和未运行回归说明见[终态链冻结 Current](../design/terminal-chain-published-current.md)。
+
+### 终态链新 epoch / Stop 后继计划
+
+`POST /api/disks/terminal-chain-activation-plan` 在真实首槽与完整冻结 Current 后，绑定原实际目录、Stop、前次 epoch 和 Publication，保存唯一未来 epoch 及 bootstrap 后继计划。此阶段**不更新活动 locator/head、不消费 Stop、不启用 writer**，仍没有完成 readmission/H03。source-only 查询只显示历史计划，不冒充本次目标核验。单独确认、停服/host owner/Origin/CSRF 与风险提示保留，详见[原生后继计划](../design/terminal-chain-activation-plan.md)。未审查/编译/测试/CI，未操作实际系统。
+
+### 终态链原目标真实 epoch 决定
+
+`POST /api/disks/terminal-chain-io-decide` 在原精确计划后，重新核验实际 Publication/冻结 Current 与原物理根，在原盘作出独立 `TerminalChainIoAdmission` 原生不可覆盖决定，双端保留原计划及决定并提供同原请求显式续作。它不是只存草稿，但仍**不消费 Stop、不更新 locator、不启用活动 writer 或完成 readmission/H03**。必须单独确认不可撤销及失败可能已决定；来源查询不冒充目标 fresh。详见[真实 epoch 决定](../design/terminal-chain-io-decision.md)。未审查/编译/测试/CI，未操作实际系统。
+
+### 终态链 generation 日志和安装后冻结 Current
+
+`POST /api/disks/terminal-chain-generation-log` 在原目标真实 epoch choice 后，独立保存实际三帧到准确 generation 地址，安装普通不可变对象并从这些实际字节重读冻结 Current。原操作支持目标完成/SYSTEM 未完成的显式续作，完成后缺件不自动补造。**未更换活动代际指针、数据库或 seal，未消费 Stop/启 writer/完成 readmission/H03**。见[安装路径与恢复边界](../design/terminal-chain-generation-log.md)。未审查/编译/测试/CI、无实际系统操作。
+
+### 终态链准确 generation 冷选择与独立读回
+
+`POST /api/disks/terminal-chain-generation-select` 为原请求保存 SYSTEM 选择/完成与原目标 `chain-authority.json`，绑定已完成实际 epoch 决定、完整 generation 日志和普通对象。独立 `terminal-chain-generation-read` 只验读，不补造；返回从安装后对象重建的冻结 Current 统计，来源查询仍不探目标且不返回本次 Current。持有读者遇到普通对象丢失也不能回退隔离材料。**不是通用活动 authority，不更改 locator、Stop、seal 或数据库，不启 writer/服务、不完成 readmission/H03**。见[精确恢复与未完边界](../design/terminal-chain-generation-selector.md)。未审查/编译/测试/CI，无真实系统操作。
+
+### 对象内部数据库救援文件
+
+`object-database inspect/export/rebuild` 现在对应实际文件/目录内部SQLite读取、完整救援归档和独立镜像重建。重建只读归档与显式scope，不依赖原SYSTEM/原盘；输出限定新 `.object-db.json` / `.recovered.sqlite`，无覆盖且不使用活动数据库名。Inspect/Export持有当前服务生命周期租约并要求全部写者停止；Rebuild不接入服务。完整边界、格式、路径范围及未运行状态见 [对象库救援规范](../design/object-database-material-reconstruction.md)，这不是全盘/全系统恢复或自动接纳。
+
+### 盘根救援归档和独立数据库重建
+
+`disk-database-rescue export SELECTION OUTPUT.disk-db.json [--scope both|current|history]` 保存完整冻结材料；`disk-database-rescue rebuild ARCHIVE IDENTITY --source stored-current|history|current-from-history OUTPUT.recovered.sqlite` 在原 SYSTEM/原盘均不存在时也可重建一个独立 SQLite，并完整读回比较。来源必须明确，归档中的矛盾记录不能被输出选项隐藏；不凭 current 伪造缺失 history、不安装活动库。只生成新安全文件、拒绝覆盖和活动库名；export 需要停写及现有服务租约，纯归档 rebuild 不触原主机状态。未新增 Web 写入口。详见[范围、示例与未认证边界](../design/disk-database-rescue-reconstruction.md)。原九项中的 helper CLI 已定向验证，盘根 Engine libtest 尚未执行，组合验证范围见后节；未复跑 CI，无实际盘操作。
+
+### 救援数据库发表后/冷态只读核验
+
+对象和盘根 `rebuild` 现在在无覆盖发表后持有准确原 inode，对实际 SQLite 完整解码、对比原归档全部记录，并重核实际文件字节、属性、具名父目录及未知侧车。只有成功才报告 `file_readback_verified:true`，分别带归档/实际文件摘要和准确文件身份。已发表但核验失败会明确保留文件，不回滚或覆盖。新 `object-database verify` 与 `disk-database-rescue verify` 可在进程重启后只读完成同类核验，盘根仍必须明确 `--source`；缺失或错误镜像不会被补造。详见[读回协议与保全边界](../design/rescue-database-readback.md)。它们均无活动安装或来源接纳能力；本次生产 helper check、22 项所选 Rust 回归通过；三项新增 Engine libtest 用例尚未执行，不能据此宣称盘根全套验证通过。未复跑 CI，无真实盘操作。
+
+外来链后继直接推进[共同决定与冷态联合 State](../design/helper-foreign-joint-protocol.md)，不增加图准备 UI；原根 enrollment、全链 FULL/目标三范围安装与实际活动切换仍缺，正式接入没有开放。该后继未编译测试，不将协议源码或旧 Node 检查当可用流程验收。

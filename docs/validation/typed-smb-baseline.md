@@ -107,5 +107,5 @@ p95 明显波动，保留全部轮次，不选择最漂亮的一轮或推导完�
 namespace 的整树 precondition 检查需要 typed 整树或专用准入接口，是另一项
 工作；本轮不宣称已删除这些 JSON/Entry 重新解析。
 
-上述两条内部整树往返已在后续 共享不可变 commit 快照
+上述两条内部整树往返已在后续 [共享不可变 commit 快照](typed-smb-snapshots.md)
 变更中移除；原先的 path lookup 不承担 entry_id 查询语义。

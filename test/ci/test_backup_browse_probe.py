@@ -63,6 +63,11 @@ class BackupBrowseProbe(unittest.TestCase):
         self.assertIn('RepositoryName::parse("browser-fixtures")', fixture)
         self.assertIn('"P01",\n        3,', fixture)
         self.assertIn('fixture current bytes did not survive reopen', fixture)
+        # The fixture's global current-content read is deliberately separate
+        # from the new browser's read-only listing/history observation.
+        document = (ROOT / "docs/validation/backup-root-navigation-20261106.md").read_text()
+        self.assertIn('不证明 C01 本盘正文可读', document)
+        self.assertIn('递归路径 writer', document)
 
     def test_exact_host_wrapper_is_wired_into_the_real_runner_target(self):
         runner = (PROBE / "runner/backup_browse.rs").read_text()
