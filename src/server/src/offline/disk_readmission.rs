@@ -1,13 +1,12 @@
 //! Offline root coordinator for the exact retained terminal metadata lane.
 //! Root plans never certify publication; native SYSTEM decisions own recovery.
+use crate::offline::coordinator::{self, digest as plan_digest};
 mod worker;
 use crate::offline::{
     Result,
     managed_layout::{self as layout, Layout},
-    private_io::BundleDestination,
 };
 use data_serialization::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::Path;
 use storage_engine::{
     OperationId,
@@ -65,12 +64,7 @@ pub(crate) struct Preview {
     service_started: bool,
     complete_installation_ready: bool,
 }
-#[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct WorkerRequest {
-    context: layout::Context,
-    action: Action,
-}
+type WorkerRequest = crate::offline::service_worker::Envelope<Action>;
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
@@ -91,64 +85,41 @@ enum Output {
     Original { status: Option<ReadmissionStatus> },
     Status { status: ReadmissionStatus },
 }
-impl crate::offline::service_worker::Request for WorkerRequest {
+impl crate::offline::service_worker::Action for Action {
     type Output = Output;
     const COMMAND: &'static str = "internal-readmission-worker";
-    fn account(&self) -> &crate::offline::account::Snapshot {
-        &self.context.account
-    }
-    fn execute(self) -> Result<Output> {
-        worker::execute(self)
+    fn execute(request: WorkerRequest) -> Result<Output> {
+        worker::execute(request)
     }
 }
 pub(crate) fn worker_entry() -> Result<()> {
     crate::offline::service_worker::entry::<WorkerRequest>()
 }
-struct Root {
-    host: BundleDestination,
-    layout: Layout,
-    context: layout::Context,
-}
-impl Root {
-    fn open(user: String) -> Result<Self> {
-        if rustix::process::geteuid().as_raw() != 0 {
-            return Err("retained readmission requires the manually run root helper".into());
-        }
-        let host = BundleDestination::open(Path::new("/zxs"))?;
-        let layout = Layout::open(user)?;
-        let context = layout.context(host.identity());
-        Ok(Self {
-            host,
-            layout,
-            context,
-        })
+type Root = coordinator::Root<Plan>;
+impl coordinator::Plan for Plan {
+    const ROOT_REQUIRED: &'static str =
+        "retained readmission requires the manually run root helper";
+    const CONTEXT_CHANGED: &'static str =
+        "readmission host/account/layout changed; no replacement is selected";
+    const PENDING: &'static str = "readmission may be pending or published; retain and query the original operation/digest before retrying, without changing the target or clearing evidence";
+    fn context(&self) -> &layout::Context {
+        &self.context
     }
-    fn check(&self, plan: &Plan) -> Result<()> {
-        self.host.recheck()?;
-        self.layout.recheck()?;
-        if self.context != plan.context {
-            return Err(
-                "readmission host/account/layout changed; no replacement is selected".into(),
-            );
-        }
-        supported(&plan.readmission)?;
-        // Syntax-only. Original result lookup does not probe the target here.
-        layout::names(std::slice::from_ref(&plan.readmission.target.root_path)).map(|_| ())
-    }
-    fn load(&self, digest: &str) -> Result<Plan> {
-        request_digest(digest)?;
-        let bytes = self
-            .host
-            .read_operation(&record_name(digest), "plan.json", MAX_RECORD_BYTES)?
-            .ok_or("original retained readmission plan is missing; preserve native evidence")?;
-        let plan: Plan = json_codec::from_slice(&bytes)?;
-        if plan_digest(&plan)? != digest {
-            return Err("retained readmission digest differs".into());
-        }
-        self.check(&plan)?;
-        Ok(plan)
+    fn check_storage(&self, _layout: &layout::Layout) -> Result<()> {
+        supported(&self.readmission)?;
+        // Syntax-only: original result lookup does not probe the target.
+        layout::names(std::slice::from_ref(&self.readmission.target.root_path)).map(|_| ())
     }
 }
+impl coordinator::RetainedPlan for Plan {
+    const RECORD_PREFIX: &'static str = ".zxs-helper-terminal-readmission-";
+    const DIGEST_REQUIRED: &'static str =
+        "the exact lowercase original readmission digest is required";
+    const MISSING: &'static str =
+        "original retained readmission plan is missing; preserve native evidence";
+    const DIGEST_CHANGED: &'static str = "retained readmission digest differs";
+}
+
 fn supported(preview: &ReadmissionPreview) -> Result<()> {
     if !preview.authority.is_terminal() || !preview.metadata_member {
         return Err(
@@ -165,22 +136,10 @@ fn stopped(value: bool) -> Result<()> {
     Ok(())
 }
 fn request_digest(value: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err("the exact lowercase original readmission digest is required".into());
-    }
-    Ok(())
+    coordinator::request_digest::<Plan>(value)
 }
 fn record_name(digest: &str) -> String {
     format!(".zxs-helper-terminal-readmission-{digest}")
-}
-fn plan_digest(plan: &Plan) -> Result<String> {
-    Ok(platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(
-        plan,
-    )?)))
 }
 fn response(plan: Plan, status: Option<ReadmissionStatus>) -> Result<Preview> {
     Ok(Preview {
@@ -198,8 +157,7 @@ fn response(plan: Plan, status: Option<ReadmissionStatus>) -> Result<Preview> {
 pub(crate) fn preview(input: Input) -> Result<Preview> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::Preview { plan } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::Preview {
@@ -220,9 +178,8 @@ pub(crate) fn original(input: Original) -> Result<Preview> {
     stopped(input.external_writers_stopped)?;
     request_digest(&input.request_digest)?;
     let root = Root::open(input.service_user.clone())?;
-    let plan = root.load(&input.request_digest)?;
-    let context = root.context.clone();
-    drop(root);
+    let plan = root.retained(&input.request_digest)?;
+    let context = root.into_context();
     let Output::Original { status } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::Original { plan: plan.clone() },
@@ -262,7 +219,7 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
         &[("plan.json", &bytes)],
     )?;
     drop(root);
-    finish(input, request).map_err(|source| Box::new(Pending { source }) as _)
+    finish(input, request).map_err(coordinator::pending::<Plan>)
 }
 fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     let Output::Status { status } = crate::offline::service_worker::run(request)? else {
@@ -279,24 +236,6 @@ fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     }))
 }
 
-#[derive(Debug)]
-struct Pending {
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
-impl std::fmt::Display for Pending {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "readmission may be pending or published; retain and query the original operation/digest before retrying, without changing the target or clearing evidence: {}",
-            self.source
-        )
-    }
-}
-impl std::error::Error for Pending {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
 #[cfg(test)]
 #[path = "../../../../test/server/unit/offline/disk_readmission_tests.rs"]
 mod tests;

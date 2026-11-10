@@ -88,8 +88,7 @@ fn response(plan: Plan, original_result: Option<OperationResult>) -> Result<Prev
 pub(crate) fn preview(input: Input) -> Result<Preview> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::TerminalPreview { plan } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::TerminalPreview {
@@ -111,8 +110,7 @@ pub(crate) fn original(input: Original) -> Result<Preview> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
     let plan = load(&root, &input.request_digest)?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::TerminalResult { result } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::TerminalOriginal { plan: plan.clone() },

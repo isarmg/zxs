@@ -47,8 +47,7 @@ pub(crate) fn worker_entry() -> Result<()> {
 pub(crate) fn export(input: InventoryInput) -> Result<Export> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let archive = crate::offline::service_worker::run(Request {
         context: context.clone(),
     })?;

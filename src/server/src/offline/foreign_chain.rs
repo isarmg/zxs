@@ -1,17 +1,13 @@
 //! One exact complete lower-chain material batch. It does not invoke Add,
 //! rewrite the source, install an active Config or grant membership authority.
+use crate::offline::coordinator::{self, digest};
 pub(crate) mod databases;
 pub(crate) mod identity;
 pub(crate) mod objects;
 mod worker;
-use crate::offline::{
-    Result,
-    managed_layout::{self as layout, Layout},
-    private_io::BundleDestination,
-};
+use crate::offline::{Result, managed_layout as layout};
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::Path};
 use storage_engine::DiskRegistrationIdentity;
 use storage_engine::{OperationId, storage_directories::CandidateSelection};
@@ -230,12 +226,7 @@ struct Completion {
     request_digest: String,
     report: Report,
 }
-#[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct WorkerRequest {
-    context: layout::Context,
-    action: Action,
-}
+type WorkerRequest = crate::offline::service_worker::Envelope<Action>;
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
@@ -279,51 +270,29 @@ enum Output {
     Identity { proposal: identity::Proposal },
     Objects { report: objects::Observation },
 }
-impl crate::offline::service_worker::Request for WorkerRequest {
+impl crate::offline::service_worker::Action for Action {
     type Output = Output;
     const COMMAND: &'static str = "internal-foreign-chain-worker";
-    fn account(&self) -> &crate::offline::account::Snapshot {
-        &self.context.account
-    }
-    fn execute(self) -> Result<Output> {
-        worker::execute(self)
+    fn execute(request: WorkerRequest) -> Result<Output> {
+        worker::execute(request)
     }
 }
 pub(crate) fn worker_entry() -> Result<()> {
     crate::offline::service_worker::entry::<WorkerRequest>()
 }
 
-struct Root {
-    host: BundleDestination,
-    layout: Layout,
-    context: layout::Context,
+type Root = coordinator::Root<Plan>;
+impl coordinator::Plan for Plan {
+    const ROOT_REQUIRED: &'static str =
+        "foreign-chain material preparation requires the manual root helper";
+    const CONTEXT_CHANGED: &'static str =
+        "original chain host/account/layout changed; no substitute was opened";
+    const PENDING: &'static str = "complete-chain material may be partly or fully prepared; retain its original operation/digest and all roots, never clear or replace them; foreign membership was not admitted";
+    fn context(&self) -> &layout::Context {
+        &self.binding.context
+    }
 }
 impl Root {
-    fn open(user: String) -> Result<Self> {
-        if rustix::process::geteuid().as_raw() != 0 {
-            return Err(
-                "foreign-chain material preparation requires the manual root helper".into(),
-            );
-        }
-        let host = BundleDestination::open(Path::new("/zxs"))?;
-        let layout = Layout::open(user)?;
-        let context = layout.context(host.identity());
-        Ok(Self {
-            host,
-            layout,
-            context,
-        })
-    }
-    fn check(&self, plan: &Plan) -> Result<()> {
-        self.host.recheck()?;
-        self.layout.recheck()?;
-        if self.context != plan.binding.context {
-            return Err(
-                "original chain host/account/layout changed; no substitute was opened".into(),
-            );
-        }
-        Ok(())
-    }
     fn load(&self, input: &Original) -> Result<Plan> {
         request_digest(&input.request_digest)?;
         let bytes = self
@@ -359,6 +328,7 @@ impl Root {
         Ok(Some(completion))
     }
 }
+
 fn operation_name(operation: OperationId) -> String {
     format!(".zxs-helper-foreign-chain-{operation}")
 }
@@ -371,11 +341,6 @@ fn stopped(value: bool) -> Result<()> {
 fn request_digest(value: &str) -> Result<()> {
     value.parse::<storage_engine::ForeignEvidenceDigest>()?;
     Ok(())
-}
-fn digest(value: &impl Serialize) -> Result<String> {
-    Ok(platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(
-        value,
-    )?)))
 }
 fn preview_result(
     plan: Plan,
@@ -399,8 +364,7 @@ pub(crate) fn preview(input: Input) -> Result<json_codec::Value> {
             .collect::<Vec<_>>(),
     )?;
     let root = Root::open(input.service_user.clone())?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::Preview { plan } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::Preview {
@@ -424,8 +388,7 @@ pub(crate) fn original(input: Original) -> Result<json_codec::Value> {
     let root = Root::open(input.service_user.clone())?;
     let plan = root.load(&input)?;
     let completion = root.completion(&plan)?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::Report { report } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::Status { plan: plan.clone() },
@@ -471,7 +434,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
         &[("plan.json", &bytes)],
     )?;
     drop(root);
-    finish(input, envelope, completion).map_err(|source| Box::new(Pending { source }) as _)
+    finish(input, envelope, completion).map_err(coordinator::pending::<Plan>)
 }
 fn finish(
     input: Prepare,
@@ -495,24 +458,6 @@ fn finish(
         &[("receipt.json", &json_codec::to_vec(&completion)?)],
     )?;
     preview_result(input.plan, Some(report), true)
-}
-#[derive(Debug)]
-struct Pending {
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
-impl std::fmt::Display for Pending {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "complete-chain material may be partly or fully prepared; retain its original operation/digest and all roots, never clear or replace them; foreign membership was not admitted: {}",
-            self.source
-        )
-    }
-}
-impl std::error::Error for Pending {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
 }
 #[cfg(test)]
 #[path = "../../../../test/server/unit/offline/foreign_chain_tests.rs"]

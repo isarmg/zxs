@@ -12,6 +12,7 @@ use storage_contract::offline_maintenance::{
 mod private_io {
     pub(crate) use platform_io::publication::BundleDestination;
 }
+mod coordinator;
 mod credentials;
 mod disk_addition;
 mod disk_readmission;
@@ -70,7 +71,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
     .enter_host()?;
     match command {
         Command::Maintenance(_) => entry(),
-        Command::StorageWorker(_) => initialization::storage::process::entry(),
+        Command::StorageWorker(_) => initialization::storage::worker_entry(),
         Command::AdditionWorker(_) => disk_addition::worker_entry(),
         Command::ForeignChainWorker(_) => foreign_chain::worker_entry(),
         Command::RemovalWorker(_) => disk_removal::worker_entry(),

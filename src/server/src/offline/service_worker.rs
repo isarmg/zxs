@@ -9,6 +9,29 @@ pub(crate) trait Request: Serialize + DeserializeOwned {
     fn account(&self) -> &crate::offline::account::Snapshot;
     fn execute(self) -> crate::offline::Result<Self::Output>;
 }
+/// The root's admitted context and a single domain action cross the same strict
+/// pipe boundary. Neither decoding nor this envelope opens a storage owner.
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct Envelope<A> {
+    pub context: super::managed_layout::Context,
+    pub action: A,
+}
+pub(crate) trait Action: Serialize + DeserializeOwned {
+    type Output: Serialize + DeserializeOwned;
+    const COMMAND: &'static str;
+    fn execute(request: Envelope<Self>) -> Result<Self::Output>;
+}
+impl<A: Action> Request for Envelope<A> {
+    type Output = A::Output;
+    const COMMAND: &'static str = A::COMMAND;
+    fn account(&self) -> &crate::offline::account::Snapshot {
+        &self.context.account
+    }
+    fn execute(self) -> Result<Self::Output> {
+        A::execute(self)
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 enum Reply<T> {

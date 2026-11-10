@@ -166,8 +166,7 @@ fn inspect(
 pub(crate) fn run(input: Input) -> Result<Inspection> {
     stopped(input.external_writers_stopped)?;
     let root = Root::open(input.service_user.clone())?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     let Output::TerminalInspection { inspection } =
         crate::offline::service_worker::run(WorkerRequest {
             context: context.clone(),

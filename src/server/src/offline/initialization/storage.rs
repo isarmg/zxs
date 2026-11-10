@@ -1,14 +1,12 @@
 //! Root-coordinated first storage batch. Domain genesis and recovery stay in
 //! SetupRecovery/Engine; all helper IPC, plans and Web orchestration live here.
+use crate::offline::coordinator::{self, digest};
 use crate::offline::managed_layout as layout;
 pub(crate) mod directories;
-pub(crate) mod process;
 mod worker;
-use crate::offline::{Result, private_io::BundleDestination};
+use crate::offline::Result;
 use data_serialization::{Deserialize, Serialize};
 use json_codec::json;
-use sha2::{Digest, Sha256};
-use std::path::Path;
 use storage_engine::storage_directories::CandidateSelection;
 use storage_server::auth::CredentialRevision;
 const MAX_RECORD_BYTES: usize = 64 * 1024;
@@ -69,12 +67,7 @@ pub(crate) struct Preview {
     starts_service: bool,
     complete_installation_ready: bool,
 }
-#[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct WorkerRequest {
-    context: layout::Context,
-    action: Action,
-}
+type WorkerRequest = crate::offline::service_worker::Envelope<Action>;
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
@@ -89,41 +82,30 @@ enum WorkerOutput {
     OriginalInspected,
     Initialized { report: worker::Materialized },
 }
-struct Root {
-    layout: layout::Layout,
-    context: layout::Context,
-    host: BundleDestination,
-}
-impl Root {
-    fn open(user: String) -> Result<Self> {
-        if rustix::process::geteuid().as_raw() != 0 {
-            return Err("first storage requires the manually run root helper".into());
-        }
-        let host = BundleDestination::open(Path::new("/zxs"))?;
-        let layout = layout::Layout::open(user)?;
-        let context = layout.context(host.identity());
-        Ok(Self {
-            layout,
-            context,
-            host,
-        })
-    }
-    fn check(&self, plan: &Plan) -> Result<()> {
-        self.host.recheck()?;
-        self.layout.recheck()?;
-        if self.context != plan.context {
-            return Err(
-                "first-storage layout/account/host no longer matches its original plan".into(),
-            );
-        }
-        self.layout.inventory(&plan.roots())
+impl crate::offline::service_worker::Action for Action {
+    type Output = WorkerOutput;
+    const COMMAND: &'static str = "internal-storage-worker";
+    fn execute(request: WorkerRequest) -> Result<Self::Output> {
+        worker::execute(request)
     }
 }
-fn digest(plan: &Plan) -> Result<String> {
-    Ok(platform_io::lower_hex(&Sha256::digest(json_codec::to_vec(
-        plan,
-    )?)))
+pub(crate) fn worker_entry() -> Result<()> {
+    crate::offline::service_worker::entry::<WorkerRequest>()
 }
+type Root = coordinator::Root<Plan>;
+impl coordinator::Plan for Plan {
+    const ROOT_REQUIRED: &'static str = "first storage requires the manually run root helper";
+    const CONTEXT_CHANGED: &'static str =
+        "first-storage layout/account/host no longer matches its original plan";
+    const PENDING: &'static str = "first-storage batch may be partly or fully published; retain its original saved plan and request digest, retry only that operation; no disk cleanup, rollback, service start or complete installation readiness is claimed";
+    fn context(&self) -> &layout::Context {
+        &self.context
+    }
+    fn check_storage(&self, layout: &layout::Layout) -> Result<()> {
+        layout.inventory(&self.roots())
+    }
+}
+
 fn request(value: &str) -> Result<()> {
     if value.len() != 64
         || !value
@@ -148,9 +130,8 @@ fn preview_response(plan: Plan, request_digest: String, recovery: bool) -> Previ
 pub(crate) fn preview(input: Input) -> Result<Preview> {
     let root = Root::open(input.service_user.clone())?;
     root.layout.inventory(&input.roots)?;
-    let context = root.context.clone();
-    drop(root); // Worker acquires its own lease and revalidates the exact context.
-    let WorkerOutput::Preview { plan } = process::run(WorkerRequest {
+    let context = root.into_context(); // Worker acquires its own lease and revalidates the exact context.
+    let WorkerOutput::Preview { plan } = crate::offline::service_worker::run(WorkerRequest {
         context,
         action: Action::Preview { roots: input.roots },
     })?
@@ -186,10 +167,9 @@ pub(crate) fn recover_preview(input: Original) -> Result<Preview> {
         return Err("retained first-storage plan digest differs".into());
     }
     root.check(&plan)?;
-    let context = root.context.clone();
-    drop(root);
+    let context = root.into_context();
     if !matches!(
-        process::run(WorkerRequest {
+        crate::offline::service_worker::run(WorkerRequest {
             context,
             action: Action::InspectOriginal { plan: plan.clone() }
         })?,
@@ -223,18 +203,17 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
         &format!(".zxs-helper-first-storage-{}", input.input.request_digest),
         &[("plan.json", bytes.as_slice())],
     )?;
-    let context = root.context.clone();
-    drop(root);
-    finish(input, context)
-        .map_err(|source| Box::new(Pending { source }) as Box<dyn std::error::Error + Send + Sync>)
+    let context = root.into_context();
+    finish(input, context).map_err(coordinator::pending::<Plan>)
 }
 fn finish(input: Commit, context: layout::Context) -> Result<json_codec::Value> {
-    let WorkerOutput::Initialized { report } = process::run(WorkerRequest {
-        context,
-        action: Action::Execute {
-            plan: input.plan.clone(),
-        },
-    })?
+    let WorkerOutput::Initialized { report } =
+        crate::offline::service_worker::run(WorkerRequest {
+            context,
+            action: Action::Execute {
+                plan: input.plan.clone(),
+            },
+        })?
     else {
         return Err("unexpected first-storage execution reply".into());
     };
@@ -256,24 +235,6 @@ fn finish(input: Commit, context: layout::Context) -> Result<json_codec::Value> 
     )?;
     root.check(&input.plan)?;
     Ok(receipt)
-}
-#[derive(Debug)]
-struct Pending {
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
-impl std::fmt::Display for Pending {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "first-storage batch may be partly or fully published; retain its original saved plan and request digest, retry only that operation; no disk cleanup, rollback, service start or complete installation readiness is claimed: {}",
-            self.source
-        )
-    }
-}
-impl std::error::Error for Pending {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
 }
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/offline/initialization/storage_tests.rs"]
