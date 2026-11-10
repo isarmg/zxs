@@ -1,5 +1,5 @@
-//! Physical integrity after a bounded closed-schema SQLite image is decoded.
-//! Callers own a dedicated read-only memory connection with no progress handler.
+//! Physical integrity of a bounded, closed-schema SQLite snapshot.
+//! Callers exclusively own its connection and have no installed progress handler.
 //! This checks indexes/pages, not source authority; no file or writer is opened.
 use crate::{Error, ErrorCode, Result};
 use sqlite_access::SqliteConnection;

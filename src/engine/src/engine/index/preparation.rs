@@ -5,11 +5,7 @@ use crate::history_package::{AdmittedState, preparation_checkpoint};
 use sqlite_access::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::sync::atomic::AtomicBool;
 
-mod readback;
-
-pub(super) fn verify_installed(bytes: &[u8], state: &State) -> Result<()> {
-    readback::verify(bytes, state, &|| Ok(()))
-}
+pub(super) mod readback;
 
 pub(in crate::engine) const MAX_BYTES: usize = 64 * 1024 * 1024;
 

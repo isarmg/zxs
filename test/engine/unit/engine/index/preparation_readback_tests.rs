@@ -1,4 +1,4 @@
-//! Source-only preparation-image regressions; no live index recovery authority.
+//! Complete preparation-image and live-WAL projection readback regressions.
 use super::*;
 use sqlite_access::{Execute, Sqlite, sqlite::SqliteOwnedBuf};
 use std::cell::Cell;
@@ -260,4 +260,94 @@ fn preparation_readback_reports_cancellation_without_a_partial_success() {
     .unwrap_err();
     assert_eq!(error.code(), ErrorCode::OperationAborted);
     assert_eq!(checks.get(), 3);
+}
+
+fn live_writer(path: &Path, state: &State) -> IndexConnection {
+    let mut writer = IndexConnection::open(path, true).unwrap();
+    writer
+        .project(None, state, &HistoryDelta::between(None, &state.versions))
+        .unwrap();
+    writer
+}
+
+#[test]
+fn move_readback_verifies_a_live_wal_projection_without_changing_its_mode() {
+    let (temp, engine, _) = fixture();
+    let path = temp.path().join("move-readback.sqlite");
+    let mut writer = live_writer(&path, engine.state());
+    let bytes = platform_io::sqlite::block_on_sqlite_connection(async {
+        writer
+            .connection
+            .as_mut()
+            .unwrap()
+            .serialize(None)
+            .await
+            .unwrap()
+    });
+    // This is the exact input that cannot be deserialized into :memory:.
+    assert_eq!(&bytes[18..20], &[2, 2]);
+    assert!(
+        std::fs::metadata(path.with_extension("sqlite-wal"))
+            .unwrap()
+            .len()
+            > 0
+    );
+    writer.check_identity(&path).unwrap();
+    writer.verify_move_projection(engine.state()).unwrap();
+    writer.check_identity(&path).unwrap();
+    let mode: String = platform_io::sqlite::block_on_sqlite_connection(async {
+        sqlite_access::query_scalar("PRAGMA journal_mode")
+            .fetch_one(writer.connection.as_mut().unwrap())
+            .await
+            .unwrap()
+    });
+    assert_eq!(mode, "wal");
+    writer.close().unwrap();
+}
+
+#[test]
+fn live_wal_move_readback_rejects_changed_rows_without_repairing_them() {
+    let (temp, engine, _) = fixture();
+    let mut writer = live_writer(&temp.path().join("move-readback.sqlite"), engine.state());
+    for sql in [
+        "DELETE FROM file_history_versions",
+        "UPDATE history_scope_members SET file_id='other' WHERE kind=0",
+        "UPDATE system_changes SET payload=replace(payload,'admin','other') WHERE kind=36",
+    ] {
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            writer
+                .connection
+                .as_mut()
+                .unwrap()
+                .execute(sql)
+                .await
+                .unwrap();
+        });
+        assert_eq!(
+            writer
+                .verify_move_projection(engine.state())
+                .unwrap_err()
+                .code(),
+            ErrorCode::ContainerLayoutInvalid
+        );
+        // A rejected observation must not rewrite the rows or keep its read
+        // transaction open. The same bad rows remain rejected until the owner
+        // explicitly projects the authoritative State again.
+        assert_eq!(
+            writer
+                .verify_move_projection(engine.state())
+                .unwrap_err()
+                .code(),
+            ErrorCode::ContainerLayoutInvalid
+        );
+        writer
+            .project(
+                None,
+                engine.state(),
+                &HistoryDelta::between(None, &engine.state().versions),
+            )
+            .unwrap();
+        writer.verify_move_projection(engine.state()).unwrap();
+    }
+    writer.close().unwrap();
 }

@@ -319,30 +319,41 @@ impl IndexConnection {
         Ok(())
     }
 
-    fn move_readback(&mut self) -> Result<Vec<u8>> {
+    fn verify_move_projection(&mut self, state: &State) -> Result<()> {
         let connection = self
             .connection
             .as_mut()
             .expect("invariant: installed index worker is open");
         platform_io::sqlite::block_on_sqlite_connection(async {
-            let pages: i64 = sqlite_access::query_scalar("PRAGMA page_count")
-                .fetch_one(&mut *connection)
-                .await?;
-            let size: i64 = sqlite_access::query_scalar("PRAGMA page_size")
-                .fetch_one(&mut *connection)
-                .await?;
-            if pages <= 0
-                || size <= 0
-                || pages
-                    .checked_mul(size)
-                    .is_none_or(|bytes| bytes > preparation::MAX_BYTES as i64)
-            {
-                return Err(Error::new(
-                    ErrorCode::ResourceLimit,
-                    "move SYSTEM readback exceeds 64 MiB",
-                ));
+            // A serialized WAL database cannot be deserialized as an isolated
+            // memory database. Read its committed projection in one snapshot.
+            let mut tx = connection.begin().await?;
+            let result = async {
+                let pages: i64 = sqlite_access::query_scalar("PRAGMA page_count")
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let size: i64 = sqlite_access::query_scalar("PRAGMA page_size")
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if pages <= 0
+                    || size <= 0
+                    || pages
+                        .checked_mul(size)
+                        .is_none_or(|bytes| bytes > preparation::MAX_BYTES as i64)
+                {
+                    return Err(Error::new(
+                        ErrorCode::ResourceLimit,
+                        "move SYSTEM readback exceeds 64 MiB",
+                    ));
+                }
+                preparation::readback::verify_connection(&mut tx, state, &|| Ok(())).await
             }
-            Ok(connection.serialize(None).await?.to_vec())
+            .await;
+            match (result, tx.rollback().await) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => Err(error.into()),
+                (Err(error), Err(rollback)) => Err(preserve_close_failure(error, rollback.into())),
+            }
         })
     }
 
@@ -668,8 +679,7 @@ impl Engine {
         };
         if strict {
             writer.check_identity(&path)?;
-            let bytes = writer.move_readback()?;
-            preparation::verify_installed(&bytes, state)?;
+            writer.verify_move_projection(state)?;
             writer.check_identity(&path)?;
         }
         proof.read_generation = Arc::new(());

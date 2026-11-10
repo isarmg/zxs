@@ -1,4 +1,4 @@
-//! Complete readback of a bounded preparation image, not of the live index.
+//! Complete readback shared by bounded images and the installed WAL connection.
 //! The caller's frozen State is the comparison source, not a new authority.
 use super::{CURRENT_STATE_TABLE, HISTORY_INDEX, HISTORY_TABLE, MAX_BYTES, scope, system_changes};
 use crate::{Error, ErrorCode, Result, State};
@@ -36,14 +36,7 @@ pub(super) fn verify(
                 .await
                 .map_err(|error| Error::from(std::io::Error::other(error)))?;
             connection.deserialize(None, database, true).await?;
-            schema(&mut connection).await?;
-            crate::sqlite_integrity::verify(&mut connection).await?;
-            checkpoint()?;
-            marker(&mut connection, state.sequence).await?;
-            versions(&mut connection, state, checkpoint).await?;
-            scope::verify_prepared(&mut connection, state, checkpoint).await?;
-            system_changes::verify_prepared(&mut connection, state, checkpoint).await?;
-            checkpoint()
+            verify_connection(&mut connection, state, checkpoint).await
         }
         .await;
         match (result, connection.close().await) {
@@ -56,6 +49,23 @@ pub(super) fn verify(
             }),
         }
     })
+}
+
+/// The caller owns the snapshot: an immutable decoded image or a read
+/// transaction on the installed writer. This does not change writer limits.
+pub(in crate::engine::index) async fn verify_connection(
+    connection: &mut SqliteConnection,
+    state: &State,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<()> {
+    schema(connection).await?;
+    crate::sqlite_integrity::verify(connection).await?;
+    checkpoint()?;
+    marker(connection, state.sequence).await?;
+    versions(connection, state, checkpoint).await?;
+    scope::verify_prepared(connection, state, checkpoint).await?;
+    system_changes::verify_prepared(connection, state, checkpoint).await?;
+    checkpoint()
 }
 
 async fn schema(connection: &mut SqliteConnection) -> Result<()> {
