@@ -68,8 +68,6 @@ impl CompletionBinding {
 
     pub(in crate::engine) fn sequence(&self) -> u64 { self.sequence }
 
-    pub(in crate::engine) fn operation(&self) -> OperationId { self.operation }
-
     pub(in crate::engine) fn candidate_hash(&self) -> &str { &self.candidate_hash }
 
     fn same(&self, other: &Self) -> Result<()> {

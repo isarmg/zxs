@@ -7,7 +7,7 @@ use storage_contract::directory_git::DirectoryGitRepository;
 use storage_contract::file_relocation::ObjectMoveRequest;
 mod projection;
 mod evidence;
-pub(crate) use evidence::{admit_ordinary_undo, admit_result, deletion_for, verify_publication};
+pub(crate) use evidence::{admit_ordinary_undo, admit_result, verify_publication};
 pub(crate) use projection::{plan, read_result, verify_transition, MovePlan, ResultBody};
 
 /// The caller and exact intent are parsed once at the request boundary. This
@@ -74,7 +74,6 @@ pub(crate) enum MoveTarget {
     Existing {
         repository: Repository,
         namespace: Vec<Entry>,
-        owner_directory_id: Option<String>,
         displaced: Option<Entry>,
         displaced_entries: Vec<Entry>,
     },
@@ -198,13 +197,12 @@ fn target_scope(state: &State, request: &ObjectMoveRequest, source: &Entry, curr
     }) {
         return Err(Error::new(ErrorCode::ParentNotDirectory, "move destination parent missing"));
     }
-    let owner_directory_id = tree.initialized_repository_id(parent_key.unwrap_or("")).map(str::to_owned);
     let displaced_entries = displaced.map(|root| {
         tree.visible_entries().filter(|entry| in_scope(entry, root)).cloned().collect()
     }).unwrap_or_default();
     let displaced = displaced.cloned();
     Ok(MoveTarget::Existing {
-        repository: repository.clone(), namespace, owner_directory_id, displaced, displaced_entries,
+        repository: repository.clone(), namespace, displaced, displaced_entries,
     })
 }
 

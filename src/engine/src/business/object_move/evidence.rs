@@ -51,12 +51,6 @@ pub(crate) fn admit_ordinary_undo(state:&State,receipt:&OperationResult,node:&Fi
     Ok(())
 }
 
-pub(crate) fn deletion_for(receipt:&OperationResult,file:&str)->Result<FileDeletionNode> {
-    let result=read_result(receipt)?;
-    result.source_deletions.into_iter().chain(result.displaced_deletions).chain(result.imported_deletions)
-        .find(|node|node.file_id==file).ok_or_else(invalid)
-}
-
 /// The deletion gate and Current gate replay this same planner. No independent
 /// move-specific lifecycle plan, fake per-file receipt or relaxed write set.
 pub(crate) fn verify_publication(previous:&State,next:&State,current:Option<&crate::engine::CurrentNamespaces>)->Result<bool> {
