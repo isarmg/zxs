@@ -101,10 +101,15 @@ impl Backend for LostCommitReply {
         command: crate::MoveCurrentObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         let (target_binding, target_disk_id, target_generation) = match &command.target {
-            crate::MoveObjectTarget::Repository { binding, disk_id, binding_generation } =>
-                (Some(binding), disk_id, binding_generation),
-            crate::MoveObjectTarget::EmptyDisk { disk_id, binding_generation } =>
-                (None, disk_id, binding_generation),
+            crate::MoveObjectTarget::Repository {
+                binding,
+                disk_id,
+                binding_generation,
+            } => (Some(binding), disk_id, binding_generation),
+            crate::MoveObjectTarget::EmptyDisk {
+                disk_id,
+                binding_generation,
+            } => (None, disk_id, binding_generation),
         };
         self.move_requests.lock().unwrap().push(json!({
             "source_repository_id": command.source_binding.repository_id,

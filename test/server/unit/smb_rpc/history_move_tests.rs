@@ -1,7 +1,7 @@
 //! Adapter/SMB admission regressions. Scripted replies are not publication proofs.
 use super::*;
-use storage_contract::{CommitState, CurrentHealth, ProtectionAtPublish, Repository};
 use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
+use storage_contract::{CommitState, CurrentHealth, ProtectionAtPublish, Repository};
 
 struct Roots {
     _fixture: Fixture,
@@ -103,7 +103,9 @@ fn scripted_result(
 ) -> storage_contract::OperationResult {
     let mut request = command(roots, operation);
     request.target_name = crate::MoveTargetName::parse(target_path).unwrap();
-    let movement = request.movement(&roots.target.primary_slot_id, None).unwrap();
+    let movement = request
+        .movement(&roots.target.primary_slot_id, None)
+        .unwrap();
     storage_contract::OperationResult {
         operation_id: operation,
         kind: OBJECT_MOVE_KIND.into(),
@@ -167,12 +169,24 @@ fn command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentFile {
 
 fn object_command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentObject {
     let request = command(roots, operation);
-    let movement = request.movement(&roots.target.primary_slot_id, None).unwrap();
-    let topology = roots.shared.backend.topology_snapshot(&identity(&roots.shared)).unwrap();
-    let source = topology.slots.iter()
-        .find(|slot| slot.slot_id == roots.source.primary_slot_id).unwrap();
-    let target = topology.slots.iter()
-        .find(|slot| slot.slot_id == roots.target.primary_slot_id).unwrap();
+    let movement = request
+        .movement(&roots.target.primary_slot_id, None)
+        .unwrap();
+    let topology = roots
+        .shared
+        .backend
+        .topology_snapshot(&identity(&roots.shared))
+        .unwrap();
+    let source = topology
+        .slots
+        .iter()
+        .find(|slot| slot.slot_id == roots.source.primary_slot_id)
+        .unwrap();
+    let target = topology
+        .slots
+        .iter()
+        .find(|slot| slot.slot_id == roots.target.primary_slot_id)
+        .unwrap();
     crate::MoveCurrentObject {
         source_binding: request.source_binding,
         source_slot_id: source.slot_id.clone(),
@@ -195,8 +209,12 @@ fn default_move_passes_both_pinned_bindings_and_cleans_only_confirmed_intent() {
     let roots = roots();
     let entry = original_entry(&roots);
     let operation = OperationId::generate().unwrap();
-    *roots.backend.move_result.lock().unwrap() =
-        Some(Ok(scripted_result(&roots, operation, CommitState::Published, "arrived.txt")));
+    *roots.backend.move_result.lock().unwrap() = Some(Ok(scripted_result(
+        &roots,
+        operation,
+        CommitState::Published,
+        "arrived.txt",
+    )));
     let (reply, descriptor) = share(&roots)
         .dispatch(request(operation, "b/arrived.txt", false))
         .unwrap();
@@ -235,8 +253,12 @@ fn nonpublished_move_retains_original_intent_and_blocks_namespace_replay() {
     let roots = roots();
     let entry = original_entry(&roots);
     let operation = OperationId::generate().unwrap();
-    *roots.backend.move_result.lock().unwrap() =
-        Some(Ok(scripted_result(&roots, operation, CommitState::Prepared, "arrived.txt")));
+    *roots.backend.move_result.lock().unwrap() = Some(Ok(scripted_result(
+        &roots,
+        operation,
+        CommitState::Prepared,
+        "arrived.txt",
+    )));
     let mut share = share(&roots);
     let failure = share
         .dispatch(request(operation, "b/arrived.txt", false))
@@ -348,8 +370,12 @@ fn default_move_forwards_parent_paths_and_does_not_invent_an_absent_replacement(
     for (target, replace) in [("b/arrived.txt", true), ("b/folder/arrived.txt", false)] {
         let operation = OperationId::generate().unwrap();
         let relative = target.strip_prefix("b/").unwrap();
-        *roots.backend.move_result.lock().unwrap() =
-            Some(Ok(scripted_result(&roots, operation, CommitState::Published, relative)));
+        *roots.backend.move_result.lock().unwrap() = Some(Ok(scripted_result(
+            &roots,
+            operation,
+            CommitState::Published,
+            relative,
+        )));
         share.dispatch(request(operation, target, replace)).unwrap();
         let calls = roots.backend.move_requests.lock().unwrap();
         let captured = calls.last().unwrap();
@@ -589,4 +615,3 @@ fn default_connection_cannot_adopt_reenabled_target_binding_generation() {
 
 #[path = "history_move_identity_tests.rs"]
 mod history_move_identity_tests;
-

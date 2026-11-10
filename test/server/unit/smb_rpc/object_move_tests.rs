@@ -50,7 +50,10 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
         )
         .unwrap()
         .unwrap();
-    assert_eq!(original.kind, storage_contract::NamespaceEntryKind::Directory);
+    assert_eq!(
+        original.kind,
+        storage_contract::NamespaceEntryKind::Directory
+    );
     let operation = OperationId::generate().unwrap();
     backend.fail.store(true, Ordering::SeqCst);
     let (reply, descriptor) = binding_tests::exchange(&mut stream, rename(operation));
@@ -73,11 +76,21 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     );
     assert_eq!(directory(&mut stream, "p"), vec!["renamed"]);
     let (reader, _file) = open(&mut stream, "p/renamed/note.txt", false, false);
-    assert_eq!(read_rpc(&mut stream, reader.handle, 0, 4096), b"saved child");
-    okay(&mut stream, Request::Close { handle: reader.handle });
+    assert_eq!(
+        read_rpc(&mut stream, reader.handle, 0, 4096),
+        b"saved child"
+    );
+    okay(
+        &mut stream,
+        Request::Close {
+            handle: reader.handle,
+        },
+    );
     close_wire(stream, worker);
 
-    let published = backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    let published = backend
+        .inner
+        .test_with_engine_locked(|engine| engine.state().clone());
     let original_receipt = published.operations.get(&operation).unwrap();
     assert_eq!(original_receipt.kind, OBJECT_MOVE_KIND);
     let fact: ObjectMoveFact =
@@ -93,7 +106,9 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     assert_eq!(reply["operation_kind"], OBJECT_MOVE_KIND);
     assert_eq!(reply["result"], original_receipt.result);
     assert!(!record.exists());
-    backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+    backend
+        .inner
+        .test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
     let calls = backend.move_requests.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0], calls[1]);
@@ -101,9 +116,15 @@ fn directory_rename_reconnect_reuses_the_captured_object_and_original_receipt() 
     assert_eq!(calls[0]["source_entry_id"], original.entry_id);
     assert_eq!(calls[0]["source_slot_id"], intent["source_slot_id"]);
     assert_eq!(calls[0]["source_disk_id"], intent["source_disk"]["disk_id"]);
-    assert_eq!(calls[0]["source_disk_generation"], intent["source_disk"]["binding_generation"]);
+    assert_eq!(
+        calls[0]["source_disk_generation"],
+        intent["source_disk"]["binding_generation"]
+    );
     assert_eq!(calls[0]["target_disk_id"], intent["target_disk"]["disk_id"]);
-    assert_eq!(calls[0]["target_disk_generation"], intent["target_disk"]["binding_generation"]);
+    assert_eq!(
+        calls[0]["target_disk_generation"],
+        intent["target_disk"]["binding_generation"]
+    );
     assert!(shared.file_writers.lock().unwrap().is_empty());
     drop(calls);
     close_wire(stream, worker);

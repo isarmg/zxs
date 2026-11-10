@@ -67,7 +67,10 @@ fn object_completion_cold_replay_preserves_the_selected_operation_and_serving_sc
             assert_eq!(receipt.kind, OBJECT_MOVE_KIND, "{fault}");
             assert_eq!(receipt.sequence, before.sequence + 1, "{fault}");
             assert_eq!(receipt.commit_state, CommitState::Published);
-            assert_eq!(receipt.protection_at_publish, ProtectionAtPublish::TargetMet);
+            assert_eq!(
+                receipt.protection_at_publish,
+                ProtectionAtPublish::TargetMet
+            );
             assert_eq!(receipt.current_health, CurrentHealth::Healthy);
             assert_eq!(engine.state().operations.len(), before.operations.len() + 1);
             assert_eq!(
@@ -142,4 +145,3 @@ fn object_completion_cold_replay_preserves_the_selected_operation_and_serving_sc
         backend.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published, "{fault}"));
     }
 }
-

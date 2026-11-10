@@ -26,7 +26,10 @@ fn reopen_backend(fixture: &Fixture) -> EngineBackend {
 fn retain_file_intent(
     roots: &Roots,
     operation: OperationId,
-) -> (storage_contract::State, storage_engine::FileHistoryMoveRecoveryInfo) {
+) -> (
+    storage_contract::State,
+    storage_engine::FileHistoryMoveRecoveryInfo,
+) {
     let file = HistoryFileId::parse(&original_entry(roots).file_id).unwrap();
     let cancellation = storage_contract::history_window::HistoryWindowCancellation::new();
     // Use the existing real retained-material APIs. Fresh public move methods
@@ -86,7 +89,11 @@ fn published_move_retry_does_not_capture_a_new_file_at_the_old_source_path() {
             .create_workspace(&roots.source.main_branch_id, "alice")
             .unwrap();
         engine
-            .stage_bytes(&workspace.workspace_id, "source.txt", b"new owner of this path")
+            .stage_bytes(
+                &workspace.workspace_id,
+                "source.txt",
+                b"new owner of this path",
+            )
             .unwrap();
         engine
             .commit_workspace(CommitRequest {
@@ -147,7 +154,10 @@ fn published_move_rejects_changed_original_source_entry_or_file_identity() {
             .inner
             .move_current_file(&identity(&roots.shared), changed)
             .unwrap_err();
-        assert_eq!(error.code, storage_contract::ErrorCode::IdempotencyKeyReused);
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::IdempotencyKeyReused
+        );
     }
     roots
         .backend
@@ -194,7 +204,10 @@ fn replacement_retry_keeps_both_original_target_identities_after_publication() {
             .inner
             .replace_current_file(&identity(&roots.shared), changed)
             .unwrap_err();
-        assert_eq!(error.code, storage_contract::ErrorCode::IdempotencyKeyReused);
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::IdempotencyKeyReused
+        );
     }
     roots
         .backend
@@ -222,11 +235,17 @@ fn retained_file_intent_retries_original_identity_without_a_second_operation() {
             .inner
             .move_current_file(&identity(&roots.shared), changed)
             .unwrap_err();
-        assert_eq!(error.code, storage_contract::ErrorCode::IdempotencyKeyReused);
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::IdempotencyKeyReused
+        );
         roots.backend.inner.test_with_engine_locked(|engine| {
             assert_eq!(engine.state(), &before);
             assert_eq!(
-                engine.inspect_file_history_move_recovery().unwrap().as_ref(),
+                engine
+                    .inspect_file_history_move_recovery()
+                    .unwrap()
+                    .as_ref(),
                 Some(&intent)
             );
         });
@@ -257,7 +276,12 @@ fn retained_file_intent_retries_original_identity_without_a_second_operation() {
                 .count(),
             1
         );
-        assert!(engine.inspect_file_history_move_recovery().unwrap().is_none());
+        assert!(
+            engine
+                .inspect_file_history_move_recovery()
+                .unwrap()
+                .is_none()
+        );
     });
     assert_eq!(intent.operation_id(), operation);
     assert!(lookup(&roots, &roots.source, "source.txt").is_none());
@@ -382,7 +406,10 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
     backend.test_with_engine_locked(|engine| {
         assert!(!engine.state().operations.contains_key(&operation));
         assert_eq!(
-            engine.inspect_file_history_move_recovery().unwrap().as_ref(),
+            engine
+                .inspect_file_history_move_recovery()
+                .unwrap()
+                .as_ref(),
             Some(&intent)
         );
     });
@@ -424,7 +451,12 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
                 .count(),
             1
         );
-        assert!(engine.inspect_file_history_move_recovery().unwrap().is_none());
+        assert!(
+            engine
+                .inspect_file_history_move_recovery()
+                .unwrap()
+                .is_none()
+        );
     });
 }
 
@@ -441,19 +473,48 @@ fn object_move_replay_rechecks_captured_disk_identity_and_generation() {
     let mut wrong_source = object_command(&roots, operation);
     wrong_source.source_disk_id = new_id("disk").unwrap();
     let mut wrong_target = object_command(&roots, operation);
-    let crate::MoveObjectTarget::Repository { binding_generation, .. } = &mut wrong_target.target
-        else { panic!("fixture target must already have a root"); };
+    let crate::MoveObjectTarget::Repository {
+        binding_generation, ..
+    } = &mut wrong_target.target
+    else {
+        panic!("fixture target must already have a root");
+    };
     *binding_generation += 1;
-    let receipt = roots.backend.inner.move_current_object(&actor, first).unwrap();
-    let published = roots.backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    let receipt = roots
+        .backend
+        .inner
+        .move_current_object(&actor, first)
+        .unwrap();
+    let published = roots
+        .backend
+        .inner
+        .test_with_engine_locked(|engine| engine.state().clone());
     assert!(lookup(&roots, &roots.source, "source.txt").is_none());
     for command in [wrong_source, wrong_target] {
         assert_eq!(
-            roots.backend.inner.move_current_object(&actor, command).unwrap_err().code,
+            roots
+                .backend
+                .inner
+                .move_current_object(&actor, command)
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::WorkspaceChanged
         );
-        roots.backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+        roots
+            .backend
+            .inner
+            .test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
     }
-    assert_eq!(roots.backend.inner.move_current_object(&actor, retry).unwrap(), receipt);
-    roots.backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
+    assert_eq!(
+        roots
+            .backend
+            .inner
+            .move_current_object(&actor, retry)
+            .unwrap(),
+        receipt
+    );
+    roots
+        .backend
+        .inner
+        .test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
 }
