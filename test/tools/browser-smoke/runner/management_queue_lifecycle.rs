@@ -28,7 +28,7 @@ pub(super) fn run(browser: &Browser, password: &str) -> Result<()> {
     browser.script(include_str!("management_queue_lifecycle.js"))?;
     with_cleanup(
         || {
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             check(
                 browser,
                 "real discovery held with a specific readmission request queued",
@@ -57,7 +57,7 @@ pub(super) fn run(browser: &Browser, password: &str) -> Result<()> {
             )?;
             browser.click(&browser.button("Sign in", "登录")?)?;
             browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?;
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             check(
                 browser,
                 "new-session management read waits behind the old active response",

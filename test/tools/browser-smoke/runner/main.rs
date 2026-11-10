@@ -23,6 +23,8 @@ mod base64_compatibility_tests;
 
 mod accessibility;
 mod admin_language;
+mod admin_navigation;
+use admin_navigation::AdminPage;
 mod auth_layout;
 mod backup_browse;
 mod contour_evidence;

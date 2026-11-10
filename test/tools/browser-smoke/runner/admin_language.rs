@@ -1,18 +1,10 @@
 //! Read-only administration labels and real language-toggle session restoration.
 use super::*;
 
-pub(super) const SECTION: &str =
-    "section[aria-label='Daily administration'], section[aria-label='日常管理']";
-
-const ACTIONS: [(&str, &str); 9] = [
+const ACTIONS: [(&str, &str); 4] = [
     ("Repository", "仓库"),
     ("Path copy rule", "路径副本规则"),
     ("Placement rule", "主盘规则"),
-    ("History branch", "历史分支"),
-    ("Merge link", "合并连线"),
-    ("Purge preview", "清理预览"),
-    ("Split preview", "拆分预览"),
-    ("Historical save preview", "历史保存预览"),
     ("Inspect / query", "检查 / 查询"),
 ];
 const QUERIES: [(&str, &str); 13] = [
@@ -46,21 +38,22 @@ fn locale(browser: &Browser) -> Result<String> {
         value => Err(format!("unexpected document locale: {value:?}").into()),
     }
 }
-fn visible_text(browser: &Browser, selector: &str) -> Result<Value> {
+fn visible_text(browser: &Browser, page: AdminPage, selector: &str) -> Result<Value> {
     browser.script(&format!(
         "const section=document.querySelector({}); return [...section.querySelectorAll({})].filter(e=>e.getClientRects().length).map(e=>e.textContent.trim());",
-        json!(SECTION), json!(selector),
+        json!(page.section()), json!(selector),
     ))
 }
 fn expect_labels(
     browser: &Browser,
+    page: AdminPage,
     selector: &str,
     expected: &[(&str, &str)],
     locale: &str,
 ) -> Result<()> {
     let expected = json!(labels(expected, locale));
     wait_for("localized administration labels", || {
-        let actual = visible_text(browser, selector)?;
+        let actual = visible_text(browser, page, selector)?;
         if actual != expected {
             return Err(
                 format!("admin {locale} {selector}: expected {expected}, got {actual}").into(),
@@ -69,11 +62,21 @@ fn expect_labels(
         Ok(())
     })
 }
-fn select_action(browser: &Browser, en: &str, zh: &str) -> Result<()> {
+fn actions(page: AdminPage) -> &'static [(&'static str, &'static str)] {
+    match page {
+        AdminPage::Storage => &[],
+        AdminPage::Repositories => &ACTIONS[..1],
+        AdminPage::Rules => &ACTIONS[1..3],
+        AdminPage::Diagnostics => &ACTIONS[3..],
+    }
+}
+fn select_action(browser: &Browser, page: AdminPage, en: &str, zh: &str) -> Result<()> {
     let button = browser.element("xpath", &format!(
-        "//section[@aria-label='Daily administration' or @aria-label='日常管理']/nav//button[normalize-space(.)='{en}' or normalize-space(.)='{zh}']"
+        "//section[@data-zxs-admin-section]/nav//button[normalize-space(.)='{en}' or normalize-space(.)='{zh}']"
     ))?;
-    browser.click(&button)
+    browser.click(&button)?;
+    browser.css(&format!("{} .zxs-form-grid", page.section()))?;
+    Ok(())
 }
 // Hold the real list body to observe pending UI and the production read queue.
 fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
@@ -162,17 +165,36 @@ fn refresh_disks_from_header(browser: &Browser) -> Result<()> {
     )
 }
 
-fn inspect(browser: &Browser, locale: &str) -> Result<()> {
-    browser.click(&browser.button("Administration", "系统管理")?)?;
-    browser.css(SECTION)?;
-    refresh_disks_from_header(browser)?;
-    select_action(browser, "Inspect / query", "检查 / 查询")?;
+fn retired_controls_absent(browser: &Browser, page: AdminPage) -> Result<()> {
+    if browser.script(&format!(
+        "return [...document.querySelector({}).querySelectorAll('button,label')].some(e=>['SMB binding','SMB 绑定','Enable SMB','启用 SMB','History branch','历史分支','Merge link','合并连线','Purge preview','清理预览','Split preview','拆分预览','Historical save preview','历史保存预览'].includes(e.textContent.trim()))",
+        json!(page.section()),
+    ))? != false {
+        return Err(format!("obsolete creation or SMB controls remain on {page:?}").into());
+    }
+    Ok(())
+}
+fn open_console(browser: &Browser, page: AdminPage, locale: &str) -> Result<()> {
+    page.open(browser)?;
+    expect_labels(browser, page, "nav button", actions(page), locale)?;
+    retired_controls_absent(browser, page)
+}
+fn inspect_queries(browser: &Browser, locale: &str) -> Result<()> {
+    let page = AdminPage::Diagnostics;
+    open_console(browser, page, locale)?;
+    select_action(browser, page, "Inspect / query", "检查 / 查询")?;
     accessibility::input_surfaces(browser)?;
-    expect_labels(browser, "nav button", &ACTIONS, locale)?;
-    expect_labels(browser, ":scope > button", &QUERIES, locale)?;
     expect_labels(
         browser,
-        "label > span",
+        page,
+        ":scope > div.zxs-flow > button",
+        &QUERIES,
+        locale,
+    )?;
+    expect_labels(
+        browser,
+        page,
+        ".zxs-form-grid label > span",
         &[
             ("Repository ID", "仓库 ID"),
             (
@@ -181,14 +203,16 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
             ),
         ],
         locale,
-    )?;
-    // These navigation buttons only select local forms. Never submit a mutation
-    // or click a query/checkbox, even when the disposable fixture is writable.
-    select_action(browser, "Repository", "仓库")?;
-    accessibility::input_surfaces(browser)?;
+    )
+}
+fn inspect_repository(browser: &Browser, locale: &str) -> Result<()> {
+    let page = AdminPage::Repositories;
+    open_console(browser, page, locale)?;
+    select_action(browser, page, "Repository", "仓库")?;
     expect_labels(
         browser,
-        "label > span",
+        page,
+        ".zxs-form-grid label > span",
         &[
             ("Name", "名称"),
             ("Primary slot", "主盘槽位"),
@@ -201,18 +225,64 @@ fn inspect(browser: &Browser, locale: &str) -> Result<()> {
     )?;
     expect_labels(
         browser,
+        page,
         ":scope > button",
-        &[("Save configuration / Create preview", "保存配置 / 创建预览")],
+        &[("Save configuration", "保存配置")],
         locale,
     )?;
-    if browser.script(&format!(
-        "return [...document.querySelector({}).querySelectorAll('button,label')].some(e=>['SMB binding','SMB 绑定','Enable SMB','启用 SMB'].includes(e.textContent.trim()))",
-        json!(SECTION),
-    ))? != false {
-        return Err("obsolete independent SMB binding controls remain in administration".into());
+    accessibility::input_surface_viewports(browser)
+}
+fn inspect_rules(browser: &Browser, locale: &str) -> Result<()> {
+    let page = AdminPage::Rules;
+    open_console(browser, page, locale)?;
+    for (action, id, target) in [
+        (
+            ACTIONS[1],
+            ("Path rule ID", "路径规则 ID"),
+            (
+                "Copies including primary; 1 has no redundancy",
+                "份数（含主盘；1 份无冗余）",
+            ),
+        ),
+        (
+            ACTIONS[2],
+            ("Rule ID", "规则 ID"),
+            ("Primary slot", "主盘槽位"),
+        ),
+    ] {
+        select_action(browser, page, action.0, action.1)?;
+        expect_labels(
+            browser,
+            page,
+            ".zxs-form-grid label > span",
+            &[
+                id,
+                ("Repository ID", "仓库 ID"),
+                ("Path prefix", "路径前缀"),
+                target,
+                ("Expected generation (0 for new)", "预期代数（新建填 0）"),
+            ],
+            locale,
+        )?;
+        expect_labels(
+            browser,
+            page,
+            ":scope > button",
+            &[("Save configuration", "保存配置")],
+            locale,
+        )?;
+        accessibility::input_surface_viewports(browser)?;
     }
-    accessibility::input_surface_viewports(browser)?;
     Ok(())
+}
+fn inspect(browser: &Browser, locale: &str) -> Result<()> {
+    AdminPage::Storage.open(browser)?;
+    refresh_disks_from_header(browser)?;
+    retired_controls_absent(browser, AdminPage::Storage)?;
+    // Only select local forms. Never submit a mutation, query or checkbox.
+    inspect_queries(browser, locale)?;
+    inspect_repository(browser, locale)?;
+    inspect_rules(browser, locale)
 }
 fn switch(browser: &Browser, target: &str) -> Result<()> {
     // Reload must not hide failures collected earlier in the current document.
@@ -256,7 +326,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS administration has 10 actions, 14 queries and localized forms in both languages; real session reload restores original locale and Files"
+        "PASS four administration pages, four current actions, 13 queries and localized forms in both languages; real session reload restores original locale and Files"
     );
     Ok(())
 }

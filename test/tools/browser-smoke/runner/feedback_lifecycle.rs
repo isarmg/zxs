@@ -123,13 +123,11 @@ fn saved(browser: &Browser) -> Result<()> {
 }
 
 fn exercise_notices(browser: &Browser) -> Result<()> {
-    for (english, chinese) in [
-        ("Status", "状态"),
-        ("History", "历史记录"),
-        ("Administration", "系统管理"),
-        ("Account settings", "账号设置"),
-        ("Details", "详情"),
-    ] {
+    for (english, chinese) in [("Status", "状态"), ("History", "历史记录")]
+        .into_iter()
+        .chain(AdminPage::ALL.map(AdminPage::labels))
+        .chain([("Account settings", "账号设置"), ("Details", "详情")])
+    {
         publish_default(browser)?;
         saved(browser)?;
         browser.click(&browser.button(english, chinese)?)?;
@@ -185,9 +183,9 @@ fn exercise_notices(browser: &Browser) -> Result<()> {
         ),
     )?;
     if browser.script(
-        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===8&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/repositories\\/[^/]+\\/default-branch$/.test(write.path))",
+        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===11&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/repositories\\/[^/]+\\/default-branch$/.test(write.path))",
     )? != true {
-        return Err("notification lifecycle did not publish exactly eight default-branch receipts".into());
+        return Err("notification lifecycle did not publish exactly eleven default-branch receipts".into());
     }
     Ok(())
 }

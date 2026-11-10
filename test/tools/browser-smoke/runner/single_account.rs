@@ -32,18 +32,21 @@ impl Drop for Session {
 }
 
 pub(super) fn run(browser: &Browser, password: &str) -> Result<()> {
-    browser.click(&browser.button("Administration", "系统管理")?)?;
-    if browser.script(
-        r#"
-        const section = document.querySelector('section[aria-label="Daily administration"], section[aria-label="日常管理"]');
-        if (!section || section.querySelector('input[type=password]')) return false;
-        const text = section.textContent;
-        return !['刷新账户', 'Refresh accounts', '账户 Accounts', '访问权限 ACL',
-            'admin=', 'disabled=', 'repositories=', '仓库授权'].some(label => text.includes(label));
-    "#,
-    )? != true
-    {
-        return Err("retired account or ACL management remains in the real page".into());
+    for page in AdminPage::ALL {
+        page.open(browser)?;
+        if browser.script(&format!(
+            r#"
+            const section = document.querySelector({});
+            if (section.querySelector('input[type=password]')) return false;
+            const text = section.textContent;
+            return !['刷新账户', 'Refresh accounts', '账户 Accounts', '访问权限 ACL',
+                'admin=', 'disabled=', 'repositories=', '仓库授权'].some(label => text.includes(label));
+        "#,
+            json!(page.section()),
+        ))? != true
+        {
+            return Err(format!("retired account or ACL management remains on {page:?}").into());
+        }
     }
     browser.click(&browser.button("Account settings", "账号设置")?)?;
     browser.css(".zxs-account-form input[name='current_password']")?;

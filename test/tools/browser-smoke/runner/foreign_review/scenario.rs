@@ -77,7 +77,7 @@ pub(super) fn exercise(
     actor: &Session,
     before: &fixture::Snapshot,
 ) -> Result<Value> {
-    browser.click(&browser.button("Administration", "系统管理")?)?;
+    AdminPage::Storage.open(browser)?;
     browser.click(&browser.css("[data-storage-discover]:not([disabled])")?)?;
     browser.click(&browser.css(&format!(
         "[data-storage-candidate={}]:not([disabled])",
@@ -142,7 +142,7 @@ pub(super) fn exercise(
     // Normal SPA navigation must keep the original uncertain request. It is not
     // evidence of full reload/session-end automatic recovery (still unsupported).
     browser.click(&browser.button("Files", "文件")?)?;
-    browser.click(&browser.button("Administration", "系统管理")?)?;
+    AdminPage::Storage.open(browser)?;
     browser.css("[data-foreign-plan-retry]:not([disabled])")?;
     audits.push(audit(browser, "unknown", &source)?);
     browser.script("window.__zxsForeignReview.holdNext='save';const b=document.querySelector('[data-foreign-plan-retry]');b.click();b.click();return true")?;

@@ -55,7 +55,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     with_cleanup(
         || {
             browser.click(&browser.button("Files", "文件")?)?;
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             disk_tree::select(browser, "P01")?;
             check(
                 browser,
@@ -66,15 +66,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 const read=slot=>window.__zxsDiskHealth.reads.some(value=>value.slot===slot);
                 if(!['P01','B01','C01'].every(read)||!one)return false;
                 const health=one.querySelector('.zxs-disk-health');
-                const buttons=Array.from(document.querySelectorAll('button')).map(button=>button.textContent.trim());
-                const recovery=document.querySelector('.zxs-management-recovery');
                 return health?.dataset.zxsDiskHealth==='smart'&&health.textContent.includes('/dev/nvme9n1')
                     &&!health.textContent.includes('/dev/nvme9n1p1')&&health.textContent.includes('2023-11-14T22:13:20.123Z')
                     &&health.textContent.includes('0 °C')&&/0 (hours|小时)/.test(health.textContent)
-                    &&/SMART reports passed|SMART 报告通过/.test(health.textContent)
-                    &&recovery&&recovery.getBoundingClientRect().height>0
-                    &&buttons.some(value=>['Check management status','检查管理状态'].includes(value))
-                    &&!buttons.some(value=>['Management health','管理健康'].includes(value));
+                    &&/SMART reports passed|SMART 报告通过/.test(health.textContent);
+
             "#,
             )?;
             disk_tree::select(browser, "B01")?;
@@ -149,6 +145,19 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                     &&/SMART reports failure|SMART 报告异常/.test(card.querySelector('.zxs-disk-health')?.textContent);
             "#,
             )?;
+            AdminPage::Diagnostics.open(browser)?;
+            check(
+                browser,
+                "recovery controls are on the diagnostics page",
+                r#"
+                const section=document.querySelector('section[data-zxs-admin-section="diagnostics"]');
+                const recovery=section.querySelector('.zxs-management-recovery');
+                const buttons=[...section.querySelectorAll('button')].map(button=>button.textContent.trim());
+                return recovery&&recovery.getBoundingClientRect().height>0
+                    &&buttons.some(value=>['Check management status','检查管理状态'].includes(value))
+                    &&!buttons.some(value=>['Management health','管理健康'].includes(value));
+            "#,
+            )?;
             Ok(())
         },
         || {
@@ -156,12 +165,12 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "window.__zxsDiskHealth?.restore();delete window.__zxsDiskHealth;return true",
             )?;
             browser.click(&browser.button("Files", "文件")?)?;
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             Ok(())
         },
     )?;
     println!(
-        "PASS synthetic per-directory SMART attribution, shared devices, unavailable states, stale reads and Administration recovery controls"
+        "PASS synthetic per-directory SMART attribution, shared devices, unavailable states, stale reads and diagnostics recovery controls"
     );
     Ok(())
 }

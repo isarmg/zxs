@@ -257,7 +257,7 @@ pub(super) fn disk_notes(browser: &Browser) -> Result<()> {
     "#)?;
     with_cleanup(
         || {
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             disk_note_check(
                 browser,
                 "real disk card remains editable with unknown hardware",
@@ -293,7 +293,7 @@ pub(super) fn disk_notes(browser: &Browser) -> Result<()> {
             )?;
             let reads = browser.script("return window.__zxsDiskNotes.reads.length")?;
             browser.click(&browser.button("Files", "文件")?)?;
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             disk_note_check(
                 browser,
                 "new request after reentry reads persisted disk note",

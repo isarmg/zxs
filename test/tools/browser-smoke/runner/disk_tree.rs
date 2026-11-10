@@ -97,7 +97,7 @@ fn keyboard_selection(browser: &Browser) -> Result<()> {
 }
 
 pub(super) fn run(browser: &Browser) -> Result<()> {
-    browser.click(&browser.button("Administration", "系统管理")?)?;
+    AdminPage::Storage.open(browser)?;
     browser.css(".zxs-header-refresh:not([disabled])")?;
     with_cleanup(
         || {
@@ -143,7 +143,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 return Err("disk refresh replaced the selected tree node".into());
             }
             browser.click(&browser.button("Files", "文件")?)?;
-            browser.click(&browser.button("Administration", "系统管理")?)?;
+            AdminPage::Storage.open(browser)?;
             geometry(browser)?;
             Ok(())
         },

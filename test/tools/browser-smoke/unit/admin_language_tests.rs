@@ -17,7 +17,7 @@ fn management_admission_probes_preserve_bytes_errors_and_cleanup() {
 
 #[test]
 fn administration_browser_expectations_cover_both_languages_without_mixed_labels() {
-    assert_eq!(ACTIONS.len(), 9);
+    assert_eq!(ACTIONS.len(), 4);
     assert_eq!(QUERIES.len(), 13);
     for pairs in [&ACTIONS[..], &QUERIES[..]] {
         let en = labels(pairs, "en");
@@ -41,4 +41,29 @@ fn administration_controls_do_not_offer_a_second_smb_binding() {
                 .all(|(en, zh)| !en.contains("SMB") && !zh.contains("SMB"))
         );
     }
+}
+
+#[test]
+fn management_actions_belong_to_their_current_pages() {
+    assert_eq!(actions(AdminPage::Storage), &[]);
+    assert_eq!(actions(AdminPage::Repositories), &[("Repository", "仓库")]);
+    assert_eq!(
+        actions(AdminPage::Rules),
+        &[
+            ("Path copy rule", "路径副本规则"),
+            ("Placement rule", "主盘规则")
+        ]
+    );
+    assert_eq!(
+        actions(AdminPage::Diagnostics),
+        &[("Inspect / query", "检查 / 查询")]
+    );
+    assert_eq!(
+        AdminPage::ALL
+            .into_iter()
+            .flat_map(actions)
+            .copied()
+            .collect::<Vec<_>>(),
+        ACTIONS
+    );
 }
