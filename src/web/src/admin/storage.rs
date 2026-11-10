@@ -15,6 +15,7 @@ mod conversion;
 mod foreign;
 pub(super) mod lifecycle;
 pub(super) mod readmission;
+mod registration_operation;
 mod response;
 mod wizard;
 #[derive(Debug, error_definition::Error)]

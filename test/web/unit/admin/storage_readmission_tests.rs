@@ -1,5 +1,15 @@
 use super::*;
 
+#[test]
+fn shared_readmission_ownership_retains_the_published_receipt() {
+    let pending = pending();
+    let mut complete = pending.clone();
+    complete.state = ReadmissionState::Completed;
+    complete.phase = ReadmissionPhase::Completed;
+    complete.result = Some(completion(&complete));
+    registration_operation::tests::ownership(pending, complete);
+}
+
 fn preview() -> ReadmissionPreview {
     ReadmissionPreview {
         request: ReadmissionRequest {
@@ -66,7 +76,7 @@ fn completion_requires_exact_identity_and_published_new_io_epoch() {
     let mut status = pending();
     assert!(validate_status(&status, Some(status.operation_id)).is_ok());
     let mut model = Model::default();
-    assert!(!accept(&mut model, status.clone()));
+    assert!(!model.accept(status.clone()));
     assert!(model.blocks_edit());
     assert_eq!(model.operation, Some(status.operation_id));
     status.state = ReadmissionState::Completed;
@@ -91,9 +101,9 @@ fn completion_requires_exact_identity_and_published_new_io_epoch() {
     let mut wrong = status.clone();
     wrong.result.as_mut().unwrap().kind = "membership-add".into();
     assert!(validate_status(&wrong, None).is_err());
-    assert!(accept(&mut model, status.clone()));
+    assert!(model.accept(status.clone()));
     assert!(!model.blocks_edit());
-    assert!(!accept(&mut model, status));
+    assert!(!model.accept(status));
 }
 
 #[test]
@@ -148,8 +158,8 @@ fn current_registry_identity_cannot_be_replaced_by_same_slot_or_device_health() 
     let mut state = State::default();
     let preview = preview();
     let model = &mut state.admin_console.storage.readmission;
-    model.authority = RegistrationAuthority::Active;
-    model.registrations.insert(
+    model.context.authority = RegistrationAuthority::Active;
+    model.context.registrations.insert(
         "P01".into(),
         RegistrationEntry {
             slot_id: "P01".into(),
@@ -172,6 +182,7 @@ fn current_registry_identity_cannot_be_replaced_by_same_slot_or_device_health() 
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .get_mut("P01")
         .unwrap()
@@ -180,7 +191,7 @@ fn current_registry_identity_cannot_be_replaced_by_same_slot_or_device_health() 
         registration_mode(&state, "P01", &preview.target.disk_id),
         Some(RegistrationMode::Enabled)
     );
-    state.admin_console.storage.readmission.authority = RegistrationAuthority::Unadmitted;
+    state.admin_console.storage.readmission.context.authority = RegistrationAuthority::Unadmitted;
     assert_eq!(
         registration_mode(&state, "P01", &preview.target.disk_id),
         None
@@ -221,11 +232,12 @@ fn terminal_state() -> State {
             completed_retirement: None,
         }),
     });
-    state.admin_console.storage.readmission.authority = RegistrationAuthority::Terminal;
+    state.admin_console.storage.readmission.context.authority = RegistrationAuthority::Terminal;
     state
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .insert(
             preview.target.slot_id.clone(),
@@ -257,6 +269,7 @@ fn terminal_button_requires_an_authenticated_restorable_role_and_exact_registrat
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .get_mut(slot)
         .unwrap()
@@ -266,6 +279,7 @@ fn terminal_button_requires_an_authenticated_restorable_role_and_exact_registrat
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .get_mut(slot)
         .unwrap()
@@ -275,6 +289,7 @@ fn terminal_button_requires_an_authenticated_restorable_role_and_exact_registrat
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .get_mut(slot)
         .unwrap()
@@ -285,7 +300,7 @@ fn terminal_button_requires_an_authenticated_restorable_role_and_exact_registrat
     state.session_transition = crate::ui::SessionTransition::LoggingOut;
     assert!(!can_preview(&state, slot, disk));
     state.session_transition = crate::ui::SessionTransition::Idle;
-    state.admin_console.storage.readmission.authority = RegistrationAuthority::Unadmitted;
+    state.admin_console.storage.readmission.context.authority = RegistrationAuthority::Unadmitted;
     assert!(!can_preview(&state, slot, disk));
 }
 
@@ -293,7 +308,12 @@ fn terminal_button_requires_an_authenticated_restorable_role_and_exact_registrat
 fn late_preview_must_match_its_authority_role_and_binding() {
     let state = terminal_state();
     let preview = terminal_preview();
-    let entry = &state.admin_console.storage.readmission.registrations["P01"];
+    let entry = &state
+        .admin_console
+        .storage
+        .readmission
+        .context
+        .registrations["P01"];
     assert!(preview_matches_registration(
         &preview,
         RegistrationAuthority::Terminal,
@@ -341,7 +361,7 @@ fn leaving_the_page_invalidates_only_unsubmitted_preview_responses() {
     assert!(!model.sending);
     assert!(!model.acknowledged);
     let status = pending();
-    accept(&mut model, status.clone());
+    model.accept(status.clone());
     let generation = model.generation;
     model.leave_preview();
     assert_eq!(model.generation, generation);
@@ -385,7 +405,7 @@ fn exit_buttons_require_active_exact_registration_and_do_not_repeat_offline() {
     assert!(!can_exit(&state, ExitAction::Deregister));
     state.admin_console.storage.snapshot.as_mut().unwrap().state = StorageState::Active;
     assert!(!can_exit(&state, ExitAction::Deregister));
-    state.admin_console.storage.readmission.authority = RegistrationAuthority::Active;
+    state.admin_console.storage.readmission.context.authority = RegistrationAuthority::Active;
     assert!(can_exit(&state, ExitAction::Deregister));
     assert!(!can_exit(&state, ExitAction::PlannedOffline));
     assert!(!super::super::lifecycle::can_preview(
@@ -398,6 +418,7 @@ fn exit_buttons_require_active_exact_registration_and_do_not_repeat_offline() {
         .admin_console
         .storage
         .readmission
+        .context
         .registrations
         .get_mut(slot)
         .unwrap();
@@ -411,7 +432,7 @@ fn exit_buttons_require_active_exact_registration_and_do_not_repeat_offline() {
     state.session_transition = crate::ui::SessionTransition::LoggingOut;
     assert!(!can_exit(&state, ExitAction::Deregister));
     state.session_transition = crate::ui::SessionTransition::Idle;
-    state.admin_console.storage.readmission.authority = RegistrationAuthority::Unadmitted;
+    state.admin_console.storage.readmission.context.authority = RegistrationAuthority::Unadmitted;
     assert!(!can_exit(&state, ExitAction::Deregister));
 }
 
@@ -419,7 +440,7 @@ fn exit_buttons_require_active_exact_registration_and_do_not_repeat_offline() {
 fn resuming_readmission_releases_superseded_status_without_accepting_its_result() {
     let original = pending();
     let mut model = Model::default();
-    accept(&mut model, original.clone());
+    model.accept(original.clone());
     let reading_generation = model.generation;
     model.reading = Some(reading_generation);
 
@@ -466,9 +487,9 @@ fn dismissing_unsubmitted_readmission_does_not_release_a_later_status_read() {
 fn superseded_registration_read_schedules_one_refresh_after_readmission() {
     let mut state = terminal_state();
     let model = &mut state.admin_console.storage.readmission;
-    let previous = (model.authority, model.registrations.clone());
-    model.registrations_loading = true;
-    model.registrations_generation = 7;
+    let previous = (model.context.authority, model.context.registrations.clone());
+    model.context.registrations_loading = true;
+    model.context.registrations_generation = 7;
     let operation_generation = model.generation;
 
     // The explicit submission finishes while the older registration GET owns
@@ -480,8 +501,8 @@ fn superseded_registration_read_schedules_one_refresh_after_readmission() {
         operation_generation,
         Ok(previous.clone()),
     ));
-    assert!(!model.registrations_loading);
-    assert_eq!(model.registrations, previous.1);
+    assert!(!model.context.registrations_loading);
+    assert_eq!(model.context.registrations, previous.1);
     assert!(!finish_registrations(
         model,
         7,
@@ -489,8 +510,8 @@ fn superseded_registration_read_schedules_one_refresh_after_readmission() {
         Ok(previous.clone()),
     ));
 
-    model.registrations_loading = true;
-    model.registrations_generation += 1;
+    model.context.registrations_loading = true;
+    model.context.registrations_generation += 1;
     let current_generation = model.generation;
     let mut enabled = previous.1.clone();
     let entry = enabled.get_mut("P01").unwrap();
@@ -503,23 +524,26 @@ fn superseded_registration_read_schedules_one_refresh_after_readmission() {
         operation_generation,
         Ok(previous),
     ));
-    assert!(model.registrations_loading);
+    assert!(model.context.registrations_loading);
     assert!(!finish_registrations(
         model,
         8,
         current_generation,
         Ok((RegistrationAuthority::Active, enabled.clone())),
     ));
-    assert!(!model.registrations_loading);
-    assert_eq!(model.authority, RegistrationAuthority::Active);
-    assert_eq!(model.registrations, enabled);
+    assert!(!model.context.registrations_loading);
+    assert_eq!(model.context.authority, RegistrationAuthority::Active);
+    assert_eq!(model.context.registrations, enabled);
 }
 
 #[test]
 fn leaving_registration_view_does_not_reschedule_an_invalidated_read() {
     let mut model = Model {
-        registrations_generation: 7,
-        registrations_loading: true,
+        context: Registrations {
+            registrations_generation: 7,
+            registrations_loading: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let operation_generation = model.generation;
@@ -530,6 +554,6 @@ fn leaving_registration_view_does_not_reschedule_an_invalidated_read() {
         operation_generation,
         Err(invalid(ResponseError::Identity)),
     ));
-    assert!(!model.registrations_loading);
+    assert!(!model.context.registrations_loading);
     assert!(model.error.is_none());
 }

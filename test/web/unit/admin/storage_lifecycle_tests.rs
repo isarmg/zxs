@@ -1,4 +1,32 @@
 use super::*;
+
+#[test]
+fn shared_exit_ownership_retains_the_published_receipt() {
+    let pending = status(ExitAction::Deregister);
+    let mut complete = pending.clone();
+    complete.state = ExitState::Completed;
+    complete.phase = ExitPhase::Completed;
+    complete.result = Some(storage_contract::OperationResult {
+        operation_id: complete.operation_id,
+        kind: "disk-deregister".into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: storage_contract::CommitState::Published,
+        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+        current_health: storage_contract::CurrentHealth::Healthy,
+        request_digest: "d".repeat(64),
+        sequence: 4,
+        result: json!({
+            "target_io": "closed",
+            "disk_id": complete.preview.target.disk_id,
+            "slot_id": complete.preview.target.slot_id,
+            "binding_generation": "1",
+            "registration": "detached",
+        }),
+    });
+    registration_operation::tests::ownership(pending, complete);
+}
 fn preview(action: ExitAction) -> ExitPreview {
     ExitPreview {
         request: ExitRequest {
@@ -40,7 +68,7 @@ fn exit_target_and_permanent_operation_are_exact_and_interruption_stays_pending(
     let mut record = status(ExitAction::Deregister);
     assert!(validate_status(&record, Some(record.operation_id)).is_ok());
     let mut model = Model::default();
-    assert!(!accept(&mut model, record.clone()));
+    assert!(!model.accept(record.clone()));
     assert!(model.blocks_edit());
     record.preview.target.disk_id = "disk_00000000000000000000000000000002".into();
     assert!(validate_status(&record, None).is_err());
@@ -77,9 +105,9 @@ fn exit_never_accepts_preparation_or_another_action_as_completion() {
         submitted: true,
         ..Default::default()
     };
-    assert!(accept(&mut model, record.clone()));
+    assert!(model.accept(record.clone()));
     assert!(!model.blocks_edit());
-    assert!(!accept(&mut model, record.clone()));
+    assert!(!model.accept(record.clone()));
     record.result.as_mut().unwrap().commit_state = storage_contract::CommitState::InDoubt;
     assert!(validate_status(&record, None).is_err());
 }
@@ -176,7 +204,7 @@ fn leaving_exit_preview_fences_late_reads_but_preserves_submitted_recovery() {
     assert!(!model.acknowledged);
 
     let original = status(ExitAction::Deregister);
-    accept(&mut model, original.clone());
+    model.accept(original.clone());
     model.reading = Some(model.generation);
     let generation = model.generation;
     model.leave_preview();

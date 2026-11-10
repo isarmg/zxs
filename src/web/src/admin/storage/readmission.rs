@@ -13,54 +13,49 @@ enum RegistrationAuthority {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Model {
+pub(super) struct Registrations {
     registrations: BTreeMap<String, RegistrationEntry>,
     authority: RegistrationAuthority,
     registrations_loading: bool,
     registrations_generation: u64,
-    preview: Option<ReadmissionPreview>,
-    status: Option<ReadmissionStatus>,
-    operation: Option<OperationId>,
-    submitted: bool,
-    rejected: bool,
-    sending: bool,
-    reading: Option<u64>,
-    generation: u64,
-    acknowledged: bool,
-    error: Option<api::Error>,
 }
-impl Model {
-    pub(super) fn blocks_edit(&self) -> bool {
-        self.sending
-            || self.reading.is_some()
-            || self.submitted
-            || self
-                .status
-                .as_ref()
-                .is_some_and(|status| status.state != ReadmissionState::Completed)
+pub(super) type Model = registration_operation::Model<ReadmissionStatus>;
+
+impl registration_operation::Status for ReadmissionStatus {
+    type Preview = ReadmissionPreview;
+    type Context = Registrations;
+    const PATH: &'static str = "/api/admin/disks/readmission";
+
+    fn model(state: &State) -> &Model {
+        &state.admin_console.storage.readmission
     }
-    /// A retry supersedes the response generation, not the outstanding read's
-    /// ownership. Its completion must release that slot without applying data.
-    fn finish_read(&mut self, generation: u64) -> bool {
-        if self.reading != Some(generation) {
-            return false;
-        }
-        self.reading = None;
-        self.generation == generation
+    fn model_mut(state: &mut State) -> &mut Model {
+        &mut state.admin_console.storage.readmission
     }
-    fn leave_preview(&mut self) {
-        if !self.submitted {
-            self.generation += 1;
-            self.preview = None;
-            self.acknowledged = false;
-            self.sending = false;
-            self.reading = None;
-            if self.status.is_none() {
-                self.operation = None;
-            }
-        }
-        self.registrations_generation += 1;
-        self.registrations_loading = false;
+    fn operation(&self) -> OperationId {
+        self.operation_id
+    }
+    fn preview(&self) -> &Self::Preview {
+        &self.preview
+    }
+    fn completed(&self) -> bool {
+        self.state == ReadmissionState::Completed
+    }
+    fn running(&self) -> bool {
+        self.state == ReadmissionState::Running
+    }
+    fn validate(&self, expected: Option<OperationId>) -> Result<(), api::Error> {
+        validate_status(self, expected)
+    }
+    fn response(value: Value) -> Result<Option<Self>, api::Error> {
+        Ok(decode::<ReadmissionStatusResponse>(value)?.operation)
+    }
+    fn load_context(state: RwSignal<State>) {
+        load_registrations(state);
+    }
+    fn leave_context(context: &mut Registrations) {
+        context.registrations_generation += 1;
+        context.registrations_loading = false;
     }
 }
 pub(in crate::admin) fn can_preview(state: &State, slot: &str, disk: &str) -> bool {
@@ -71,7 +66,7 @@ pub(in crate::admin) fn can_preview(state: &State, slot: &str, disk: &str) -> bo
                 matches!(
                     (
                         snapshot.state,
-                        storage.readmission.authority,
+                        storage.readmission.context.authority,
                         entry.readmission
                     ),
                     (StorageState::Active, RegistrationAuthority::Active, Some(_))
@@ -93,10 +88,11 @@ pub(in crate::admin) fn can_preview(state: &State, slot: &str, disk: &str) -> bo
 }
 fn registration<'a>(state: &'a State, slot: &str, disk: &str) -> Option<&'a RegistrationEntry> {
     let model = &state.admin_console.storage.readmission;
-    if model.authority == RegistrationAuthority::Unadmitted {
+    if model.context.authority == RegistrationAuthority::Unadmitted {
         return None;
     }
     model
+        .context
         .registrations
         .get(slot)
         .filter(|entry| entry.disk_id == disk)
@@ -109,7 +105,7 @@ pub(super) fn active_registration<'a>(
     disk: &str,
 ) -> Option<&'a RegistrationEntry> {
     let storage = &state.admin_console.storage;
-    if storage.readmission.authority != RegistrationAuthority::Active
+    if storage.readmission.context.authority != RegistrationAuthority::Active
         || storage
             .snapshot
             .as_ref()
@@ -131,7 +127,7 @@ pub(in crate::admin) fn registration_mode(
 pub(in crate::admin) fn registration_label(state: &State, slot: &str, disk: &str) -> String {
     match registration_mode(state, slot, disk) {
         Some(RegistrationMode::Enabled)
-            if state.admin_console.storage.readmission.authority
+            if state.admin_console.storage.readmission.context.authority
                 == RegistrationAuthority::Terminal =>
         {
             t(
@@ -144,7 +140,7 @@ pub(in crate::admin) fn registration_label(state: &State, slot: &str, disk: &str
             "Registration: Enabled. An unavailable device is not a planned offline registration.",
         ),
         Some(RegistrationMode::Disabled)
-            if state.admin_console.storage.readmission.authority
+            if state.admin_console.storage.readmission.context.authority
                 == RegistrationAuthority::Terminal =>
         {
             if registration(state, slot, disk)
@@ -216,10 +212,11 @@ fn finish_registrations(
     operation_generation: u64,
     result: Result<(RegistrationAuthority, BTreeMap<String, RegistrationEntry>), api::Error>,
 ) -> bool {
-    if !model.registrations_loading || model.registrations_generation != generation {
+    if !model.context.registrations_loading || model.context.registrations_generation != generation
+    {
         return false;
     }
-    model.registrations_loading = false;
+    model.context.registrations_loading = false;
     if model.generation != operation_generation {
         // Completion may have requested fresh registration data while this read
         // still occupied the slot. Discard its old view and start that refresh.
@@ -227,14 +224,14 @@ fn finish_registrations(
     }
     match result {
         Ok((authority, entries)) => {
-            if model.authority != authority || model.registrations != entries {
-                model.authority = authority;
-                model.registrations = entries;
+            if model.context.authority != authority || model.context.registrations != entries {
+                model.context.authority = authority;
+                model.context.registrations = entries;
             }
         }
         Err(error) => {
-            model.authority = RegistrationAuthority::Unadmitted;
-            model.registrations.clear();
+            model.context.authority = RegistrationAuthority::Unadmitted;
+            model.context.registrations.clear();
             model.error = Some(error);
         }
     }
@@ -244,15 +241,21 @@ fn finish_registrations(
 pub(in crate::admin) fn load_registrations(state: RwSignal<State>) {
     let captured = state
         .try_update(|s| {
-            if !s.session_active() || s.admin_console.storage.readmission.registrations_loading {
+            if !s.session_active()
+                || s.admin_console
+                    .storage
+                    .readmission
+                    .context
+                    .registrations_loading
+            {
                 return None;
             }
             let model = &mut s.admin_console.storage.readmission;
-            model.registrations_loading = true;
-            model.registrations_generation += 1;
+            model.context.registrations_loading = true;
+            model.context.registrations_generation += 1;
             Some((
                 s.session_epoch,
-                model.registrations_generation,
+                model.context.registrations_generation,
                 model.generation,
             ))
         })
@@ -310,7 +313,12 @@ pub(in crate::admin) fn preview(state: RwSignal<State>, slot_id: String, expecte
             model.sending = true;
             model.error = None;
             model.generation += 1;
-            Some((s.session_epoch, model.generation, model.authority, expected))
+            Some((
+                s.session_epoch,
+                model.generation,
+                model.context.authority,
+                expected,
+            ))
         })
         .flatten();
     let Some((epoch, generation, authority, registration)) = captured else {
@@ -347,8 +355,9 @@ pub(in crate::admin) fn preview(state: RwSignal<State>, slot_id: String, expecte
             model.sending = false;
             match result {
                 Ok(preview) => {
-                    if model.authority != authority
-                        || model.registrations.get(&registration.slot_id) != Some(&registration)
+                    if model.context.authority != authority
+                        || model.context.registrations.get(&registration.slot_id)
+                            != Some(&registration)
                     {
                         return;
                     }
@@ -386,7 +395,7 @@ fn submit(state: RwSignal<State>, resume: bool) {
                 && (!can_preview(s, &preview.target.slot_id, &preview.target.disk_id)
                     || registration(s, &preview.target.slot_id, &preview.target.disk_id)
                         .is_none_or(|entry| {
-                            !preview_matches_registration(&preview, model.authority, entry)
+                            !preview_matches_registration(&preview, model.context.authority, entry)
                         }))
             {
                 return None;
@@ -415,54 +424,19 @@ fn submit(state: RwSignal<State>, resume: bool) {
             model.rejected = false;
             model.error = None;
             model.generation += 1;
-            Some((
-                s.session_epoch,
-                model.generation,
+            Some(registration_operation::Submission::<ReadmissionStatus> {
+                epoch: s.session_epoch,
+                generation: model.generation,
                 operation,
                 preview,
                 path,
                 body,
-            ))
+            })
         })
         .flatten();
-    let Some((epoch, generation, operation, preview, path, body)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let result = api::validated_request("POST", path, Some(body), |value| {
-            let status: ReadmissionStatus = decode(value)?;
-            validate_status(&status, Some(operation))?;
-            if status.preview != preview {
-                return Err(invalid(ResponseError::Identity));
-            }
-            Ok(status)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch
-                || s.admin_console.storage.readmission.generation != generation
-            {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.readmission;
-            model.sending = false;
-            match result {
-                Ok(status) => accept(model, status),
-                Err(error) => {
-                    model.rejected = !error.mutation_outcome_unknown();
-                    model.error = Some(error);
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            refresh_after_readmission(state);
-        }
-        load(state);
-    });
+    if let Some(request) = captured {
+        registration_operation::send(state, request);
+    }
 }
 fn digest(value: &str) -> bool {
     value.len() == 64
@@ -564,126 +538,11 @@ fn validate_status(
     }
     Ok(())
 }
-fn accept(model: &mut Model, status: ReadmissionStatus) -> bool {
-    let completed = status.state == ReadmissionState::Completed;
-    let changed = completed
-        && !model.status.as_ref().is_some_and(|old| {
-            old.operation_id == status.operation_id && old.state == ReadmissionState::Completed
-        });
-    model.operation = Some(status.operation_id);
-    model.submitted = !completed;
-    model.status = Some(status);
-    if completed {
-        model.preview = None;
-        model.acknowledged = false;
-        model.error = None;
-    }
-    changed
-}
-fn refresh_after_readmission(state: RwSignal<State>) {
-    state.update(|s| s.files.invalidate_disks());
-    super::super::disks::load(state);
-    crate::management::load(state);
-    super::load(state);
-}
 pub(super) fn load(state: RwSignal<State>) {
-    load_registrations(state);
-    let captured = state
-        .try_update(|s| {
-            if !s.session_active() {
-                return None;
-            }
-            let model = &mut s.admin_console.storage.readmission;
-            if model.reading.is_some() {
-                return None;
-            }
-            model.reading = Some(model.generation);
-            Some((
-                s.session_epoch,
-                model.generation,
-                model.submitted.then_some(model.operation).flatten(),
-                model.submitted.then(|| model.preview.clone()).flatten(),
-            ))
-        })
-        .flatten();
-    let Some((epoch, generation, operation, expected)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let path = operation.map_or_else(
-            || "/api/admin/disks/readmission".into(),
-            |operation| format!("/api/admin/disks/readmission?operation_id={operation}"),
-        );
-        let result = api::validated_request("GET", &path, None, |value| {
-            let response: ReadmissionStatusResponse = decode(value)?;
-            if let Some(status) = &response.operation {
-                validate_status(status, operation)?;
-                if expected
-                    .as_ref()
-                    .is_some_and(|expected| expected != &status.preview)
-                {
-                    return Err(invalid(ResponseError::Identity));
-                }
-            }
-            Ok(response)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.readmission;
-            if !model.finish_read(generation) {
-                return false;
-            }
-            match result {
-                Ok(response) => {
-                    if model.preview.is_some() && !model.submitted {
-                        return false;
-                    }
-                    response
-                        .operation
-                        .is_some_and(|status| accept(model, status))
-                }
-                Err(error) => {
-                    if error.code == storage_contract::ErrorCode::OperationNotFound
-                        && model.rejected
-                    {
-                        model.submitted = false;
-                        model.preview = None;
-                        model.operation = None;
-                        model.status = None;
-                        model.acknowledged = false;
-                    } else {
-                        model.error = Some(error);
-                    }
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            refresh_after_readmission(state);
-        }
-    });
+    registration_operation::load::<ReadmissionStatus>(state);
 }
 pub(super) fn poll(state: RwSignal<State>) {
-    if state.with_untracked(|s| {
-        s.session_active()
-            && s.admin_console.storage.readmission.submitted
-            && s.admin_console.storage.readmission.reading.is_none()
-            && (s.admin_console.storage.readmission.sending
-                || s.admin_console
-                    .storage
-                    .readmission
-                    .status
-                    .as_ref()
-                    .is_none_or(|status| status.state == ReadmissionState::Running))
-    }) {
-        load(state);
-    }
+    registration_operation::poll::<ReadmissionStatus>(state);
 }
 fn phase_text(phase: ReadmissionPhase) -> String {
     match phase {

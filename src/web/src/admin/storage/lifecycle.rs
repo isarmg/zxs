@@ -6,47 +6,36 @@ use storage_contract::{
     storage_readmission::{RegistrationEntry, RegistrationMode},
 };
 
-#[derive(Clone, Default)]
-pub(super) struct Model {
-    preview: Option<ExitPreview>,
-    status: Option<ExitStatus>,
-    operation: Option<OperationId>,
-    submitted: bool,
-    rejected: bool,
-    sending: bool,
-    reading: Option<u64>,
-    generation: u64,
-    acknowledged: bool,
-    error: Option<api::Error>,
-}
-impl Model {
-    pub(super) fn blocks_edit(&self) -> bool {
-        self.sending
-            || self.reading.is_some()
-            || self.submitted
-            || self
-                .status
-                .as_ref()
-                .is_some_and(|status| status.state != ExitState::Completed)
+pub(super) type Model = registration_operation::Model<ExitStatus>;
+
+impl registration_operation::Status for ExitStatus {
+    type Preview = ExitPreview;
+    type Context = ();
+    const PATH: &'static str = "/api/admin/disks/exit";
+
+    fn model(state: &State) -> &Model {
+        &state.admin_console.storage.lifecycle
     }
-    /// Only the read that owns this slot can release it. A newer mutation may
-    /// supersede its result while the original read is still in flight.
-    fn finish_read(&mut self, generation: u64) -> bool {
-        if self.reading != Some(generation) {
-            return false;
-        }
-        self.reading = None;
-        self.generation == generation
+    fn model_mut(state: &mut State) -> &mut Model {
+        &mut state.admin_console.storage.lifecycle
     }
-    fn leave_preview(&mut self) {
-        if !self.submitted {
-            self.generation += 1;
-            self.preview = None;
-            self.acknowledged = false;
-            self.sending = false;
-            self.reading = None;
-            self.operation = self.status.as_ref().map(|status| status.operation_id);
-        }
+    fn operation(&self) -> OperationId {
+        self.operation_id
+    }
+    fn preview(&self) -> &Self::Preview {
+        &self.preview
+    }
+    fn completed(&self) -> bool {
+        self.state == ExitState::Completed
+    }
+    fn running(&self) -> bool {
+        self.state == ExitState::Running
+    }
+    fn validate(&self, expected: Option<OperationId>) -> Result<(), api::Error> {
+        validate_status(self, expected)
+    }
+    fn response(value: Value) -> Result<Option<Self>, api::Error> {
+        Ok(decode::<ExitStatusResponse>(value)?.operation)
     }
 }
 pub(in crate::admin) fn can_preview(
@@ -229,54 +218,19 @@ fn submit(state: RwSignal<State>, resume: bool) {
             model.rejected = false;
             model.error = None;
             model.generation += 1;
-            Some((
-                s.session_epoch,
-                model.generation,
+            Some(registration_operation::Submission::<ExitStatus> {
+                epoch: s.session_epoch,
+                generation: model.generation,
                 operation,
                 preview,
                 path,
                 body,
-            ))
+            })
         })
         .flatten();
-    let Some((epoch, generation, operation, preview, path, body)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let result = api::validated_request("POST", path, Some(body), |value| {
-            let status: ExitStatus = decode(value)?;
-            validate_status(&status, Some(operation))?;
-            if status.preview != preview {
-                return Err(invalid(ResponseError::Identity));
-            }
-            Ok(status)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch
-                || s.admin_console.storage.lifecycle.generation != generation
-            {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.lifecycle;
-            model.sending = false;
-            match result {
-                Ok(status) => accept(model, status),
-                Err(error) => {
-                    model.rejected = !error.mutation_outcome_unknown();
-                    model.error = Some(error);
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            refresh_after_exit(state);
-        }
-        load(state);
-    });
+    if let Some(request) = captured {
+        registration_operation::send(state, request);
+    }
 }
 fn digest(value: &str) -> bool {
     value.len() == 64
@@ -341,125 +295,11 @@ fn validate_status(status: &ExitStatus, expected: Option<OperationId>) -> Result
     }
     Ok(())
 }
-fn accept(model: &mut Model, status: ExitStatus) -> bool {
-    let completed = status.state == ExitState::Completed;
-    let changed = completed
-        && !model.status.as_ref().is_some_and(|old| {
-            old.operation_id == status.operation_id && old.state == ExitState::Completed
-        });
-    model.operation = Some(status.operation_id);
-    model.submitted = !completed;
-    model.status = Some(status);
-    if completed {
-        model.preview = None;
-        model.acknowledged = false;
-        model.error = None;
-    }
-    changed
-}
-fn refresh_after_exit(state: RwSignal<State>) {
-    state.update(|s| s.files.invalidate_disks());
-    super::super::disks::load(state);
-    crate::management::load(state);
-    super::load(state);
-}
 pub(super) fn load(state: RwSignal<State>) {
-    let captured = state
-        .try_update(|s| {
-            if !s.session_active() {
-                return None;
-            }
-            let model = &mut s.admin_console.storage.lifecycle;
-            if model.reading.is_some() {
-                return None;
-            }
-            model.reading = Some(model.generation);
-            Some((
-                s.session_epoch,
-                model.generation,
-                model.submitted.then_some(model.operation).flatten(),
-                model.submitted.then(|| model.preview.clone()).flatten(),
-            ))
-        })
-        .flatten();
-    let Some((epoch, generation, operation, expected)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let path = operation.map_or_else(
-            || "/api/admin/disks/exit".into(),
-            |operation| format!("/api/admin/disks/exit?operation_id={operation}"),
-        );
-        let result = api::validated_request("GET", &path, None, |value| {
-            let response: ExitStatusResponse = decode(value)?;
-            if let Some(status) = &response.operation {
-                validate_status(status, operation)?;
-                if expected
-                    .as_ref()
-                    .is_some_and(|expected| expected != &status.preview)
-                {
-                    return Err(invalid(ResponseError::Identity));
-                }
-            }
-            Ok(response)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.lifecycle;
-            if !model.finish_read(generation) {
-                return false;
-            }
-            match result {
-                Ok(response) => {
-                    if model.preview.is_some() && !model.submitted {
-                        return false;
-                    }
-                    response
-                        .operation
-                        .is_some_and(|status| accept(model, status))
-                }
-                Err(error) => {
-                    if error.code == storage_contract::ErrorCode::OperationNotFound
-                        && model.rejected
-                    {
-                        model.submitted = false;
-                        model.preview = None;
-                        model.operation = None;
-                        model.status = None;
-                        model.acknowledged = false;
-                    } else {
-                        model.error = Some(error);
-                    }
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            refresh_after_exit(state);
-        }
-    });
+    registration_operation::load::<ExitStatus>(state);
 }
 pub(super) fn poll(state: RwSignal<State>) {
-    if state.with_untracked(|s| {
-        s.session_active()
-            && s.admin_console.storage.lifecycle.submitted
-            && s.admin_console.storage.lifecycle.reading.is_none()
-            && (s.admin_console.storage.lifecycle.sending
-                || s.admin_console
-                    .storage
-                    .lifecycle
-                    .status
-                    .as_ref()
-                    .is_none_or(|status| status.state == ExitState::Running))
-    }) {
-        load(state);
-    }
+    registration_operation::poll::<ExitStatus>(state);
 }
 fn action_text(action: ExitAction) -> String {
     match action {

@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn shared_addition_ownership_retains_completed_and_cancelled_receipts() {
+    for (state, phase) in [
+        (AdditionState::Completed, AdditionPhase::Completed),
+        (AdditionState::Cancelled, AdditionPhase::Cancelled),
+    ] {
+        registration_operation::tests::ownership(
+            status(AdditionState::RecoveryRequired, AdditionPhase::Enrolling),
+            status(state, phase),
+        );
+    }
+}
+
 fn preview() -> AdditionPreview {
     let selection = super::super::tests::candidate("/mnt/disk/new");
     AdditionPreview {
@@ -95,20 +108,14 @@ fn uncertain_original_operation_blocks_editing_until_confirmed_complete() {
         ..Default::default()
     };
     assert!(model.blocks_edit());
-    assert!(!accept(
-        &mut model,
-        status(AdditionState::RecoveryRequired, AdditionPhase::Enrolling)
-    ));
+    assert!(!model.accept(status(
+        AdditionState::RecoveryRequired,
+        AdditionPhase::Enrolling
+    )));
     assert!(model.blocks_edit());
-    assert!(accept(
-        &mut model,
-        status(AdditionState::Completed, AdditionPhase::Completed)
-    ));
+    assert!(model.accept(status(AdditionState::Completed, AdditionPhase::Completed)));
     assert!(!model.blocks_edit());
-    assert!(!accept(
-        &mut model,
-        status(AdditionState::Completed, AdditionPhase::Completed)
-    ));
+    assert!(!model.accept(status(AdditionState::Completed, AdditionPhase::Completed)));
 }
 #[test]
 fn metadata_role_counts_and_permanent_operation_match_the_preview() {
@@ -132,13 +139,13 @@ fn only_published_original_cancellation_unlocks_editing() {
         AdditionPhase::AbortCertified,
     );
     pending.continuation = AdditionContinuation::Cancel;
-    assert!(!accept(&mut model, pending));
+    assert!(!model.accept(pending));
     assert!(model.blocks_edit());
     let cancelled = status(AdditionState::Cancelled, AdditionPhase::Cancelled);
     assert!(validate_status(&cancelled, None).is_ok());
-    assert!(accept(&mut model, cancelled.clone()));
+    assert!(model.accept(cancelled.clone()));
     assert!(!model.blocks_edit());
-    assert!(!accept(&mut model, cancelled));
+    assert!(!model.accept(cancelled));
     let mut false_cancel = status(AdditionState::Cancelled, AdditionPhase::Cancelled);
     false_cancel.result.as_mut().unwrap().kind = "membership-add".into();
     assert!(validate_status(&false_cancel, None).is_err());
@@ -152,13 +159,13 @@ fn cancelling_and_uncertain_cancel_keep_the_original_operation_locked() {
     let mut model = Model::default();
     let mut record = status(AdditionState::Cancelling, AdditionPhase::CertifyingAbort);
     record.continuation = AdditionContinuation::Cancel;
-    accept(&mut model, record.clone());
-    model.cancel_acknowledged = true;
+    model.accept(record.clone());
+    model.context.cancel_acknowledged = true;
     record.state = AdditionState::RecoveryRequired;
-    accept(&mut model, record);
+    model.accept(record);
     assert!(model.blocks_edit());
-    assert!(!model.cancel_acknowledged);
-    assert!(!model.resume_add_acknowledged);
+    assert!(!model.context.cancel_acknowledged);
+    assert!(!model.context.resume_add_acknowledged);
     assert_eq!(model.operation, Some(preview().request.operation_id));
     assert_eq!(
         model.status.unwrap().continuation,
@@ -223,6 +230,7 @@ fn metadata_resume_mixed_preview_counts_only_explicit_voters() {
     selected(&mut model);
     model
         .addition
+        .context
         .fields
         .get_mut(&model.selections[1].selection_id)
         .unwrap()
@@ -232,6 +240,7 @@ fn metadata_resume_mixed_preview_counts_only_explicit_voters() {
     assert!(!request.additions[1].metadata_member);
     model
         .addition
+        .context
         .fields
         .get_mut(&model.selections[0].selection_id)
         .unwrap()
@@ -248,7 +257,7 @@ fn terminal_resume_allows_explicit_cancellation_but_requires_its_exact_receipt()
     pending.preview = terminal_preview();
     assert!(validate_status(&pending, None).is_ok());
     let mut model = Model::default();
-    accept(&mut model, pending.clone());
+    model.accept(pending.clone());
     assert!(can_cancel(&model));
     assert!(model.blocks_edit());
     pending.continuation = AdditionContinuation::Cancel;
@@ -281,7 +290,7 @@ fn terminal_cancelled_status_requires_permanent_cancelled_kind_and_authority() {
         submitted: true,
         ..Default::default()
     };
-    assert!(accept(&mut model, cancelled.clone()));
+    assert!(model.accept(cancelled.clone()));
     assert!(!model.blocks_edit());
     assert!(!can_cancel(&model));
     cancelled.continuation = AdditionContinuation::Add;
@@ -305,7 +314,7 @@ fn terminal_cancel_requires_a_current_observation_and_never_guesses_from_progres
         assert!(validate_status(&pending, None).is_ok());
         let operation = pending.operation_id;
         let mut model = Model::default();
-        accept(&mut model, pending);
+        model.accept(pending);
         assert!(!can_cancel(&model));
         assert!(model.blocks_edit());
         assert_eq!(model.operation, Some(operation));

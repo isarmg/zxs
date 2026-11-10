@@ -11,37 +11,68 @@ struct Fields {
     metadata: bool,
 }
 #[derive(Clone, Default)]
-pub(super) struct Model {
+pub(super) struct Form {
     fields: BTreeMap<String, Fields>,
-    preview: Option<AdditionPreview>,
-    status: Option<AdditionStatus>,
-    operation: Option<OperationId>,
-    submitted: bool,
-    rejected: bool,
-    sending: bool,
-    reading: bool,
-    generation: u64,
-    acknowledged: bool,
     cancel_acknowledged: bool,
     resume_add_acknowledged: bool,
-    error: Option<api::Error>,
 }
+pub(super) type Model = registration_operation::Model<AdditionStatus>;
+
 impl Model {
-    pub(super) fn blocks_edit(&self) -> bool {
-        self.sending
-            || self.reading
-            || self.submitted
-            || self
-                .status
-                .as_ref()
-                .is_some_and(|status| !status.state.is_terminal())
-    }
     pub(super) fn invalidate(&mut self) {
         self.preview = None;
         self.operation = None;
         self.acknowledged = false;
-        self.cancel_acknowledged = false;
-        self.resume_add_acknowledged = false;
+        self.context.cancel_acknowledged = false;
+        self.context.resume_add_acknowledged = false;
+    }
+}
+impl registration_operation::Status for AdditionStatus {
+    type Preview = AdditionPreview;
+    type Context = Form;
+    const PATH: &'static str = "/api/admin/disks/addition";
+
+    fn model(state: &State) -> &Model {
+        &state.admin_console.storage.addition
+    }
+    fn model_mut(state: &mut State) -> &mut Model {
+        &mut state.admin_console.storage.addition
+    }
+    fn operation(&self) -> OperationId {
+        self.operation_id
+    }
+    fn preview(&self) -> &Self::Preview {
+        &self.preview
+    }
+    fn completed(&self) -> bool {
+        self.state.is_terminal()
+    }
+    fn running(&self) -> bool {
+        matches!(
+            self.state,
+            AdditionState::Adding | AdditionState::Cancelling
+        )
+    }
+    fn validate(&self, expected: Option<OperationId>) -> Result<(), api::Error> {
+        validate_status(self, expected)
+    }
+    fn response(value: Value) -> Result<Option<Self>, api::Error> {
+        Ok(decode::<AdditionStatusResponse>(value)?.operation)
+    }
+    fn accept(model: &mut Model, status: Self) -> bool {
+        accept(model, status)
+    }
+    fn discard_rejected(model: &mut Model) -> bool {
+        if model.sending {
+            return false;
+        }
+        model.submitted = false;
+        model.status = None;
+        model.invalidate();
+        true
+    }
+    fn refresh(state: RwSignal<State>) {
+        completed_addition(state);
     }
 }
 fn active(model: &super::Model) -> bool {
@@ -76,11 +107,13 @@ pub(super) fn selected(model: &mut super::Model) {
     let selections = &model.selections;
     model
         .addition
+        .context
         .fields
         .retain(|id, _| selections.iter().any(|s| s.selection_id == *id));
     for (index, selection) in selections.iter().enumerate() {
         model
             .addition
+            .context
             .fields
             .entry(selection.selection_id.clone())
             .or_insert_with(|| Fields {
@@ -104,6 +137,7 @@ fn make_request(
         .map(|selection| {
             let fields = model
                 .addition
+                .context
                 .fields
                 .get(&selection.selection_id)
                 .expect("invariant: selected addition has fields");
@@ -273,7 +307,7 @@ fn submit(state: RwSignal<State>, action: Submit) {
                     }
                     if continuation == AdditionContinuation::Add
                         && status.continuation == AdditionContinuation::Cancel
-                        && !model.resume_add_acknowledged
+                        && !model.context.resume_add_acknowledged
                     {
                         return None;
                     }
@@ -286,7 +320,7 @@ fn submit(state: RwSignal<State>, action: Submit) {
                     )
                 }
                 Submit::Cancel => {
-                    if !can_cancel(model) || !model.cancel_acknowledged {
+                    if !can_cancel(model) || !model.context.cancel_acknowledged {
                         return None;
                     }
                     (
@@ -303,53 +337,19 @@ fn submit(state: RwSignal<State>, action: Submit) {
             model.rejected = false;
             model.error = None;
             model.generation += 1;
-            Some((
-                s.session_epoch,
-                model.generation,
+            Some(registration_operation::Submission::<AdditionStatus> {
+                epoch: s.session_epoch,
+                generation: model.generation,
                 operation,
                 path,
                 body,
-                expected_preview,
-            ))
+                preview: expected_preview,
+            })
         })
         .flatten();
-    let Some((epoch, generation, operation, path, body, expected_preview)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let result = api::validated_request("POST", path, Some(body), |value| {
-            let status: AdditionStatus = decode(value)?;
-            validate_status(&status, Some(operation))?;
-            if status.preview != expected_preview {
-                return Err(invalid(ResponseError::Identity));
-            }
-            Ok(status)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch || s.admin_console.storage.addition.generation != generation
-            {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.addition;
-            model.sending = false;
-            match result {
-                Ok(status) => accept(model, status),
-                Err(error) => {
-                    model.rejected = !error.mutation_outcome_unknown();
-                    model.error = Some(error);
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            completed_addition(state);
-        }
-        load(state);
-    });
+    if let Some(request) = captured {
+        registration_operation::send(state, request);
+    }
 }
 pub(super) fn validate_preview(preview: &AdditionPreview) -> Result<(), api::Error> {
     let digest = |value: &str| {
@@ -465,19 +465,14 @@ pub(super) fn validate_status(
 }
 fn accept(model: &mut Model, status: AdditionStatus) -> bool {
     let completed = status.state.is_terminal();
-    let newly_completed = completed
-        && !model
-            .status
-            .as_ref()
-            .is_some_and(|old| old.operation_id == status.operation_id && old.state.is_terminal());
     if model.status.as_ref() != Some(&status) {
-        model.cancel_acknowledged = false;
-        model.resume_add_acknowledged = false;
+        model.context.cancel_acknowledged = false;
+        model.context.resume_add_acknowledged = false;
     }
     model.operation = Some(status.operation_id);
     model.submitted = !completed;
     model.status = Some(status);
-    newly_completed
+    completed
 }
 fn completed_addition(state: RwSignal<State>) {
     state.update(|s| {
@@ -492,105 +487,10 @@ fn completed_addition(state: RwSignal<State>) {
     super::load(state);
 }
 pub(super) fn load(state: RwSignal<State>) {
-    let captured = state
-        .try_update(|s| {
-            if !s.session_active() {
-                return None;
-            }
-            let model = &mut s.admin_console.storage.addition;
-            if model.reading {
-                return None;
-            }
-            model.reading = true;
-            // Preview-only IDs do not yet have a persisted status.
-            let operation = model.submitted.then_some(model.operation).flatten();
-            let expected = model.submitted.then(|| model.preview.clone()).flatten();
-            Some((s.session_epoch, model.generation, operation, expected))
-        })
-        .flatten();
-    let Some((epoch, generation, operation, expected)) = captured else {
-        return;
-    };
-    spawn_local(async move {
-        let path = operation.map_or_else(
-            || "/api/admin/disks/addition".into(),
-            |id| format!("/api/admin/disks/addition?operation_id={id}"),
-        );
-        let result = api::validated_request("GET", &path, None, |value| {
-            let response: AdditionStatusResponse = decode(value)?;
-            if let Some(status) = &response.operation {
-                validate_status(status, operation)?;
-                if expected
-                    .as_ref()
-                    .is_some_and(|preview| preview != &status.preview)
-                {
-                    return Err(invalid(ResponseError::Identity));
-                }
-            }
-            Ok(response)
-        })
-        .await;
-        if !accept_read_response(state, epoch, &result) {
-            return;
-        }
-        let completed = state.try_update(|s| {
-            if s.session_epoch != epoch {
-                return false;
-            }
-            let model = &mut s.admin_console.storage.addition;
-            model.reading = false;
-            if model.generation != generation {
-                return false;
-            }
-            match result {
-                Ok(response) => {
-                    if model.preview.is_some() && !model.submitted {
-                        return false;
-                    }
-                    response
-                        .operation
-                        .is_some_and(|status| accept(model, status))
-                }
-                Err(error) => {
-                    if error.code == storage_contract::ErrorCode::OperationNotFound
-                        && model.rejected
-                        && !model.sending
-                    {
-                        model.submitted = false;
-                        model.status = None;
-                        model.invalidate();
-                    } else {
-                        model.error = Some(error);
-                    }
-                    false
-                }
-            }
-        }) == Some(true);
-        if completed {
-            completed_addition(state);
-        }
-    });
+    registration_operation::load::<AdditionStatus>(state);
 }
 pub(super) fn poll(state: RwSignal<State>) {
-    if state.with_untracked(|s| {
-        s.session_active()
-            && s.admin_console.storage.addition.submitted
-            && !s.admin_console.storage.addition.reading
-            && (s.admin_console.storage.addition.sending
-                || s.admin_console
-                    .storage
-                    .addition
-                    .status
-                    .as_ref()
-                    .is_none_or(|status| {
-                        matches!(
-                            status.state,
-                            AdditionState::Adding | AdditionState::Cancelling
-                        )
-                    }))
-    }) {
-        load(state);
-    }
+    registration_operation::poll::<AdditionStatus>(state);
 }
 fn edit(state: RwSignal<State>, id: &str, field: &'static str, value: String) {
     state.update(|s| {
@@ -599,6 +499,7 @@ fn edit(state: RwSignal<State>, id: &str, field: &'static str, value: String) {
         }
         let model = &mut s.admin_console.storage.addition;
         let fields = model
+            .context
             .fields
             .get_mut(id)
             .expect("invariant: rendered selection has fields");
@@ -617,7 +518,7 @@ fn field(
     key: &'static str,
     label: String,
 ) -> impl IntoView {
-    view! {<label class="zxs-form-field"><span>{label}</span><input class="zxs-input" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:value=move ||state.with(|s|s.admin_console.storage.addition.fields.get(&id.get_value()).map(|fields|match key{"slot"=>fields.slot.clone(),"level"=>fields.level.clone(),"upstream"=>fields.upstream.clone(),_=>unreachable!("invariant: addition field")}).unwrap_or_default()) on:input=move |event|edit(state,&id.get_value(),key,event_target_value(&event))/></label>}
+    view! {<label class="zxs-form-field"><span>{label}</span><input class="zxs-input" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:value=move ||state.with(|s|s.admin_console.storage.addition.context.fields.get(&id.get_value()).map(|fields|match key{"slot"=>fields.slot.clone(),"level"=>fields.level.clone(),"upstream"=>fields.upstream.clone(),_=>unreachable!("invariant: addition field")}).unwrap_or_default()) on:input=move |event|edit(state,&id.get_value(),key,event_target_value(&event))/></label>}
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
@@ -632,7 +533,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     {field(state,id,"slot",t("新槽位（唯一）", "New slot (unique)"))}
                     {field(state,id,"level",t("层级（1 为主存储）", "Level (1 for primary storage)"))}
                     {field(state,id,"upstream",t("上游槽位（备份层必填）", "Upstream slot (required for backup tiers)"))}
-                </div><label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.fields.get(&id.get_value()).is_some_and(|fields|fields.metadata)) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){let model=&mut s.admin_console.storage.addition;model.fields.get_mut(&id.get_value()).expect("invariant: selection fields").metadata=event_target_checked(&event);model.invalidate();}})/>{t("同时保存元数据（不勾选则仅存数据）", "Also store metadata (unchecked means data only)")}</label></section>}
+                </div><label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.context.fields.get(&id.get_value()).is_some_and(|fields|fields.metadata)) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){let model=&mut s.admin_console.storage.addition;model.context.fields.get_mut(&id.get_value()).expect("invariant: selection fields").metadata=event_target_checked(&event);model.invalidate();}})/>{t("同时保存元数据（不勾选则仅存数据）", "Also store metadata (unchecked means data only)")}</label></section>}
             }/>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()||s.admin_console.storage.selections.is_empty()) on:click=move |_|preview(state)>{move ||state.with(|s|if terminal(&s.admin_console.storage){t("预览恢复元数据组", "Preview metadata group recovery")}else{t("预览在线添加", "Preview online addition")})}</button>
             {move ||state.with(|s|s.admin_console.storage.addition.preview.clone()).map(|preview|view!{
@@ -652,7 +553,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         })}
         <Show when=move ||state.with(|s|s.admin_console.storage.addition.submitted&&!s.admin_console.storage.addition.sending)>
             <button type="button" class="zxs-button" on:click=move |_|resume(state)>{move || state.with(|s| if s.admin_console.storage.addition.status.as_ref().is_some_and(|status| status.continuation == AdditionContinuation::Cancel) { t("继续原取消操作", "Continue original cancellation") } else if s.admin_console.storage.addition.status.as_ref().is_some_and(|status| status.preview.authority.is_terminal()) { t("继续原元数据恢复", "Continue original metadata recovery") } else { t("继续原添加操作", "Continue original addition") })}</button>
-            <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.reading) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
+            <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.reading.is_some()) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
         </Show>
         <Show when=move ||state.with(|s|can_cancel(&s.admin_console.storage.addition))>
             <p class="zxs-row">{move || state.with(|s| if s.admin_console.storage.addition.status.as_ref().is_some_and(|status| status.preview.authority.is_terminal()) {
@@ -660,12 +561,12 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             } else {
                 t("取消仅适用于尚能取得原成员固定多数取消票的添加。已形成联合多数时不可取消；取消不会删除新目录或已写入的准备材料。", "Cancellation requires the original fixed quorum's Abort votes. An existing joint quorum cannot be cancelled. Cancellation does not delete new directories or preparation data.")
             })}</p>
-            <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.cancel_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.cancel_acknowledged=event_target_checked(&event);}})/>{t("确认申请取消此原添加操作，并保留所有目录数据。", "I confirm cancellation of this original addition, retaining all directory data.")}</label>
-            <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.cancel_acknowledged) on:click=move |_|submit(state, Submit::Cancel)>{t("申请取消原添加", "Request original addition cancellation")}</button>
+            <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.context.cancel_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.context.cancel_acknowledged=event_target_checked(&event);}})/>{t("确认申请取消此原添加操作，并保留所有目录数据。", "I confirm cancellation of this original addition, retaining all directory data.")}</label>
+            <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.context.cancel_acknowledged) on:click=move |_|submit(state, Submit::Cancel)>{t("申请取消原添加", "Request original addition cancellation")}</button>
             <Show when=move ||state.with(|s|s.admin_console.storage.addition.status.as_ref().is_some_and(|status|status.continuation==AdditionContinuation::Cancel&&status.state==AdditionState::RecoveryRequired))>
                 <p class="zxs-row">{t("取消失败不会自动转回添加。若改为继续添加，已持久化的取消票仍可能拒绝此操作。", "A failed cancellation never automatically resumes addition. If you choose addition instead, existing durable Abort votes can still prevent it.")}</p>
-                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.resume_add_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.resume_add_acknowledged=event_target_checked(&event);}})/>{t("我明确改为继续原添加。", "I explicitly choose to continue the original addition instead.")}</label>
-                <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.resume_add_acknowledged) on:click=move |_|submit(state, Submit::Resume(AdditionContinuation::Add))>{t("改为继续原添加", "Continue addition instead")}</button>
+                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.context.resume_add_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.context.resume_add_acknowledged=event_target_checked(&event);}})/>{t("我明确改为继续原添加。", "I explicitly choose to continue the original addition instead.")}</label>
+                <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.context.resume_add_acknowledged) on:click=move |_|submit(state, Submit::Resume(AdditionContinuation::Add))>{t("改为继续原添加", "Continue addition instead")}</button>
             </Show>
         </Show>
         {move ||state.with(|s|s.admin_console.storage.addition.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
