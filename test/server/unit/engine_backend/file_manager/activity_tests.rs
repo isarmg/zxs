@@ -357,6 +357,23 @@ fn file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback(
         .find(|entry| entry.path() == "before.txt")
         .unwrap()
         .clone();
+    let revision = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    engine
+        .stage_bytes(&revision.workspace_id, "before.txt", b"second body")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: revision.workspace_id,
+            operation_id: OperationId::generate().unwrap(),
+            principal: "owner".into(),
+            expected_head: revision.base_head,
+            fencing_token: revision.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
     let operation_id = OperationId::generate().unwrap();
     engine
         .set_file_note(
@@ -368,6 +385,7 @@ fn file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback(
         )
         .unwrap();
     let event_path = |engine: &Engine| {
+        assert_file_projection_matches_scan(engine);
         let mut events = BTreeMap::new();
         super::file_operation_events(engine, &mut events).unwrap();
         let event = events
@@ -394,4 +412,90 @@ fn file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback(
             .unwrap();
         assert_eq!(event_path(&engine), expected);
     }
+}
+
+fn assert_file_projection_matches_scan(engine: &storage_engine::Engine) {
+    let mut projection = super::FileProjection::new(engine);
+    let files = engine
+        .state()
+        .versions
+        .values()
+        .map(|version| version.file_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(projection.versions.len(), files.len());
+    for file in &files {
+        let first = engine
+            .state()
+            .versions
+            .values()
+            .find(|version| version.file_id == *file)
+            .unwrap();
+        assert!(std::ptr::eq(projection.versions[file], first));
+    }
+    for repository in engine.state().repositories.values() {
+        let entries = engine.list_tree_ref(&repository.main_branch_id).unwrap();
+        for _ in 0..3 {
+            for file in &files {
+                let expected = entries
+                    .iter()
+                    .find(|entry| entry.file_id == *file)
+                    .map(|entry| entry.path());
+                assert_eq!(
+                    projection
+                        .current_path(&repository.main_branch_id, file)
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+    assert_eq!(projection.paths.len(), engine.state().repositories.len());
+    assert!(!projection.versions.contains_key("missing-file"));
+}
+
+#[test]
+fn current_path_projection_keeps_the_first_alias_in_namespace_order() {
+    use storage_contract::{Entry, NamespaceEntryKind};
+    let entries = (0..513)
+        .map(|index| Entry {
+            entry_id: format!("entry-{index}"),
+            path: name_policy::PortablePath::parse(&format!("path-{index:04}")).unwrap(),
+            kind: NamespaceEntryKind::File,
+            file_id: format!("file-{}", index % 17),
+            version_id: format!("version-{index}"),
+            size: 1,
+        })
+        .collect::<Vec<_>>();
+    let paths = super::first_current_paths(&entries);
+    assert_eq!(paths.len(), 17);
+    for file in 0..17 {
+        let file = format!("file-{file}");
+        let expected = entries
+            .iter()
+            .find(|entry| entry.file_id == file)
+            .unwrap()
+            .path();
+        assert_eq!(paths[file.as_str()], expected);
+    }
+    assert!(!paths.contains_key("missing-file"));
+}
+
+#[test]
+fn empty_file_projection_preserves_current_namespace_admission_errors() {
+    let root = crate::tests::private_tempdir();
+    let engine = storage_engine::Engine::initialize(
+        &root.path().join("system"),
+        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let mut projection = super::FileProjection::new(&engine);
+    assert!(projection.versions.is_empty());
+    assert_eq!(
+        projection
+            .current_path("missing-branch", "missing-file")
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::BranchNotFound,
+    );
+    assert!(projection.paths.is_empty());
 }

@@ -1,5 +1,4 @@
 //! Read-only, bounded activity projection across committed history sources.
-use super::file_repo;
 use crate::{
     ActivityHistorySnapshot, ApiError,
     backend_activity::{ActivityDetailSnapshot, ActivityEventSnapshot, HISTORY_LIMIT},
@@ -309,10 +308,54 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
     Ok(())
 }
 
+/// Read-local indexes borrow one immutable engine view. The first occurrence
+/// retains the same ordering as the former versions/tree `find` calls.
+struct FileProjection<'a> {
+    engine: &'a Engine,
+    versions: BTreeMap<&'a str, &'a storage_contract::FileVersion>,
+    paths: BTreeMap<&'a str, BTreeMap<&'a str, &'a str>>,
+}
+impl<'a> FileProjection<'a> {
+    fn new(engine: &'a Engine) -> Self {
+        let mut versions = BTreeMap::new();
+        for version in engine.state().versions.values() {
+            versions.entry(version.file_id.as_str()).or_insert(version);
+        }
+        Self {
+            engine,
+            versions,
+            paths: BTreeMap::new(),
+        }
+    }
+
+    fn current_path(&mut self, branch: &'a str, file: &str) -> Result<Option<&'a str>, ApiError> {
+        let paths = match self.paths.entry(branch) {
+            std::collections::btree_map::Entry::Occupied(paths) => paths.into_mut(),
+            std::collections::btree_map::Entry::Vacant(paths) => {
+                let entries = self
+                    .engine
+                    .list_tree_ref(branch)
+                    .map_err(crate::engine_backend::error)?;
+                paths.insert(first_current_paths(entries))
+            }
+        };
+        Ok(paths.get(file).copied())
+    }
+}
+
+fn first_current_paths(entries: &[storage_contract::Entry]) -> BTreeMap<&str, &str> {
+    let mut paths = BTreeMap::new();
+    for entry in entries {
+        paths.entry(entry.file_id.as_str()).or_insert(entry.path());
+    }
+    paths
+}
+
 fn file_operation_events<'a>(
     engine: &'a Engine,
     events: &mut ActivityRows<'a>,
 ) -> Result<(), ApiError> {
+    let mut files = None;
     for operation in engine.state().operations.values().filter(|op| {
         matches!(
             op.kind.as_str(),
@@ -331,11 +374,11 @@ fn file_operation_events<'a>(
         let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {
             continue;
         };
-        let repo = match file_repo(engine, file) {
-            Ok(repo) => repo,
-            Err(error) if error.code == storage_contract::ErrorCode::FileNotFound => continue,
-            Err(error) => return Err(error),
+        let files = files.get_or_insert_with(|| FileProjection::new(engine));
+        let Some(version) = files.versions.get(file).copied() else {
+            continue;
         };
+        let repo = repo_for_history(engine, &version.history_tree_id)?;
         let path_node = operation
             .result
             .get("node_id")
@@ -346,28 +389,15 @@ fn file_operation_events<'a>(
             .get("node_id")
             .and_then(Value::as_str)
             .and_then(|id| engine.state().file_metadata_nodes.get(id));
-        let current = engine
-            .list_tree_ref(&repo.main_branch_id)
-            .map_err(crate::engine_backend::error)?
-            .iter()
-            .find(|entry| entry.file_id == file);
+        let current = files.current_path(&repo.main_branch_id, file)?;
         let relative = (operation.kind == "file.default.set")
             .then(|| operation.result.get("path").and_then(Value::as_str))
             .flatten()
-            .map(str::to_owned)
-            .or_else(|| path_node.map(|node| node.path.clone()))
-            .or_else(|| current.map(|entry| entry.path().to_owned()))
-            .or_else(|| {
-                engine
-                    .state()
-                    .versions
-                    .values()
-                    .find(|v| v.file_id == file)
-                    .map(|v| v.creation_name.clone())
-            })
-            .unwrap_or_default();
+            .or_else(|| path_node.map(|node| node.path.as_str()))
+            .or(current)
+            .unwrap_or(&version.creation_name);
         let display = if repo.file_manager_root {
-            relative
+            relative.to_owned()
         } else {
             format!("{}/{}", repo.name, relative)
         };
