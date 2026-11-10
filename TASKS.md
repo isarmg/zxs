@@ -83,6 +83,7 @@
 - 独立分支只开发测试，业务搬运桥接已交对应负责人。复用 contract 单元测试与 SMB 真实 EngineBackend／临时盘夹具，新增请求和 result.movement 回执事实严格匹配、拒绝未包装事实、事实中的源／被覆盖文件身份显式保留、源路径复用、源及覆盖目标完整身份、原 file intent 被 SMB 同操作续作且拒绝变更源身份、NFD 源消失后的重放用例；测试保持在根 test/。
 - 沿用既有跨盘完整历史、三范围数据库和决定后冷恢复测试，不新增生产 hook 或第二套框架。契约测试依赖新 ObjectMoveRequest／ObjectMoveFact，源身份重放测试依赖核心完整身份桥接；目录聚合及空盘单核心请求仍待实际接口接续。测试架构与边界见 [统一搬运测试](docs/validation/unified-object-move.md)。
 - 空盘 framed RPC 的既有用例已对齐新 object.move：原目标仓库 None 留在 result.movement，事实记录实际根，操作集合只新增原 move，不另建根操作；丢回复重试仍须沿原 spool 模式。原 file intent 用例先由真实文件入口留下材料，再让 SMB 桥接续作，不假定新 planner 使用旧 failpoint。
+- SMB 后继复用同一原 intent 准备 helper，增加已发表回执仍需当前双端绑定，以及原 file intent 冷重开经 SMB 完成、再冷重开幂等读取的跨层用例；不复制共享执行器故障矩阵，不新增生产 hook。
 - 本片未执行、编译、格式化或运行 CI，不能称通过或可合入独立产品；待共同业务依赖整合后再按用户许可执行。
 
 ### 首版正常路径：空目录首装、Web 文件导航与 SMB 创建

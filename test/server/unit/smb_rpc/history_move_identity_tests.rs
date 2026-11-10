@@ -15,6 +15,29 @@ fn lookup(roots: &Roots, repository: &Repository, path: &str) -> Option<Entry> {
         .unwrap()
 }
 
+fn retain_file_intent(
+    roots: &Roots,
+    operation: OperationId,
+) -> (storage_contract::State, storage_engine::FileHistoryMoveRecoveryInfo) {
+    // Seed an already retained file operation, not a guessed failpoint in the
+    // new object planner. The SMB bridge must continue its exact old decision.
+    roots.backend.inner.test_with_engine_locked(|engine| {
+        engine.inject_fault_once("move_after_original_intent");
+        let original = storage_engine::FileHistoryMovePathRequest {
+            source_repository_id: roots.source.repository_id.clone(),
+            source_path: "source.txt".into(),
+            target_repository_id: roots.target.repository_id.clone(),
+            target_name: "arrived.txt".into(),
+        };
+        assert!(engine.move_current_file(&original, "alice", operation).is_err());
+        assert!(!engine.state().operations.contains_key(&operation));
+        (
+            engine.state().clone(),
+            engine.inspect_file_history_move_recovery().unwrap().unwrap(),
+        )
+    })
+}
+
 #[test]
 fn published_move_retry_does_not_capture_a_new_file_at_the_old_source_path() {
     let roots = roots();
@@ -164,23 +187,7 @@ fn retained_file_intent_retries_original_identity_without_a_second_operation() {
     wrong_entry.expected_source_entry_id = new_id("entry").unwrap();
     wrong_file.expected_source_file_id = HistoryFileId::parse(&new_id("file").unwrap()).unwrap();
     let old = original_entry(&roots);
-    // Seed the already retained file operation, not a guessed failpoint in the
-    // new object planner. The SMB bridge must continue its exact old decision.
-    let (before, intent) = roots.backend.inner.test_with_engine_locked(|engine| {
-        engine.inject_fault_once("move_after_original_intent");
-        let original = storage_engine::FileHistoryMovePathRequest {
-            source_repository_id: roots.source.repository_id.clone(),
-            source_path: "source.txt".into(),
-            target_repository_id: roots.target.repository_id.clone(),
-            target_name: "arrived.txt".into(),
-        };
-        assert!(engine.move_current_file(&original, "alice", operation).is_err());
-        assert!(!engine.state().operations.contains_key(&operation));
-        (
-            engine.state().clone(),
-            engine.inspect_file_history_move_recovery().unwrap().unwrap(),
-        )
-    });
+    let (before, intent) = retain_file_intent(&roots, operation);
     for changed in [wrong_entry, wrong_file] {
         let error = roots
             .backend
@@ -274,4 +281,128 @@ fn canonical_source_alias_is_preserved_for_retry_after_the_source_disappears() {
         .backend
         .inner
         .test_with_engine_locked(|engine| assert_eq!(engine.state(), &before));
+}
+
+#[test]
+fn published_move_replay_still_requires_both_current_smb_bindings() {
+    for target in [false, true] {
+        let roots = roots();
+        let operation = OperationId::generate().unwrap();
+        let first = command(&roots, operation);
+        let retry = command(&roots, operation);
+        let receipt = roots
+            .backend
+            .inner
+            .move_current_file(&identity(&roots.shared), first)
+            .unwrap();
+        let repository = if target { &roots.target } else { &roots.source };
+        let binding = roots
+            .backend
+            .inner
+            .smb_binding_status(&identity(&roots.shared), &repository.repository_id)
+            .unwrap();
+        roots
+            .backend
+            .inner
+            .update_smb_binding(
+                &identity(&roots.shared),
+                crate::UpdateSmbBinding {
+                    repository: &repository.repository_id,
+                    branch: &repository.main_branch_id,
+                    enabled: false,
+                    expected_history_generation: binding.history_generation,
+                    operation: OperationId::generate().unwrap(),
+                },
+            )
+            .unwrap();
+        let before = roots
+            .backend
+            .inner
+            .test_with_engine_locked(|engine| engine.state().clone());
+        let error = roots
+            .backend
+            .inner
+            .move_current_file(&identity(&roots.shared), retry)
+            .unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::SmbRebindRequired);
+        roots.backend.inner.test_with_engine_locked(|engine| {
+            assert_eq!(engine.state(), &before);
+            assert_eq!(engine.state().operations.get(&operation), Some(&receipt));
+        });
+    }
+}
+
+#[test]
+fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_receipt() {
+    let roots = roots();
+    let actor = identity(&roots.shared);
+    let operation = OperationId::generate().unwrap();
+    let retry = command(&roots, operation);
+    let replay = command(&roots, operation);
+    let old = original_entry(&roots);
+    let (before, intent) = retain_file_intent(&roots, operation);
+    let Roots {
+        _fixture,
+        shared,
+        backend,
+        source,
+        target,
+    } = roots;
+    drop(shared);
+    drop(backend);
+    let reopen = || {
+        let backend = EngineBackend::new(Engine::open(&_fixture.path().join("state")).unwrap());
+        backend
+            .set_management_auth(crate::lock(&_fixture.auth).reader())
+            .unwrap();
+        backend
+    };
+    let backend = reopen();
+    backend.test_with_engine_locked(|engine| {
+        assert!(!engine.state().operations.contains_key(&operation));
+        assert_eq!(
+            engine.inspect_file_history_move_recovery().unwrap().as_ref(),
+            Some(&intent)
+        );
+    });
+    let receipt = backend.move_current_file(&actor, retry).unwrap();
+    assert_eq!(receipt.kind, "file.history.move");
+    assert_eq!(receipt.sequence, before.sequence + 1);
+    backend.test_with_engine_locked(|engine| {
+        assert!(
+            engine
+                .namespace_tree(&source.main_branch_id)
+                .unwrap()
+                .get("source.txt")
+                .is_none()
+        );
+        assert!(
+            engine
+                .namespace_tree(&target.main_branch_id)
+                .unwrap()
+                .get("arrived.txt")
+                .is_some()
+        );
+        assert_eq!(
+            engine.file_deletion(&old.file_id).unwrap().operation_id,
+            operation
+        );
+    });
+    drop(backend);
+    let backend = reopen();
+    let published = backend.test_with_engine_locked(|engine| engine.state().clone());
+    assert_eq!(backend.move_current_file(&actor, replay).unwrap(), receipt);
+    backend.test_with_engine_locked(|engine| {
+        assert_eq!(engine.state(), &published);
+        assert_eq!(
+            engine
+                .state()
+                .events
+                .iter()
+                .filter(|event| event.operation_id == operation)
+                .count(),
+            1
+        );
+        assert!(engine.inspect_file_history_move_recovery().unwrap().is_none());
+    });
 }
