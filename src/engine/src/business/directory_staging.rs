@@ -116,13 +116,6 @@ impl Ids {
     }
 }
 
-fn outside(entry: &Entry, boundaries: &BTreeMap<String, String>) -> bool {
-    !boundaries.values().any(|path| {
-        let key = name_policy::path_key(path);
-        entry.lookup_key() == key || namespace::is_descendant(entry.lookup_key(), &key)
-    })
-}
-
 /// Freeze the owned files plus the exact child commits reviewed by the user.
 /// This never moves any working branch, child HEAD, or namespace selection.
 fn frozen_tree(
@@ -131,12 +124,41 @@ fn frozen_tree(
     index: &storage_contract::directory_git::DirectoryGitBranch,
     direct: &BTreeMap<String, String>,
 ) -> Result<DirectoryTree> {
-    let mut frozen = working.clone();
-    frozen.entries.retain(|entry| outside(entry, direct));
-    frozen
-        .file_contexts
-        .retain(|key, _| frozen.entries.iter().any(|entry| entry.lookup_key() == key));
-    frozen.directory_refs.clear();
+    let boundaries = direct.values().map(|path| name_policy::path_key(path))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut mounts = BTreeMap::new();
+    let mut entries = Vec::new();
+    let mut owned_paths = std::collections::BTreeSet::new();
+    for entry in &working.entries {
+        if entry.kind == NamespaceEntryKind::Directory && direct.contains_key(&entry.entry_id) {
+            mounts.insert(entry.entry_id.as_str(), entry);
+        }
+        if namespace::closest_directory_repository(entry.lookup_key(), |key| {
+            boundaries.get(key).map(String::as_str)
+        }).is_none() {
+            owned_paths.insert(entry.lookup_key());
+            entries.push(entry.clone());
+        }
+    }
+    let file_contexts = working.file_contexts.iter()
+        .filter(|(key, _)| owned_paths.contains(key.as_str()))
+        .map(|(key, context)| (key.clone(), context.clone()))
+        .collect();
+    // Copy only the parent's owned entries. Child contents below are taken
+    // from the explicitly staged commits, not cloned then discarded here.
+    let mut frozen = DirectoryTree {
+        tree_id: working.tree_id.clone(),
+        directory_branch_id: working.directory_branch_id.clone(),
+        parent_tree_id: working.parent_tree_id.clone(),
+        commit_id: working.commit_id.clone(),
+        path: working.path.clone(),
+        entries,
+        file_contexts,
+        file_branches: working.file_branches.clone(),
+        inherited_files: working.inherited_files.clone(),
+        directory_refs: BTreeMap::new(),
+        sequence: working.sequence,
+    };
     for (directory, path) in direct {
         let Some(reference) = index.index_children.get(directory) else {
             continue;
@@ -145,12 +167,7 @@ fn frozen_tree(
             continue;
         };
         let child = &state.directory_trees[tree_id];
-        let mount = working
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.kind == NamespaceEntryKind::Directory && &entry.entry_id == directory
-            })
+        let mount = mounts.get(directory.as_str()).copied()
             .ok_or_else(|| {
                 Error::new(
                     ErrorCode::StateInvalid,
