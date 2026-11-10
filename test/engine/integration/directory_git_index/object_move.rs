@@ -254,10 +254,21 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         );
         // The first explicit commits are roots. Moving them must not turn
         // those real history nodes into uncommitted working projections.
-        for moved in [&after, &child_after] {
+        let mut histories = vec![(&target, &after), (&target, &child_after)];
+        if source.repository_id != target.repository_id {
+            // Cross-history rename removes the current occurrence, not the
+            // original committed histories or their independently readable bodies.
+            histories.extend([(&source, &before), (&source, &child_before)]);
+            assert_eq!(snapshot_files(&engine, &parent_head), committed);
+            assert_eq!(
+                snapshot_files(&engine, child_before.head_tree_id.as_deref().unwrap())["file"],
+                b"committed child"
+            );
+        }
+        for (repository, directory) in histories {
             let request = DirectoryHistoryRequest::parse(
-                &target.repository_id,
-                &moved.directory_id,
+                &repository.repository_id,
+                &directory.directory_id,
                 DirectoryHistoryCollection::Nodes,
                 BTreeMap::new(),
             )
@@ -268,10 +279,16 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             let page = read.page().unwrap();
             engine.recheck_directory_history(&read).unwrap();
             page.validate(&request).unwrap();
-            assert_eq!(page.current.committed_tree_id, moved.head_tree_id);
+            if repository.repository_id == target.repository_id {
+                assert_eq!(page.current.committed_tree_id, directory.head_tree_id);
+            } else {
+                assert!(page.current.directory_branch_id.is_none());
+                assert!(page.current.tree_id.is_none());
+                assert!(page.current.committed_tree_id.is_none());
+            }
             assert!(
                 page.nodes.iter().any(|node| {
-                    Some(node.tree_id.as_str()) == moved.head_tree_id.as_deref()
+                    Some(node.tree_id.as_str()) == directory.head_tree_id.as_deref()
                 }),
                 "{route:?}"
             );
