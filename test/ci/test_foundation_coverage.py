@@ -181,6 +181,29 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
         self.assertEqual(commands[0][-4:], ['--', '--ignored', '--exact', '--test-threads=1'])
         self.assertEqual(commands[1], ['python3', '.github/scripts/check-binding-expressions.py', '--clang'])
 
+    def test_workspace_dispatch_preserves_the_full_retained_command_sequence(self):
+        check = (ROOT / '.github/scripts/check.sh').read_text()
+        commands = list(COVERAGE.retained_commands(check, 'workspace'))
+        self.assertIn(['cargo', 'test', '--locked', '--offline'], commands)
+        self.assertEqual(sum(command[:1] == ['cargo'] for command in commands), 6)
+        self.assertNotIn(['python3', '.github/scripts/check-workspace-shards.py', '$ZXS_WORKSPACE_SHARD'], commands)
+
+    def test_workspace_dispatch_changes_are_not_accepted_as_coverage(self):
+        check = (ROOT / '.github/scripts/check.sh').read_text()
+        for old, new in (
+            ('if [[ -n "${ZXS_WORKSPACE_SHARD:-}" ]]; then', 'if true; then'),
+            ('      exit\n', ''),
+            ('check-workspace-shards.py', 'different-shards.py'),
+        ):
+            with self.subTest(old=old), self.assertRaisesRegex(AssertionError, 'unsupported coverage shell'):
+                list(COVERAGE.retained_commands(check.replace(old, new), 'workspace'))
+
+    def test_saved_recipe_must_not_enable_workspace_dispatch(self):
+        path = self.root / '.github/ci/full-workflows/ci.yml'
+        path.write_text(path.read_text() + '\n# ZXS_WORKSPACE_SHARD must remain absent\n')
+        with self.assertRaisesRegex(AssertionError, 'unsharded workspace'):
+            self.validate()
+
     def test_unsupported_pipeline_is_not_silently_accepted(self):
         with self.assertRaisesRegex(AssertionError, 'unsupported coverage shell syntax'):
             list(COVERAGE.shell_commands('python3 ' + self.script + ' || true'))

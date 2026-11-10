@@ -271,6 +271,19 @@ def shell_arm(source, shard):
     return '\n'.join(arms[shard])
 
 
+def retained_commands(check, shard):
+    source = shell_arm(check, shard)
+    # The saved full recipe has no shard environment. Recognize only the exact
+    # live-CI dispatch, then prove its unchanged unsharded command sequence.
+    dispatch = ('if [[ -n "${ZXS_WORKSPACE_SHARD:-}" ]]; then\n'
+                '  python3 .github/scripts/check-workspace-shards.py "$ZXS_WORKSPACE_SHARD"\n'
+                '  exit\n'
+                'fi\n')
+    if shard == 'workspace':
+        source = source.removeprefix(dispatch)
+    return shell_commands(source)
+
+
 def retained_recipe_scripts():
     """Return exact entrypoint paths declared by the retained full CI recipe.
 
@@ -279,7 +292,9 @@ def retained_recipe_scripts():
     CI projection and complete matrix are checked by development-ci.py.
     The generated inventory remains a full-recipe design map, not a run receipt.
     """
-    jobs = workflow_jobs((ROOT / '.github/ci/full-workflows/ci.yml').read_text())
+    workflow = (ROOT / '.github/ci/full-workflows/ci.yml').read_text()
+    assert 'ZXS_WORKSPACE_SHARD' not in workflow, 'retained recipe must use unsharded workspace'
+    jobs = workflow_jobs(workflow)
     selector = ast.parse((ROOT / '.github/scripts/select-ci-suites.py').read_text())
     constants = {}
     for node in selector.body:
@@ -316,7 +331,7 @@ def retained_recipe_scripts():
         if shard not in {'workspace', 'build-tools', 'web-production', *constants['FOUNDATION']}:
             continue
         reachable[shard].add('.github/scripts/check.sh')
-        for words in shell_commands(shell_arm(check, shard)):
+        for words in retained_commands(check, shard):
             if words[:2] == ['bash', '.github/scripts/check-foundation.sh']:
                 assert words[2:] == ['$1'], 'foundation dispatcher must forward the selected shard'
                 reachable[shard].add(words[1])
