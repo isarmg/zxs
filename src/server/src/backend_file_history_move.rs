@@ -56,11 +56,6 @@ impl MoveTargetName {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
-
-    pub(crate) fn lookup(&self) -> name_policy::LookupPath {
-        name_policy::LookupPath::from(&self.0)
-    }
-
 }
 
 /// The destination disk was still an empty displayed root at admission. Its
