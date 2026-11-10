@@ -209,82 +209,14 @@ impl Engine {
                 // Current routes authorize a new root, never overwrite the
                 // meaning of a permanent creation receipt after a later exit.
                 engine.route(primary, copies)?;
-                if state
-                    .repositories
-                    .values()
-                    .any(|r| name_policy::lookup_key(&r.name) == name.key())
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::NameCollision,
-                        "repository name already exists",
-                    ));
-                }
-                let repo_id = new_id("repo")?;
-                let history_id = new_id("history")?;
-                let branch_id = new_id("br")?;
-                let commit_id = new_id("commit")?;
-                let repository = Repository {
-                    repository_id: repo_id.clone(),
-                    smb_enabled: true,
-                    smb_binding_generation: 1,
-                    file_manager_root,
-                    name: name.as_str().into(),
-                    history_tree_id: history_id.clone(),
-                    main_branch_id: branch_id.clone(),
-                    primary_slot_id: engine.disk(primary)?.slot_id.clone(),
-                    target_copies: copies,
-                    name_policy: name_policy::NAME_POLICY.into(),
-                    unicode_version: name_policy::UNICODE_VERSION.into(),
-                };
-                state.histories.insert(
-                    history_id.clone(),
-                    HistoryTree {
-                        history_tree_id: history_id.clone(),
-                        repository_id: repo_id.clone(),
-                        root_commit_id: commit_id.clone(),
-                        main_branch_id: Some(branch_id.clone()),
-                        generation: 1,
-                        state: HistoryState::Active,
-                        provenance: None,
-                    },
-                );
-                state.branches.insert(
-                    branch_id.clone(),
-                    Branch {
-                        file_node_id: None,
-                        branch_id: branch_id.clone(),
-                        history_tree_id: history_id.clone(),
-                        name: "main".into(),
-                        head_commit_id: commit_id.clone(),
-                        fork_commit_id: commit_id.clone(),
-                        branch_kind: BranchKind::Full,
-                        file_id: None,
-                        pending_file_versions: Default::default(),
-                        generation: 1,
-                        state: BranchState::Active,
-                    },
-                );
-                state.commits.insert(
-                    commit_id.clone(),
-                    Commit {
-                        namespace_deletions: None,
-                        commit_id: commit_id.clone(),
-                        history_tree_id: history_id.clone(),
-                        kind: "root".into(),
-                        parent_commit_ids: Vec::new(),
-                        tree_id: new_id("tree")?,
-                        sequence: state.sequence,
-                        operation_id: operation,
-                        author: principal.into(),
-                        message: "Create repository".into(),
-                        entries: Vec::new(),
-                        pending_file_versions: Default::default(),
-                        provenance: None,
-                    },
-                );
-                state
-                    .repositories
-                    .insert(repo_id.clone(), repository.clone());
+                let repository = project_creation(state, RepositoryCreation {
+                    name, primary: &engine.disk(primary)?.slot_id, copies,
+                    file_manager_root, principal, operation,
+                }, RepositoryIds::random()?)?;
+                let repo_id = &repository.repository_id;
+                let history_id = &repository.history_tree_id;
+                let branch_id = &repository.main_branch_id;
+                let commit_id = &state.histories[history_id].root_commit_id;
                 Ok(json!({
                     "repository_id": repo_id,
                     "history_tree_id": history_id,
@@ -304,6 +236,124 @@ impl Engine {
         })
     }
 }
+
+
+pub(super) struct RepositoryCreation<'a> {
+    pub(super) name: &'a storage_contract::RepositoryName,
+    pub(super) primary: &'a str,
+    pub(super) copies: u32,
+    pub(super) file_manager_root: bool,
+    pub(super) principal: &'a str,
+    pub(super) operation: OperationId,
+}
+
+pub(super) struct RepositoryIds {
+    repository: String,
+    history: String,
+    branch: String,
+    commit: String,
+    tree: String,
+}
+impl RepositoryIds {
+    fn random() -> Result<Self> {
+        Ok(Self {
+            repository: new_id("repo")?, history: new_id("history")?,
+            branch: new_id("br")?, commit: new_id("commit")?, tree: new_id("tree")?,
+        })
+    }
+
+    pub(super) fn move_target(operation: OperationId) -> Result<Self> {
+        let id = |prefix: &str| -> Result<String> {
+            let digest = object_hash("object-move-root", &(operation, prefix))?;
+            Ok(format!("{prefix}_{}", &digest[..32]))
+        };
+        Ok(Self {
+            repository: id("repo")?, history: id("history")?, branch: id("br")?,
+            commit: id("commit")?, tree: id("tree")?,
+        })
+    }
+}
+
+/// The one root-record projection for explicit creation and an empty-disk move.
+/// The caller supplies the admitted route; publication remains its operation.
+pub(super) fn project_creation(
+    state: &mut State,
+    creation: RepositoryCreation<'_>,
+    ids: RepositoryIds,
+) -> Result<Repository> {
+    let RepositoryCreation { name, primary, copies, file_manager_root, principal, operation } = creation;
+    if state.repositories.values().any(|repository| name_policy::lookup_key(&repository.name) == name.key()) {
+        return Err(Error::new(ErrorCode::NameCollision, "repository name already exists"));
+    }
+    let RepositoryIds {
+        repository: repo_id, history: history_id, branch: branch_id,
+        commit: commit_id, tree: tree_id,
+    } = ids;
+    let repository = Repository {
+        repository_id: repo_id.clone(),
+        smb_enabled: true,
+        smb_binding_generation: 1,
+        file_manager_root,
+        name: name.as_str().into(),
+        history_tree_id: history_id.clone(),
+        main_branch_id: branch_id.clone(),
+        primary_slot_id: primary.to_owned(),
+        target_copies: copies,
+        name_policy: name_policy::NAME_POLICY.into(),
+        unicode_version: name_policy::UNICODE_VERSION.into(),
+    };
+    state.histories.insert(
+        history_id.clone(),
+        HistoryTree {
+            history_tree_id: history_id.clone(),
+            repository_id: repo_id.clone(),
+            root_commit_id: commit_id.clone(),
+            main_branch_id: Some(branch_id.clone()),
+            generation: 1,
+            state: HistoryState::Active,
+            provenance: None,
+        },
+    );
+    state.branches.insert(
+        branch_id.clone(),
+        Branch {
+            file_node_id: None,
+            branch_id: branch_id.clone(),
+            history_tree_id: history_id.clone(),
+            name: "main".into(),
+            head_commit_id: commit_id.clone(),
+            fork_commit_id: commit_id.clone(),
+            branch_kind: BranchKind::Full,
+            file_id: None,
+            pending_file_versions: Default::default(),
+            generation: 1,
+            state: BranchState::Active,
+        },
+    );
+    state.commits.insert(
+        commit_id.clone(),
+        Commit {
+            namespace_deletions: None,
+            commit_id: commit_id.clone(),
+            history_tree_id: history_id.clone(),
+            kind: "root".into(),
+            parent_commit_ids: Vec::new(),
+            tree_id: tree_id,
+            sequence: state.sequence,
+            operation_id: operation,
+            author: principal.into(),
+            message: "Create repository".into(),
+            entries: Vec::new(),
+            pending_file_versions: Default::default(),
+            provenance: None,
+        },
+    );
+    state
+        .repositories
+        .insert(repo_id.clone(), repository.clone());
+    Ok(repository)
+}
+
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/repository/tests.rs"]

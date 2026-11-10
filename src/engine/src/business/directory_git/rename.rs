@@ -35,11 +35,12 @@ impl<'a> RenameOwnership<'a> {
         }
     }
 
+    pub(crate) fn requires_history_copy(&self, state: &State) -> Result<bool> {
+        has_committed_departure(state, &self.departures)
+    }
+
     pub(crate) fn require_direct(&self, state: &State) -> Result<()> {
-        if self.departures.is_empty() {
-            return Ok(());
-        }
-        if has_committed_departure(state, &self.departures)? {
+        if self.requires_history_copy(state)? {
             return Err(Error::new(
                 ErrorCode::UnsupportedOperation,
                 "renaming a historically committed file out of its directory repository requires a full-history copy; source and destination are unchanged",
