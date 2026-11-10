@@ -255,9 +255,15 @@ fn phase1_primary_empty_create_publishes_once_on_close_or_flush_then_close() {
     let (temp, shared, backend) = primary_fixture();
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     let mut saved = Vec::new();
-    for (path, flush_first) in [("p/close-only.txt", false), ("p/flush-first.txt", true)] {
-        let (created, _fd) = open(&mut stream, path, true, true);
+    for (path, writable, flush_first) in [
+        ("p/readonly-close.txt", false, false),
+        ("p/readonly-flush.txt", false, true),
+        ("p/close-only.txt", true, false),
+        ("p/flush-first.txt", true, true),
+    ] {
+        let (created, _fd) = open(&mut stream, path, writable, true);
         assert_eq!(created.size, 0);
+        assert!(created.workspace_id.is_some());
         assert!(created.version_id.is_none());
         // No PrepareWrite, descriptor writes or Dirty: creation itself is work.
         if flush_first {
@@ -287,9 +293,16 @@ fn phase1_primary_empty_create_publishes_once_on_close_or_flush_then_close() {
 
     let engine = Engine::open(&temp.path().join("state")).unwrap();
     let entries = engine.list_tree(&repository.main_branch_id).unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_ne!(entries[0].file_id, entries[1].file_id);
-    assert_eq!(engine.state().versions.len(), 2);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| &entry.file_id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4
+    );
+    assert_eq!(engine.state().versions.len(), 4);
     for opened in saved {
         let entry = entries
             .iter()

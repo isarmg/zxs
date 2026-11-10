@@ -128,6 +128,17 @@ impl DefaultShare {
         let Location::Path { slot, path } = self.locate(path)? else {
             return Err(directory_only());
         };
+        self.resolve_at(&slot, path, intent)
+    }
+
+    // Reuse this request's parsed display location. Backend resolution and the
+    // eventual publication still check live disk/repository identity.
+    fn resolve_at(
+        &self,
+        slot: &TopologySlot,
+        path: name_policy::LookupPath,
+        intent: SmbPathIntent,
+    ) -> Result<SmbPathLocation, ApiError> {
         self.shared.backend.resolve_smb_path(
             &self.identity,
             ResolveSmbPath {
@@ -287,16 +298,13 @@ impl DefaultShare {
                 self.open_directory(location, id)?
             }
             Location::Path { slot, path: within } => {
-                let location = self.shared.backend.resolve_smb_path(
-                    &self.identity,
-                    ResolveSmbPath {
-                        slot_id: slot.slot_id.clone(),
-                        path: within,
-                        intent: if create {
-                            SmbPathIntent::CreateFile
-                        } else {
-                            SmbPathIntent::Lookup
-                        },
+                let location = self.resolve_at(
+                    &slot,
+                    within,
+                    if create {
+                        SmbPathIntent::CreateFile
+                    } else {
+                        SmbPathIntent::Lookup
                     },
                 )?;
                 let root_entry_id = location
@@ -353,14 +361,7 @@ impl DefaultShare {
                 (slot.disk_id, name.clone(), name)
             }
             Location::Path { slot, path: within } => {
-                let location = self.shared.backend.resolve_smb_path(
-                    &self.identity,
-                    ResolveSmbPath {
-                        slot_id: slot.slot_id.clone(),
-                        path: within,
-                        intent: SmbPathIntent::Lookup,
-                    },
-                )?;
+                let location = self.resolve_at(&slot, within, SmbPathIntent::Lookup)?;
                 let root_entry_id = location
                     .relative_path
                     .is_empty()
@@ -466,9 +467,6 @@ impl DefaultShare {
                 return Err(ApiError::unsupported());
             }
             if let Some(path) = destination {
-                let Location::Path { .. } = self.locate(&path)? else {
-                    return Err(ApiError::unsupported());
-                };
                 let reply = self.move_object(source, &path, admission, replace)?;
                 return Ok((Reply::Json(reply), None));
             }

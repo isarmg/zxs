@@ -372,27 +372,11 @@ impl Session {
         };
         Ok((result, Some(fd)))
     }
-    pub(super) fn authorize_read(&self, handle: u64) -> Result<Value, ApiError> {
-        match self.handles.get(&handle) {
-            Some(Handle::Read(_, version)) => {
-                self.shared
-                    .backend
-                    .authorize_version(&self.identity, version)?;
-            }
-            Some(Handle::Write(_)) | Some(Handle::Directory(_)) => {
-                self.shared
-                    .backend
-                    .authorize_current(&self.identity, &self.branch)?;
-            }
-            None => {
-                return Err(ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::NotFound,
-                    "SMB handle missing",
-                ));
-            }
-        }
-        Ok(json!({"authorized":true}))
+    pub(super) fn authorize_read(&self, handle: u64) -> Result<(), ApiError> {
+        self.handles
+            .get(&handle)
+            .ok_or_else(missing_handle)?
+            .authorize_read(&self.shared, &self.identity, &self.branch)
     }
 
     pub(super) fn read(
@@ -404,18 +388,18 @@ impl Session {
         if length as usize > smb_protocol::protocol::MAX_READ_BYTES {
             return Err(ApiError::limit("SMB read exceeds bounded reply size"));
         }
-        self.authorize_read(handle)?;
-        let content = match self.handles.get_mut(&handle) {
-            Some(Handle::Read(content, _)) => content,
-            Some(Handle::Directory(_)) => {
+        let opened = self.handles.get_mut(&handle).ok_or_else(missing_handle)?;
+        opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
+        let content = match opened {
+            Handle::Read(content, _) => content,
+            Handle::Directory(_) => {
                 return Err(ApiError::new(
                     ::http::StatusCode::CONFLICT,
                     storage_contract::ErrorCode::IsDirectory,
                     "directory data is not readable",
                 ));
             }
-            Some(Handle::Write(_)) => return Err(ApiError::unsupported()),
-            None => unreachable!("invariant: read authorization admitted this handle"),
+            Handle::Write(_) => return Err(ApiError::unsupported()),
         };
         // Version authorization concerns metadata; it does not admit disk I/O.
         // Check even a cached/empty read so an idle handle cannot resurrect a
@@ -463,5 +447,31 @@ impl Session {
             }
         };
         Ok(bytes)
+    }
+}
+
+pub(super) fn missing_handle() -> ApiError {
+    ApiError::new(
+        ::http::StatusCode::NOT_FOUND,
+        storage_contract::ErrorCode::NotFound,
+        "SMB handle missing",
+    )
+}
+
+impl Handle {
+    // Borrowing the selected handle keeps its identity and kind stable for this
+    // synchronous operation; live backend authority is still checked each time.
+    pub(super) fn authorize_read(
+        &self,
+        shared: &Shared,
+        identity: &Identity,
+        branch: &str,
+    ) -> Result<(), ApiError> {
+        match self {
+            Self::Read(_, version) => shared.backend.authorize_version(identity, version),
+            Self::Write(_) | Self::Directory(_) => {
+                shared.backend.authorize_current(identity, branch)
+            }
+        }
     }
 }

@@ -306,91 +306,31 @@ impl Session {
         }
     }
     pub(super) fn flush(&mut self, handle: u64) -> Result<Value, ApiError> {
-        if !matches!(self.handles.get(&handle), Some(Handle::Write(writer)) if writer.dirty) {
-            // No-change acknowledgements are still I/O, not terminal cleanup.
-            self.authorize_read(handle)?;
-            match &self.handles[&handle] {
-                Handle::Read(content, _) => content.file.sync_all().map_err(ApiError::io)?,
-                Handle::Directory(directory) => directory.file.sync_all().map_err(ApiError::io)?,
-                Handle::Write(_) => {}
-            }
-            return Ok(json!({"saved":true,"changed":false}));
-        }
-        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
-            unreachable!("invariant: publication follows a dirty writer match");
-        };
-        if writer.committed {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::WorkspaceRebaseRequired,
-                "changed bytes need an authorized workspace before saving",
-            ));
-        }
-        // A lost response must not restage under a new dirty generation and
-        // thereby change the original request digest. Reconcile by operation id.
-        match self
-            .shared
-            .backend
-            .operation_outcome(&self.identity, writer.operation_id)
-        {
-            Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
-                return finish_publication(
-                    &self.shared,
-                    &self.identity,
-                    &self.branch,
-                    writer,
-                    result,
-                );
-            }
-            Ok(_) => {
-                return Err(ApiError::new(
-                    ::http::StatusCode::SERVICE_UNAVAILABLE,
-                    storage_contract::ErrorCode::RecoveryRequired,
-                    "SMB save outcome must be reconciled before retrying",
-                ));
-            }
-            Err(error)
-                if error.code == storage_contract::ErrorCode::NotFound
-                    || error.code == storage_contract::ErrorCode::OperationNotFound => {}
-            Err(error) => return Err(error),
-        }
-        writer
-            .directory
-            .verify_payload(
-                &platform_io::fs_safety::EntryName::new(
-                    writer
-                        .source
-                        .file_name()
-                        .ok_or_else(|| ApiError::invalid("SMB source filename missing"))?,
-                )
-                .map_err(crate::upload_fs_error)?,
-                &writer.file,
-            )
-            .map_err(crate::upload_fs_error)?;
-        writer.file.sync_all().map_err(ApiError::io)?;
-        if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {
-            return Err(ApiError::limit("file exceeds SMB byte limit"));
-        }
-        self.shared.backend.upload(
-            &self.identity,
-            &writer.workspace.workspace_id,
-            &writer.item_id,
-            &writer.path,
-            &crate::UploadSource::from_file(
-                writer.file.try_clone().map_err(ApiError::io)?,
+        let opened = self
+            .handles
+            .get_mut(&handle)
+            .ok_or_else(handles::missing_handle)?;
+        match opened {
+            Handle::Write(writer) if writer.dirty => flush_writer(
+                &self.shared,
+                &self.identity,
+                &self.branch,
                 self.max_file_bytes,
-            )?,
-        )?;
-        let result = self
-            .shared
-            .backend
-            .commit_workspace(&self.identity, writer.save_request())?;
-        finish_publication(
-            &self.shared,
-            &self.identity,
-            &self.branch,
-            writer,
-            result.into(),
-        )
+                writer,
+            ),
+            opened => {
+                // No-change acknowledgements still require current authority.
+                opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
+                match opened {
+                    Handle::Read(content, _) => content.file.sync_all().map_err(ApiError::io)?,
+                    Handle::Directory(directory) => {
+                        directory.file.sync_all().map_err(ApiError::io)?;
+                    }
+                    Handle::Write(_) => {}
+                }
+                Ok(json!({"saved":true,"changed":false}))
+            }
+        }
     }
 
     /// Unlike Flush, Close always consumes the handle. A failed publication
@@ -403,31 +343,30 @@ impl Session {
         {
             self.read_cache = None;
         }
-        if !self.handles.contains_key(&handle) {
-            return Err(ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound,
-                "SMB handle missing",
-            ));
-        }
-        let saved = (|| {
-            // Clean handles only need terminal cleanup; a revoked identity
-            // must not turn their release into a new I/O acknowledgement.
-            if !abort
-                && matches!(self.handles.get(&handle), Some(Handle::Write(writer)) if writer.dirty)
-            {
-                self.flush(handle)?;
-            }
-            if let Some(Handle::Write(writer)) = self.handles.get(&handle)
-                && !writer.committed
-            {
-                self.shared
-                    .backend
-                    .abort_workspace(&self.identity, &writer.workspace.workspace_id)?;
-            }
-            Ok(())
-        })();
-        if let Some(Handle::Write(mut writer)) = self.handles.remove(&handle) {
+        let opened = self
+            .handles
+            .remove(&handle)
+            .ok_or_else(handles::missing_handle)?;
+        if let Handle::Write(mut writer) = opened {
+            // Close owns the descriptor even when publication fails. Its path
+            // reservation stays held until cleanup or detached retention finishes.
+            let saved = (|| {
+                if !abort && writer.dirty {
+                    flush_writer(
+                        &self.shared,
+                        &self.identity,
+                        &self.branch,
+                        self.max_file_bytes,
+                        &mut writer,
+                    )?;
+                }
+                if !writer.committed {
+                    self.shared
+                        .backend
+                        .abort_workspace(&self.identity, &writer.workspace.workspace_id)?;
+                }
+                Ok(())
+            })();
             match &saved {
                 Ok(()) => cleanup_writer(&writer),
                 Err(error) => {
@@ -435,8 +374,8 @@ impl Session {
                 }
             }
             self.release_paths(&[writer.path.key().to_owned()]);
+            saved?;
         }
-        saved?;
         Ok(json!({"closed":true,"aborted":abort}))
     }
 
@@ -450,13 +389,10 @@ impl Session {
         {
             self.read_cache = None;
         }
-        let entry = self.handles.remove(&handle).ok_or_else(|| {
-            ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound,
-                "SMB handle missing",
-            )
-        })?;
+        let entry = self
+            .handles
+            .remove(&handle)
+            .ok_or_else(handles::missing_handle)?;
         let mut result = json!({"closed":true,"detached":true});
         if let Handle::Write(mut writer) = entry {
             let reason = ApiError::new(
@@ -470,4 +406,73 @@ impl Session {
         }
         Ok(result)
     }
+}
+
+// Both Flush and terminal Close publish the same borrowed writer. Callers hold
+// account admission and the existing path reservation throughout this function.
+fn flush_writer(
+    shared: &Shared,
+    identity: &Identity,
+    branch: &str,
+    max_file_bytes: u64,
+    writer: &mut Writer,
+) -> Result<Value, ApiError> {
+    if writer.committed {
+        return Err(ApiError::conflict(
+            storage_contract::ErrorCode::WorkspaceRebaseRequired,
+            "changed bytes need an authorized workspace before saving",
+        ));
+    }
+    // A lost response must not restage under a new dirty generation and
+    // thereby change the original request digest. Reconcile by operation id.
+    match shared
+        .backend
+        .operation_outcome(identity, writer.operation_id)
+    {
+        Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
+            return finish_publication(shared, identity, branch, writer, result);
+        }
+        Ok(_) => {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::RecoveryRequired,
+                "SMB save outcome must be reconciled before retrying",
+            ));
+        }
+        Err(error)
+            if error.code == storage_contract::ErrorCode::NotFound
+                || error.code == storage_contract::ErrorCode::OperationNotFound => {}
+        Err(error) => return Err(error),
+    }
+    writer
+        .directory
+        .verify_payload(
+            &platform_io::fs_safety::EntryName::new(
+                writer
+                    .source
+                    .file_name()
+                    .ok_or_else(|| ApiError::invalid("SMB source filename missing"))?,
+            )
+            .map_err(crate::upload_fs_error)?,
+            &writer.file,
+        )
+        .map_err(crate::upload_fs_error)?;
+    writer.file.sync_all().map_err(ApiError::io)?;
+    if writer.file.metadata().map_err(ApiError::io)?.len() > max_file_bytes {
+        return Err(ApiError::limit("file exceeds SMB byte limit"));
+    }
+    shared.backend.upload(
+        identity,
+        &writer.workspace.workspace_id,
+        &writer.item_id,
+        &writer.path,
+        &crate::UploadSource::from_file(
+            writer.file.try_clone().map_err(ApiError::io)?,
+            max_file_bytes,
+        )?,
+    )?;
+    let result = shared
+        .backend
+        .commit_workspace(identity, writer.save_request())?;
+    finish_publication(shared, identity, branch, writer, result.into())
 }

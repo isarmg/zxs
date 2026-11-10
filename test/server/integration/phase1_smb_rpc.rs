@@ -422,9 +422,15 @@ fn public_smb_bridge_empty_create_close_and_flush_publish_once() {
     let mut fixture = Fixture::new();
     let client = fixture.connect();
     let mut saved = vec![];
-    for (path, flush) in [("p/close.txt", false), ("p/flush.txt", true)] {
-        let (opened, _fd) = open(&client, path, true, true, false);
+    for (path, writable, flush) in [
+        ("p/readonly-close.txt", false, false),
+        ("p/readonly-flush.txt", false, true),
+        ("p/close.txt", true, false),
+        ("p/flush.txt", true, true),
+    ] {
+        let (opened, _fd) = open(&client, path, writable, true, false);
         assert_eq!(opened.size, 0);
+        assert!(opened.workspace_id.is_some());
         assert!(opened.version_id.is_none());
         if flush {
             client
@@ -443,9 +449,16 @@ fn public_smb_bridge_empty_create_close_and_flush_publish_once() {
     drop(client);
     let (root, engine) = fixture.cold_open();
     let entries = engine.list_tree(&repo.main_branch_id).unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_ne!(entries[0].file_id, entries[1].file_id);
-    assert_eq!(engine.state().versions.len(), 2);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| &entry.file_id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4
+    );
+    assert_eq!(engine.state().versions.len(), 4);
     for opened in saved {
         let entry = entries
             .iter()
@@ -502,6 +515,44 @@ fn public_smb_bridge_exclusive_conflicts_preserve_content_and_connection() {
     let (root, engine) = fixture.cold_open();
     assert_eq!(engine.file_history(&before.file_id).unwrap().len(), 1);
     assert_eq!(exported(&engine, root.path(), &before.version_id), b"keep");
+}
+
+#[test]
+fn public_smb_bridge_read_only_create_existing_keeps_pinned_content_without_a_writer() {
+    let mut fixture = Fixture::new();
+    let client = fixture.connect();
+    save(&client, "p/existing.txt", b"before", true);
+    let repo = fixture.repository();
+    let before = fixture.entry(&repo.main_branch_id, "existing.txt");
+    let (reader, _placeholder) = client
+        .open(Request::Open {
+            path: "p/existing.txt".into(),
+            writable: false,
+            create: true,
+            truncate: false,
+            exclusive: false,
+            write_through: false,
+        })
+        .unwrap();
+    assert!(reader.workspace_id.is_none());
+    assert_eq!(reader.entry_id, before.entry_id);
+    assert_eq!(
+        reader.version_id.as_deref(),
+        Some(before.version_id.as_str())
+    );
+    // A read-only create of an existing file must not reserve its write path.
+    save(&client, "p/existing.txt", b"after", false);
+    let mut pinned = [0; 6];
+    assert_eq!(client.read(reader.handle, 0, &mut pinned).unwrap(), 6);
+    assert_eq!(&pinned, b"before");
+    close(&client, reader.handle);
+    assert_eq!(read(&client, "p/existing.txt").1, b"after");
+    let current = fixture.entry(&repo.main_branch_id, "existing.txt");
+    drop(client);
+    let (root, engine) = fixture.cold_open();
+    assert_eq!(engine.file_history(&before.file_id).unwrap().len(), 2);
+    assert_eq!(exported(&engine, root.path(), &before.version_id), b"before");
+    assert_eq!(exported(&engine, root.path(), &current.version_id), b"after");
 }
 
 #[path = "phase1_smb_rpc/http_soft_deletion.rs"]

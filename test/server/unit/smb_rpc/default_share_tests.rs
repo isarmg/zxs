@@ -929,17 +929,17 @@ fn default_mkdir_replay_admission_precedes_any_internal_root_creation() {
 }
 
 #[test]
-fn invalid_read_only_create_or_truncate_never_creates_a_default_root() {
+fn read_only_truncate_never_creates_a_default_root() {
     let (_temp, shared, _backend) = empty_fixture(false);
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
-    for (create, truncate) in [(true, false), (false, true), (true, true)] {
+    for create in [false, true] {
         let (reply, _) = binding_tests::exchange(
             &mut stream,
             Request::Open {
                 path: "p/file.txt".into(),
                 writable: false,
                 create,
-                truncate,
+                truncate: true,
                 exclusive: false,
                 write_through: false,
             },

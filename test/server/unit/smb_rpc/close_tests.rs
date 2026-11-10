@@ -1005,3 +1005,40 @@ fn poisoned_vfs_lock_detaches_without_publishing_or_discarding_unannounced_bytes
     drop(client);
     worker.join().unwrap();
 }
+
+#[test]
+fn failed_terminal_close_consumes_writer_and_preserves_reader_and_recovery() {
+    let (_temp, shared, backend, branch) = fixture();
+    let mut active = session(shared.clone(), &branch);
+    let (reader, _placeholder) = open_file(&mut active, false);
+    let (writer, file) = open_file(&mut active, true);
+    file.write_all_at(b"new", 0).unwrap();
+    active.dirty(writer.handle).unwrap();
+    let retained = source(&shared, &writer);
+    let operation = record(&retained)["operation_id"].clone();
+    backend.fail.store(true, Ordering::SeqCst);
+
+    assert_eq!(
+        active.close(writer.handle, false).unwrap_err().code,
+        storage_contract::ErrorCode::InjectedFailure
+    );
+    assert!(!active.handles.contains_key(&writer.handle));
+    assert!(active.writer_locks.is_empty());
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&retained).unwrap(), b"new");
+    assert_eq!(record(&retained)["handle_state"], "detached");
+    assert_eq!(record(&retained)["operation_id"], operation);
+    assert_eq!(read_session(&mut active, reader.handle, 0, 3), b"old");
+
+    let uploads = backend.uploads.load(Ordering::SeqCst);
+    assert_eq!(
+        active.close(writer.handle, false).unwrap_err().code,
+        storage_contract::ErrorCode::NotFound
+    );
+    let (reopened, _file) = open_file(&mut active, true);
+    active.close(reopened.handle, true).unwrap();
+    active.close(reader.handle, false).unwrap();
+    assert!(active.handles.is_empty());
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), uploads);
+    assert!(retained.is_file());
+}

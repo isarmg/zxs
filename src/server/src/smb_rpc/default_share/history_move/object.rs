@@ -130,7 +130,11 @@ impl DefaultShare {
         let source = self.pin_binding(source.repository)?;
         let source_identity = self.bound_identity(&source);
         self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
-        let (target, target_path) = match self.resolve(destination, SmbPathIntent::Lookup) {
+        let (target, target_path) = match self.resolve_at(
+            &target_slot,
+            destination_path.clone(),
+            SmbPathIntent::Lookup,
+        ) {
             Ok(location) => {
                 if location.relative_path.is_empty() {
                     return Err(ApiError::unsupported());
@@ -214,7 +218,10 @@ impl DefaultShare {
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
         let intent: Intent = storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
-        let Location::Path { slot: source_slot, .. } = self.locate(source)? else {
+        let Location::Path {
+            slot: source_slot,
+            path: source_path,
+        } = self.locate(source)? else {
             return Err(changed());
         };
         let Location::Path { slot: target_slot, path: target_path } = self.locate(target)? else {
@@ -230,7 +237,7 @@ impl DefaultShare {
         }
         // Resolve only the displayed repository binding. A completed move can
         // remove the source occurrence; it must never capture new members here.
-        let source = self.resolve(source, SmbPathIntent::Lookup)?;
+        let source = self.resolve_at(&source_slot, source_path, SmbPathIntent::Lookup)?;
         let source_path = name_policy::LookupPath::parse(&source.relative_path)
             .map_err(ApiError::invalid_source)?;
         if !intent.source_binding.matches(&self.pin_binding(source.repository)?)
@@ -240,7 +247,7 @@ impl DefaultShare {
         }
         match &intent.target_binding {
             Some(binding) => {
-                let target = self.resolve(target, SmbPathIntent::Lookup)?;
+                let target = self.resolve_at(&target_slot, target_path, SmbPathIntent::Lookup)?;
                 if !binding.matches(&self.pin_binding(target.repository)?)
                     || target.relative_path.as_str() != intent.movement.target_path.as_str()
                 {

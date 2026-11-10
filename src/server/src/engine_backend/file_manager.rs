@@ -25,17 +25,6 @@ fn disk<'a>(
             )
         })
 }
-fn eligible(engine: &Engine, slot: &str, repo: &Repository) -> bool {
-    repo.primary_slot_id == slot
-        || engine.state().placements.values().any(|p| {
-            engine
-                .state()
-                .versions
-                .get(&p.version_id)
-                .is_some_and(|version| version.history_tree_id == repo.history_tree_id)
-                && p.route_slot_ids.iter().any(|s| s == slot)
-        })
-}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DiskAccess {
     Read,
@@ -137,13 +126,6 @@ fn resolve_existing<'a>(
         })
         .cloned()
     {
-        if !eligible(engine, slot, &repo) {
-            return Err(ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::DirectoryNotFound,
-                "directory is not stored on this disk",
-            ));
-        }
         return Ok(Some((
             repo,
             relative.split_once('/').map(|(_, p)| p).unwrap_or(""),
