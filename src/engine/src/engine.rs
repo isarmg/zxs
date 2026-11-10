@@ -88,9 +88,11 @@ pub use disk_catalog::{
 };
 mod history_move_recovery;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
+pub(crate) mod move_execution;
+pub(crate) use move_execution::PublishedMove;
 mod history_move_decision;
-pub(crate) use history_move_decision::PublishedMove;
 pub use history_move_decision::{
+    CapturedFileMoveSource,
     FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
     FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,

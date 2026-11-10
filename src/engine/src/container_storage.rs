@@ -1655,10 +1655,10 @@ fn version_time(time: std::time::SystemTime) -> Result<OffsetDateTime> {
 
 /// Strict first-activation observation. Historical repair may skip an unavailable
 /// old body, but a move cannot return its first success with a missing FILE.
-pub(crate) fn verify_move_files(
+pub(crate) fn verify_move_files<O: crate::engine::move_execution::MoveOutcome>(
     config: &ValidatedConfig,
     resources: &Arc<DiskResources>,
-    published: &crate::engine::PublishedMove,
+    published: &crate::engine::PublishedMove<O>,
 ) -> Result<()> {
     let transition = ProjectionTransition::new(published.state(), published.state(), None)?;
     for (slot, history_id, file) in published.files() {

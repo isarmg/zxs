@@ -20,11 +20,11 @@ pub(super) struct Databases {
 
 pub(super) fn file_scopes(
     engine: &Engine,
-    projection: &FileHistoryMoveProjection,
+    retained_versions: &[String],
     candidate: &Candidate,
 ) -> BTreeSet<(String, String, String)> {
     let mut files = BTreeSet::new();
-    for id in projection.capture().retained_version_ids() {
+    for id in retained_versions {
         let version = &engine.state.versions[id];
         for slot in &engine.state.placements[id].route_slot_ids {
             files.insert((
@@ -91,10 +91,10 @@ fn full(engine: &Engine, version: &FileVersion, placement: &Placement) -> Result
 }
 pub(super) fn verify_full(
     engine: &Engine,
-    projection: &FileHistoryMoveProjection,
+    retained_versions: &[String],
     candidate: &Candidate,
 ) -> Result<()> {
-    for id in projection.capture().retained_version_ids() {
+    for id in retained_versions {
         full(
             engine,
             &engine.state.versions[id],
@@ -106,7 +106,7 @@ pub(super) fn verify_full(
     }
     Ok(())
 }
-pub(super) fn verify_published_full(engine: &Engine, published: &PublishedMove) -> Result<()> {
+pub(super) fn verify_published_full<O: MoveOutcome>(engine: &Engine, published: &PublishedMove<O>) -> Result<()> {
     require_resources(engine, &published.candidate)?;
     for id in &published.retained_versions {
         full(
@@ -237,7 +237,7 @@ impl Databases {
         }
         Ok(())
     }
-    pub(super) fn install(self, engine: &mut Engine, published: &PublishedMove) -> Result<()> {
+    pub(super) fn install<O: MoveOutcome>(self, engine: &mut Engine, published: &PublishedMove<O>) -> Result<()> {
         let stop = AtomicBool::new(false);
         require_resources(engine, &published.candidate)?;
         for pair in self.pairs {

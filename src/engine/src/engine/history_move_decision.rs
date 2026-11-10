@@ -6,8 +6,7 @@ use data_serialization::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod execution;
-pub use execution::FileHistoryMovePathRequest;
-pub(crate) use execution::PublishedMove;
+pub use execution::{CapturedFileMoveSource, FileHistoryMovePathRequest};
 mod journal_prepare;
 pub use journal_prepare::FileHistoryMoveJournalPreparation;
 pub(super) use journal_prepare::PrepareBinding;
