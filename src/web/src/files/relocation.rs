@@ -17,6 +17,7 @@ use web_interface::{
 
 mod folders;
 mod target;
+mod completion;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Basis {
@@ -99,6 +100,7 @@ struct Editor {
     reading: RwSignal<bool>,
     generation: RwSignal<u64>,
     cancellation: RwSignal<Option<api::ReadCancellation>>,
+    completion: RwSignal<Option<completion::Destination>>,
 }
 
 impl Editor {
@@ -127,8 +129,19 @@ pub(crate) fn provide(state: RwSignal<State>) {
         reading: RwSignal::new(false),
         generation: RwSignal::new(0),
         cancellation: RwSignal::new(None),
+        completion: RwSignal::new(None),
     };
     provide_context(editor);
+    Effect::new(move |_| {
+        let owner = state.with(|state| {
+            state.session_active().then(|| (state.session_epoch, state.principal.clone()))
+        });
+        if editor.completion.with_untracked(|completion| {
+            completion.as_ref().is_some_and(|destination| !destination.owned_by(owner.as_ref()))
+        }) {
+            editor.completion.set(None);
+        }
+    });
     Effect::new(move |_| {
         let current = state.with(basis);
         if editor
@@ -171,6 +184,7 @@ pub(super) fn start(state: RwSignal<State>, entry: Option<Entry>) {
         .expect("invariant: opening a move selects its admitted current object");
     let editor = expect_context::<Editor>();
     editor.clear_review();
+    editor.completion.set(None);
     editor.target_slot.set(captured.slot.clone());
     editor.destination.set(captured.display_path.clone());
     editor.draft.set(Some(captured));
@@ -267,6 +281,7 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
     let selected_slot = Signal::derive(move || editor.target_slot.get());
     let disabled = Signal::derive(move || !state.with(actions::write_allowed));
     view! {
+        {completion::view(state, editor.completion)}
         <Show when=move ||editor.draft.with(|draft|draft.is_some())>
             <section class="zxs-surface zxs-stack" data-zxs-object-move="">
                 <p>{move ||editor.draft.with(|draft|draft.as_ref().map(|draft|format!(
@@ -327,7 +342,8 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
                                         t("依据已变，请重新审阅。", "The basis changed. Review again."))));
                                     return;
                                 }
-                                if super::mkdir::start_relocation(state, captured.request).is_some() {
+                                if let Some(operation) = super::mkdir::start_relocation(state, captured.request.clone()) {
+                                    editor.completion.set(Some(completion::Destination::submitted(captured, operation)));
                                     editor.draft.set(None);
                                     editor.clear_review();
                                 }
