@@ -449,26 +449,25 @@ fn staged_file_is_committed_without_resurrecting_its_later_working_deletion() {
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap()).unwrap();
     let head = result.result["head_tree_id"].as_str().unwrap();
     assert_eq!(engine.state().directory_trees[head].entries, expected);
-    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert!(tree.visible_entries().next().is_none());
+    assert_eq!(tree.entries(), expected);
     let after = status(&engine, &repo, "");
     assert!(!after.staged && !after.unstaged);
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(status(&engine, &repo, ""), after);
-    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert!(tree.visible_entries().next().is_none());
+    assert_eq!(tree.entries(), expected);
     assert_eq!(version_bytes(&engine, &expected[0].version_id), b"staged");
     assert_eq!(engine.file_deletion(&deletion.file_id), Some(&deletion));
-    assert_eq!(
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .entries(),
-        expected
-    );
     let next = commit(&mut engine, &repo, "");
     assert_eq!(next, head);
     let restaged = status(&engine, &repo, "");
-    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert!(tree.visible_entries().next().is_none());
+    assert_eq!(tree.entries(), expected);
     engine
         .undo_file_deletion(UndoFileDeletionRequest {
             file_id: &HistoryFileId::parse(&deletion.file_id).unwrap(),
@@ -535,18 +534,16 @@ fn staged_soft_deletion_preserves_the_reserved_file_until_exact_undo() {
         commit_reviewed(&mut engine, &repo, &ready, OperationId::generate().unwrap()).unwrap();
     assert_eq!(result.result["no_change"], true);
     assert_eq!(result.result["head_tree_id"], head);
-    assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert!(tree.visible_entries().next().is_none());
+    assert_eq!(tree.entries(), std::slice::from_ref(&original));
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(status(&engine, &repo, ""), ready);
     assert_eq!(engine.file_deletion(&original.file_id), Some(&deletion));
-    assert_eq!(
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .entries(),
-        [original.clone()]
-    );
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert!(tree.visible_entries().next().is_none());
+    assert_eq!(tree.entries(), std::slice::from_ref(&original));
     assert_eq!(
         version_bytes(&engine, &original.version_id),
         b"old identity"
