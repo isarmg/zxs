@@ -117,14 +117,38 @@ fn deletion(previous:&State,repository:&Repository,entry:&Entry,principal:&str,o
     })
 }
 
+fn relocate_existing_locations(next: &mut State, unit: &MoveUnit) -> Result<()> {
+    let source = unit.entries.iter()
+        .find(|member| member.source.lookup_key() == unit.request.source_path.key())
+        .expect("invariant: captured move includes its source");
+    let is_directory = source.source.kind == NamespaceEntryKind::Directory;
+    let mut locations = BTreeMap::<String, String>::new();
+    for member in unit.entries.iter().filter(|member| member.source.kind == NamespaceEntryKind::File) {
+        let file = &member.source;
+        let old = next.file_locations.get(&file.file_id).cloned()
+            .unwrap_or_else(|| file.path().to_owned());
+        let path = directory::namespace_location(
+            old, file, unit.request.source_path.as_str(), unit.request.target_path.as_str(),
+            storage_contract::DirectoryBatchKind::Rename, is_directory,
+        );
+        if let Some(other) = locations.insert(file.file_id.clone(), path.clone())
+            && name_policy::path_key(&other) != name_policy::path_key(&path)
+        {
+            return Err(Error::new(ErrorCode::BatchMappingConflict,
+                "one physical file cannot have two move/rename outcomes"));
+        }
+    }
+    // Resolve every occurrence against the same original owner before changing
+    // any file. Aliases cannot select an owner through traversal order.
+    for (file, path) in locations {
+        next.file_names.insert(file.clone(), path.rsplit('/').next().unwrap_or("").into());
+        next.file_locations.insert(file, path);
+    }
+    Ok(())
+}
+
 fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:&Repository,graph:Option<&graph::Graph>,arrived:&[Entry],route:&CopyRoute,principal:&str,operation:OperationId)->Result<()> {
-    let same_parent_rename=!unit.copy_history
-        && unit.request.source_path.key().rsplit_once('/').map(|(parent,_)|parent)
-            ==unit.request.target_path.key().rsplit_once('/').map(|(parent,_)|parent);
-    let rename_directory=same_parent_rename && unit.entries.iter()
-        .find(|member|member.source.lookup_key()==unit.request.source_path.key())
-        .expect("invariant: captured move includes its source").source.kind==NamespaceEntryKind::Directory;
-    let mut renamed_locations=BTreeSet::new();
+    if !unit.copy_history { relocate_existing_locations(next, unit)?; }
     let mut files=BTreeSet::new();
     let aliased_files=unit.entries.iter().filter(|member|
         member.source.kind==NamespaceEntryKind::File && !files.insert(member.source.file_id.as_str()))
@@ -139,14 +163,7 @@ fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:
     let entries_by_path=target_head.entries.iter().map(|entry|(entry.lookup_key(),entry)).collect::<BTreeMap<_,_>>();
     for (member,entry) in unit.entries.iter().zip(arrived) {
         if entry.kind!=NamespaceEntryKind::File { continue; }
-        if same_parent_rename {
-            // All aliases of this directory rename have the same physical
-            // outcome. Apply the existing owner-prefix rule once per file.
-            if renamed_locations.insert(entry.file_id.as_str()) {
-                directory::set_namespace_location(next,&member.source,unit.request.source_path.as_str(),
-                    unit.request.target_path.as_str(),storage_contract::DirectoryBatchKind::Rename,rename_directory);
-            }
-        } else {
+        if unit.copy_history {
             next.file_names.insert(entry.file_id.clone(),entry.name().into());
             next.file_locations.insert(entry.file_id.clone(),entry.path().into());
         }
@@ -176,7 +193,7 @@ fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:
             file::relocate_namespace_file_branch_with_ids(next,&context,&entries_by_path,entry,operation,&mut ids)?;
         }
         next.file_contexts.insert(directory::context_key_from_key(&target.repository_id,entry.lookup_key()),context);
-        if !same_parent_rename {
+        if unit.copy_history {
             next.file_names.insert(entry.file_id.clone(),entry.name().into());
             next.file_locations.insert(entry.file_id.clone(),entry.path().into());
         }

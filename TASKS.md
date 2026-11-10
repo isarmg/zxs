@@ -14,7 +14,7 @@
 
 ## 本轮正常业务收敛
 
-- M01 同父目录改名的物理 owner 后继基于 `a66cbd7e`：仅同仓且不复制历史、源／目标规范父路径相同的 object.move，复用现有 set_namespace_location／namespace_location 的 Rename 规则，每 file 更新一次实际位置。目录内别名的改名不抢占范围外 owner；实际 owner 在源内时按原前缀改名，同 file 多个出现位置不由最后遍历成员决定归属。逐路径 context／节点及原派生 ID 保持，跨父移动、跨仓新身份 owner 和 foreign-version pending 分支不在本片范围。不添加恢复机制或改写旧材料；旧实现误改 owner 的候选即使派生 ID 不变，完整 State 也可能不再通过新投影精确重放，保留材料而不承诺自动兼容。独立源码待协调者合批，未运行程序、格式器、编译、测试或 CI。
+- M01 无历史复制的物理 owner 后继基于独立 `5513d46c`：将同父改名与跨父 object.move 统一为现有 namespace_location 的 Rename 规则，从同一原 owner 计算全部出现位置，按 file 汇总后一次写入。规范路径结果冲突沿用 batch／Current 的 BatchMappingConflict，在私有候选阶段拒绝，不以首项、末项或别名路径自行决定归属；同父目录改名仍保留范围外 owner、按源前缀更新范围内 owner。逐路径 context、节点及派生 ID 保持，复制历史的新身份 owner 未扩改。foreign-version pending 经 split 等入口静态核对未建立公开可达性，本轮不新增机制。旧版候选若包含冲突或错误归属，不能保证通过当前投影；不兼容、迁移或删除原材料。独立源码待协调者后续合批，不混入 16:30 已冻结载荷；未运行程序、格式器、编译、测试或 CI。
 
 - 本轮集中批次基于 `3594ee91`，组合别名业务 `4cdbd88e`、隐藏目标预算 `c8bf8a6b` 及对应独立测试 `b18a9e9d`／`a61f5ea8`，并最小带入 `8b01bc12` 的未有首提交空仓库流程。保留各独立分支，不修改已批准的71路径载荷，仅由协调者在整点／半点窗口提交，源码组合不代表运行验收。
 - T02 到达候选使用完整原始目标命名空间计入 max_entries，并同时按 `(entry_id, lookup_key)` 排除本次源与被覆盖出现位置；隐藏保留行占用额度，与最终发布集合一致。可见性只参与目标准入，覆盖意图和现有删除保护不变；不混入目录 D 模型、SQLite 格式或 Current companion guard。
