@@ -1,6 +1,6 @@
 //! Directory selection admits the complete composed tree, not just its subtree.
 //! All namespace, publication, and restart checks use disposable storage pools.
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
 use storage_engine::{
     CommitRequest, Config, DirectoryCommitRequest, Engine, NamespaceOperation, Repository,
 };
@@ -44,11 +44,16 @@ impl Pool {
         }
     }
 
-    fn namespace(&mut self, kind: storage_contract::NamespaceOperationKind, path: &str) {
+    fn namespace(
+        &mut self,
+        kind: storage_contract::NamespaceOperationKind,
+        path: &str,
+        target: Option<&str>,
+    ) {
         self.engine
             .file_namespace(
                 &self.repo.repository_id,
-                NamespaceOperation::parse(kind, path, None).unwrap(),
+                NamespaceOperation::parse(kind, path, target).unwrap(),
                 "admin",
                 storage_contract::OperationId::generate().unwrap(),
             )
@@ -98,6 +103,18 @@ impl Pool {
             .to_owned()
     }
 
+    fn select(&mut self, path: &str, name: &str) {
+        self.engine
+            .select_directory_branches(
+                &self.repo.repository_id,
+                Some(&name_policy::LookupPath::parse(path).unwrap()),
+                &storage_contract::BranchName::parse(name).unwrap(),
+                "admin",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
+
     fn checkpoint(&mut self, path: &str) {
         directory_fixture::checkpoint(&mut self.engine, &self.repo, path);
     }
@@ -109,6 +126,24 @@ impl Pool {
             .into_iter()
             .map(|entry| entry.path.into_string())
             .collect()
+    }
+
+    fn assert_file(&self, path: &str, expected: &[u8]) {
+        let entry = self
+            .engine
+            .list_tree(&self.repo.main_branch_id)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path() == path)
+            .unwrap();
+        let mut body = Vec::new();
+        self.engine
+            .open_content(&entry.version_id)
+            .unwrap()
+            .file
+            .read_to_end(&mut body)
+            .unwrap();
+        assert_eq!(body, expected);
     }
 
     fn state_bytes(&self) -> Vec<u8> {
@@ -131,30 +166,41 @@ impl Pool {
     }
 }
 
-fn left_composition() -> Pool {
+fn empty_composition() -> Pool {
     let mut pool = Pool::new();
-    pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "left");
-    pool.namespace(storage_contract::NamespaceOperationKind::Mkdir, "right");
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Mkdir,
+        "left",
+        None,
+    );
+    pool.namespace(
+        storage_contract::NamespaceOperationKind::Mkdir,
+        "right",
+        None,
+    );
+    pool
+}
+
+fn fill_left(pool: &mut Pool) {
     pool.save("left/one.txt");
     pool.save("left/two.txt");
     assert_eq!(
         pool.paths(),
         ["left", "left/one.txt", "left/two.txt", "right"]
     );
-    pool
 }
 
-fn replace_left_with_right(pool: &mut Pool) {
+fn rename_left_to_right(pool: &mut Pool) {
     pool.namespace(
-        storage_contract::NamespaceOperationKind::Delete,
+        storage_contract::NamespaceOperationKind::Rename,
         "left/one.txt",
+        Some("right/one.txt"),
     );
     pool.namespace(
-        storage_contract::NamespaceOperationKind::Delete,
+        storage_contract::NamespaceOperationKind::Rename,
         "left/two.txt",
+        Some("right/two.txt"),
     );
-    pool.save("right/one.txt");
-    pool.save("right/two.txt");
     assert_eq!(
         pool.paths(),
         ["left", "right", "right/one.txt", "right/two.txt"]
@@ -162,11 +208,17 @@ fn replace_left_with_right(pool: &mut Pool) {
 }
 
 fn sibling_compositions() -> Pool {
-    let mut pool = left_composition();
+    let mut pool = empty_composition();
+    pool.register("left", "empty");
+    pool.register("right", "empty");
+    fill_left(&mut pool);
     let left = pool.register("left", "full");
-    replace_left_with_right(&mut pool);
-    // Checkout must reach the composed-tree quota check from a clean source.
-    pool.checkpoint("left");
+
+    // Checkout a committed empty branch instead of deleting owned files.
+    pool.select("left", "empty");
+    assert_eq!(pool.paths(), ["left", "right"]);
+    pool.save("right/one.txt");
+    pool.save("right/two.txt");
     let right = pool.register("right", "full");
 
     // Each sibling was committed legally at the four-entry limit. Combining
@@ -180,11 +232,12 @@ fn sibling_compositions() -> Pool {
 }
 
 fn root_compositions() -> (Pool, String, String) {
-    let mut pool = left_composition();
+    let mut pool = empty_composition();
+    fill_left(&mut pool);
     // The root owns ordinary descendants. Independently initialized children
     // would be preserved by root checkout rather than replaced with its tree.
     let left_root = pool.register("", "left-full");
-    replace_left_with_right(&mut pool);
+    rename_left_to_right(&mut pool);
     let right_root = pool.register("", "right-full");
 
     let branches = &pool.engine.state().directory_branches;
@@ -226,14 +279,8 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
 
     // The rejected operation did not reserve its key and can succeed once the
     // siblings leave enough room, without recreating its frozen composition.
-    pool.namespace(
-        storage_contract::NamespaceOperationKind::Delete,
-        "right/one.txt",
-    );
-    pool.namespace(
-        storage_contract::NamespaceOperationKind::Delete,
-        "right/two.txt",
-    );
+    pool.select("right", "empty");
+    assert_eq!(pool.paths(), ["left", "right"]);
     let result = pool
         .engine
         .select_directory_branches(
@@ -248,6 +295,8 @@ fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
         pool.paths(),
         ["left", "left/one.txt", "left/two.txt", "right"]
     );
+    pool.assert_file("left/one.txt", b"left/one.txt");
+    pool.assert_file("left/two.txt", b"left/two.txt");
     assert_eq!(
         pool.engine.operation(operation).unwrap().result,
         result.result
@@ -299,6 +348,8 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
         pool.paths(),
         ["left", "right", "right/one.txt", "right/two.txt"]
     );
+    pool.assert_file("right/one.txt", b"left/one.txt");
+    pool.assert_file("right/two.txt", b"left/two.txt");
     assert_eq!(
         pool.engine.state().directory_selections[&pool.repo.repository_id],
         right_root
@@ -320,4 +371,6 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
     };
     assert_eq!(recovered.state_bytes(), before);
     assert_eq!(recovered.journals(), journals);
+    recovered.assert_file("right/one.txt", b"left/one.txt");
+    recovered.assert_file("right/two.txt", b"left/two.txt");
 }
