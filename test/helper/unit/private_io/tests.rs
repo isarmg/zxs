@@ -1,4 +1,5 @@
 use super::*;
+use platform_io::publication::PublicationFailure;
 use std::io::Write;
 use std::{
     fs,

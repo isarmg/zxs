@@ -17,7 +17,7 @@ use platform_io::fs_safety::{
 };
 pub(crate) use platform_io::publication::{BundleDestination, BundlePublication, BundleState};
 use platform_io::publication::{
-    PublicationFailure, write_atomic_at, write_atomic_at_mode, write_atomic_at_mode_receipt,
+    write_atomic_at, write_atomic_at_mode, write_atomic_at_mode_receipt,
 };
 pub(crate) use program_repair::ProgramSnapshot;
 pub(crate) use rescue_image::{publish_rescue_sqlite, rescue_digest, verify_rescue_sqlite};
