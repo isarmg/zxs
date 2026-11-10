@@ -16,41 +16,12 @@ fn at_key<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
         .map(|index| &entries[index])
 }
 
-pub(super) fn descendants<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
-    if key.is_empty() {
-        return entries;
-    }
-    let prefix = format!("{key}/");
-    let start = entries.partition_point(|entry| entry.lookup_key() < prefix.as_str());
-    let entries = &entries[start..];
-    let end = entries.partition_point(|entry| entry.lookup_key().starts_with(&prefix));
-    &entries[..end]
-}
+pub(super) use crate::business::sorted_descendants as descendants;
 
 pub(super) fn rebase(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
-    let depth = if from.is_empty() {
-        0
-    } else {
-        from.split('/').count()
-    };
-    let target = (!to.is_empty())
-        .then(|| name_policy::PortablePath::parse(to))
-        .transpose()?;
-    entries
-        .iter()
-        .map(|entry| {
-            let mut entry = entry.clone();
-            let path = match &target {
-                Some(target) => entry.location().rebase(depth, target)?,
-                None => entry
-                    .location()
-                    .strip_components(depth)
-                    .ok_or_else(|| invalid("directory projection contains its own root"))?,
-            };
-            entry.relocate(path);
-            Ok(entry)
-        })
-        .collect()
+    crate::business::rebase_directory_entries(entries, from, to, || {
+        invalid("directory projection contains its own root")
+    })
 }
 
 fn current_path<'a>(owner: &'a [Entry], repository: &str, directory: &str) -> Result<&'a str> {

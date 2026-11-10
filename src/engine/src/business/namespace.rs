@@ -13,6 +13,50 @@ pub(crate) fn relocate_entry(entry: &mut Entry, path: name_policy::PortablePath)
     entry.relocate(path);
 }
 
+/// Borrow strict descendants from a namespace already ordered by lookup key.
+/// The empty key selects the repository root's full contents.
+pub(crate) fn sorted_descendants<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
+    if key.is_empty() {
+        return entries;
+    }
+    let prefix = format!("{key}/");
+    let start = entries.partition_point(|entry| entry.lookup_key() < prefix.as_str());
+    let entries = &entries[start..];
+    let end = entries.partition_point(|entry| entry.lookup_key().starts_with(&prefix));
+    &entries[..end]
+}
+
+pub(crate) fn rebase_directory_entries(
+    entries: &[Entry],
+    from: &str,
+    to: &str,
+    own_root: fn() -> Error,
+) -> Result<Vec<Entry>> {
+    let depth = if from.is_empty() {
+        0
+    } else {
+        from.split('/').count()
+    };
+    let target = (!to.is_empty())
+        .then(|| name_policy::PortablePath::parse(to))
+        .transpose()?;
+    entries
+        .iter()
+        .map(|entry| {
+            let path = match &target {
+                Some(target) => entry.location().rebase(depth, target)?,
+                None => entry
+                    .location()
+                    .strip_components(depth)
+                    .ok_or_else(own_root)?,
+            };
+            let mut entry = entry.clone();
+            entry.relocate(path);
+            Ok(entry)
+        })
+        .collect()
+}
+
 pub(crate) fn sorted(entries: &mut [Entry]) {
     entries.sort_by(|a, b| a.lookup_key().as_bytes().cmp(b.lookup_key().as_bytes()));
 }

@@ -1141,3 +1141,31 @@ fn detached_git_status_rechecks_current_namespace_publication_even_at_the_same_s
         ErrorCode::RecoveryRequired
     );
 }
+
+#[test]
+fn shared_directory_rebase_preserves_current_projection_error_classification() {
+    let entry = Entry {
+        entry_id: "entry".into(),
+        path: name_policy::PortablePath::parse("Root/File").unwrap(),
+        kind: NamespaceEntryKind::File,
+        file_id: "file".into(),
+        version_id: "version".into(),
+        size: 9,
+    };
+    let error = rebase(std::slice::from_ref(&entry), "root/file", "").unwrap_err();
+    assert_eq!(error.code(), ErrorCode::WorkspaceChanged);
+    assert_eq!(
+        error.to_string(),
+        invalid("directory projection contains its own root").to_string()
+    );
+    for entries in [std::slice::from_ref(&entry), &[]] {
+        let expected = Error::from(name_policy::PortablePath::parse("..").unwrap_err());
+        let actual = rebase(entries, "root", "..").unwrap_err();
+        assert_eq!(actual.code(), expected.code());
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
+    let actual = rebase(std::slice::from_ref(&entry), "root", "Target").unwrap();
+    let mut expected = entry;
+    expected.relocate(name_policy::PortablePath::parse("Target/File").unwrap());
+    assert_eq!(actual, vec![expected]);
+}

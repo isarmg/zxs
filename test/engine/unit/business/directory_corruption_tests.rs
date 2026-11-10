@@ -151,7 +151,10 @@ fn missing_directory_selection_references_return_errors_without_publication() {
 fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
     for missing in ["branch", "tree"] {
         let (_temporary, mut engine, repo, _) = fixture();
-        let (directory, _, _) = scope(&engine.state, &repo.repository_id, "folder").unwrap();
+        let directory = scope_view(&engine.state, &repo.repository_id, "folder")
+            .unwrap()
+            .directory_id
+            .to_owned();
         if missing == "branch" {
             let branch = engine.state.directory_selections[&directory].clone();
             std::sync::Arc::make_mut(&mut engine.state)

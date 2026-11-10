@@ -229,7 +229,7 @@ impl DirectorySnapshotSource {
                 })?;
             (entry.entry_id.as_str(), entry.path())
         };
-        let entries = current_scope_entries(tree.entries(), &key);
+        let entries = namespace::sorted_descendants(tree.entries(), &key);
         Ok(DirectoryScopeView {
             directory_id,
             path,
@@ -242,39 +242,6 @@ impl DirectorySnapshotSource {
             entries,
         })
     }
-}
-
-fn current_scope_entries<'a>(entries: &'a [Entry], key: &str) -> &'a [Entry] {
-    if key.is_empty() {
-        return entries;
-    }
-    let prefix = format!("{key}/");
-    let start = entries.partition_point(|entry| entry.lookup_key() < prefix.as_str());
-    let descendants = &entries[start..];
-    let end = descendants.partition_point(|entry| entry.lookup_key().starts_with(&prefix));
-    &descendants[..end]
-}
-
-pub(crate) fn scope(
-    state: &State,
-    repository: &str,
-    path: &str,
-) -> Result<(String, Vec<Entry>, String)> {
-    let view = scope_view(state, repository, path)?;
-    let entries = view
-        .commit
-        .entries
-        .iter()
-        .filter(|entry| {
-            view.key.is_empty() || namespace::is_descendant(entry.lookup_key(), &view.key)
-        })
-        .cloned()
-        .collect();
-    Ok((
-        view.directory_id.to_owned(),
-        entries,
-        view.commit.commit_id.clone(),
-    ))
 }
 
 pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
@@ -300,34 +267,12 @@ pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
 }
 
 pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<Vec<Entry>> {
-    let depth = if from.is_empty() {
-        0
-    } else {
-        from.split('/').count()
-    };
-    let target = if to.is_empty() {
-        None
-    } else {
-        Some(name_policy::PortablePath::parse(to)?)
-    };
-    entries
-        .iter()
-        .map(|entry| {
-            let path = if let Some(target) = &target {
-                entry.location().rebase(depth, target)?
-            } else {
-                entry.location().strip_components(depth).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "directory snapshot contains its own root",
-                    )
-                })?
-            };
-            let mut entry = entry.clone();
-            entry.relocate(path);
-            Ok(entry)
-        })
-        .collect()
+    namespace::rebase_directory_entries(entries, from, to, || {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "directory snapshot contains its own root",
+        )
+    })
 }
 
 fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
@@ -360,7 +305,8 @@ fn snapshot_current_source(
                 directory_id: directory.entry_id.clone(),
                 path: directory.path().into(),
                 current: Arc::clone(&source.current),
-                entries: current_scope_entries(&source.entries, directory.lookup_key()).to_vec(),
+                entries: namespace::sorted_descendants(&source.entries, directory.lookup_key())
+                    .to_vec(),
             },
         )?;
     }
@@ -668,7 +614,8 @@ pub(super) fn initialize_git_working_scope(
     for (directory_id, path) in scopes {
         let source = DirectorySnapshotSource {
             directory_id,
-            entries: current_scope_entries(&entries, &name_policy::path_key(&path)).to_vec(),
+            entries: namespace::sorted_descendants(&entries, &name_policy::path_key(&path))
+                .to_vec(),
             path,
             current: Arc::clone(&current),
         };
@@ -783,8 +730,8 @@ pub(crate) fn prepare_renamed_directories(
     old_paths.sort_by_key(|p| std::cmp::Reverse(p.split('/').count()));
     old_paths.dedup();
     for path in old_paths {
-        let (id, _, _) = scope(state, repository, &path)?;
-        if !state.directory_selections.contains_key(&id) {
+        let id = scope_view(state, repository, &path)?.directory_id;
+        if !state.directory_selections.contains_key(id) {
             snapshot(state, repository, &path)?;
         }
     }
@@ -1595,3 +1542,7 @@ mod corruption_tests;
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/directory_fork_names.rs"]
 mod fork_names;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/directory_path_projection_tests.rs"]
+mod path_projection_tests;
