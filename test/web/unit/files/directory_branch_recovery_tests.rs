@@ -507,3 +507,77 @@ fn cleanup_of_one_record_cannot_erase_an_unrelated_recovery_failure() {
     assert!(Arc::ptr_eq(&model.records[0].record, &pending));
     assert!(matches!(model.records[0].phase, Phase::Pending));
 }
+
+#[test]
+fn shared_encoding_keeps_each_original_shape_bytes_digest_and_request() {
+    let folder = Record::capture(&state(), id("op", 3).parse().unwrap(), "new").unwrap();
+    let mut moved = folder.stored;
+    moved.format = Format::ObjectMove;
+    moved.namespace = Namespace::ObjectMove {
+        movement: storage_contract::file_relocation::ObjectMoveRequest {
+            source_repository_id: HistoryRepositoryId::parse(&id("repo", 1)).unwrap(),
+            source_entry_id: storage_contract::file_relocation::NamespaceEntryId::parse(&id(
+                "entry", 2,
+            ))
+            .unwrap(),
+            source_path: name_policy::LookupPath::parse("folder/new").unwrap(),
+            target_slot_id: "P02".into(),
+            target_repository_id: None,
+            target_path: name_policy::PortablePath::parse("destination").unwrap(),
+            replace: false,
+            target_entry_id: None,
+        },
+    };
+    let movement = Record::encode(moved, "object move is oversized").unwrap();
+    let folder = Record::capture(&state(), id("op", 4).parse().unwrap(), "new").unwrap();
+    for record in [create(), checkout(), folder, movement] {
+        let expected = storage_contract::canonical_json(&record.stored).unwrap();
+        let encoded = Record::encode(record.stored, "request is oversized").unwrap();
+        assert_eq!(encoded.bytes.as_bytes(), expected);
+        let restored = Record::decode(&encoded.key(), "alice", &encoded.bytes).unwrap();
+        assert_eq!(restored.bytes, encoded.bytes);
+        assert_eq!(restored.request(), encoded.request());
+        assert_eq!(restored.digest, encoded.digest);
+        assert_eq!(restored.relocation_digests, encoded.relocation_digests);
+    }
+}
+
+#[test]
+fn shared_encoding_keeps_the_exact_byte_limit_before_binding() {
+    for extra in [0, 1] {
+        let mut stored = create().stored;
+        stored.principal.clear();
+        let overhead = storage_contract::canonical_json(&stored).unwrap().len();
+        stored.principal = "a".repeat(MAX_RECORD_BYTES - overhead + extra);
+        assert_eq!(
+            storage_contract::canonical_json(&stored).unwrap().len(),
+            MAX_RECORD_BYTES + extra,
+        );
+        let error = match Record::encode(stored, "specific original request is oversized") {
+            Ok(_) => panic!("the oversized account must not be admitted"),
+            Err(error) => error,
+        };
+        if extra == 0 {
+            assert_eq!(error.code, ErrorCode::InvalidRequest);
+            assert_eq!(error.message, "The folder recovery account is invalid.");
+        } else {
+            assert_eq!(error.code, ErrorCode::ResourceLimit);
+            assert_eq!(error.message, "specific original request is oversized");
+        }
+    }
+}
+
+#[test]
+fn shared_encoding_preserves_binding_errors_and_their_source() {
+    let mut stored = create().stored;
+    stored.slot = "../outside".into();
+    let error = match Record::encode(stored, "request is oversized") {
+        Ok(_) => panic!("an invalid slot must not be admitted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(api::ErrorSource::FolderCreationRecovery(_))
+    ));
+}

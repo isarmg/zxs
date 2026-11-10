@@ -256,13 +256,9 @@ impl Record {
             path,
             namespace: Namespace::DirectoryBranch { request },
         };
-        let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
-        if bytes.len() > MAX_RECORD_BYTES {
-            return Err(limit(
-                "The original directory request exceeds 32 KiB; no request was sent.",
-            ));
-        }
-        let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
-        Self::bind(stored, Arc::from(bytes))
+        Self::encode(
+            stored,
+            "The original directory request exceeds 32 KiB; no request was sent.",
+        )
     }
 }

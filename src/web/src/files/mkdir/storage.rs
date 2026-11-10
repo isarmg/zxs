@@ -243,14 +243,10 @@ impl Record {
             path: Some(path),
             namespace,
         };
-        let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
-        let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
-        if bytes.len() > MAX_RECORD_BYTES {
-            return Err(limit(
-                "The original folder request exceeds 32 KiB; no request was sent.",
-            ));
-        }
-        Self::bind(stored, Arc::from(bytes))
+        Self::encode(
+            stored,
+            "The original folder request exceeds 32 KiB; no request was sent.",
+        )
     }
     pub(super) fn capture_relocation(
         state: &State,
@@ -281,13 +277,17 @@ impl Record {
             ),
             namespace: Namespace::ObjectMove { movement },
         };
+        Self::encode(
+            stored,
+            "The original object move exceeds 32 KiB; no request was sent.",
+        )
+    }
+    fn encode(stored: Stored, oversized: &str) -> Result<Self, api::Error> {
         let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
-        let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
         if bytes.len() > MAX_RECORD_BYTES {
-            return Err(limit(
-                "The original object move exceeds 32 KiB; no request was sent.",
-            ));
+            return Err(limit(oversized));
         }
+        let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
         Self::bind(stored, Arc::from(bytes))
     }
     fn decode(key: &str, principal: &str, bytes: &str) -> Result<Self, api::Error> {

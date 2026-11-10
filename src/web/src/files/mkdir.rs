@@ -108,18 +108,7 @@ pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
     {
         return None;
     }
-    let id = crate::ui::file_operation_id(state)?;
-    let operation = id
-        .parse()
-        .expect("invariant: UI generated a canonical operation ID");
-    let record = match state.with_untracked(|s| Record::capture(s, operation, name)) {
-        Ok(record) => Arc::new(record),
-        Err(error) => {
-            fail(state, error);
-            return None;
-        }
-    };
-    retain(state, record)
+    capture_and_retain(state, |s, operation| Record::capture(s, operation, name))
 }
 
 pub(super) fn start_relocation(
@@ -131,18 +120,9 @@ pub(super) fn start_relocation(
     {
         return None;
     }
-    let operation = crate::ui::file_operation_id(state)?
-        .parse()
-        .expect("invariant: UI generated a canonical operation ID");
-    let record = match state.with_untracked(|s| Record::capture_relocation(s, operation, movement))
-    {
-        Ok(record) => Arc::new(record),
-        Err(error) => {
-            fail(state, error);
-            return None;
-        }
-    };
-    retain(state, record)
+    capture_and_retain(state, |s, operation| {
+        Record::capture_relocation(s, operation, movement)
+    })
 }
 
 pub(super) fn start_directory_branch(
@@ -160,18 +140,9 @@ pub(super) fn start_directory_branch(
     }) {
         return None;
     }
-    let operation = crate::ui::file_operation_id(state)?
-        .parse()
-        .expect("invariant: UI generated a canonical operation ID");
-    let record =
-        state.with_untracked(|s| Record::capture_directory_branch(s, operation, source, name));
-    match record {
-        Ok(record) => retain(state, Arc::new(record)),
-        Err(error) => {
-            fail(state, error);
-            None
-        }
-    }
+    capture_and_retain(state, |s, operation| {
+        Record::capture_directory_branch(s, operation, source, name)
+    })
 }
 
 pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
@@ -187,18 +158,22 @@ pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
     }) {
         return;
     }
-    let Some(id) = crate::ui::file_operation_id(state) else {
-        return;
-    };
-    let operation = id
+    capture_and_retain(state, Record::capture_directory_checkout);
+}
+
+fn capture_and_retain(
+    state: RwSignal<State>,
+    capture: impl FnOnce(&State, OperationId) -> Result<Record, api::Error>,
+) -> Option<String> {
+    let operation = crate::ui::file_operation_id(state)?
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
-    let record = state.with_untracked(|s| Record::capture_directory_checkout(s, operation));
-    match record {
-        Ok(record) => {
-            retain(state, Arc::new(record));
+    match state.with_untracked(|s| capture(s, operation)) {
+        Ok(record) => retain(state, Arc::new(record)),
+        Err(error) => {
+            fail(state, error);
+            None
         }
-        Err(error) => fail(state, error),
     }
 }
 
