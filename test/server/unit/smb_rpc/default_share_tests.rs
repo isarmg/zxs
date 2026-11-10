@@ -1042,3 +1042,43 @@ fn default_share_rejects_colliding_disk_directory_basenames() {
     assert!(matches!(reply, Response::Error { .. }));
     close_wire(stream, worker);
 }
+
+#[test]
+fn default_resolution_preserves_typed_suffix_and_explicit_repository_root() {
+    let (_temp, shared, _backend, _branch) = fixture();
+    let resolve = |path: &str, intent| {
+        shared.backend.resolve_smb_path(
+            &identity(&shared),
+            crate::ResolveSmbPath {
+                slot_id: "P01".into(),
+                path: name_policy::LookupPath::parse(path).unwrap(),
+                intent,
+            },
+        )
+    };
+    let root = resolve("资料", crate::SmbPathIntent::Lookup).unwrap();
+    assert!(!root.repository.file_manager_root);
+    assert!(matches!(root.relative_path, SmbRelativePath::Root));
+    let named = resolve("资料/Cafe\u{301}/FILE.txt", crate::SmbPathIntent::Lookup).unwrap();
+    assert_eq!(
+        named.repository.repository_id,
+        root.repository.repository_id
+    );
+    let SmbRelativePath::Entry(path) = named.relative_path else {
+        panic!("named repository child must retain its path")
+    };
+    assert_eq!(path.as_str(), "Cafe\u{301}/FILE.txt");
+    assert_eq!(path.key(), "café/file.txt");
+    let created = resolve("Café", crate::SmbPathIntent::CreateFile).unwrap();
+    assert!(created.repository.file_manager_root);
+    let root_child = resolve("Cafe\u{301}/FILE.txt", crate::SmbPathIntent::Lookup).unwrap();
+    assert_eq!(
+        root_child.repository.repository_id,
+        created.repository.repository_id
+    );
+    let SmbRelativePath::Entry(path) = root_child.relative_path else {
+        panic!("disk-root child must retain every path component")
+    };
+    assert_eq!(path.as_str(), "Cafe\u{301}/FILE.txt");
+    assert_eq!(path.key(), "café/file.txt");
+}

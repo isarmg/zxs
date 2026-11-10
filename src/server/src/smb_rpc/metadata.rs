@@ -12,45 +12,53 @@ impl Session {
     }
 
     pub(super) fn stat(&self, path: &str) -> Result<Value, ApiError> {
-        self.stat_typed(path).map(|result| {
+        let path = if path.is_empty() || path == "." {
+            SmbRelativePath::Root
+        } else {
+            SmbRelativePath::Entry(
+                name_policy::LookupPath::parse(path).map_err(|source| contract(source.into()))?,
+            )
+        };
+        self.stat_typed(&path).map(|result| {
             json_codec::to_value(result).expect("invariant: stat metadata serializes")
         })
     }
 
-    pub(super) fn stat_typed(&self, path: &str) -> Result<StatResult, ApiError> {
-        let result = if path.is_empty() || path == "." {
-            self.authorize_binding()?;
-            StatResult {
-                entry_id: self.branch.clone(),
-                kind: storage_contract::NamespaceEntryKind::Directory,
-                path: String::new(),
-                name: String::new(),
-                size: 0,
-                mtime: FileMtime::NotFile {},
-            }
-        } else {
-            let path =
-                name_policy::LookupPath::parse(path).map_err(|source| contract(source.into()))?;
-            let entry = self.find(&path)?.ok_or_else(|| {
-                ApiError::new(
-                    ::http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::NotFound,
-                    "entry missing",
-                )
-            })?;
-            let mtime = match entry.kind {
-                storage_contract::NamespaceEntryKind::File => {
-                    self.version_mtime(&entry.version_id)?
+    pub(super) fn stat_typed(&self, path: &SmbRelativePath) -> Result<StatResult, ApiError> {
+        let result = match path {
+            SmbRelativePath::Root => {
+                self.authorize_binding()?;
+                StatResult {
+                    entry_id: self.branch.clone(),
+                    kind: storage_contract::NamespaceEntryKind::Directory,
+                    path: String::new(),
+                    name: String::new(),
+                    size: 0,
+                    mtime: FileMtime::NotFile {},
                 }
-                storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
-            };
-            StatResult {
-                name: entry.name().to_owned(),
-                path: entry.path.into_string(),
-                entry_id: entry.entry_id,
-                kind: entry.kind,
-                size: entry.size,
-                mtime,
+            }
+            SmbRelativePath::Entry(path) => {
+                let entry = self.find(path)?.ok_or_else(|| {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::NotFound,
+                        "entry missing",
+                    )
+                })?;
+                let mtime = match entry.kind {
+                    storage_contract::NamespaceEntryKind::File => {
+                        self.version_mtime(&entry.version_id)?
+                    }
+                    storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
+                };
+                StatResult {
+                    name: entry.name().to_owned(),
+                    path: entry.path.into_string(),
+                    entry_id: entry.entry_id,
+                    kind: entry.kind,
+                    size: entry.size,
+                    mtime,
+                }
             }
         };
         Ok(result)

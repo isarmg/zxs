@@ -112,6 +112,22 @@ impl LookupPath {
         })
     }
 }
+impl TryFrom<LookupPath> for PortablePath {
+    type Error = Error;
+
+    /// Lookup already proves structure, characters and budgets. Creation adds NFC.
+    fn try_from(path: LookupPath) -> Result<Self> {
+        for component in path.display.split('/') {
+            if !unicode::is_nfc(component) {
+                return Err(Error::NotNormalized(component.nfc().collect()));
+            }
+        }
+        Ok(Self {
+            display: path.display,
+            key: path.key,
+        })
+    }
+}
 impl From<&PortablePath> for LookupPath {
     fn from(path: &PortablePath) -> Self {
         Self {

@@ -134,9 +134,9 @@ impl DefaultShare {
         admission: NamespaceAdmission,
         replace: bool,
     ) -> Result<Value, ApiError> {
-        if source.relative_path.is_empty() {
+        let SmbRelativePath::Entry(source_path) = source.relative_path else {
             return Err(ApiError::unsupported());
-        }
+        };
         let Location::Path {
             slot: target_slot,
             path: destination_path,
@@ -144,8 +144,6 @@ impl DefaultShare {
         else {
             return Err(ApiError::unsupported());
         };
-        let source_path = name_policy::LookupPath::parse(&source.relative_path)
-            .map_err(ApiError::invalid_source)?;
         let source_slot_id = source.repository.primary_slot_id.clone();
         let source_slot = self
             .shared
@@ -166,11 +164,11 @@ impl DefaultShare {
             SmbPathIntent::Lookup,
         ) {
             Ok(location) => {
-                if location.relative_path.is_empty() {
+                let SmbRelativePath::Entry(path) = location.relative_path else {
                     return Err(ApiError::unsupported());
-                }
-                let target_path = name_policy::PortablePath::parse(&location.relative_path)
-                    .map_err(ApiError::invalid_source)?;
+                };
+                let target_path =
+                    name_policy::PortablePath::try_from(path).map_err(ApiError::invalid_source)?;
                 let key = self.pin_binding(location.repository)?;
                 let identity = self.bound_identity(&key);
                 self.shared
@@ -182,7 +180,7 @@ impl DefaultShare {
                 if error.code == storage_contract::ErrorCode::DirectoryNotFound
                     && !destination_path.as_str().contains('/') =>
             {
-                let target_path = name_policy::PortablePath::parse(destination_path.as_str())
+                let target_path = name_policy::PortablePath::try_from(destination_path)
                     .map_err(ApiError::invalid_source)?;
                 (None, target_path)
             }
@@ -319,8 +317,9 @@ impl DefaultShare {
         // Resolve only the displayed repository binding. A completed move can
         // remove the source occurrence; it must never capture new members here.
         let source = self.resolve_at(&source_slot, source_path, SmbPathIntent::Lookup)?;
-        let source_path = name_policy::LookupPath::parse(&source.relative_path)
-            .map_err(ApiError::invalid_source)?;
+        let SmbRelativePath::Entry(source_path) = source.relative_path else {
+            return Err(changed());
+        };
         if !intent
             .source_binding
             .matches(&self.pin_binding(source.repository)?)
@@ -331,8 +330,11 @@ impl DefaultShare {
         match &intent.target_binding {
             Some(binding) => {
                 let target = self.resolve_at(&target_slot, target_path, SmbPathIntent::Lookup)?;
+                let SmbRelativePath::Entry(path) = target.relative_path else {
+                    return Err(changed());
+                };
                 if !binding.matches(&self.pin_binding(target.repository)?)
-                    || target.relative_path.as_str() != intent.movement.target_path.as_str()
+                    || path.as_str() != intent.movement.target_path.as_str()
                 {
                     return Err(changed());
                 }

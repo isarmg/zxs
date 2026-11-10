@@ -52,7 +52,13 @@ pub enum SmbPathIntent {
     CreateFile,
     CreateDirectory(storage_contract::OperationId),
 }
+/// A resolved repository root or a validated path within that repository.
+#[derive(Debug)]
+pub enum SmbRelativePath {
+    Root,
+    Entry(name_policy::LookupPath),
+}
 pub struct SmbPathLocation {
     pub repository: storage_contract::Repository,
-    pub relative_path: String,
+    pub relative_path: SmbRelativePath,
 }

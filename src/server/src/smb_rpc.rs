@@ -1,7 +1,7 @@
 //! Protected local Samba bridge. Every operation is authorized by Backend;
 //! mutable files remain unpublished until the normal core commit succeeds.
 use crate::{
-    ApiError, Backend, Content,
+    ApiError, Backend, Content, SmbRelativePath,
     auth::{AuthReader, AuthStore, Identity},
 };
 use data_serialization::Serialize;

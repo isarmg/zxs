@@ -167,7 +167,8 @@ pub use backend_create_branch::CreateBranch;
 mod backend_smb_binding;
 mod http_archive;
 pub use backend_smb_binding::{
-    ResolveSmbPath, SmbBindingStatus, SmbPathIntent, SmbPathLocation, UpdateSmbBinding,
+    ResolveSmbPath, SmbBindingStatus, SmbPathIntent, SmbPathLocation, SmbRelativePath,
+    UpdateSmbBinding,
 };
 mod http_smb_binding;
 use http_smb_binding::{smb_binding, update_smb_binding};

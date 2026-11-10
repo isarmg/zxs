@@ -44,8 +44,6 @@ impl Drop for OperationReservation {
 
 pub(super) struct NamespaceInput {
     kind: NamespaceOperation,
-    path: String,
-    destination: Option<String>,
     replace: bool,
     change: storage_contract::NamespaceOperation,
     source_path: name_policy::LookupPath,
@@ -58,53 +56,46 @@ impl NamespaceInput {
         destination: Option<String>,
         replace: bool,
     ) -> Result<Self, ApiError> {
-        let (change, source_path, destination_path) = match kind {
-            NamespaceOperation::Mkdir => {
-                let path = name_policy::PortablePath::parse(&path)
-                    .map_err(|source| contract(source.into()))?;
-                let lookup = name_policy::LookupPath::from(&path);
-                (
-                    storage_contract::NamespaceOperation::Mkdir { path },
-                    lookup,
-                    None,
-                )
-            }
-            NamespaceOperation::Unlink | NamespaceOperation::Rmdir => {
-                let path = name_policy::LookupPath::parse(&path)
-                    .map_err(|source| contract(source.into()))?;
-                (
-                    storage_contract::NamespaceOperation::Delete { path: path.clone() },
-                    path,
-                    None,
-                )
-            }
-            NamespaceOperation::Rename => {
-                let source = name_policy::LookupPath::parse(&path)
-                    .map_err(|source| contract(source.into()))?;
-                let target = destination
-                    .as_deref()
-                    .ok_or_else(|| ApiError::invalid("rename needs a destination"))?;
-                let target = name_policy::PortablePath::parse(target)
-                    .map_err(|source| contract(source.into()))?;
-                (
-                    storage_contract::NamespaceOperation::Rename {
-                        source: source.clone(),
-                        destination: target.clone(),
-                    },
-                    source,
-                    Some(target),
-                )
-            }
-        };
-        if kind != NamespaceOperation::Rename && (destination.is_some() || replace) {
+        let path =
+            name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?;
+        let destination = destination
+            .map(|path| name_policy::PortablePath::parse(&path))
+            .transpose()
+            .map_err(|source| contract(source.into()))?;
+        Self::new(kind, path, destination, replace)
+    }
+
+    pub(super) fn new(
+        kind: NamespaceOperation,
+        source_path: name_policy::LookupPath,
+        destination_path: Option<name_policy::PortablePath>,
+        replace: bool,
+    ) -> Result<Self, ApiError> {
+        if kind != NamespaceOperation::Rename && (destination_path.is_some() || replace) {
             return Err(ApiError::invalid(
                 "only rename accepts a destination or replacement",
             ));
         }
+        let change = match kind {
+            NamespaceOperation::Mkdir => storage_contract::NamespaceOperation::Mkdir {
+                path: name_policy::PortablePath::try_from(source_path.clone())
+                    .map_err(|source| contract(source.into()))?,
+            },
+            NamespaceOperation::Unlink | NamespaceOperation::Rmdir => {
+                storage_contract::NamespaceOperation::Delete {
+                    path: source_path.clone(),
+                }
+            }
+            NamespaceOperation::Rename => storage_contract::NamespaceOperation::Rename {
+                source: source_path.clone(),
+                destination: destination_path
+                    .as_ref()
+                    .ok_or_else(|| ApiError::invalid("rename needs a destination"))?
+                    .clone(),
+            },
+        };
         Ok(Self {
             kind,
-            path,
-            destination,
             replace,
             change,
             source_path,
@@ -376,8 +367,6 @@ impl Session {
     ) -> Result<Value, ApiError> {
         let NamespaceInput {
             kind,
-            path,
-            destination,
             replace,
             change,
             source_path,
@@ -385,9 +374,9 @@ impl Session {
         } = input;
         let operation_id = admission.reservation.operation_id;
         let record = &admission.record;
-        let mut affected = vec![path.as_str()];
-        if let Some(target) = destination.as_deref() {
-            affected.push(target);
+        let mut affected = vec![source_path.as_str()];
+        if let Some(target) = &destination_path {
+            affected.push(target.as_str());
         }
         let soft_delete_directory = if kind == NamespaceOperation::Rmdir {
             match &self.identity.smb_binding {
@@ -454,8 +443,8 @@ impl Session {
                 record,
                 &json!({
                     "format":"smb-protocol-namespace","principal":self.identity.principal,
-                    "branch_id":self.branch,"kind":kind,"path":path,
-                    "destination":destination,"replace":replace,"operation_id":operation_id,
+                    "branch_id":self.branch,"kind":kind,"path":source_path.as_str(),
+                    "destination":destination_path.as_ref().map(|path| path.as_str()),"replace":replace,"operation_id":operation_id,
                     "publication_outcome":"unconfirmed","commit_request":{
                         "workspace_id":commit.workspace_id,"operation_id":commit.operation_id,
                         "expected_head":commit.expected_head,"fencing_token":commit.fencing_token.to_string(),

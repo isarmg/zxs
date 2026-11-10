@@ -2,6 +2,12 @@
 
 状态核对时间：2026-11-10。当前源码父基线：`a6d2d08c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
+## 本轮 SMB 路径类型贯穿
+
+- ResolveSmbPath 的 LookupPath 经引擎路由后继续保留类型和缓存 key；SmbPathLocation 明确区分 repository root 与非空相对路径，删除空串哨兵及 DefaultShare／Session 的重复解析。命名仓库后缀从已验证路径裁取，默认根保留完整路径。
+- Open／Stat／namespace／object.move 和保留请求重试共用这些类型；NamespaceInput 删除额外原始 path／destination 字符串，仅在协议回复和恢复记录边界输出原拼写。LookupPath 转创建路径只检查此前尚未证明的组件 NFC，转移原 display／key，不重新验证结构、字符、预算或计算 key。实时授权、磁盘／绑定身份、创建前 NFC 拒绝和恢复字节比对仍保留。
+- 根测试补充 NFC 转换与原缓冲转移、NFD 查询／创建拒绝、命名仓库 root／后缀和默认根路径。格式、调用点静态检查与补丁检查通过；未本地编译或执行 Rust，准确提交 CI 待验证。本片不改变存储格式或发布协议。
+
 ## 本轮辅助工具与外来材料派生重构
 
 - 辅助工具 45 个同形维护 handler 合并为一处 Operation 路由绑定，URL／操作映射及原有请求准入、任务 owner、秘密处理和响应保持。完整链提案直接移交已构造的 Config，删除随后重复重建／哈希；固定链摘要与根集合在每次操作内只派生一次。

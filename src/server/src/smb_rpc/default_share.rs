@@ -306,9 +306,7 @@ impl DefaultShare {
                         SmbPathIntent::Lookup
                     },
                 )?;
-                let root_entry_id = location
-                    .relative_path
-                    .is_empty()
+                let root_entry_id = matches!(&location.relative_path, SmbRelativePath::Root)
                     .then(|| location.repository.repository_id.clone());
                 let prefix = if location.repository.file_manager_root {
                     slot.directory_name()?.as_str().to_owned()
@@ -361,9 +359,7 @@ impl DefaultShare {
             }
             Location::Path { slot, path: within } => {
                 let location = self.resolve_at(&slot, within, SmbPathIntent::Lookup)?;
-                let root_entry_id = location
-                    .relative_path
-                    .is_empty()
+                let root_entry_id = matches!(&location.relative_path, SmbRelativePath::Root)
                     .then(|| location.repository.repository_id.clone());
                 let prefix = if location.repository.file_manager_root {
                     slot.directory_name()?.as_str().to_owned()
@@ -423,8 +419,7 @@ impl DefaultShare {
                 let Location::Path { path, .. } = self.locate(&path)? else {
                     return Err(directory_only());
                 };
-                name_policy::PortablePath::parse(path.as_str())
-                    .map_err(ApiError::invalid_source)?;
+                name_policy::PortablePath::try_from(path).map_err(ApiError::invalid_source)?;
             }
             if kind == NamespaceOperation::Rename
                 && let Some(reply) = self.resume_object_move(
@@ -450,16 +445,15 @@ impl DefaultShare {
             };
             let source = self.resolve(&path, intent)?;
             // Root namespaces cannot be renamed/deleted through the contents API.
-            if source.relative_path.is_empty() {
-                return Err(ApiError::unsupported());
-            }
             if let Some(path) = destination {
                 let reply = self.move_object(source, &path, admission, replace)?;
                 return Ok((Reply::Json(reply), None));
             }
+            let SmbRelativePath::Entry(path) = source.relative_path else {
+                return Err(ApiError::unsupported());
+            };
             let key = self.session_key(source.repository)?;
-            let input =
-                super::namespace::NamespaceInput::parse(kind, source.relative_path, None, replace)?;
+            let input = super::namespace::NamespaceInput::new(kind, path, None, replace)?;
             let result = self
                 .sessions
                 .get_mut(&key)

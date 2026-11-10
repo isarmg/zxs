@@ -128,3 +128,39 @@ fn lookup_suffix_preserves_parsed_display_and_cached_component_keys() {
     assert_eq!(suffix.strip_components(1).unwrap().as_str(), "FILE.txt");
     assert!(path.strip_components(3).is_none());
 }
+
+#[test]
+fn lookup_to_creation_preserves_display_and_key_and_only_adds_nfc() {
+    for text in [
+        "FILE.txt",
+        "Café/报告.txt",
+        "Straße/Σςσ/İı/각",
+        "A/\u{301}/Z",
+    ] {
+        let lookup = LookupPath::parse(text).unwrap();
+        let display = lookup.as_str().as_ptr();
+        let key = lookup.key().as_ptr();
+        let path = PortablePath::try_from(lookup).unwrap();
+        assert_eq!(path, PortablePath::parse(text).unwrap());
+        assert_eq!(path.as_str().as_ptr(), display);
+        assert_eq!(path.key().as_ptr(), key);
+    }
+    for text in [
+        "Cafe\u{301}",
+        "A/e\u{301}/B",
+        "\u{1100}\u{1161}\u{11a8}/file",
+    ] {
+        let lookup = LookupPath::parse(text).unwrap();
+        assert_eq!(
+            PortablePath::try_from(lookup).unwrap_err(),
+            PortablePath::parse(text).unwrap_err(),
+        );
+    }
+    let within = LookupPath::parse("Repo\u{301}/Café/FILE.txt")
+        .unwrap()
+        .strip_components(1)
+        .unwrap();
+    let path = PortablePath::try_from(within).unwrap();
+    assert_eq!(path.as_str(), "Café/FILE.txt");
+    assert_eq!(path.key(), "café/file.txt");
+}

@@ -158,11 +158,18 @@ pub(super) fn resolve_smb_path(
         DiskAccess::Read
     };
     let value = request.path.as_str();
-    if let Some((repository, relative)) = resolve_existing(engine, &request.slot_id, value, access)?
-    {
+    if let Some((repository, _)) = resolve_existing(engine, &request.slot_id, value, access)? {
+        let relative_path = if repository.file_manager_root {
+            crate::SmbRelativePath::Entry(request.path)
+        } else {
+            match request.path.strip_components(1) {
+                Some(path) => crate::SmbRelativePath::Entry(path),
+                None => crate::SmbRelativePath::Root,
+            }
+        };
         return Ok(crate::SmbPathLocation {
             repository,
-            relative_path: relative.into(),
+            relative_path,
         });
     }
     if !create {
@@ -173,10 +180,11 @@ pub(super) fn resolve_smb_path(
     }
     // Only a missing creation path requires strict display spelling. Existing
     // NFC entries remain reachable by canonically equivalent lookup names.
-    name_policy::PortablePath::parse(value).map_err(ApiError::invalid_source)?;
+    let path =
+        name_policy::PortablePath::try_from(request.path).map_err(ApiError::invalid_source)?;
     Ok(crate::SmbPathLocation {
         repository: create_disk_root(engine, identity, &request.slot_id)?,
-        relative_path: value.into(),
+        relative_path: crate::SmbRelativePath::Entry(path.into()),
     })
 }
 

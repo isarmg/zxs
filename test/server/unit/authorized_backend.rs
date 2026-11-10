@@ -640,7 +640,7 @@ impl Backend for RecordingBackend {
         )?;
         Ok(crate::SmbPathLocation {
             repository: recorded_repository("repository"),
-            relative_path: request.path.as_str().to_owned(),
+            relative_path: crate::SmbRelativePath::Entry(request.path),
         })
     }
     fn smb_binding_status(

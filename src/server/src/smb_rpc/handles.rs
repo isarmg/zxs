@@ -39,11 +39,15 @@ impl Session {
         exclusive: bool,
         write_through: bool,
     ) -> Result<(Value, Option<OwnedFd>), ApiError> {
-        self.open_typed(
-            path,
-            OpenOptions::parse(writable, create, truncate, exclusive, write_through)?,
-        )
-        .map(|(result, descriptor)| {
+        let options = OpenOptions::parse(writable, create, truncate, exclusive, write_through)?;
+        let path = if path.is_empty() {
+            SmbRelativePath::Root
+        } else {
+            SmbRelativePath::Entry(
+                name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?,
+            )
+        };
+        self.open_typed(path, options).map(|(result, descriptor)| {
             (
                 json_codec::to_value(result).expect("invariant: open metadata serializes"),
                 descriptor,
@@ -52,7 +56,7 @@ impl Session {
     }
     pub(super) fn open_typed(
         &mut self,
-        path: String,
+        path: SmbRelativePath,
         options: OpenOptions,
     ) -> Result<(OpenResult, Option<OwnedFd>), ApiError> {
         let OpenOptions {
@@ -62,11 +66,12 @@ impl Session {
             exclusive,
             write_through,
         } = options;
-        let lookup = if path.is_empty() {
-            self.authorize_binding()?;
-            None
-        } else {
-            Some(name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?)
+        let lookup = match path {
+            SmbRelativePath::Root => {
+                self.authorize_binding()?;
+                None
+            }
+            SmbRelativePath::Entry(path) => Some(path),
         };
         if self.handles.len() >= MAX_HANDLES {
             return Err(ApiError::limit("too many SMB handles"));
@@ -82,7 +87,7 @@ impl Session {
                 "entry already exists",
             ));
         }
-        if existing.is_none() && !create && !path.is_empty() {
+        if existing.is_none() && !create && lookup.is_some() {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::NotFound,
@@ -91,11 +96,11 @@ impl Session {
         }
         // The share root has no creation path. Existing entries retain their
         // display spelling; missing create targets are parsed before admission.
-        let path = match &existing {
-            Some(entry) => Some(entry.path.clone()),
-            None if path.is_empty() => None,
-            None => Some(
-                name_policy::PortablePath::parse(&path)
+        let path = match (&existing, &lookup) {
+            (Some(entry), _) => Some(entry.path.clone()),
+            (None, None) => None,
+            (None, Some(path)) => Some(
+                name_policy::PortablePath::try_from(path.clone())
                     .map_err(|source| contract(source.into()))?,
             ),
         };
