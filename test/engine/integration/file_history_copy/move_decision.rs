@@ -513,7 +513,7 @@ fn replacing_a_target_inode_and_its_marker_cannot_rebind_the_original_decision_i
 }
 
 #[test]
-fn missing_target_fulls_cancellation_and_stale_sources_never_create_a_move_decision() {
+fn missing_target_fulls_and_cancellation_never_create_a_move_decision() {
     let mut fixture = Fixture::new(false);
     let (projection, recovery) = plan(&mut fixture);
     let cancel = HistoryWindowCancellation::new();
@@ -534,7 +534,9 @@ fn missing_target_fulls_cancellation_and_stale_sources_never_create_a_move_decis
         .join("content")
         .join(&fixture.engine.state().versions[source].creation_name);
     let content = fs::read(&body).unwrap();
-    fs::write(&body, b"incomplete FULL").unwrap();
+    let source_content = bytes(&fixture.engine, source);
+    let retained = fixture.temp.path().join("retained-target-full");
+    fs::rename(&body, &retained).unwrap();
     assert!(
         fixture
             .engine
@@ -546,7 +548,26 @@ fn missing_target_fulls_cancellation_and_stale_sources_never_create_a_move_decis
             .is_err()
     );
     assert!(!system(&fixture).exists());
-    fs::write(&body, content).unwrap();
+    assert_eq!(fs::read(&retained).unwrap(), content);
+    assert_eq!(bytes(&fixture.engine, source), source_content);
+    assert_eq!(
+        fs::read(&body).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert!(
+        !fixture
+            .engine
+            .state()
+            .operations
+            .contains_key(&projection.operation_id())
+    );
+}
+
+#[test]
+fn rejected_source_edits_preserve_the_original_move_decision_capture() {
+    let mut fixture = Fixture::new(false);
+    let (projection, recovery) = plan(&mut fixture);
+    let before = fixture.engine.state().clone();
     fixture
         .engine
         .set_file_note(
@@ -557,6 +578,7 @@ fn missing_target_fulls_cancellation_and_stale_sources_never_create_a_move_decis
             op(),
         )
         .unwrap_err();
+    assert_eq!(fixture.engine.state(), &before);
     fixture
         .engine
         .prepare_file_history_move_decision_inputs(
