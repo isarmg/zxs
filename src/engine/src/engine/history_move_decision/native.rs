@@ -64,7 +64,12 @@ impl Engine {
                 .install_native(&native, cancellation)?;
             for participant in &materials.record.disks {
                 checkpoint(cancellation)?;
-                store::Store::require_native_capacity(self, &materials, participant, &native)?;
+                store::require_capacity(
+                    self,
+                    participant,
+                    || store::native_storage_bytes(&materials, participant, &native),
+                    "native move draft exceeds configured participant capacity",
+                )?;
                 store::Store::disk(self, &materials, participant, store::Mode::Read)?
                     .install_native(&native, cancellation)?;
             }

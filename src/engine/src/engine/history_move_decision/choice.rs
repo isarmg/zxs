@@ -459,26 +459,32 @@ impl Engine {
             ));
         }
         for participant in &materials.record.disks {
-            store::Store::require_choice_capacity(
+            store::require_capacity(
                 self,
-                &materials,
                 participant,
-                &native,
-                &scopes,
-                choice.bytes.len(),
+                || {
+                    store::scoped_storage_bytes(&materials, participant, &native, &scopes)?
+                        .checked_add(choice.storage_bytes())
+                        .ok_or_else(limit)
+                },
+                "move joint choice and all retained inputs exceed configured participant capacity",
             )?;
         }
         checkpoint(cancellation)?;
         // Fence first, even if the first fsync fails. A partially durable choice
         // can only tighten denial on restart; it is never a voting authority.
         self.history_move_choice = Some(choice.clone());
+        let artifacts = [store::Artifact::Exact {
+            name: NAME,
+            bytes: &choice.bytes,
+        }];
         let finish = || -> Result<()> {
             store::Store::system(self, &materials, store::Mode::Read)?
-                .install_choice(&choice.bytes, cancellation)?;
+                .install_artifacts(&artifacts, cancellation)?;
             for participant in &materials.record.disks {
                 checkpoint(cancellation)?;
                 store::Store::disk(self, &materials, participant, store::Mode::Read)?
-                    .install_choice(&choice.bytes, cancellation)?;
+                    .install_artifacts(&artifacts, cancellation)?;
             }
             self.verify_joint_choice(&materials, &choice, cancellation)?;
             self.verify_move_scopes(
@@ -544,12 +550,16 @@ impl Engine {
         choice: &Choice,
         cancellation: &HistoryWindowCancellation,
     ) -> Result<()> {
+        let artifacts = [store::Artifact::Exact {
+            name: NAME,
+            bytes: &choice.bytes,
+        }];
         store::Store::system(self, materials, store::Mode::Read)?
-            .verify_choice(&choice.bytes, cancellation)?;
+            .verify_artifacts(&artifacts, cancellation)?;
         for participant in &materials.record.disks {
             checkpoint(cancellation)?;
             store::Store::disk(self, materials, participant, store::Mode::Read)?
-                .verify_choice(&choice.bytes, cancellation)?;
+                .verify_artifacts(&artifacts, cancellation)?;
         }
         choice.require_baseline(self)
     }

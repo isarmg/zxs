@@ -79,7 +79,12 @@ impl Engine {
         // Reject configured capacity before writing the first scoped file. The
         // physical reserve and identities are checked again by each held store.
         for participant in &materials.record.disks {
-            store::Store::require_scoped_capacity(self, &materials, participant, &native, &scopes)?;
+            store::require_capacity(
+                self,
+                participant,
+                || store::scoped_storage_bytes(&materials, participant, &native, &scopes),
+                "move scoped databases exceed configured participant capacity",
+            )?;
         }
         let prepare = || -> Result<()> {
             checkpoint(cancellation)?;
