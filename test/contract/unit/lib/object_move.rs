@@ -3,7 +3,7 @@
 use crate::file_relocation::{
     NamespaceEntryId, OBJECT_MOVE_KIND, ObjectMoveFact, ObjectMoveRequest,
 };
-use crate::history_window::HistoryRepositoryId;
+use crate::history_window::{HistoryFileId, HistoryRepositoryId};
 use json_codec::{json, Value};
 
 fn request(empty: bool) -> ObjectMoveRequest {
@@ -27,6 +27,10 @@ fn entry(id: u8) -> NamespaceEntryId {
     NamespaceEntryId::parse(&format!("entry_{id:032x}")).unwrap()
 }
 
+fn file(id: u8) -> HistoryFileId {
+    HistoryFileId::parse(&format!("file_{id:032x}")).unwrap()
+}
+
 fn receipt(request: &ObjectMoveRequest) -> Value {
     json!({
         "operation_kind": OBJECT_MOVE_KIND,
@@ -37,6 +41,8 @@ fn receipt(request: &ObjectMoveRequest) -> Value {
                 principal: "alice".into(),
                 target_repository_id: repository(2),
                 target_entry_id: entry(2),
+                source_file_id: Some(file(1)),
+                displaced_target_file_id: request.target_entry_id.as_ref().map(|_| file(2)),
             },
         },
     })
@@ -156,3 +162,37 @@ fn request_digest_alone_cannot_substitute_another_fact_or_legacy_move_receipt() 
     assert!(!original.matches_receipt("alice", &wrong_digest));
 }
 
+
+#[test]
+fn fact_retains_explicit_source_and_displaced_file_identities_for_core_replay() {
+    let mut movement = request(false);
+    movement.replace = true;
+    movement.target_entry_id = Some(entry(2));
+    let published = receipt(&movement);
+    let fact: ObjectMoveFact =
+        json_codec::from_value(published["result"]["movement"].clone()).unwrap();
+    assert_eq!(fact.source_file_id, Some(file(1)));
+    assert_eq!(fact.displaced_target_file_id, Some(file(2)));
+    assert!(movement.matches_receipt("alice", &published));
+    for field in ["source_file_id", "displaced_target_file_id"] {
+        let mut missing = published.clone();
+        missing["result"]["movement"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(!movement.matches_receipt("alice", &missing), "{field}");
+    }
+    let directory = ObjectMoveFact {
+        request: request(false),
+        source_file_id: None,
+        displaced_target_file_id: None,
+        ..fact
+    };
+    let wire = json_codec::to_value(&directory).unwrap();
+    assert_eq!(wire["source_file_id"], Value::Null);
+    assert_eq!(wire["displaced_target_file_id"], Value::Null);
+    assert_eq!(
+        json_codec::from_value::<ObjectMoveFact>(wire).unwrap(),
+        directory
+    );
+}
