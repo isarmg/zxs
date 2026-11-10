@@ -111,6 +111,66 @@ pub(crate) struct DetachedPublication {
     history_owners: crate::state_projection::DerivedOwners,
 }
 
+/// Owns the exact immutable outcome and its admitted Current projection.
+/// It cannot be serialized, detached from that outcome or reused after either
+/// original State/Current allocation changes.
+pub(in crate::engine) struct MoveProjection<O> {
+    outcome: O,
+    previous: std::sync::Arc<State>,
+    current: Option<std::sync::Arc<super::CurrentNamespaces>>,
+    next: Option<std::sync::Arc<super::CurrentNamespaces>>,
+}
+
+impl<O: super::move_execution::MoveOutcome> MoveProjection<O> {
+    /// Recovery and retained native-file operations establish a fresh proof.
+    /// Live object moves instead transfer DetachedPublication's existing proof.
+    pub(in crate::engine) fn admit(engine: &Engine, outcome: O) -> Result<Self> {
+        let current = engine.admitted_current_namespaces()?;
+        let next = match current {
+            Some(view) => Some(std::sync::Arc::new(
+                view.advance(&engine.state, outcome.state())?,
+            )),
+            None => {
+                if outcome.result().kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+                    crate::business::object_move::verify_transition(
+                        &engine.state, outcome.state(), None, outcome.result(),
+                    )?;
+                }
+                None
+            }
+        };
+        Ok(Self {
+            outcome,
+            previous: std::sync::Arc::clone(&engine.state),
+            current: engine.current_namespaces.clone(),
+            next,
+        })
+    }
+
+    pub(in crate::engine) fn into_current(
+        self,
+        engine: &Engine,
+        candidate: &Candidate,
+    ) -> Result<(O, Option<std::sync::Arc<super::CurrentNamespaces>>)> {
+        let same_current = match (&self.current, &engine.current_namespaces) {
+            (Some(before), Some(now)) => std::sync::Arc::ptr_eq(before, now),
+            (None, None) => true,
+            _ => false,
+        };
+        if !std::sync::Arc::ptr_eq(&self.previous, &engine.state) || !same_current {
+            return Err(Error::new(ErrorCode::PreparationStale,
+                "move projection no longer extends its admitted State and Current"));
+        }
+        if let Some(view) = &self.current
+            && !view.verify_history_move_candidate(&self.previous, self.outcome.state(), candidate)?
+        {
+            return Err(Error::new(ErrorCode::PreparationStale,
+                "move candidate has no exact Current transition"));
+        }
+        Ok((self.outcome, self.next))
+    }
+}
+
 struct ObjectMoveOutcome {
     state: State,
     operation: OperationId,
@@ -268,15 +328,13 @@ impl Engine {
 
     /// Reuse ordinary payload/snapshot preparation, then enter the one strict
     /// move executor. Ordinary decide_publication must not expose this State.
-    pub(crate) fn publish_move(&mut self, next: State, prepared: Vec<Prepared>,
-        result: OperationResult, retained: Vec<String>) -> Result<OperationResult>
+    pub(crate) fn publish_move(&mut self, plan: crate::business::object_move::MovePlan)
+        -> Result<OperationResult>
     {
-        crate::business::object_move::verify_transition(
-            &self.state, &next, self.current_namespaces.as_deref(), &result,
-        )?;
+        let (next, prepared, result, retained) = plan.into_parts();
         let detached = self.prepare_publication(next, prepared, result, MAX_METADATA)?;
         self.require_detached_publication(&detached)?;
-        let DetachedPublication { next, candidate, result, verified, names,
+        let DetachedPublication { next, next_current_namespaces, candidate, result, verified, names,
             prepared_epoch, reused_dependencies, config_hash,
             base_snapshot, base_sequence, base_next_slot, .. } = detached;
         let object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
@@ -291,8 +349,13 @@ impl Engine {
             live: Some(ObjectMoveProof { verified, prepared_epoch,
                 reused_dependencies, config_hash }),
         };
-        self.finish_move(candidate, hash,
-            ObjectMoveOutcome { state: next, operation: result.operation_id },
+        let projection = MoveProjection {
+            outcome: ObjectMoveOutcome { state: next, operation: result.operation_id },
+            previous: std::sync::Arc::clone(&self.state),
+            current: self.current_namespaces.clone(),
+            next: next_current_namespaces,
+        };
+        self.finish_move(candidate, hash, projection,
             retained, None, false, Some(names), selection)
     }
 
@@ -305,9 +368,6 @@ impl Engine {
         binding.require_candidate(&candidate, &hash)?;
         let receipt = next.operations.get(&candidate.operation_id)
             .ok_or_else(|| Error::new(ErrorCode::PublicationInvalid, "object move result missing"))?;
-        crate::business::object_move::verify_transition(
-            &self.state, next, self.current_namespaces.as_deref(), receipt,
-        )?;
         let body = crate::business::object_move::read_result(receipt)?;
         let selection = ObjectMoveSelection {
             previous_snapshot: self.snapshot.clone(), previous_sequence: self.state.sequence,
@@ -315,7 +375,9 @@ impl Engine {
             recovered: true, prepared: false, live: None,
         };
         let operation = candidate.operation_id;
-        self.finish_move(candidate, hash, ObjectMoveOutcome { state: next.clone(), operation },
+        let projection = MoveProjection::admit(self,
+            ObjectMoveOutcome { state: next.clone(), operation })?;
+        self.finish_move(candidate, hash, projection,
             body.retained_version_ids, existing, true, None, selection)
     }
 
@@ -1105,10 +1167,15 @@ impl crate::engine::PlanningContext<'_> {
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
         crate::business::reject_unclosed_file_history_move(self.state, &next, &result)?;
-        let next_current_namespaces = self
-            .current_namespaces
-            .map(|view| view.advance(self.state, &next).map(std::sync::Arc::new))
-            .transpose()?;
+        let next_current_namespaces = match self.current_namespaces {
+            Some(view) => Some(std::sync::Arc::new(view.advance(self.state, &next)?)),
+            None => {
+                if result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+                    crate::business::object_move::verify_transition(self.state, &next, None, &result)?;
+                }
+                None
+            }
+        };
         if let Some(view) = self.current_namespaces {
             // The State proof above cannot constrain Prepared. Bind every copy
             // before the first existing-body probe or any payload preparation.

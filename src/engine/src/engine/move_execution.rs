@@ -56,11 +56,11 @@ impl Engine {
     /// Freeze once, then publish and install once. Both live execution and an
     /// admitted recovery of that exact candidate use this method. No member of
     /// an aggregate move is submitted as an independent operation.
-    pub(crate) fn finish_move<O: MoveOutcome, S: MoveSelection<O>>(
+    pub(in crate::engine) fn finish_move<O: MoveOutcome, S: MoveSelection<O>>(
         &mut self,
         candidate: Candidate,
         hash: String,
-        outcome: O,
+        projection: super::publication::MoveProjection<O>,
         retained_versions: Vec<String>,
         existing: Option<Publication>,
         decided: bool,
@@ -69,13 +69,7 @@ impl Engine {
     ) -> Result<OperationResult> {
         selection.verify(self, &candidate, &hash)?;
         self.require_native_move_authority()?;
-        let next_namespaces = self.admitted_current_namespaces()?.map(|view| {
-            let advanced = view.advance(&self.state, outcome.state())?;
-            if !view.verify_history_move_candidate(&self.state, outcome.state(), &candidate)? {
-                return Err(invalid("move candidate has no exact Current transition"));
-            }
-            Ok(std::sync::Arc::new(advanced))
-        }).transpose()?;
+        let (outcome, next_namespaces) = projection.into_current(self, &candidate)?;
         scopes::require_resources(self, &candidate)?;
         scopes::verify_full(self, &retained_versions, &candidate)?;
         let mut databases = scopes::Databases::prepare(self, &candidate, &hash, decided)?;

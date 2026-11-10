@@ -165,7 +165,6 @@ impl Engine {
         self.require_native_move_authority()?;
         let plan = crate::business::object_move::plan(self, &input, operation)?;
         require_identity(plan.movement(), files.as_ref())?;
-        let (next, prepared, result, retained) = plan.into_parts();
-        self.publish_move(next, prepared, result, retained)
+        self.publish_move(plan)
     }
 }

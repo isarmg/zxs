@@ -395,7 +395,8 @@ impl Engine {
         existing: Option<Publication>,
         decided: bool,
     ) -> Result<OperationResult> {
-        self.finish_move(candidate, hash, outcome,
+        let projection_state = crate::engine::publication::MoveProjection::admit(self, outcome)?;
+        self.finish_move(candidate, hash, projection_state,
             projection.capture().retained_version_ids().cloned().collect(),
             existing, decided, None, OriginalFileSelection)
     }
