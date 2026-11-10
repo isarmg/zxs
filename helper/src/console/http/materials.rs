@@ -20,9 +20,15 @@ pub(super) async fn manifest(
 
 async fn download(state: State, request: Request, kind: Kind) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
-    let _: InstallPreviewRequest = input(request).await?;
+    let _: Empty = input(request).await?;
     let (verified, permit) = tokio::task::spawn_blocking(move || {
-        let verified = crate::installation::materials::verified().map_err(install_failure)?;
+        let verified = crate::installation::materials::verified().map_err(|error| {
+            Failure::message(
+                StatusCode::CONFLICT,
+                "program_installation",
+                &crate::diagnostic_chain(error.as_ref()),
+            )
+        })?;
         Ok::<_, Failure>((verified, permit))
     })
     .await

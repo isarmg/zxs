@@ -5,6 +5,11 @@
 
 
 
+## 本轮 helper 许可材料下载接线修复
+
+- CI #1080 的 E0425 确认普通 JSON 作业去重后，独立流式材料下载仍引用已删除的 InstallPreviewRequest／install_failure。下载改用现有严格 Empty，并在原下载边界保留 program_installation 的完整错误来源，不恢复旧重复 handler。
+- 准入、阻塞校验后许可回传、响应体持槽、两种内容与摘要头保持原实现；新增两个真实路由的未知字段拒绝及 busy 顺序测试。已扫描被删父模块符号的其余消费者并静核原错误映射，固定格式／严格补丁通过；未本地编译或执行 Rust，真实结果待准确提交 CI。
+
 ## 本轮 CI 分片环境隔离回归
 
 - CI #1077（a5a5c0d1）的 rust-sources 在三项 workspace 参考配方断言失败；根因是测试夹具继承该 job 的 ZXS_WORKSPACE_SHARD=single，意外进入分片入口。夹具调用现在显式选择完整参考配方或目标分片，不修改生产入口、矩阵或原覆盖断言。

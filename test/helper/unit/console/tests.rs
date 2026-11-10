@@ -717,3 +717,28 @@ async fn former_online_activation_confirmation_cannot_start_a_handoff() {
             .contains("confirm helper exit")
     );
 }
+
+#[tokio::test]
+async fn license_material_downloads_parse_strict_empty_input_before_native_work() {
+    let state = state();
+    let app = http::router(state.clone());
+    for path in [
+        "/api/install/materials-download",
+        "/api/install/materials-manifest",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(post(path, json!({"unknown":true})))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_body(response).await["error"]["code"], "request_json");
+        assert_eq!(state.jobs.available_permits(), 1);
+        let permit = Arc::clone(&state.jobs).try_acquire_owned().unwrap();
+        let response = app.clone().oneshot(post(path, json!({}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(json_body(response).await["error"]["code"], "helper_busy");
+        assert_eq!(state.jobs.available_permits(), 0);
+        drop(permit);
+    }
+}
