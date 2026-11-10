@@ -72,18 +72,21 @@ impl CurrentNamespaces {
             .checked_mul(2)
             .ok_or_else(invalid)?
             .max(input.targets.len());
-        let plan = self
-            .file_tag_plan(
-                previous,
-                &input,
-                principal,
-                TagPublication {
-                    operation: receipt.operation_id,
-                    sequence: next.sequence,
-                    created_at,
-                },
-                maximum,
-            )
+        let plan = TagEdit::new(&input.targets, &input.add, &input.remove, maximum)
+            .and_then(|edit| {
+                self.file_tag_plan(
+                    previous,
+                    &input,
+                    principal,
+                    TagPublication {
+                        operation: receipt.operation_id,
+                        sequence: next.sequence,
+                        created_at,
+                    },
+                    &edit,
+                    maximum,
+                )
+            })
             .map_err(|error| {
                 error.context(
                     ErrorCode::PublicationInvalid,

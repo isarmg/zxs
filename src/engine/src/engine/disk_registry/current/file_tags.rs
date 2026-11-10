@@ -144,6 +144,7 @@ impl CurrentNamespaces {
         previous: &State,
         next: &mut State,
         request: &FileNodeTagsUpdateRequest<'_>,
+        edit: &TagEdit,
         maximum: usize,
     ) -> Result<Value> {
         let input = Input {
@@ -165,6 +166,7 @@ impl CurrentNamespaces {
                 sequence: next.sequence,
                 created_at: crate::business::now()?,
             },
+            edit,
             maximum,
         )?;
         let Plan {
@@ -207,6 +209,7 @@ impl CurrentNamespaces {
         input: &Input,
         principal: &str,
         publication: TagPublication,
+        edit: &TagEdit,
         maximum: usize,
     ) -> Result<Plan> {
         let TagPublication {
@@ -230,13 +233,13 @@ impl CurrentNamespaces {
             changes: Vec::new(),
             plan: Plan::default(),
         }
-        .prepare()
+        .prepare(edit)
     }
 }
 
 impl Planner<'_> {
-    fn prepare(mut self) -> Result<Plan> {
-        self.preflight()?;
+    fn prepare(mut self, edit: &TagEdit) -> Result<Plan> {
+        self.preflight(edit)?;
         self.metadata_children()?;
         if self.changes.iter().any(|change| change.changed) {
             let history = &self.previous.branches[&self.changes[0].branch].history_tree_id;
@@ -287,9 +290,8 @@ impl Planner<'_> {
         Ok(self.plan)
     }
 
-    fn preflight(&mut self) -> Result<()> {
+    fn preflight(&mut self, edit: &TagEdit) -> Result<()> {
         let input = self.input;
-        let edit = TagEdit::new(&input.targets, &input.add, &input.remove, self.maximum)?;
         let mut seen = BTreeSet::new();
         for target in &input.targets {
             let branch = target_branch(self.previous, &input.file_id, target, &mut seen)?;

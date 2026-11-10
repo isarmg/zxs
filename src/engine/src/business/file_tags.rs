@@ -161,6 +161,7 @@ impl Engine {
                         engine.state(),
                         state,
                         &request,
+                        &edit,
                         engine.config.max_entries,
                     );
                 }

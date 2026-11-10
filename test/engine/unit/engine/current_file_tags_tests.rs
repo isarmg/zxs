@@ -810,6 +810,13 @@ fn disk_exit_tag_source_cannot_borrow_another_retained_occurrence_or_stale_head(
         remove: Vec::new(),
         location: None,
     };
+    let tag_edit = TagEdit::new(
+        &input.targets,
+        &input.add,
+        &input.remove,
+        fixture.engine.config.max_entries,
+    )
+    .unwrap();
     assert!(
         view.file_tag_plan(
             fixture.engine.state(),
@@ -820,6 +827,7 @@ fn disk_exit_tag_source_cannot_borrow_another_retained_occurrence_or_stale_head(
                 sequence: fixture.engine.state.sequence + 1,
                 created_at: crate::business::now().unwrap(),
             },
+            &tag_edit,
             fixture.engine.config.max_entries
         )
         .is_err(),
@@ -958,6 +966,13 @@ fn prepared_tags(
     };
     let body =
         json!({"file_id":request.file_id,"targets":targets,"add":add,"remove":[],"location":null});
+    let tag_edit = TagEdit::new(
+        request.targets,
+        request.add,
+        request.remove,
+        fixture.engine.config.max_entries,
+    )
+    .unwrap();
     fixture
         .engine
         .plan_mutation_digest(KIND, "admin", operation, body, None, |engine, next, _| {
@@ -965,7 +980,13 @@ fn prepared_tags(
                 .current_namespaces
                 .as_ref()
                 .unwrap()
-                .update_current_file_tags(engine.state(), next, &request, engine.config.max_entries)
+                .update_current_file_tags(
+                    engine.state(),
+                    next,
+                    &request,
+                    &tag_edit,
+                    engine.config.max_entries,
+                )
         })
         .unwrap()
 }
@@ -995,6 +1016,13 @@ fn current_file_tags_closed_planner_rejects_payload_and_unproven_metadata() {
     };
     let input =
         json!({"file_id":request.file_id,"targets":targets,"add":add,"remove":[],"location":null});
+    let tag_edit = TagEdit::new(
+        request.targets,
+        request.add,
+        request.remove,
+        fixture.engine.config.max_entries,
+    )
+    .unwrap();
     let digest = Engine::native_request_digest(KIND, "admin", &input).unwrap();
     let mut context = fixture.engine.planning_context();
     assert_eq!(
@@ -1018,6 +1046,7 @@ fn current_file_tags_closed_planner_rejects_payload_and_unproven_metadata() {
                     &previous,
                     next,
                     &request,
+                    &tag_edit,
                     fixture.engine.config.max_entries,
                 )?;
                 match attack {
@@ -1827,6 +1856,13 @@ fn current_file_tags_source_node_and_body_identities_remain_exact() {
         remove: vec![],
         location: None,
     };
+    let tag_edit = TagEdit::new(
+        &input.targets,
+        &input.add,
+        &input.remove,
+        fixture.engine.config.max_entries,
+    )
+    .unwrap();
     for attack in 0..8 {
         let mut source = previous.as_ref().clone();
         match attack {
@@ -1891,6 +1927,7 @@ fn current_file_tags_source_node_and_body_identities_remain_exact() {
                     sequence: source.sequence + 1,
                     created_at: 0,
                 },
+                &tag_edit,
                 fixture.engine.config.max_entries
             )
             .is_err(),
