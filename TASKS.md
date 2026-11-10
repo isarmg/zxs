@@ -91,6 +91,9 @@
 - 复用真实 framed RPC 增加一次同盘目录 rename：已保存子文件、捕获目录 None 身份、丢回执后重连，源名已消失仍使用原 operation 返回同一结果且 State 不变。原“非空目标拒绝”用例改指真实已占用目标并期待 NameCollision；不再把支持的新跨盘入口当 UnsupportedOperation。
 - 目录及同一 entry 的纯成功回执按真实无新增正文语义使用 Published／NotApplicable／Healthy，不再用 TargetMet 掩盖泛化成功门的契约差异；旧 file 回执完整状态矩阵不变。
 - 泛化 command 新捕获源 slot/disk/generation 与目标 disk/generation 后，测试构造使用真实拓扑；已发表操作的错误源盘身份／目标盘代数仍拒绝且 State 不变，原捕获重试返回同一结果。脚本回执显式 version_mapping，缺失不得当空；空 map 与 NotApplicable 成功门一致。
+- 既有 Engine 搬运测试同步新请求的 object.move 与公共完成绑定；真实原 file intent 通过复用 capture/project/save 留存，再覆盖原时钟、决定后边界与损坏正文，仍要求原 file.history.move，不用新请求触发旧 hook。将已完成退出的旧拒绝断言修为退出进行中拒绝、原激活完成后正常搬运及冷开幂等；目标碰撞按真实同名占用断言 NameCollision，不扩大故障矩阵。
+- completion 原两边界各复用一个真实磁盘代表状态：首准备前 SYSTEM／一个成员绑定缺失但另一成员原字节存活，发表后单成员已退休其余仍 active；冷开必须完成原候选并在所有成员退休原字节。新增一条完整 SYSTEM 丢失恢复流程，原 metadata 完成归档足以还原同一 State／回执；全部原归档缺失必须拒绝，归还准确原字节后才可恢复。不伪造候选、收据或新增业务 hook，不复制按对象种类矩阵；仅为未执行测试源码。
+- 共享 move fence 后继复用发表后同一场景，经真实 `Engine::open_for_recovery` 打开仍保留旧 State 与写围栏；已安装候选 SYSTEM 数据库和 active／retired 原绑定字节不得被普通重建改写，再交正常冷开完成。依赖独立核心 `30358839`，不新增故障边界或运行检查。
 - 本片未执行、编译、格式化或运行 CI，不能称通过或可合入独立产品；待共同业务依赖整合后再按用户许可执行。
 
 ### 首版正常路径：空目录首装、Web 文件导航与 SMB 创建

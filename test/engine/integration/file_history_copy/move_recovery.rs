@@ -4,12 +4,24 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 use storage_contract::history_window::HistoryFileId;
 
 fn projection(fixture: &Fixture, operation: OperationId) -> FileHistoryMoveProjection {
-    let file = entry(&fixture.engine, &fixture.source, "source.txt");
+    projection_for(
+        fixture,
+        operation,
+        &request(&fixture.engine, &fixture.source, &fixture.target),
+    )
+}
+
+pub(super) fn projection_for(
+    fixture: &Fixture,
+    operation: OperationId,
+    namespace: &FileHistoryCopyRequest,
+) -> FileHistoryMoveProjection {
+    let file = entry(&fixture.engine, &fixture.source, &namespace.source_path);
     let capture = fixture
         .engine
         .capture_file_history_move(
             FileHistoryMoveRequest {
-                namespace: &request(&fixture.engine, &fixture.source, &fixture.target),
+                namespace,
                 source_file_id: &HistoryFileId::parse(&file.file_id).unwrap(),
             },
             &HistoryWindowCancellation::new(),
