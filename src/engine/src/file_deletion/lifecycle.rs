@@ -152,14 +152,10 @@ impl Engine {
                         },
                     )?;
                 } else {
-                    let namespace = engine.namespace_tree(&repository.main_branch_id)?;
-                    preflight::require_scope_writable(
+                    preflight::require_undo_scope(
                         engine.state(),
                         engine.admitted_current_namespaces()?,
-                        repository,
-                        namespace.entries(),
-                        file_id.as_str(),
-                        &HistoryWindowCancellation::default(),
+                        &deletion,
                     )?;
                 }
                 let node = state

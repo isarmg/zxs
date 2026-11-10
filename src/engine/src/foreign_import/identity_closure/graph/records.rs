@@ -173,13 +173,13 @@ impl Remap<'_> {
             tree_id,
             entries,
             pending_file_versions,
-            kind: _,
+            kind,
             sequence: _,
             operation_id: _,
             author: _,
             message: _,
             namespace_deletions: _,
-            provenance: _,
+            provenance,
         } = value;
         self.replace(Domain::Commit, commit_id)?;
         self.replace(Domain::History, history_tree_id)?;
@@ -187,6 +187,9 @@ impl Remap<'_> {
         self.replace(Domain::CommitTree, tree_id)?;
         self.entries(entries)?;
         self.pairs(pending_file_versions, Domain::File, Domain::Version)?;
+        if kind.as_str() == "directory_commit" {
+            self.optional(Domain::DirectoryTree, provenance)?;
+        }
         Ok(())
     }
     pub(super) fn version(&self, value: &mut storage_contract::FileVersion) -> Result<()> {

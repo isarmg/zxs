@@ -465,29 +465,18 @@ impl DefaultShare {
             if source.relative_path.is_empty() {
                 return Err(ApiError::unsupported());
             }
-            let destination = if let Some(path) = destination {
+            if let Some(path) = destination {
                 let Location::Path { .. } = self.locate(&path)? else {
                     return Err(ApiError::unsupported());
                 };
-                if source.repository.file_manager_root {
-                    let reply = self.move_object(source, &path, admission, replace)?;
-                    return Ok((Reply::Json(reply), None));
-                }
-                let target = self.resolve(&path, SmbPathIntent::Lookup)?;
-                if target.repository.repository_id != source.repository.repository_id
-                    || target.relative_path.is_empty()
-                {
-                    return Err(ApiError::unsupported());
-                }
-                Some(target.relative_path)
-            } else {
-                None
-            };
+                let reply = self.move_object(source, &path, admission, replace)?;
+                return Ok((Reply::Json(reply), None));
+            }
             let key = self.session_key(source.repository)?;
             let input = super::namespace::NamespaceInput::parse(
                 kind,
                 source.relative_path,
-                destination,
+                None,
                 replace,
             )?;
             let result = self

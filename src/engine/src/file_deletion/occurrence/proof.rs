@@ -14,6 +14,9 @@ pub(in crate::file_deletion) fn original(
         .ok_or_else(invalid)?;
     if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::admit_file_history_move_displaced(state, receipt, node)
+    } else if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+        crate::business::object_move::admit_ordinary_undo(state, receipt, node)?;
+        Ok(None)
     } else {
         Ok(None)
     }

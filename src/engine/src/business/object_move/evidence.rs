@@ -37,6 +37,20 @@ pub(crate) fn admit_result(state:&State,receipt:&OperationResult)->Result<Result
     Ok(result)
 }
 
+/// Removed source and replacement occurrences need exact restoration evidence.
+/// Imported lifecycle nodes continue through the existing ordinary undo gate.
+pub(crate) fn admit_ordinary_undo(state:&State,receipt:&OperationResult,node:&FileDeletionNode)->Result<()> {
+    let result=admit_result(state,receipt)?;
+    if result.source_deletions.iter().chain(&result.displaced_deletions).any(|original|original==node) {
+        return Err(Error::new(ErrorCode::UnsupportedOperation,
+            "object movement has no exact restoration evidence for this removed occurrence"));
+    }
+    if !result.imported_deletions.iter().any(|original|original==node) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 pub(crate) fn deletion_for(receipt:&OperationResult,file:&str)->Result<FileDeletionNode> {
     let result=read_result(receipt)?;
     result.source_deletions.into_iter().chain(result.displaced_deletions).chain(result.imported_deletions)

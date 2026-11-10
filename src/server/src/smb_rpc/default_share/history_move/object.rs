@@ -116,14 +116,12 @@ impl DefaultShare {
         admission: NamespaceAdmission,
         replace: bool,
     ) -> Result<Value, ApiError> {
-        if !source.repository.file_manager_root || source.relative_path.is_empty() {
+        if source.relative_path.is_empty() {
             return Err(ApiError::unsupported());
         }
         let Location::Path { slot: target_slot, path: destination_path } = self.locate(destination)? else {
             return Err(ApiError::unsupported());
         };
-        let target_path = name_policy::PortablePath::parse(destination_path.as_str())
-            .map_err(ApiError::invalid_source)?;
         let source_path = name_policy::LookupPath::parse(&source.relative_path)
             .map_err(ApiError::invalid_source)?;
         let source_slot_id = source.repository.primary_slot_id.clone();
@@ -132,18 +130,24 @@ impl DefaultShare {
         let source = self.pin_binding(source.repository)?;
         let source_identity = self.bound_identity(&source);
         self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
-        let target = match self.resolve(destination, SmbPathIntent::Lookup) {
+        let (target, target_path) = match self.resolve(destination, SmbPathIntent::Lookup) {
             Ok(location) => {
-                if !location.repository.file_manager_root || location.relative_path.is_empty() {
+                if location.relative_path.is_empty() {
                     return Err(ApiError::unsupported());
                 }
+                let target_path = name_policy::PortablePath::parse(&location.relative_path)
+                    .map_err(ApiError::invalid_source)?;
                 let key = self.pin_binding(location.repository)?;
                 let identity = self.bound_identity(&key);
                 self.shared.backend.authorize_repository(&identity, &key.repository)?;
-                Some(key)
+                (Some(key), target_path)
             }
             Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound
-                && target_path.parent().is_none() => None,
+                && !destination_path.as_str().contains('/') => {
+                    let target_path = name_policy::PortablePath::parse(destination_path.as_str())
+                        .map_err(ApiError::invalid_source)?;
+                    (None, target_path)
+                }
             Err(error) => return Err(error),
         };
         let target_identity = target.as_ref().map(|key| self.bound_identity(key));
@@ -210,7 +214,7 @@ impl DefaultShare {
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
         let intent: Intent = storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
-        let Location::Path { slot: source_slot, path: source_path } = self.locate(source)? else {
+        let Location::Path { slot: source_slot, .. } = self.locate(source)? else {
             return Err(changed());
         };
         let Location::Path { slot: target_slot, path: target_path } = self.locate(target)? else {
@@ -219,19 +223,41 @@ impl DefaultShare {
         if intent.replace_requested != replace
             || source_slot.slot_id != intent.source_slot_id
             || target_slot.slot_id != intent.movement.target_slot_id
-            || source_path.key() != intent.movement.source_path.key()
-            || target_path.as_str() != intent.movement.target_path.as_str()
             || !intent.source_disk.matches(&source_slot)
             || !intent.target_disk.matches(&target_slot)
         {
             return Err(changed());
+        }
+        // Resolve only the displayed repository binding. A completed move can
+        // remove the source occurrence; it must never capture new members here.
+        let source = self.resolve(source, SmbPathIntent::Lookup)?;
+        let source_path = name_policy::LookupPath::parse(&source.relative_path)
+            .map_err(ApiError::invalid_source)?;
+        if !intent.source_binding.matches(&self.pin_binding(source.repository)?)
+            || source_path.key() != intent.movement.source_path.key()
+        {
+            return Err(changed());
+        }
+        match &intent.target_binding {
+            Some(binding) => {
+                let target = self.resolve(target, SmbPathIntent::Lookup)?;
+                if !binding.matches(&self.pin_binding(target.repository)?)
+                    || target.relative_path.as_str() != intent.movement.target_path.as_str()
+                {
+                    return Err(changed());
+                }
+            }
+            // An originally empty disk may now own the published root. Keep
+            // the captured None intent rather than resolving it as a new target.
+            None if target_path.as_str() != intent.movement.target_path.as_str() => return Err(changed()),
+            None => {}
         }
         self.submit_object_move(intent, admission, bytes, None)
     }
 
     fn require_object_binding(&mut self, binding: &Binding, slot: &str) -> Result<(), ApiError> {
         let repository = self.shared.backend.repository_snapshot(&self.identity, &binding.repository_id)?;
-        if !repository.file_manager_root || repository.primary_slot_id != slot {
+        if repository.primary_slot_id != slot {
             return Err(changed());
         }
         let key = self.pin_binding(repository)?;

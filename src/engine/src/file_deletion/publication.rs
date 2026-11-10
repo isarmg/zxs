@@ -121,6 +121,7 @@ pub(crate) fn verify(
     }
     if undo {
         super::directory::require_individual_undo(previous, &node.file_id)?;
+        preflight::require_undo_scope(previous, current, node)?;
     }
     verify_receipt(previous, next, node, receipt, undo)?;
     if !undo {

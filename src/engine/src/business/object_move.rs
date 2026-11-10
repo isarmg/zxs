@@ -7,7 +7,7 @@ use storage_contract::directory_git::DirectoryGitRepository;
 use storage_contract::file_relocation::ObjectMoveRequest;
 mod projection;
 mod evidence;
-pub(crate) use evidence::{admit_result, deletion_for, retained_for, verify_publication};
+pub(crate) use evidence::{admit_ordinary_undo, admit_result, deletion_for, retained_for, verify_publication};
 pub(crate) use projection::{plan, read_result, verify_transition, MovePlan, ResultBody};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]

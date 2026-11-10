@@ -112,8 +112,7 @@ fn require_move_binding(
     current.smb_binding = Some(binding.clone());
     *current = current_protected_identity(engine, current)?;
     let repository = repo_for_branch(engine, &binding.branch_id)?;
-    if !repository.file_manager_root
-        || repository.repository_id != binding.repository_id
+    if repository.repository_id != binding.repository_id
         || repository.main_branch_id != binding.branch_id
     {
         return Err(ApiError::unsupported());
