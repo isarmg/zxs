@@ -75,8 +75,8 @@ fn retained_commits(previous: &State, unit: &MoveUnit) -> BTreeSet<String> {
         pending.extend(
             directory
                 .repository
-                .deletions
-                .values()
+                .iter()
+                .flat_map(|repository| repository.deletions.values())
                 .map(|node| node.namespace_head.clone()),
         );
     }
@@ -180,7 +180,11 @@ fn identities(
                     .map(|entry| entry.entry_id.clone()),
             );
         }
-        for deletion in directory.repository.deletions.values() {
+        for deletion in directory
+            .repository
+            .iter()
+            .flat_map(|repository| repository.deletions.values())
+        {
             selected.insert(deletion.node_id.clone());
             selected.insert(deletion.directory_id.clone());
         }
@@ -228,7 +232,11 @@ fn identities(
         );
     }
     for directory in unit.directories.values() {
-        for node in directory.repository.deletions.values() {
+        for node in directory
+            .repository
+            .iter()
+            .flat_map(|repository| repository.deletions.values())
+        {
             let mapped_directory = ids[&node.directory_id].clone();
             ids.insert(
                 node.node_id.clone(),

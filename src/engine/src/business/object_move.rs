@@ -52,7 +52,8 @@ pub(crate) struct MoveEntry {
 
 #[derive(Serialize)]
 pub(crate) struct MoveDirectory {
-    pub(crate) repository: DirectoryGitRepository,
+    /// Ordinary directory snapshots have no independently initialized owner.
+    pub(crate) repository: Option<DirectoryGitRepository>,
     pub(crate) branch_ids: Vec<String>,
     pub(crate) tree_ids: Vec<String>,
     pub(crate) selected_branch: Option<String>,
@@ -429,10 +430,10 @@ fn directory_members(state: &State, entries: &[MoveEntry]) -> BTreeMap<String, M
         if directories.contains_key(&id) {
             continue;
         }
-        let Some(repository) = state.directory_git_repositories.get(&id) else {
+        let Some(member_branches) = branches.get(id.as_str()) else {
             continue;
         };
-        let member_branches = branches.get(id.as_str()).cloned().unwrap_or_default();
+        let repository = state.directory_git_repositories.get(&id);
         let member_trees = member_branches
             .iter()
             .flat_map(|branch| {
@@ -443,8 +444,8 @@ fn directory_members(state: &State, entries: &[MoveEntry]) -> BTreeMap<String, M
                     .copied()
             })
             .collect::<Vec<_>>();
-        // Frozen child pins can outlive the current child path. Their exact
-        // histories belong to the parent, even when that child is not visible.
+        // Frozen references also name ordinary directory working scopes. Keep
+        // their branch/tree closure without initializing them as Git owners.
         for child in member_trees
             .iter()
             .flat_map(|tree| tree.directory_refs.values())
@@ -456,8 +457,8 @@ fn directory_members(state: &State, entries: &[MoveEntry]) -> BTreeMap<String, M
             );
         }
         for child in repository
-            .branches
-            .values()
+            .into_iter()
+            .flat_map(|repository| repository.branches.values())
             .flat_map(|branch| branch.index_children.values())
         {
             pending.insert(
@@ -469,7 +470,7 @@ fn directory_members(state: &State, entries: &[MoveEntry]) -> BTreeMap<String, M
         directories.insert(
             id.clone(),
             MoveDirectory {
-                repository: repository.clone(),
+                repository: repository.cloned(),
                 branch_ids: member_branches
                     .iter()
                     .map(|branch| branch.directory_branch_id.clone())
@@ -525,7 +526,11 @@ fn file_members(
         }
     }
     for member in directories.values() {
-        for deletion in member.repository.deletions.values() {
+        for deletion in member
+            .repository
+            .iter()
+            .flat_map(|repository| repository.deletions.values())
+        {
             pending.extend(deletion.files.keys().cloned());
         }
     }

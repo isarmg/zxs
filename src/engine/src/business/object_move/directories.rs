@@ -66,7 +66,7 @@ pub(super) fn copy(
     event: &MoveEvent<'_>,
 ) -> Result<Vec<storage_contract::directory_git::DirectoryDeletionNode>> {
     let mut imported = Vec::new();
-    for member in unit.directories.values() {
+    for (directory, member) in &unit.directories {
         for id in &member.tree_ids {
             let mut tree = previous.directory_trees[id].clone();
             tree.tree_id = graph.id(id)?;
@@ -112,79 +112,81 @@ pub(super) fn copy(
             next.directory_branches
                 .insert(branch.directory_branch_id.clone(), branch);
         }
-        let mut git = member.repository.clone();
-        git.repository_id = target.repository_id.clone();
-        git.directory_id = graph.id(&git.directory_id)?;
-        git.main_branch_id = graph.id(&git.main_branch_id)?;
-        git.current_branch_id = graph.id(&git.current_branch_id)?;
-        git.branches = git
-            .branches
-            .into_iter()
-            .map(|(id, mut branch)| {
-                branch.head_tree_id = branch
-                    .head_tree_id
-                    .as_deref()
-                    .map(|id| graph.id(id))
-                    .transpose()?;
-                branch.index_tree_id = graph.id(&branch.index_tree_id)?;
-                branch.index_boundaries = branch
-                    .index_boundaries
-                    .into_iter()
-                    .map(|(id, path)| Ok((graph.id(&id)?, path)))
-                    .collect::<Result<_>>()?;
-                branch.index_children = branch
-                    .index_children
-                    .into_iter()
-                    .map(|(id, reference)| {
-                        Ok((
-                            graph.id(&id)?,
-                            DirectoryGitChildReference {
-                                directory_branch_id: graph.id(&reference.directory_branch_id)?,
-                                tree_id: reference
-                                    .tree_id
-                                    .as_deref()
-                                    .map(|id| graph.id(id))
-                                    .transpose()?,
-                            },
-                        ))
-                    })
-                    .collect::<Result<_>>()?;
-                Ok((graph.id(&id)?, branch))
-            })
-            .collect::<Result<_>>()?;
-        // Deleted children remain represented by mapped retained markers. The
-        // importing operation owns these copies; original audit remains in the
-        // per-file retained prefix instead of fabricating old operations.
-        git.deletions = git
-            .deletions
-            .into_iter()
-            .map(|(id, mut node)| {
-                node.node_id = graph.id(&node.node_id)?;
-                node.repository_id = target.repository_id.clone();
-                node.history_tree_id = target.history_tree_id.clone();
-                node.owner_directory_id = graph.id(&node.owner_directory_id)?;
-                node.directory_id = graph.id(&node.directory_id)?;
-                node.namespace_head = graph.id(&node.namespace_head)?;
-                node.directory_branch_id = graph.id(&node.directory_branch_id)?;
-                node.source_tree_id = graph.id(&node.source_tree_id)?;
-                node.operation_id = event.operation;
-                node.author = event.principal.into();
-                node.sequence = next.sequence;
-                node.created_at = event.created_at;
-                node.files = node
-                    .files
-                    .into_iter()
-                    .map(|(file, mut member)| {
-                        member.deletion_node_id = graph.id(&member.deletion_node_id)?;
-                        Ok((graph.id(&file)?, member))
-                    })
-                    .collect::<Result<_>>()?;
-                imported.push(node.clone());
-                Ok((graph.id(&id)?, node))
-            })
-            .collect::<Result<_>>()?;
-        let id = git.directory_id.clone();
-        next.directory_git_repositories.insert(id.clone(), git);
+        if let Some(mut git) = member.repository.clone() {
+            git.repository_id = target.repository_id.clone();
+            git.directory_id = graph.id(&git.directory_id)?;
+            git.main_branch_id = graph.id(&git.main_branch_id)?;
+            git.current_branch_id = graph.id(&git.current_branch_id)?;
+            git.branches = git
+                .branches
+                .into_iter()
+                .map(|(id, mut branch)| {
+                    branch.head_tree_id = branch
+                        .head_tree_id
+                        .as_deref()
+                        .map(|id| graph.id(id))
+                        .transpose()?;
+                    branch.index_tree_id = graph.id(&branch.index_tree_id)?;
+                    branch.index_boundaries = branch
+                        .index_boundaries
+                        .into_iter()
+                        .map(|(id, path)| Ok((graph.id(&id)?, path)))
+                        .collect::<Result<_>>()?;
+                    branch.index_children = branch
+                        .index_children
+                        .into_iter()
+                        .map(|(id, reference)| {
+                            Ok((
+                                graph.id(&id)?,
+                                DirectoryGitChildReference {
+                                    directory_branch_id: graph.id(&reference.directory_branch_id)?,
+                                    tree_id: reference
+                                        .tree_id
+                                        .as_deref()
+                                        .map(|id| graph.id(id))
+                                        .transpose()?,
+                                },
+                            ))
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok((graph.id(&id)?, branch))
+                })
+                .collect::<Result<_>>()?;
+            // Deleted children remain represented by mapped retained markers. The
+            // importing operation owns these copies; original audit remains in the
+            // per-file retained prefix instead of fabricating old operations.
+            git.deletions = git
+                .deletions
+                .into_iter()
+                .map(|(id, mut node)| {
+                    node.node_id = graph.id(&node.node_id)?;
+                    node.repository_id = target.repository_id.clone();
+                    node.history_tree_id = target.history_tree_id.clone();
+                    node.owner_directory_id = graph.id(&node.owner_directory_id)?;
+                    node.directory_id = graph.id(&node.directory_id)?;
+                    node.namespace_head = graph.id(&node.namespace_head)?;
+                    node.directory_branch_id = graph.id(&node.directory_branch_id)?;
+                    node.source_tree_id = graph.id(&node.source_tree_id)?;
+                    node.operation_id = event.operation;
+                    node.author = event.principal.into();
+                    node.sequence = next.sequence;
+                    node.created_at = event.created_at;
+                    node.files = node
+                        .files
+                        .into_iter()
+                        .map(|(file, mut member)| {
+                            member.deletion_node_id = graph.id(&member.deletion_node_id)?;
+                            Ok((graph.id(&file)?, member))
+                        })
+                        .collect::<Result<_>>()?;
+                    imported.push(node.clone());
+                    Ok((graph.id(&id)?, node))
+                })
+                .collect::<Result<_>>()?;
+            next.directory_git_repositories
+                .insert(git.directory_id.clone(), git);
+        }
+        let id = graph.id(directory)?;
         if let Some(branch) = &member.selected_branch {
             next.directory_selections
                 .insert(id.clone(), graph.id(branch)?);
