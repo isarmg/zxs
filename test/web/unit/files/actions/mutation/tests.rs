@@ -22,17 +22,20 @@ fn business_mutations_require_an_active_session_before_browser_work() {
             // No browser ID generation or server request may start after
             // sign-out admission closes, even while credentials are kept
             // for a failed revocation retry.
-            let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
+            let _ = super::super::create_directory(state, "new");
             let _ = directory_branch(state, branch_source(), "draft".into());
             let _ = update_note(state, None, "note".into());
             select_branch(state, "other".into());
-            let _ = record_mutation(
-                state,
+            for access in [
                 MutationAccess::Current,
-                "PATCH",
-                "/api/test".into(),
-                json!({}),
-            );
+                MutationAccess::History,
+                MutationAccess::DefaultView,
+            ] {
+                assert!(
+                    record_mutation(state, access, "PATCH", "/api/test".into(), json!({}))
+                        .is_none()
+                );
+            }
             crate::files::review::submit(
                 state,
                 crate::files::review::Kind::Backup,
@@ -59,7 +62,7 @@ fn refreshed_or_navigating_directories_block_writes_at_the_action_boundary() {
             s.files.selected = Some(crate::files::test_entries::entry(json!({"file_id":"file"})));
         });
         // These must return before generating IDs or spawning browser work.
-        let _ = namespace(state, NamespaceAction::CreateDirectory, "new".into());
+        let _ = super::super::create_directory(state, "new");
         let _ = directory_branch(state, branch_source(), "draft".into());
         let _ = update_note(state, None, "note".into());
         select_branch(state, "other".into());
@@ -118,6 +121,19 @@ fn shared_dispatch_keeps_history_admission_before_ids_or_browser_work() {
                     .is_none(),
                 "{change}"
             );
+            if change <= 6 {
+                assert!(
+                    record_mutation(
+                        state,
+                        MutationAccess::DefaultView,
+                        "PUT",
+                        "/api/test".into(),
+                        json!({})
+                    )
+                    .is_none()
+                );
+                set_default_file_branch(state);
+            }
             state.with_untracked(|state| {
                 assert_eq!(state.files.mutation_pending, pending);
                 assert_eq!(state.files.operations.len(), operations);
@@ -212,7 +228,7 @@ fn blocked_actions_do_not_clone_unrelated_state_snapshots() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());
         crate::snapshot::CLONES.with(|count| count.set(0));
-        assert!(namespace(state, NamespaceAction::CreateDirectory, "new".into()).is_none());
+        assert!(super::super::create_directory(state, "new").is_none());
         crate::files::merge::start(state);
         crate::files::tags::start(state);
         crate::files::batch::start(state, crate::files::batch::Kind::Delete, None);
@@ -227,6 +243,7 @@ fn preview_is_not_general_mutation_authority() {
         authenticated: true,
         ..Default::default()
     };
+    state.management.storage = crate::management::Storage::Ready;
     state.files.writable = true;
     state.files.loaded = true;
     state.files.directory_preview = Some(DirectoryPreview {
@@ -235,12 +252,14 @@ fn preview_is_not_general_mutation_authority() {
         ),
         path: String::new(),
     });
+    assert!(super::super::default_write_allowed(&state));
     assert!(!super::super::write_allowed(&state));
     assert!(!super::super::history_write_allowed(&state));
     state.files.directory_preview = None;
     state.files.file_preview = Some(crate::files::history::tests::branch(
         json!({"branch_id":"draft"}),
     ));
+    assert!(super::super::default_write_allowed(&state));
     assert!(!super::super::write_allowed(&state));
     assert!(!super::super::history_write_allowed(&state));
 }

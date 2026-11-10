@@ -268,7 +268,8 @@ fn replay_comparison_matches_full_state_for_independent_hot_and_cold_outcomes() 
 
 #[test]
 fn table_permissions_preserve_unrelated_rows_for_hot_and_cold_changes() {
-    let mutations: [(Table, fn(&mut State)); 5] = [
+    type TableMutation = (Table, fn(&mut State));
+    let mutations: [TableMutation; 5] = [
         (Table::FileNotes, |state| {
             state.file_notes.insert("file".into(), "note".into());
         }),

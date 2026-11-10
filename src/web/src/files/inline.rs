@@ -1,5 +1,5 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
-use super::{actions, history::NodeKind, model::NamespaceAction};
+use super::{actions, history::NodeKind};
 use crate::{icons::FileIcon, ui::State};
 use wasm_bindgen::JsCast;
 use web_interface::{html, i18n::t, prelude::*};
@@ -146,9 +146,7 @@ impl Target {
 
     fn submit(self, state: RwSignal<State>, value: String) -> Option<String> {
         match self {
-            Self::CreateDirectory => {
-                actions::namespace(state, NamespaceAction::CreateDirectory, value)
-            }
+            Self::CreateDirectory => actions::create_directory(state, &value),
             Self::RenameDirectoryBranch {
                 repository,
                 branch_id,

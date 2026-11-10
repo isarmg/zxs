@@ -256,10 +256,6 @@ impl Model {
         }
     }
 }
-#[derive(Clone, PartialEq)]
-pub(crate) enum NamespaceAction {
-    CreateDirectory,
-}
 pub(crate) use storage_contract::client_protocol::OperationStatus as SaveStatus;
 
 /// An operation observation, not a receipt or an authorization grant.

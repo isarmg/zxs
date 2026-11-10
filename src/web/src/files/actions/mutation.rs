@@ -6,27 +6,20 @@ use super::{
 };
 use crate::{
     api,
-    files::model::{FileOperation, NamespaceAction},
+    files::model::FileOperation,
     ui::{ErrorContext, State, current_session, fail_in, set_notice},
 };
 use json_codec::{Value, json};
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
+#[derive(Clone, Copy)]
 enum MutationAccess {
     Current,
     History,
+    DefaultView,
 }
 
-pub(crate) fn namespace(
-    state: RwSignal<State>,
-    action: NamespaceAction,
-    name: String,
-) -> Option<String> {
-    match action {
-        NamespaceAction::CreateDirectory => crate::files::mkdir::start(state, &name),
-    }
-}
 pub(crate) fn directory_branch(
     state: RwSignal<State>,
     source: storage_contract::directory_git::DirectoryBranchCreateSource,
@@ -37,43 +30,6 @@ pub(crate) fn directory_branch(
 
 pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
     crate::files::mkdir::start_directory_checkout(state, &branch_id);
-}
-
-fn publish_default(
-    state: RwSignal<State>,
-    method: &'static str,
-    endpoint: String,
-    mut body: Value,
-) {
-    if !state.with_untracked(super::default_write_allowed) {
-        return;
-    }
-    let Some(id) = crate::ui::file_operation_id(state) else {
-        return;
-    };
-    body["operation_id"] = id.clone().into();
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    state.update(|s| {
-        s.files.default_operation = Some(id.clone());
-        s.files.mutation_pending = true;
-        s.notices.operation_success(t(
-            "默认读取视图已更新；已启用的 SMB 共享使用该视图。",
-            "The default view is updated. Enabled SMB shares use this view.",
-        ));
-    });
-    spawn_local(async move {
-        let result = api::request(method, &endpoint, Some(body)).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                record_receipt(state, &id, value);
-            }
-            Err(error) => record_failure(state, epoch, &id, error),
-        }
-        state.update(|s| s.files.mutation_pending = false);
-    });
 }
 
 pub(crate) fn initialize_directory_git(
@@ -229,13 +185,23 @@ fn record_mutation(
     if !state.with_untracked(|state| match access {
         MutationAccess::Current => write_allowed(state),
         MutationAccess::History => history_write_allowed(state),
+        MutationAccess::DefaultView => super::default_write_allowed(state),
     }) {
         return None;
     }
     let operation_id = crate::ui::file_operation_id(state)?;
     body["operation_id"] = operation_id.clone().into();
     let epoch = state.with_untracked(|s| s.session_epoch);
-    state.update(|s| s.files.mutation_pending = true);
+    state.update(|s| {
+        s.files.mutation_pending = true;
+        if matches!(access, MutationAccess::DefaultView) {
+            s.files.default_operation = Some(operation_id.clone());
+            s.notices.operation_success(t(
+                "默认读取视图已更新；已启用的 SMB 共享使用该视图。",
+                "The default view is updated. Enabled SMB shares use this view.",
+            ));
+        }
+    });
     let submitted = operation_id.clone();
     spawn_local(async move {
         let result = api::request(method, &endpoint, Some(body)).await;
@@ -382,8 +348,7 @@ pub(crate) fn select_branch(state: RwSignal<State>, branch: String) {
 
 pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
     let request = state.with_untracked(|s| {
-        if !super::default_write_allowed(s)
-            || !s.files.file_history.ready()
+        if !s.files.file_history.ready()
             || s.files.history_loading
             || s.files.directory_preview.is_some()
         {
@@ -413,8 +378,9 @@ pub(crate) fn set_default_file_branch(state: RwSignal<State>) {
     let Some((file, branch, repository, path, node, head)) = request else {
         return;
     };
-    publish_default(
+    let _ = record_mutation(
         state,
+        MutationAccess::DefaultView,
         "PUT",
         format!(
             "/api/file-manager/files/{}/default-branch",

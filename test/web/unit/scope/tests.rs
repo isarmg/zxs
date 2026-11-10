@@ -144,7 +144,9 @@ fn detail_rename_has_no_path_only_namespace_fallback() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/files");
     let mutation = std::fs::read_to_string(root.join("actions/mutation.rs")).unwrap();
     let inline = std::fs::read_to_string(root.join("inline.rs")).unwrap();
-    assert!(!mutation.contains("NamespaceAction::Rename"));
+    let model = std::fs::read_to_string(root.join("model.rs")).unwrap();
+    assert!(!model.contains("enum NamespaceAction"));
+    assert!(!mutation.contains("fn namespace("));
     assert!(!inline.contains("RenameEntry"));
 }
 

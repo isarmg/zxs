@@ -12,6 +12,7 @@ pub(crate) use history::{
     page_history_branches, page_history_nodes, review_history_merge, review_history_tags,
 };
 
+pub(crate) use super::mkdir::start as create_directory;
 pub(crate) use browse::{
     change_page, edit_search, go_directory, go_directory_details, go_root, load_disks,
     load_entries, open_disk, open_disk_directory, open_preview_origin, preview_directory_branch,
@@ -19,10 +20,10 @@ pub(crate) use browse::{
     search, select_entry,
 };
 pub(crate) use mutation::{
-    commit_directory, create_branch, directory_branch, initialize_directory_git, namespace,
-    record_failure, rename_directory_branch, rename_file_branch, select_branch,
-    select_default_branch, set_default_file_branch, stage_directory_child, stage_directory_owned,
-    update_node_note, update_note,
+    commit_directory, create_branch, directory_branch, initialize_directory_git, record_failure,
+    rename_directory_branch, rename_file_branch, select_branch, select_default_branch,
+    set_default_file_branch, stage_directory_child, stage_directory_owned, update_node_note,
+    update_note,
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 
