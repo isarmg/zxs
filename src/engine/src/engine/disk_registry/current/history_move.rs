@@ -3,6 +3,7 @@
 use super::*;
 use crate::business::{FILE_HISTORY_MOVE_KIND, verify_current_move_transition};
 use crate::{OperationId, OperationResult};
+use storage_contract::file_relocation::OBJECT_MOVE_KIND;
 
 fn invalid() -> Error {
     Error::new(
@@ -21,12 +22,14 @@ fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Operation
                 return Ok(());
             }
             if before.into_iter().chain(after).any(|op| {
-                op.kind == FILE_HISTORY_MOVE_KIND || op.result.get("move_request").is_some()
+                matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
+                    || op.result.get("move_request").is_some()
+                    || op.result.get("movement").is_some()
             }) {
                 let current = after.ok_or_else(invalid)?;
                 if before.is_some()
                     || current.operation_id != *id
-                    || current.kind != FILE_HISTORY_MOVE_KIND
+                    || !matches!(current.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
                     || found.replace(current).is_some()
                 {
                     return Err(invalid());
@@ -62,7 +65,7 @@ impl CurrentNamespaces {
         if next
             .operations
             .get(&candidate.operation_id)
-            .is_some_and(|op| op.kind == FILE_HISTORY_MOVE_KIND)
+            .is_some_and(|op| matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND))
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -80,23 +83,27 @@ impl CurrentNamespaces {
         let Some(op) = receipt(previous, next)? else {
             return Ok(None);
         };
-        // Activation has already been reconstructed from its native authority.
-        // Retain that epoch, not a number supplied by the move's own receipt.
-        let mut activations = previous
-            .operations
-            .values()
-            .filter(|original| original.sequence == self.activation_sequence);
-        let activation = activations.next().ok_or_else(invalid)?;
-        if activations.next().is_some() {
-            return Err(invalid());
+        if op.kind == OBJECT_MOVE_KIND {
+            crate::business::object_move::verify_transition(previous, next, Some(self), op)?;
+        } else {
+            // Activation has already been reconstructed from its native authority.
+            // Retain that epoch, not a number supplied by the move's own receipt.
+            let mut activations = previous
+                .operations
+                .values()
+                .filter(|original| original.sequence == self.activation_sequence);
+            let activation = activations.next().ok_or_else(invalid)?;
+            if activations.next().is_some() {
+                return Err(invalid());
+            }
+            let epoch = storage_contract::parse_u64_decimal(
+                activation.result["membership_epoch"]
+                    .as_str()
+                    .ok_or_else(invalid)?,
+            )
+            .map_err(|_| invalid())?;
+            verify_current_move_transition(previous, next, self, op, epoch)?;
         }
-        let epoch = storage_contract::parse_u64_decimal(
-            activation.result["membership_epoch"]
-                .as_str()
-                .ok_or_else(invalid)?,
-        )
-        .map_err(|_| invalid())?;
-        verify_current_move_transition(previous, next, self, op, epoch)?;
         let mut view = self.clone();
         for (id, branch) in next
             .branches
@@ -136,7 +143,11 @@ impl CurrentNamespaces {
         {
             return Err(invalid());
         }
-        let versions = op.result["version_ids"].as_array().ok_or_else(invalid)?;
+        let versions: Vec<&json_codec::Value> = if op.kind == OBJECT_MOVE_KIND {
+            op.result["version_mapping"].as_object().ok_or_else(invalid)?.values().collect()
+        } else {
+            op.result["version_ids"].as_array().ok_or_else(invalid)?.iter().collect()
+        };
         if versions.len() != candidate.versions.len() {
             return Err(invalid());
         }

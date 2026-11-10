@@ -64,7 +64,7 @@ impl crate::engine::move_execution::MoveSelection<NativeMoveCandidate> for Origi
     fn verify(&self, engine: &Engine, _: &Candidate, _: &str) -> Result<()> {
         engine.require_move_choice_baseline()
     }
-    fn prepare(&self, _: &mut Engine, _: &Candidate, _: &str) -> Result<()> {
+    fn prepare(&mut self, _: &mut Engine, _: &Candidate, _: &str) -> Result<()> {
         // The existing file input preparation has already retained PREPARE.
         Ok(())
     }
@@ -364,6 +364,6 @@ impl Engine {
     ) -> Result<OperationResult> {
         self.finish_move(candidate, hash, outcome,
             projection.capture().retained_version_ids().cloned().collect(),
-            existing, decided, OriginalFileSelection)
+            existing, decided, None, OriginalFileSelection)
     }
 }

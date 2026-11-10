@@ -111,6 +111,96 @@ pub(crate) struct DetachedPublication {
     history_owners: crate::state_projection::DerivedOwners,
 }
 
+struct ObjectMoveOutcome {
+    state: State,
+    operation: OperationId,
+}
+impl super::move_execution::MoveOutcome for ObjectMoveOutcome {
+    fn state(&self) -> &State { &self.state }
+    fn result(&self) -> &OperationResult { &self.state.operations[&self.operation] }
+    fn into_state(self) -> State { self.state }
+}
+
+struct ObjectMoveProof {
+    verified: VerifiedPayloadSet,
+    prepared_epoch: super::provenance::MetadataEpoch,
+    reused_dependencies: Option<PublishedDependencyReuse>,
+    config_hash: String,
+}
+struct ObjectMoveSelection {
+    previous_snapshot: Option<String>,
+    previous_sequence: u64,
+    next_slot: u64,
+    candidate_hash: String,
+    recovered: bool,
+    prepared: bool,
+    live: Option<ObjectMoveProof>,
+}
+impl super::move_execution::MoveSelection<ObjectMoveOutcome> for ObjectMoveSelection {
+    fn verify(&self, engine: &Engine, candidate: &Candidate, hash: &str) -> Result<()> {
+        let expected_slot = if self.prepared || self.recovered {
+            candidate.sequence.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit,
+                "move decision sequence exhausted"))?
+        } else { self.next_slot };
+        if engine.snapshot != self.previous_snapshot || engine.state.sequence != self.previous_sequence
+            || candidate.previous_snapshot != self.previous_snapshot
+            || candidate.sequence != self.next_slot || engine.next_slot != expected_slot
+            || hash != self.candidate_hash
+        {
+            return Err(Error::new(ErrorCode::PreparationStale,
+                "move journal selection no longer extends the original namespace"));
+        }
+        if let Some(proof) = &self.live {
+            proof.verified.validate(&engine.config, candidate)?;
+            if object_hash("publication-config", &engine.config)? != proof.config_hash
+                || !proof.prepared_epoch.matches(&engine.metadata_integrity)
+                || proof.reused_dependencies.as_ref().is_some_and(|reuse|
+                    !reuse.matches(&engine.planning_context(), &proof.config_hash))
+            {
+                return Err(Error::new(ErrorCode::PreparationStale,
+                    "move payload and metadata preparation authority changed"));
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare(&mut self, engine: &mut Engine, candidate: &Candidate, hash: &str) -> Result<()> {
+        engine.next_slot = candidate.sequence.checked_add(1)
+            .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "move decision sequence exhausted"))?;
+        for disk in engine.members() {
+            if self.recovered {
+                engine.append_recovered_journal(&disk, RecordType::Prepare,
+                    candidate.sequence, hash, &candidate.snapshot_hash)?;
+            } else {
+                engine.append_journal(&disk, RecordType::Prepare,
+                    candidate.sequence, hash, &candidate.snapshot_hash)?;
+            }
+        }
+        self.prepared = true;
+        super::provenance::validate_candidate_seals(&engine.config, &engine.disk_resources,
+            candidate, &engine.metadata_integrity)?;
+        if let Some(proof) = &mut self.live {
+            if let Some(reuse) = proof.reused_dependencies.take() {
+                reuse.admit(&engine.planning_context(), &proof.config_hash)?;
+            } else if !proof.prepared_epoch.matches(&engine.metadata_integrity) {
+                return Err(Error::new(ErrorCode::PreparationStale,
+                    "move metadata changed after complete dependency preparation"));
+            }
+        }
+        Ok(())
+    }
+    fn mark_decided(&self, _: &mut Engine) {
+        // The common CompletionBinding and original PREPARE retain this choice.
+    }
+    fn retire(&self, _: &mut Engine,
+        _: &super::move_execution::PublishedMove<ObjectMoveOutcome>) -> Result<()> {
+        // No object-specific archive exists. finish_move retires the shared
+        // binding only after all serving scopes and original history roots.
+        Ok(())
+    }
+    fn clear(self, _: &mut Engine) {}
+}
+
 enum Completion<'a> {
     Move {
         names: crate::container_storage::PreparedNames,
@@ -152,11 +242,9 @@ impl Engine {
         self.planning_context()
             .prepare_publication(next, prepared, result, maximum)
     }
-    pub(crate) fn decide_publication(
-        &mut self,
-        detached: DetachedPublication,
-    ) -> Result<OperationResult> {
+    fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
         if self.blocked
+            || self.move_completion.is_some()
             || self.history_move_choice.is_some()
             || self.history_move_intent.is_some()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
@@ -177,6 +265,67 @@ impl Engine {
             )
             .retryable());
         }
+        Ok(())
+    }
+
+    /// Reuse ordinary payload/snapshot preparation, then enter the one strict
+    /// move executor. Ordinary decide_publication must not expose this State.
+    pub(crate) fn publish_move(&mut self, next: State, prepared: Vec<Prepared>,
+        result: OperationResult, retained: Vec<String>) -> Result<OperationResult>
+    {
+        crate::business::object_move::verify_transition(
+            &self.state, &next, self.current_namespaces.as_deref(), &result,
+        )?;
+        let detached = self.prepare_publication(next, prepared, result, MAX_METADATA)?;
+        self.require_detached_publication(&detached)?;
+        let DetachedPublication { next, candidate, result, verified, names,
+            prepared_epoch, reused_dependencies, config_hash,
+            base_snapshot, base_sequence, base_next_slot, .. } = detached;
+        let object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
+        // A retained selector must always be able to find this complete object.
+        // Storing an unselected immutable candidate does not change visibility.
+        object.store_at(&self.disk_resources, &self.members())?;
+        let hash = object.hash.clone();
+        let selection = ObjectMoveSelection {
+            previous_snapshot: base_snapshot, previous_sequence: base_sequence,
+            next_slot: base_next_slot, candidate_hash: hash.clone(),
+            recovered: false, prepared: false,
+            live: Some(ObjectMoveProof { verified, prepared_epoch,
+                reused_dependencies, config_hash }),
+        };
+        self.finish_move(candidate, hash,
+            ObjectMoveOutcome { state: next, operation: result.operation_id },
+            retained, None, false, Some(names), selection)
+    }
+
+    pub(in crate::engine) fn recover_selected_object_move(&mut self, candidate: Candidate,
+        hash: String, next: &State, existing: Option<Publication>) -> Result<OperationResult>
+    {
+        let binding = self.move_completion.as_ref()
+            .ok_or_else(|| Error::new(ErrorCode::RecoveryRequired,
+                "object move recovery lost its original completion binding"))?;
+        binding.require_candidate(&candidate, &hash)?;
+        let receipt = next.operations.get(&candidate.operation_id)
+            .ok_or_else(|| Error::new(ErrorCode::PublicationInvalid, "object move result missing"))?;
+        crate::business::object_move::verify_transition(
+            &self.state, next, self.current_namespaces.as_deref(), receipt,
+        )?;
+        let body = crate::business::object_move::read_result(receipt)?;
+        let selection = ObjectMoveSelection {
+            previous_snapshot: self.snapshot.clone(), previous_sequence: self.state.sequence,
+            next_slot: candidate.sequence, candidate_hash: hash.clone(),
+            recovered: true, prepared: false, live: None,
+        };
+        let operation = candidate.operation_id;
+        self.finish_move(candidate, hash, ObjectMoveOutcome { state: next.clone(), operation },
+            body.retained_version_ids, existing, true, None, selection)
+    }
+
+    pub(crate) fn decide_publication(
+        &mut self,
+        detached: DetachedPublication,
+    ) -> Result<OperationResult> {
+        self.require_detached_publication(&detached)?;
         let DetachedPublication {
             next,
             next_current_namespaces,

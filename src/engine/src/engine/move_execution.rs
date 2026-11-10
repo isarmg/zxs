@@ -8,6 +8,9 @@ use crate::publication_evidence::verified_recovery_snapshot_at;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod scopes;
+mod object;
+pub(in crate::engine) mod completion;
+pub(in crate::engine) use completion::CompletionBinding;
 
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::PreparationStale, message)
@@ -29,7 +32,7 @@ pub(crate) trait MoveOutcome {
 /// There is deliberately no alternative file/directory storage executor here.
 pub(crate) trait MoveSelection<O: MoveOutcome> {
     fn verify(&self, engine: &Engine, candidate: &Candidate, hash: &str) -> Result<()>;
-    fn prepare(&self, engine: &mut Engine, candidate: &Candidate, hash: &str) -> Result<()>;
+    fn prepare(&mut self, engine: &mut Engine, candidate: &Candidate, hash: &str) -> Result<()>;
     fn mark_decided(&self, engine: &mut Engine);
     fn retire(&self, engine: &mut Engine, published: &PublishedMove<O>) -> Result<()>;
     fn clear(self, engine: &mut Engine);
@@ -61,7 +64,8 @@ impl Engine {
         retained_versions: Vec<String>,
         existing: Option<Publication>,
         decided: bool,
-        selection: S,
+        prepared_names: Option<crate::container_storage::PreparedNames>,
+        mut selection: S,
     ) -> Result<OperationResult> {
         selection.verify(self, &candidate, &hash)?;
         self.require_native_move_authority()?;
@@ -72,14 +76,15 @@ impl Engine {
             }
             Ok(std::sync::Arc::new(advanced))
         }).transpose()?;
-        let files = scopes::file_scopes(self, &retained_versions, &candidate);
         scopes::require_resources(self, &candidate)?;
         scopes::verify_full(self, &retained_versions, &candidate)?;
         let mut databases = scopes::Databases::prepare(self, &candidate, &hash, decided)?;
         let transition = crate::state_projection::ProjectionTransition::new(
             &self.state, outcome.state(), None,
         )?;
-        let mut names = if decided {
+        let mut names = if let Some(names) = prepared_names {
+            names
+        } else if decided {
             crate::container_storage::prepare_recovered_names(
                 &self.config, &self.disk_resources, &transition, MAX_METADATA,
             )?
@@ -88,29 +93,51 @@ impl Engine {
                 &self.config, &self.disk_resources, &transition, MAX_METADATA,
             )?
         };
-        // Empty directories have no FILE scopes. Every nonempty unit admits its
-        // complete source and target set before its one journal decision.
+        // The complete FULL read closure can include unchanged historical
+        // owners. FILE obligations are the same candidate's actual write set,
+        // captured before existence probes, never the cache that happened to fit.
+        let files = names.file_database_scopes().clone();
         names.unpublished_file_database_reservations(&files)?;
-        if !decided {
-            names.stage_unpublished_file_databases(&mut |_| Ok(()))?;
-            names.verify_unpublished_file_databases()?;
-            databases.stage(self)?;
-            selection.prepare(self, &candidate, &hash)?;
-        }
-        selection.verify(self, &candidate, &hash)?;
-        scopes::require_resources(self, &candidate)?;
-        // No abort/replan after this point: retain the original selector until
-        // all three serving scopes and the historical roots are installed.
-        self.blocked = true;
-        selection.mark_decided(self);
-        let finish = (|| -> Result<OperationResult> {
-            if decided {
+        let completion = match &self.move_completion {
+            Some(original) => {
+                original.require_candidate(&candidate, &hash)?;
+                original.clone()
+            }
+            None => CompletionBinding::new(self, &candidate, &hash)?,
+        };
+        // Install the process-local fence BEFORE the first retained selector.
+        // A partial replica write may fail, but never releases this operation.
+        self.move_completion = Some(completion.clone());
+        let selected = (|| -> Result<()> {
+            completion.retain(self)?;
+            #[cfg(feature = "fault-injection")]
+            self.failpoint("move_after_completion_binding")?;
+            if !decided {
+                names.stage_unpublished_file_databases(&mut |_| Ok(()))?;
+                names.verify_unpublished_file_databases()?;
+                databases.stage(self)?;
+            } else {
                 for writer in self.journals.values_mut() {
                     writer.verify_retained_name()?;
                     writer.repair_torn_tail()?;
                     writer.verify_retained_name()?;
                 }
             }
+            selection.prepare(self, &candidate, &hash)?;
+            selection.verify(self, &candidate, &hash)?;
+            scopes::require_resources(self, &candidate)
+        })();
+        if let Err(error) = selected {
+            self.blocked = true;
+            self.metadata_integrity.invalidate();
+            return Err(error.context(ErrorCode::RecoveryRequired,
+                "the original move is retained; reopen and resume its selected candidate").retryable());
+        }
+        // No abort/replan after this point: retain the original selector until
+        // all three serving scopes and the historical roots are installed.
+        self.blocked = true;
+        selection.mark_decided(self);
+        let finish = (|| -> Result<OperationResult> {
             self.complete_move_candidate(
                 &candidate, &hash, outcome.state(), existing, names, decided,
             )?;
@@ -128,6 +155,7 @@ impl Engine {
             scopes::verify_published_full(self, &published)?;
             let roots = self.verify_move_member_closure(&published)?;
             scopes::require_resources(self, &published.candidate)?;
+            completion.retire(self, &published)?;
             selection.retire(self, &published)?;
             let result = published.outcome.result().clone();
             let snapshot = published.candidate.snapshot_hash.clone();
@@ -137,6 +165,7 @@ impl Engine {
             self.snapshot = Some(snapshot);
             self.published_state_base = None;
             selection.clear(self);
+            self.move_completion = None;
             self.blocked = false;
             Ok(result)
         })();
