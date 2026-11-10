@@ -181,3 +181,98 @@ fn poisoned_progress_is_reported_as_unavailable_not_a_healthy_or_missing_task() 
     fixture.assert_target_lock_released();
     fixture.assert_same_task_completes();
 }
+
+#[test]
+fn backup_inspection_entrypoints_preserve_actor_and_preparation_order() {
+    let temp = tempfile::tempdir().unwrap();
+    let config =
+        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    let operation = OperationId::generate().unwrap();
+    type Inspect = fn(&mut Engine, OperationId, &str) -> Result<()>;
+    let inspections: [Inspect; 11] = [
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_registry_decision(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_first_publication(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_target_publication(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_published_configuration(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_published_registry(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_published_serving_images(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_published_scoped_databases(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_common_databases(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_current_read(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_database_aliases(operation, actor)
+                .map(drop)
+        },
+        |engine, operation, actor| {
+            engine
+                .inspect_backup_first_finalize(operation, actor)
+                .map(drop)
+        },
+    ];
+    engine
+        .commit_preparation
+        .store(true, std::sync::atomic::Ordering::Release);
+    for inspect in &inspections {
+        assert_eq!(
+            inspect(&mut engine, operation, "").unwrap_err().code(),
+            ErrorCode::Unauthenticated
+        );
+        assert_eq!(
+            inspect(&mut engine, operation, "admin").unwrap_err().code(),
+            ErrorCode::CommitPreparationBusy
+        );
+    }
+    engine
+        .commit_preparation
+        .store(false, std::sync::atomic::Ordering::Release);
+    for inspect in inspections {
+        assert_eq!(
+            inspect(&mut engine, operation, "admin").unwrap_err().code(),
+            ErrorCode::IoError
+        );
+    }
+    assert!(
+        !engine
+            .root
+            .join("backup-preparation/registry-placement.json")
+            .exists()
+    );
+}

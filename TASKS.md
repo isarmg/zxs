@@ -2,6 +2,15 @@
 
 状态核对时间：2026-11-10。当前源码父基线：`a6d2d08c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
+
+## 本轮 Backup 观察入口精简
+
+- registration/recovery 的 11 处公开观察／共享观察入口改用同一 backup_inspection_task，统一读取原 SYSTEM Task、核原 actor／安装身份、处理 retained worker；一次返回持有的 SYSTEM 目录和原 Task，删除每处相同实现，src 实际净删 184 行。
+- 原 actor→commit preparation→Task 读取→原安装身份→活跃 worker 拒绝→join 顺序、各入口错误码和说明完整保留。后续 target acquisition、隔离、原决定、候选、真实 Publication 前后观察及各阶段磁盘读回均保持，普通注释未删；部分入口把原先临时 SYSTEM 目录句柄保持到观察结束，不增加系统调用或写入。
+- 根测试新增 11 个真实公开入口的 actor／preparation fence 优先级及缺失 Task 只读拒绝用例；两个 Rust 文件格式和精确补丁检查通过。未本地编译或运行 Rust 测试，目标运行结论待统一 CI；本片没有改变 Backup 激活或恢复协议。
+- 独立静态审阅核对全部 11 处入口、Task 所有权、目录句柄生命周期及新增测试前提，未发现确定阻断；未据此宣称编译或运行通过。
+
+
 ## 本轮目录软删除可见性夹具修正
 
 - CI #1054（`90baf3c1`）与 #1055 的目录组 31 通过、2 失败，均是夹具把 `list_tree` 的原始保留行误当作生命周期可见列表。本轮同一 `NamespaceTree` 同时验证 `visible_entries` 为空与原始 entry 完全保留，覆盖发布、冷开和无变化提交；原 D、冻结写拒绝、旧正文与精确撤销断言保留。

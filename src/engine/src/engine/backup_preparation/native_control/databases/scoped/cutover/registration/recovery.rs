@@ -498,32 +498,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupRegistryRecoveryReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let system = DiskRoot::open(&self.root)?;
-        let task = Task::read(&system)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "decision inspection belongs to another actor or original task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained worker before decision inspection",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "decision inspection belongs to another actor or original task",
+            "wait for the retained worker before decision inspection",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -543,31 +523,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<crate::BackupFirstPublicationReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "first Backup Publication inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained worker before first Publication inspection",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "first Backup Publication inspection belongs to another actor or task",
+            "wait for the retained worker before first Publication inspection",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -586,31 +547,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupTargetPublicationReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "first Backup Publication inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained worker before first Publication inspection",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "first Backup Publication inspection belongs to another actor or task",
+            "wait for the retained worker before first Publication inspection",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -630,31 +572,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupConfigurationReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "first Backup Publication inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained worker before first Publication inspection",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "first Backup Publication inspection belongs to another actor or task",
+            "wait for the retained worker before first Publication inspection",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -674,31 +597,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupPublishedRegistryReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup registry inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained registry worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup registry inspection belongs to another actor or task",
+            "wait for the retained registry worker",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -720,31 +624,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupServingImagesReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup serving inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained serving worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup serving inspection belongs to another actor or task",
+            "wait for the retained serving worker",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -766,31 +651,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupPublishedScopesReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let task = Task::read(&DiskRoot::open(&self.root)?)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup scoped database inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained scoped database worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup scoped database inspection belongs to another actor or task",
+            "wait for the retained scoped database worker",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
@@ -812,32 +678,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupCommonDatabasesReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let system = DiskRoot::open(&self.root)?;
-        let task = Task::read(&system)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup common database inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained scoped database worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup common database inspection belongs to another actor or task",
+            "wait for the retained scoped database worker",
+        )?;
         let sources = common_databases::Sources::capture(self, &system)?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
@@ -871,32 +717,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<BackupCurrentReadReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let system = DiskRoot::open(&self.root)?;
-        let task = Task::read(&system)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup Current read inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained scoped database worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup Current read inspection belongs to another actor or task",
+            "wait for the retained scoped database worker",
+        )?;
         let sources = common_databases::Sources::capture(self, &system)?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
@@ -1107,6 +933,36 @@ impl Engine {
         self.with_backup_database_aliases(operation, principal, ordinary_serving::observe)
     }
 
+    fn backup_inspection_task(
+        &mut self,
+        operation: OperationId,
+        principal: &str,
+        task_mismatch: &'static str,
+        worker_busy: &'static str,
+    ) -> Result<(DiskRoot, Task)> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let system = DiskRoot::open(&self.root)?;
+        let task = Task::read(&system)?;
+        if task.installation.bytes()?
+            != InstallationTask::current(self, operation, principal)?.bytes()?
+        {
+            return Err(Error::new(ErrorCode::IdempotencyKeyReused, task_mismatch));
+        }
+        if self
+            .backup_preparation
+            .as_ref()
+            .and_then(|worker| worker.thread.as_ref())
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Err(Error::new(ErrorCode::WorkspaceBusy, worker_busy));
+        }
+        if let Some(worker) = self.backup_preparation.as_mut() {
+            worker.join()?;
+        }
+        Ok((system, task))
+    }
+
     fn with_backup_database_aliases<T>(
         &mut self,
         operation: OperationId,
@@ -1119,32 +975,12 @@ impl Engine {
             &AtomicBool,
         ) -> Result<T>,
     ) -> Result<T> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let system = DiskRoot::open(&self.root)?;
-        let task = Task::read(&system)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "Backup database aliases belong to another original actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the original Backup database worker",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "Backup database aliases belong to another original actor or task",
+            "wait for the original Backup database worker",
+        )?;
         let sources = common_databases::Sources::capture(self, &system)?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
@@ -1178,32 +1014,12 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<crate::BackupFirstFinalizeReport> {
-        Self::require_actor(principal)?;
-        self.require_no_commit_preparation()?;
-        let system = DiskRoot::open(&self.root)?;
-        let task = Task::read(&system)?;
-        if task.installation.bytes()?
-            != InstallationTask::current(self, operation, principal)?.bytes()?
-        {
-            return Err(Error::new(
-                ErrorCode::IdempotencyKeyReused,
-                "first Backup FINALIZE inspection belongs to another actor or task",
-            ));
-        }
-        if self
-            .backup_preparation
-            .as_ref()
-            .and_then(|worker| worker.thread.as_ref())
-            .is_some_and(|thread| !thread.is_finished())
-        {
-            return Err(Error::new(
-                ErrorCode::WorkspaceBusy,
-                "wait for the retained worker before first-slot inspection",
-            ));
-        }
-        if let Some(worker) = self.backup_preparation.as_mut() {
-            worker.join()?;
-        }
+        let (_system, task) = self.backup_inspection_task(
+            operation,
+            principal,
+            "first Backup FINALIZE inspection belongs to another actor or task",
+            "wait for the retained worker before first-slot inspection",
+        )?;
         let (targets, choices) = runtime::acquire(self, &task)?;
         require_isolated(&targets)?;
         let stop = AtomicBool::new(false);
