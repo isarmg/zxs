@@ -222,6 +222,23 @@ impl ServerProcess {
         self.stopped = true;
         Ok(())
     }
+    pub(super) fn exit_code(&mut self) -> Result<i32> {
+        match &mut self.backend {
+            Backend::Native(process) => super::wait_for("daemon exit", || {
+                process
+                    .as_mut()
+                    .expect("invariant: running native server owns its process")
+                    .0
+                    .try_wait()?
+                    .ok_or_else(|| "daemon is still running".into())
+            })?
+            .code()
+            .ok_or_else(|| "daemon terminated by signal".into()),
+            Backend::Container { name, .. } => {
+                Ok(output(&strings(&["wait", name]))?.trim().parse()?)
+            }
+        }
+    }
     pub(super) fn finish(mut self, action: impl FnOnce() -> Result<()>) -> Result<()> {
         with_cleanup(action, || self.stop())
     }

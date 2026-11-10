@@ -1,5 +1,5 @@
-//! A newly admitted primary must open its own empty root before conversion or
-//! seeded file scenarios can make an unrelated disk mask this transition.
+//! An offline-prepared primary must open its own empty root before seeded file
+//! scenarios can make an unrelated disk mask this transition.
 use super::{Browser, Path, Result, wait_for};
 
 pub(super) fn observe(browser: &Browser) -> Result<()> {
@@ -79,7 +79,7 @@ return s.diskReads.length>{reads} && s.diskReady({expected})
         return Err("new primary browsing sent an unexpected API mutation".into());
     }
     println!(
-        "PASS new primary discovery/activation to actual Files disk name, empty D01 root and fresh All disks return; no browsing mutations"
+        "PASS offline-prepared primary to actual Files disk name, empty D01 root and fresh All disks return; no browsing mutations"
     );
     Ok(())
 }

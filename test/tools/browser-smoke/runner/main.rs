@@ -597,6 +597,7 @@ fn run() -> Result<()> {
         .arg(root.join("disks"))
         .args(["--listen", &format!("127.0.0.1:{server_port}")]);
     server_web(&mut command, server_assets, root);
+    management::reject_empty(&cli_binary, server_assets, root)?;
     let server = server_launcher::launch(&mut command, &server_log)?;
     let result = server.finish(|| -> Result<()> {
         wait_for("persisted fixture authority and storage", || {
@@ -667,13 +668,12 @@ fn run() -> Result<()> {
         } else if let Some(directory) = &contour_evidence {
             contour_evidence::run(&browser, &origin, &web, directory)
         } else {
-            // First setup owns separate private pools and daemon lifetimes. Run
-            // it before unrelated history probes can stop the normal scenario.
-            // Install error observation before its first navigation, then clear
-            // its loopback cookies before opening the original seeded server.
+            // The primary fixture is prepared offline before its daemon starts.
+            // Observe browser errors before navigation, then clear its loopback
+            // cookies before opening the original seeded server.
             diagnostics::install(&browser)
                 .and_then(|()| {
-                    management::setup(&browser, &cli_binary, server_assets, root, &password)
+                    management::prepared_primary(&browser, &cli_binary, server_assets, root, &password)
                 })
                 .and_then(|()| {
                     browser.command("DELETE", "/cookie", None)?;

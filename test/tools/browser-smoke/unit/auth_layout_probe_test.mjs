@@ -428,25 +428,16 @@ for(const [name,change] of [
 // explicit models-only option is for isolated worktrees awaiting production edits.
 if(!process.argv.includes('--models-only')) {
     const host=readFileSync(new URL('../runner/auth_layout.rs',import.meta.url),'utf8');
-    const management=readFileSync(new URL('../runner/management.rs',import.meta.url),'utf8');
     const setupSource=readFileSync(new URL('../../../../src/web/src/setup.rs',import.meta.url),'utf8');
     const loginSource=readFileSync(new URL('../../../../src/interface/src/components/login.rs',import.meta.url),'utf8');
     const authCss=readFileSync(new URL('../../../../src/web/public/styles/components/auth.css',import.meta.url),'utf8');
     const geometryCss=readFileSync(new URL('../../../../src/web/public/styles/components/geometry.css',import.meta.url),'utf8');
     const paintSource=readFileSync(new URL('../../../../src/interface/src/contours/paint.rs',import.meta.url),'utf8');
-    assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Existing\)/);
-    assert.match(host,/run_with_setup\(browser, origin, output, SetupState::Empty\)/);
+    assert.match(host,/pub\(super\) fn run\(/);
     assert.match(host,/\(320, 568\), \(390, 844\), \(980, 760\), \(1440, 900\)/);
-    assert.match(host,/"args": \[setup.name\(\), phase\]/);
-    assert.match(host,/for phase in \["initial", "refreshed", setup.final_phase\(\)\]/);
-    assert.match(host,/Self::Existing => "invalid-login"/);assert.match(host,/Self::Empty => "keyboard-focus"/);
-    assert.match(host,/Self::Unconfirmed => "response-lost"/);
-    assert.match(host,/Self::RateLimited => "status-rejected"/);
-    assert.match(host,/pub\(super\) fn unconfirmed\(/);
-    assert.match(management,/super::auth_layout::unconfirmed\(browser, previews.as_deref\(\)\)/);
-    assert.match(management,/join\("first-account-unknown"\)/);
-    assert.match(management,/join\("first-account-rate-limited"\)/);
-    assert.match(management,/super::auth_layout::rate_limited\(browser, output\)/);
+    assert.match(host,/"args": \["existing", phase\]/);
+    assert.match(host,/for phase in \["initial", "refreshed", "invalid-login"\]/);
+    assert.doesNotMatch(host,/first_account|unconfirmed|rate_limited|SetupState/);
     assert.match(host,/browser.command\("POST", "\/refresh"/);
     assert.match(host,/:focus-visible/);assert.match(host,/\.zxs-auth-information \.zxs-error/);
     assert.ok(host.indexOf('window.scrollTo(0,0)')<host.indexOf('\"id\":\"auth-layout-mouse\"'));
@@ -456,16 +447,6 @@ if(!process.argv.includes('--models-only')) {
     assert.ok(host.indexOf('dir.join(&name)')<host.indexOf('if geometry["valid"] != true'));
     assert.ok(host.indexOf('dir.join("login-layout.json")')<host.indexOf('if geometry["valid"] != true'));
     assert.match(host,/Emulation.clearDeviceMetricsOverride/);
-    assert.match(management,/join\("first-account"\)/);
-    const layout=management.slice(management.indexOf('fn first_account_layout('),management.indexOf('pub(super) fn setup('));
-    const fresh=management.slice(management.indexOf('pub(super) fn setup('),management.indexOf('struct SetupFixture'));
-    assert.match(layout,/SetupFixture::new\(root, "first-account-layout"\)/);
-    assert.match(fresh,/SetupFixture::new\(root, "fresh-web-setup"\)/);
-    assert.ok(layout.indexOf('fixture.visit(browser)?')<layout.indexOf('super::auth_layout::first_account('));
-    assert.doesNotMatch(layout,/fixture.authorize|credentials\(|\/api\/setup\/initialize/);
-    assert.ok(fresh.indexOf('first_account_layout(browser, daemon, web, root)?')<fresh.indexOf('SetupFixture::new('));
-    assert.ok(fresh.indexOf('SetupFixture::new(')<fresh.indexOf('fixture.open(browser)?'));
-    assert.ok(fresh.indexOf('fixture.open(browser)?')<fresh.indexOf('credentials('));
     assert.match(setupSource,/<form data-first-account-form=""/);assert.match(loginSource,/<form data-auth-form="login"/);
     for(const formSource of [setupSource,loginSource]) {
         assert.equal((formSource.match(/<div class="zxs-auth-input-row zxs-hover-row">/g)||[]).length,2);

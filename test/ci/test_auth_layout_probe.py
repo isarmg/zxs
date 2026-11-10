@@ -13,10 +13,6 @@ class AuthLayoutProbe(unittest.TestCase):
         subprocess.run(['node', 'test/tools/browser-smoke/unit/auth_layout_probe_test.mjs'],
                        cwd=ROOT, check=True)
 
-    def test_setup_lifecycle_host_regressions(self):
-        subprocess.run(['node', 'test/tools/browser-smoke/unit/setup_lifecycle_probe_test.mjs'],
-                       cwd=ROOT, check=True)
-
     def test_scoped_text_input_surface_regressions(self):
         subprocess.run(['node', '--check', 'test/tools/browser-smoke/runner/input_surfaces.js'],
                        cwd=ROOT, check=True)

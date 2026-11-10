@@ -25,6 +25,8 @@
 
 `browser-smoke` 成功完成单个 ELF 的内嵌 Web 运行验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含 `zxs-VERSION-debian13-amd64` 主程序、`zxs-helper-VERSION-debian13-amd64` 独立辅助工具、`zxs-source-VERSION.tar.gz` 完整源码与收据归档，以及 `SHA256SUMS` 四文件集合（`VERSION` 为构建版本），供检查或部署演练；下载后仍须完整校验摘要。
 
+首装正向由隔离 Debian 中的真实 helper HTTP 初始化、退出、双向互斥和服务账户冷启验收负责。Chrome 不再启动空 ZXS 做在线首账号／磁盘变更：它检查空目录拒启，并保留离线准备后的主盘浏览、缺盘重启及正常文件／历史／故障管理。helper 页面、离线转换向导及其响应丢失的实际浏览器覆盖仍待补齐，不能用旧在线场景或静态模型宣称通过。
+
 CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完整场景成功后，使用同一私有复制的最终 ELF 追加独立 `--foreign-review-only` 外来历史审核场景，不减少原场景或改变并发。第二次调用不带文件页截图参数，任何一次失败都阻止安装候选组装。开关仅接受 `0` 或 `1`，缺省为 `0`；Release 工作流未启用，仍保持原验收范围。审核场景的实际网络、可访问性与截图证据由 `foreign-review-browser-${{ github.sha }}` artifact 保留 7 天；未生成证据不表示通过。此接线尚未经过真实 Chrome 执行，脚本模型、原生夹具与静态检查不能替代浏览器结果；场景只审核计划，不执行迁入。详见 [浏览器验收工具](tools/browser-smoke.md)。
 
 该候选只表示此 job 的打包、浏览器及组装检查通过，不代表同次 CI 的其他并行门禁已通过。它不会创建标签、GitHub Release 或公开发布；也不等同于 Release 工作流的 `workflow_dispatch` 演练，后者还通过版本工具验证并等待全部发布验证分片和固定 Samba SDK 检查，最终提供 `release-complete`。正式发布前仍须检查完整工作流结果及首发验收清单。

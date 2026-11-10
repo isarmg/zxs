@@ -3,6 +3,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -232,6 +234,39 @@ class HelperPreparation(unittest.TestCase):
             self.assertEqual(commands[1][0][1:], ['serve', '--listen', '127.0.0.1:12345'])
             self.assertNotIn('user', commands[1][1])
             self.assertTrue(all(not Path(command[0]).exists() for command, _ in commands))
+
+    def test_release_driver_creates_host_owned_output_before_root_container(self):
+        # Execute the shell orchestration with a Docker recorder, not Docker or
+        # a native product. Only a private test checkout receives fixture files.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / '.github/scripts/check-debian13-release.sh'
+            script.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / '.github/scripts/check-debian13-release.sh', script)
+            (root / '.github/samba-debian-target.json').write_text('{"package_version":"test"}')
+            (root / 'release-assets').mkdir()
+            (root / 'release-assets/zxs-helper-0.1.0-debian13-amd64').write_bytes(b'fixture')
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            docker = bin_dir / 'docker'
+            docker.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+if sys.argv[1] == 'run':
+    root = Path.cwd()
+    assert (root / 'artifacts').is_dir()
+    assert (root / 'artifacts').stat().st_uid == os.getuid()
+    volumes = [sys.argv[i + 1] for i, value in enumerate(sys.argv[:-1]) if value == '--volume']
+    assert volumes == [f'{root}:/work:ro', f'{root}/artifacts:/work/artifacts']
+    (root / 'docker-run.json').write_text(json.dumps(sys.argv[1:]))
+""")
+            docker.chmod(0o700)
+            environment = dict(os.environ, RELEASE_VERSION='0.1.0', PATH=f"{bin_dir}:{os.environ['PATH']}")
+            subprocess.run(['bash', str(script)], cwd=root, env=environment, check=True)
+            self.assertTrue((root / 'docker-run.json').is_file())
+            diagnostics = root / 'artifacts/browser-smoke/diagnostics'
+            diagnostics.mkdir(parents=True)
+            (diagnostics / 'page.json').write_text('{}')
 
     def test_runtime_remains_offline_and_browser_uses_prepared_image(self):
         script = (ROOT / '.github/scripts/check-debian13-release.sh').read_text()

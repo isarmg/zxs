@@ -12,7 +12,13 @@ fn offline_fixture_preserves_real_management_authority_with_a_corrupt_pool() {
     prepare_offline(&source, &offline).unwrap();
     let pool = offline.join("pool");
     let management = offline.join("management");
-    let (backend, mut auth) = storage_server::management::open_service(&pool, &management).unwrap();
+    let prepared =
+        storage_server::startup_admission::PreparedService::open(&pool, &management).unwrap();
+    let (backend, mut auth) = storage_server::management::open_prepared_service_with_options(
+        &prepared,
+        storage_server::management::ManagementOptions::default(),
+    )
+    .unwrap();
     assert!(
         auth.is_available(),
         "offline fixture must preserve usable system credentials"
@@ -31,6 +37,16 @@ fn offline_fixture_preserves_real_management_authority_with_a_corrupt_pool() {
             .mode()
             & 0o777,
         0o600
+    );
+    for name in ["config.json", "management-authority.json"] {
+        assert_eq!(
+            fs::metadata(pool.join(name)).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert_eq!(
+        fs::read(pool.join("management-authority.json")).unwrap(),
+        fs::read(source.join("management-authority.json")).unwrap()
     );
     let session = auth.login("smoke-admin", password).unwrap();
     let identity = auth.authenticate(&session.token).unwrap();
@@ -64,10 +80,10 @@ fn offline_fixture_preserves_real_management_authority_with_a_corrupt_pool() {
 }
 
 #[test]
-fn account_setup_fixture_has_no_disk_candidates_or_pool_configuration() {
+fn empty_fixture_is_rejected_without_creating_setup_or_configuration() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let fixture = SetupFixture::new(root.path(), "account-only-fixture").unwrap();
+    let fixture = PreparedFixture::new(root.path(), "account-only-fixture").unwrap();
     assert!(!fixture.pool.join("config.json").exists());
     assert!(!fixture.root.join("storage-parent").exists());
     for path in [&fixture.root, &fixture.pool, &fixture.management] {
@@ -77,13 +93,22 @@ fn account_setup_fixture_has_no_disk_candidates_or_pool_configuration() {
         );
     }
     assert!(!fixture.management.join("bootstrap.key").exists());
+    assert!(matches!(
+        storage_server::startup_admission::PreparedService::open(
+            &fixture.pool,
+            &fixture.management
+        ),
+        Err(storage_server::startup_admission::Error::StorageNotPrepared)
+    ));
+    assert!(fs::read_dir(&fixture.pool).unwrap().next().is_none());
+    assert!(fs::read_dir(&fixture.management).unwrap().next().is_none());
 }
 
 #[test]
 fn browser_storage_fixture_selects_only_an_empty_private_child() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let fixture = SetupFixture::new(root.path(), "nested-directory-fixture").unwrap();
+    let fixture = PreparedFixture::new(root.path(), "nested-directory-fixture").unwrap();
     let storage = fixture.storage_directory().unwrap();
     assert_eq!(
         storage,
@@ -102,19 +127,19 @@ fn browser_storage_fixture_selects_only_an_empty_private_child() {
 }
 
 #[test]
-fn completion_fixture_has_real_activation_proof_and_existing_account() {
+fn primary_fixture_completes_activation_before_the_daemon_is_launched() {
     // Inspection intentionally rejects tmpfs. Keep this test on the repository's
     // filesystem instead of weakening the production candidate validation.
     let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-    let fixture = SetupFixture::new(root.path(), "activation-completion-fixture").unwrap();
-    let storage = prepare_interruption(&fixture, "fixture-only-long-password").unwrap();
+    let fixture = PreparedFixture::new(root.path(), "offline-prepared-fixture").unwrap();
+    let storage = prepare_primary(&fixture, "fixture-only-long-password").unwrap();
     assert_single_storage(&fixture, &storage).unwrap();
     assert!(fixture.pool.join("management-authority.json").exists());
     assert!(fixture.management.join("management-auth.json").exists());
     assert!(fixture.pool.join("storage-activation-intent.json").exists());
     assert!(fixture.pool.join("storage-activation-ready.json").exists());
     assert!(
-        !fixture
+        fixture
             .pool
             .join("storage-activation-complete.json")
             .exists()
@@ -125,5 +150,9 @@ fn completion_fixture_has_real_activation_proof_and_existing_account() {
         std::collections::BTreeMap::new(),
     )
     .unwrap();
-    assert!(service.storage_status().completion_available);
+    service.activation_admitted().unwrap();
+    storage_server::startup_admission::PreparedService::open(&fixture.pool, &fixture.management)
+        .unwrap();
+    let engine = storage_engine::Engine::open(&fixture.pool).unwrap();
+    assert!(engine.auth_state_ref().is_some());
 }
