@@ -92,8 +92,7 @@ pub(crate) mod move_execution;
 pub(crate) use move_execution::PublishedMove;
 mod history_move_decision;
 pub use history_move_decision::{
-    CapturedFileMoveSource,
-    FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
+    CapturedFileMoveSource, FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
     FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
     FileHistoryMoveOrdinaryPreparation, FileHistoryMovePathRequest,
@@ -879,8 +878,12 @@ impl Engine {
         };
         engine.move_completion = move_execution::CompletionBinding::discover(&engine)?;
         if let Some(selected) = &engine.move_completion {
-            engine.next_slot = engine.next_slot.max(selected.sequence().checked_add(1)
-                .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "selected move sequence exhausted"))?);
+            engine.next_slot =
+                engine
+                    .next_slot
+                    .max(selected.sequence().checked_add(1).ok_or_else(|| {
+                        Error::new(ErrorCode::ResourceLimit, "selected move sequence exhausted")
+                    })?);
         }
         engine.discover_file_history_move_choice()?;
         Ok(engine)

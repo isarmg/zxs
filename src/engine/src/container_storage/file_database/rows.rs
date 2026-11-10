@@ -292,15 +292,24 @@ impl<'a> Validation<'a> {
                     active = Some(row.node);
                 }
                 DeletionAction::Import => {
-                    let previous=active.as_ref().ok_or_else(||super::invalid("imported deletion has no retained active source"))?;
-                    if previous.file_id!=row.node.file_id || previous.history_tree_id!=row.node.history_tree_id
-                        || previous.branch_heads!=row.node.branch_heads || previous.parent_node_ids!=row.node.parent_node_ids
-                        || row.node.operation_id!=row.operation_id || row.node.sequence!=row.sequence
-                        || row.node.author!=row.author || previous.sequence>=row.sequence
-                        || !nodes.insert(row.node.node_id.clone()) {
-                        return Err(super::invalid("imported deletion changes its retained frontier"));
+                    let previous = active.as_ref().ok_or_else(|| {
+                        super::invalid("imported deletion has no retained active source")
+                    })?;
+                    if previous.file_id != row.node.file_id
+                        || previous.history_tree_id != row.node.history_tree_id
+                        || previous.branch_heads != row.node.branch_heads
+                        || previous.parent_node_ids != row.node.parent_node_ids
+                        || row.node.operation_id != row.operation_id
+                        || row.node.sequence != row.sequence
+                        || row.node.author != row.author
+                        || previous.sequence >= row.sequence
+                        || !nodes.insert(row.node.node_id.clone())
+                    {
+                        return Err(super::invalid(
+                            "imported deletion changes its retained frontier",
+                        ));
                     }
-                    active=Some(row.node);
+                    active = Some(row.node);
                 }
                 DeletionAction::Undo => {
                     if active.as_ref() != Some(&row.node) || row.node.sequence >= row.sequence {
@@ -350,4 +359,3 @@ fn decode_local<T: for<'de> Deserialize<'de> + Serialize>(bytes: &[u8]) -> crate
     }
     Ok(row)
 }
-

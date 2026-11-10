@@ -78,7 +78,10 @@ pub(super) fn verify_full(
     }
     Ok(())
 }
-pub(super) fn verify_published_full<O: MoveOutcome>(engine: &Engine, published: &PublishedMove<O>) -> Result<()> {
+pub(super) fn verify_published_full<O: MoveOutcome>(
+    engine: &Engine,
+    published: &PublishedMove<O>,
+) -> Result<()> {
     require_resources(engine, &published.candidate)?;
     for id in &published.retained_versions {
         full(
@@ -209,7 +212,11 @@ impl Databases {
         }
         Ok(())
     }
-    pub(super) fn install<O: MoveOutcome>(self, engine: &mut Engine, published: &PublishedMove<O>) -> Result<()> {
+    pub(super) fn install<O: MoveOutcome>(
+        self,
+        engine: &mut Engine,
+        published: &PublishedMove<O>,
+    ) -> Result<()> {
         let stop = AtomicBool::new(false);
         require_resources(engine, &published.candidate)?;
         for pair in self.pairs {

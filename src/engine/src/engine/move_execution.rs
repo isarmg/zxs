@@ -2,14 +2,14 @@
 //! candidate enters here during first execution and recovery; recovery never
 //! resolves today's source path or replans the membership of the move.
 use super::Engine;
-use crate::{disk::*, *};
 use crate::journal::{Candidate, Publication, RecordType};
 use crate::publication_evidence::verified_recovery_snapshot_at;
+use crate::{disk::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
-mod scopes;
-mod object;
 pub(in crate::engine) mod completion;
+mod object;
+mod scopes;
 pub(in crate::engine) use completion::CompletionBinding;
 
 fn invalid(message: &str) -> Error {
@@ -48,8 +48,12 @@ pub(crate) struct PublishedMove<O = crate::business::NativeMoveCandidate> {
     retained_versions: Vec<String>,
 }
 impl<O: MoveOutcome> PublishedMove<O> {
-    pub(crate) fn state(&self) -> &State { self.outcome.state() }
-    pub(crate) fn files(&self) -> &BTreeSet<(String, String, String)> { &self.files }
+    pub(crate) fn state(&self) -> &State {
+        self.outcome.state()
+    }
+    pub(crate) fn files(&self) -> &BTreeSet<(String, String, String)> {
+        &self.files
+    }
 }
 
 impl Engine {
@@ -73,18 +77,23 @@ impl Engine {
         scopes::require_resources(self, &candidate)?;
         scopes::verify_full(self, &retained_versions, &candidate)?;
         let mut databases = scopes::Databases::prepare(self, &candidate, &hash, decided)?;
-        let transition = crate::state_projection::ProjectionTransition::new(
-            &self.state, outcome.state(), None,
-        )?;
+        let transition =
+            crate::state_projection::ProjectionTransition::new(&self.state, outcome.state(), None)?;
         let mut names = if let Some(names) = prepared_names {
             names
         } else if decided {
             crate::container_storage::prepare_recovered_names(
-                &self.config, &self.disk_resources, &transition, MAX_METADATA,
+                &self.config,
+                &self.disk_resources,
+                &transition,
+                MAX_METADATA,
             )?
         } else {
             crate::container_storage::prepare_names(
-                &self.config, &self.disk_resources, &transition, MAX_METADATA,
+                &self.config,
+                &self.disk_resources,
+                &transition,
+                MAX_METADATA,
             )?
         };
         // The complete FULL read closure can include unchanged historical
@@ -124,8 +133,12 @@ impl Engine {
         if let Err(error) = selected {
             self.blocked = true;
             self.metadata_integrity.invalidate();
-            return Err(error.context(ErrorCode::RecoveryRequired,
-                "the original move is retained; reopen and resume its selected candidate").retryable());
+            return Err(error
+                .context(
+                    ErrorCode::RecoveryRequired,
+                    "the original move is retained; reopen and resume its selected candidate",
+                )
+                .retryable());
         }
         // No abort/replan after this point: retain the original selector until
         // all three serving scopes and the historical roots are installed.
@@ -133,15 +146,26 @@ impl Engine {
         selection.mark_decided(self);
         let finish = (|| -> Result<OperationResult> {
             self.complete_move_candidate(
-                &candidate, &hash, outcome.state(), existing, names, decided,
+                &candidate,
+                &hash,
+                outcome.state(),
+                existing,
+                names,
+                decided,
             )?;
             self.observe_move_publication(&candidate, &hash, outcome.result())?;
             let published = PublishedMove {
-                candidate, hash, outcome, files, retained_versions,
+                candidate,
+                hash,
+                outcome,
+                files,
+                retained_versions,
             };
             databases.install(self, &published)?;
             crate::container_storage::verify_move_files(
-                &self.config, &self.disk_resources, &published,
+                &self.config,
+                &self.disk_resources,
+                &published,
             )?;
             self.install_move_system_index(&published)?;
             #[cfg(feature = "fault-injection")]
