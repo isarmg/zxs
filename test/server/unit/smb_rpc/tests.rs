@@ -95,6 +95,41 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
         self.inner.operation_outcome(identity, operation_id)
     }
+    fn move_current_object(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentObject,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let target_binding = match &command.target {
+            crate::MoveObjectTarget::Repository(binding) => Some(binding),
+            crate::MoveObjectTarget::EmptyDisk { .. } => None,
+        };
+        self.move_requests.lock().unwrap().push(json!({
+            "source_repository_id": command.source_binding.repository_id,
+            "source_branch_id": command.source_binding.branch_id,
+            "source_generation": command.source_binding.generation.to_string(),
+            "source_path": command.movement.source_path.as_str(),
+            "target_repository_id": command.movement.target_repository_id,
+            "target_branch_id": target_binding.map(|binding| &binding.branch_id),
+            "target_generation": target_binding.map(|binding| binding.generation.to_string()),
+            "target_name": command.movement.target_path.as_str(),
+            "source_entry_id": command.movement.source_entry_id,
+            "source_file_id": command.expected_source_file_id,
+            "target_file_id": command.expected_target_file_id,
+            "movement": command.movement,
+            "operation_id": command.operation_id,
+        }));
+        if let Some(result) = self.move_result.lock().unwrap().take() {
+            return result;
+        }
+        let result = self.inner.move_current_object(identity, command)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::other(
+                "injected lost object move publication reply",
+            )));
+        }
+        Ok(result)
+    }
     fn move_current_file_to_empty_disk(
         &self,
         identity: &Identity,

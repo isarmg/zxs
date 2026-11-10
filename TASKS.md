@@ -86,6 +86,8 @@
 - SMB 后继复用同一原 intent 准备 helper，增加已发表回执仍需当前双端绑定，以及原 file intent 冷重开经 SMB 完成、再冷重开幂等读取的跨层用例；不复制共享执行器故障矩阵，不新增生产 hook。
 - 生产 SMB 回执改为 MoveReceipt 后，新增 current／empty object.move 成功及捕获 file 身份不符的三项协议测试；继续复用原完整发表状态矩阵。旧目标路径测试同步 PortablePath 的父路径支持，路径存在性留给核心；依赖新 SMB 回执验证器一起整合。
 - 新对象 completion 只加一条两边界测试：move_after_completion_binding 与 move_after_system_database。故障后原 State 不前移且写入受围栏阻止；冷重开按保留绑定完成同一候选，核原 object.move、三范围读侧、单事件和绑定原字节退休，再重放不变。旧 file intent 保留真实原材料与 file.history.move，不借新对象 hook 重造；不按对象类别复制矩阵。
+- 泛化 SMB 首次入口改为 MoveCurrentObject 后，同一测试夹具转发并记录新入口；原接纳、路径占用、空盘丢回执及原模式重放用例同步 smb-object-move、显式空目标和精确捕获事实。共用完成屏障直接走泛化 backend；旧 file intent 专测真实历史材料，不要求新请求保留旧 kind。
+- 协议回执增加目录 None 身份必须精确匹配，以及同一 entry 的大小写改名不产生被覆盖文件事实两项；原请求与摘要不改，首次 object spool 不接受旧 file 回执。不另复制发布状态或故障矩阵。
 - 本片未执行、编译、格式化或运行 CI，不能称通过或可合入独立产品；待共同业务依赖整合后再按用户许可执行。
 
 ### 首版正常路径：空目录首装、Web 文件导航与 SMB 创建

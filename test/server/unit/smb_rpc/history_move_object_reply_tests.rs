@@ -33,6 +33,19 @@ fn current(operation: OperationId, replace: bool) -> MoveReceipt {
     MoveReceipt::current(&request(operation), "P02", replacement.as_ref()).unwrap()
 }
 
+fn object_request(operation: OperationId) -> crate::MoveCurrentObject {
+    let source = request(operation);
+    let movement = source.movement("P02", None).unwrap();
+    crate::MoveCurrentObject {
+        source_binding: source.source_binding,
+        target: crate::MoveObjectTarget::Repository(source.target_binding),
+        movement,
+        expected_source_file_id: Some(source.expected_source_file_id),
+        expected_target_file_id: None,
+        operation_id: operation,
+    }
+}
+
 fn object_result(expected: &MoveReceipt) -> OperationResult {
     let mut result = receipt(expected.operation_id);
     result.kind = OBJECT_MOVE_KIND.into();
@@ -43,7 +56,7 @@ fn object_result(expected: &MoveReceipt) -> OperationResult {
             principal: "alice".into(),
             target_repository_id: HistoryRepositoryId::parse(&id("repo", 2)).unwrap(),
             target_entry_id: NamespaceEntryId::parse(&id("entry", 3)).unwrap(),
-            source_file_id: Some(expected.source_file_id.clone()),
+            source_file_id: expected.source_file_id.clone(),
             displaced_target_file_id: expected.displaced_target_file_id.clone(),
         },
     });
@@ -116,4 +129,61 @@ fn empty_target_reply_preserves_the_absent_repository_after_root_publication() {
         id("repo", 2)
     );
 }
+
+#[test]
+fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
+    let mut command = object_request(OperationId::generate().unwrap());
+    command.expected_source_file_id = None;
+    let expected = MoveReceipt::object(&command).unwrap();
+    let result = object_result(&expected);
+    let reply = expected.published_object_reply(result, "alice").unwrap();
+    assert_eq!(reply["result"]["movement"]["source_file_id"], Value::Null);
+
+    let expected = MoveReceipt::object(&command).unwrap();
+    let mut wrong_file = object_result(&expected);
+    wrong_file.result["movement"]["source_file_id"] = id("file", 1).into();
+    assert_eq!(
+        expected.published_object_reply(wrong_file, "alice").unwrap_err().code,
+        storage_contract::ErrorCode::StateInvalid
+    );
+    // A newly captured object spool cannot consume a legacy file receipt.
+    assert_eq!(
+        MoveReceipt::object(&command).unwrap()
+            .published_object_reply(receipt(command.operation_id), "alice").unwrap_err().code,
+        storage_contract::ErrorCode::StateInvalid
+    );
+}
+
+#[test]
+fn same_entry_reply_preserves_the_request_without_claiming_a_displaced_file() {
+    let mut command = object_request(OperationId::generate().unwrap());
+    command.movement.target_repository_id = Some(command.movement.source_repository_id.clone());
+    command.movement.target_entry_id = Some(command.movement.source_entry_id.clone());
+    command.movement.target_slot_id = "P01".into();
+    command.movement.target_path = name_policy::PortablePath::parse("É.TXT").unwrap();
+    command.movement.replace = true;
+    command.expected_target_file_id = command.expected_source_file_id.clone();
+    command.target = crate::MoveObjectTarget::Repository(crate::auth::SmbBinding {
+        repository_id: command.source_binding.repository_id.clone(),
+        branch_id: command.source_binding.branch_id.clone(),
+        generation: command.source_binding.generation,
+    });
+    let digest = command.movement.digest("alice").unwrap();
+    let expected = MoveReceipt::object(&command).unwrap();
+    assert_eq!(expected.movement, command.movement);
+    assert_eq!(expected.displaced_target_file_id, None);
+    let mut result = object_result(&expected);
+    result.result["movement"]["target_repository_id"] = id("repo", 1).into();
+    result.result["movement"]["target_entry_id"] = id("entry", 1).into();
+    let reply = expected.published_object_reply(result, "alice").unwrap();
+    assert_eq!(reply["request_digest"], digest);
+    assert_eq!(reply["result"]["movement"]["displaced_target_file_id"], Value::Null);
+
+    command.expected_target_file_id = Some(HistoryFileId::parse(&id("file", 4)).unwrap());
+    assert_eq!(
+        MoveReceipt::object(&command).err().unwrap().code,
+        storage_contract::ErrorCode::StateInvalid
+    );
+}
+
 

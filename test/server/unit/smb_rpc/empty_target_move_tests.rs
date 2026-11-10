@@ -143,14 +143,13 @@ fn empty_disk_move_lost_reply_rejects_changed_mode_then_reconciles_same_operatio
         let record = shared.spool.join(format!("{operation}.namespace.json"));
         let captured = fs::read(&record).unwrap();
         let intent: Value = json_codec::from_slice(&captured).unwrap();
-        assert_eq!(
-            intent["format"],
-            if replace {
-                "smb-file-history-move-empty-target-replace"
-            } else {
-                "smb-file-history-move-empty-target"
-            }
-        );
+        assert_eq!(intent["format"], "smb-object-move");
+        assert_eq!(intent["replace_requested"], replace);
+        assert_eq!(intent["target_binding"], Value::Null);
+        assert_eq!(intent["movement"]["target_repository_id"], Value::Null);
+        assert_eq!(intent["movement"]["target_slot_id"], "P02");
+        assert_eq!(intent["movement"]["target_entry_id"], Value::Null);
+        assert_eq!(intent["target_file_id"], Value::Null);
         // The first call really published and removed the source. Retry must
         // use the retained request, not resolve that now-missing source again.
         assert!(directory(&mut stream, "p").is_empty());
@@ -222,3 +221,4 @@ fn empty_disk_replace_intent_never_overwrites_a_target_created_after_capture() {
     assert!(shared.file_writers.lock().unwrap().is_empty());
     close_wire(stream, worker);
 }
+

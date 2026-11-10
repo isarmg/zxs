@@ -20,8 +20,9 @@
 - 契约测试依赖已写入独立候选的 ObjectMoveRequest、ObjectMoveFact 和 matches_receipt，尚未进入当前 main。
 - SMB 完整源身份拒绝用例要求核心在原 receipt／intent 匹配中保留 source entry 与 file ID。旧实现只比较原路径及覆盖目标，适配器在已完成操作上跳过源核对，因此不能拿旧主线当本用例的正确实现。
 - 当前 SMB 接纳测试直接调用真实 backend，未认证 Samba SDK、操作系统挂载、物理断电或浏览器行为。
-- 目录和目录仓库的聚合单元、同仓 rename、覆盖目标完整身份，以及空盘 None 在一个核心操作中落盘的集成用例，待实际统一入口／桥接签名稳定后接现有 engine 夹具。不能以本文件或已写文件测试宣称这些流程完成。
-- 现有早期测试仍有“目标只允许单个文件名”的断言，而新 PortablePath 契约允许父路径。业务入口完成后应按目标父目录真实存在与否更新断言，不保留旧限制来配合测试。
+- 泛化 SMB 接纳夹具已转发真实 MoveCurrentObject，原文件桥接只负责已有请求身份与旧 intent 续作；完成屏障直接走新对象入口。空盘 framed RPC 保留原 target_repository_id／target_binding 为 None，并要求同一操作完成根与搬运。
+- 目录／目录仓库正常流程由公共 Engine 测试覆盖，不在协议层复制成员和故障矩阵。协议层只补目录显式 None 身份、same-entry 不产生 displaced file，以及新 object spool 不接受旧 file kind。
+- PortablePath 父路径与允许覆盖但目标缺失均由接纳测试转交核心；脚本化成功只证明输入映射，不证明缺失父目录能发布。目标父目录存在性和完整成员保留留在业务测试。
 
 ## 后续执行依据
 

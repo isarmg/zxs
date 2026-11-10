@@ -19,8 +19,8 @@ fn object_completion_cold_replay_preserves_the_selected_operation_and_serving_sc
         let roots = roots();
         let actor = identity(&roots.shared);
         let operation = OperationId::generate().unwrap();
-        let first = command(&roots, operation);
-        let retry = command(&roots, operation);
+        let first = object_command(&roots, operation);
+        let retry = object_command(&roots, operation);
         let old = original_entry(&roots);
         let before = roots
             .backend
@@ -33,7 +33,7 @@ fn object_completion_cold_replay_preserves_the_selected_operation_and_serving_sc
         let error = roots
             .backend
             .inner
-            .move_current_file(&actor, first)
+            .move_current_object(&actor, first)
             .unwrap_err();
         assert_eq!(error.code, expected_error, "{fault}");
         let active = roots._fixture.path().join("state/move-completion.json");
@@ -135,10 +135,11 @@ fn object_completion_cold_replay_preserves_the_selected_operation_and_serving_sc
         assert_eq!(fs::read(retired).unwrap(), original_binding, "{fault}");
         let published = backend.test_with_engine_locked(|engine| engine.state().clone());
         assert_eq!(
-            backend.move_current_file(&actor, retry).unwrap(),
+            backend.move_current_object(&actor, retry).unwrap(),
             receipt,
             "{fault}"
         );
         backend.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published, "{fault}"));
     }
 }
+
