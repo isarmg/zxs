@@ -177,13 +177,12 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
         "alias/keep",
         b"alias directory",
     );
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir");
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "alias");
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "");
     let frozen = fixture
         .engine
         .create_directory_branches(
             &fixture.repo.repository_id,
-            Some(&name_policy::LookupPath::parse("dir").unwrap()),
+            None,
             &BranchName::parse("frozen source").unwrap(),
             "admin",
             op(),
@@ -193,13 +192,11 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
         .as_str()
         .unwrap()
         .to_owned();
-    let alias = fixture
-        .engine
-        .namespace_tree(&fixture.repo.main_branch_id)
-        .unwrap()
-        .get("alias")
-        .unwrap();
-    let target = fixture.engine.state.directory_selections[&alias.entry_id].clone();
+    let target = fixture.engine.state.directory_selections[&fixture.repo.repository_id].clone();
+    assert_eq!(
+        fixture.engine.state.directory_branches[&frozen].directory_id,
+        fixture.engine.state.directory_branches[&target].directory_id
+    );
     let batch = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Move,
         items: vec![DirectoryNamespaceItem {

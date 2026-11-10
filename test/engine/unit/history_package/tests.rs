@@ -980,27 +980,22 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             .unwrap()
             .to_owned()
     };
-    let m = create(&mut engine, "a", "m");
-    let n = create(&mut engine, "a", "n");
-    let l = create(&mut engine, "b", "l");
+    let m = create(&mut engine, "", "source");
+    let frozen = create(&mut engine, "", "retained original");
+    let n = create(&mut engine, "", "selected aliases");
     engine
-        .select_directory_branches(
+        .select_default_directory_branch(
             &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("a").unwrap()),
-            &storage_contract::BranchName::parse("m").unwrap(),
+            &n,
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    engine
-        .select_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("b").unwrap()),
-            &storage_contract::BranchName::parse("l").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let frozen_branch = engine.state.directory_branches[&frozen].clone();
+    assert_eq!(
+        frozen_branch.directory_id,
+        engine.state.directory_branches[&n].directory_id
+    );
     let request = DirectoryNamespaceBatch {
         kind: storage_contract::DirectoryBatchKind::Move,
         items: vec![DirectoryNamespaceItem {
@@ -1011,8 +1006,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
                 entry_id: original.entry_id.clone(),
             },
             target: Some(DirectoryNamespaceTarget {
-                directory_branch_id: l.clone(),
-                expected_tree_id: engine.state.directory_branches[&l].head_tree_id.clone(),
+                directory_branch_id: n.clone(),
+                expected_tree_id: engine.state.directory_branches[&n].head_tree_id.clone(),
                 path: "b/f.txt".into(),
             }),
         }],
@@ -1025,23 +1020,33 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    let draft = engine
+        .create_file_branch(
+            &original.file_id,
+            &original.version_id,
+            &storage_contract::BranchName::parse("independent alias").unwrap(),
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    engine
+        .select_file_branch_at(
+            &repo.repository_id,
+            &name_policy::PortablePath::parse("b/f.txt").unwrap(),
+            &original.file_id,
+            &draft,
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
     save_path(&mut engine, "b/f.txt", b"F2");
     let moved = engine
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
         .find(|entry| entry.path == "b/f.txt")
-        .unwrap();
-    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "a", "alice");
-    crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "b", "alice");
-    engine
-        .select_directory_branches(
-            &repo.repository_id,
-            Some(&name_policy::LookupPath::parse("a").unwrap()),
-            &storage_contract::BranchName::parse("n").unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
         .unwrap();
     crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
@@ -1071,6 +1076,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         saved_tree
     );
     assert_eq!(engine.state.file_contexts, saved_contexts);
+    assert_eq!(engine.state.directory_branches[&frozen], frozen_branch);
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
     let a_key = format!("{}/a/f.txt", repo.repository_id);
     let b_key = format!("{}/b/f.txt", repo.repository_id);
@@ -1099,6 +1105,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    assert_eq!(restored.state.directory_branches[&frozen], frozen_branch);
     assert_eq!(restored.state.file_contexts, manifest.file_contexts);
     assert_eq!(restored.state.file_locations, manifest.file_locations);
     assert_eq!(

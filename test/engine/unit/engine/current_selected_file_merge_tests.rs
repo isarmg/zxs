@@ -241,13 +241,12 @@ fn disk_exit_file_merge_rejects_tampered_selected_occurrence_context_and_ref() {
 
 fn parked_parent_with_owned_merge_alias() -> (Fixture, String) {
     let mut fixture = Fixture::new(2);
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "dir");
     crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     let source = fixture
         .engine
         .create_directory_branches(
             &fixture.repository.repository_id,
-            Some(&name_policy::LookupPath::parse("dir").unwrap()),
+            None,
             &name("owned alias source"),
             "admin",
             op(),
@@ -301,6 +300,9 @@ fn parked_parent_with_owned_merge_alias() -> (Fixture, String) {
     let child = entry(&fixture.engine, &fixture.repository, "dir/live");
     assert_eq!(owned.entry_id, child.entry_id);
     assert_eq!(owned.file_id, child.file_id);
+    // Establish both aliases while they share the root owner, then initialize
+    // the independent child before capturing the parked parent's child proof.
+    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "dir");
     crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repository, "");
     let parent = fixture
         .engine
