@@ -285,89 +285,23 @@ fn commits(
                 .map(|entry| entry.entry_id.as_str()),
         )
         .collect::<BTreeSet<_>>();
-    for id in &graph.commits {
-        let original = &previous.commits[id];
-        let mut commit = original.clone();
-        commit.commit_id = graph.id(&original.commit_id)?;
-        commit.tree_id = graph.id(&original.tree_id)?;
-        commit.history_tree_id = target.history_tree_id.clone();
-        commit.parent_commit_ids = original
-            .parent_commit_ids
-            .iter()
-            .map(|id| graph.id(id))
-            .collect::<Result<_>>()?;
-        let retained_directory_commit = original.kind == "directory_commit"
-            && original.provenance.as_ref().is_some_and(|tree| {
-                unit.directories
-                    .values()
-                    .any(|directory| directory.tree_ids.contains(tree))
-            });
-        if !retained_directory_commit {
-            if commit.parent_commit_ids.is_empty() {
-                commit.parent_commit_ids.push(
-                    next.histories[&target.history_tree_id]
-                        .root_commit_id
-                        .clone(),
-                );
-                commit.kind = "file_history_projection".into();
-            } else if original.kind == "directory_commit" {
-                commit.kind = "file_history_projection".into();
-            }
-        }
-        let selected = original
-            .entries
-            .iter()
-            .filter(|entry| {
-                (entry.kind == NamespaceEntryKind::File && files.contains(entry.file_id.as_str()))
-                    || directories.contains(entry.entry_id.as_str())
-            })
-            .map(Entry::lookup_key)
-            .collect::<BTreeSet<_>>();
-        commit.entries = original
-            .entries
-            .iter()
-            .filter(|entry| {
-                selected.contains(entry.lookup_key())
-                    || (entry.kind == NamespaceEntryKind::Directory
-                        && selected
-                            .iter()
-                            .any(|path| namespace::is_descendant(path, entry.lookup_key())))
-            })
-            .map(|entry| graph.entry(entry))
-            .collect::<Result<_>>()?;
-        commit.pending_file_versions = original
-            .pending_file_versions
-            .iter()
-            .filter(|(file, _)| files.contains(file.as_str()))
-            .map(|(file, version)| Ok((graph.id(file)?, graph.id(version)?)))
-            .collect::<Result<_>>()?;
-        commit.provenance = original
-            .provenance
-            .as_ref()
-            .and_then(|id| graph.ids.get(id).cloned());
-        // Old removal paths remain historical. Keep only ones affecting a
-        // selected member in the immediate parent snapshots.
-        if let Some(deletions) = &mut commit.namespace_deletions {
-            deletions.paths.retain(|deleted| {
-                original.parent_commit_ids.iter().any(|parent| {
-                    previous.commits[parent].entries.iter().any(|entry| {
-                        (files.contains(entry.file_id.as_str())
-                            || directories.contains(entry.entry_id.as_str()))
-                            && (entry.path() == deleted.path
-                                || namespace::is_descendant(
-                                    entry.lookup_key(),
-                                    &name_policy::path_key(&deleted.path),
-                                ))
-                    })
-                })
-            });
-            if deletions.paths.is_empty() {
-                commit.namespace_deletions = None;
-            }
-        }
-        next.commits.insert(commit.commit_id.clone(), commit);
-    }
-    Ok(())
+    graph::project_commits(
+        previous,
+        next,
+        target,
+        graph.commits.iter().map(|id| &previous.commits[id]),
+        graph::CommitScope {
+            ids: &graph.ids,
+            files,
+            directories,
+            trees: unit
+                .directories
+                .values()
+                .flat_map(|directory| directory.tree_ids.iter().map(String::as_str))
+                .collect(),
+            missing: invalid,
+        },
+    )
 }
 
 fn occurrence<'a>(

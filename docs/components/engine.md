@@ -36,6 +36,7 @@ Backup 的单目标、批次及原生控制／对象库／范围库／切换输�
 | `business/history_copy.rs`、`engine/disk_registry/current/history_copy.rs` | 单文件在线历史 fork、精确写集重放及独立正文来源／候选向量准入；范围见[写入语义](../11-write-semantics.md) |
 | `business/namespace.rs` | 路径校验、父目录约束、命名空间改动与工作区冲突规则 |
 | `business/namespace/draft.rs` | 工作区提交内的临时路径索引与保序条目草稿，不用于读取或持久缓存 |
+| `business/history_copy/graph/commits.rs` | 单文件 fork 与整对象移动共用不可变提交映射；各自保留选中成员、目录提交标识及缺失身份错误，祖先键只从本次已准入原快照推导 |
 | `business/ancestry.rs` | 基于子节点索引的提交后代查询，供拆分与历史包校验复用 |
 | `journal.rs` / `metadata_budget.rs` | 哈希对象、日志帧、证明与实际序列化大小限制 |
 | `state_projection.rs` / `state_projection/` | history 与容器共同消费的 State 派生成员及精确写集闭包，不是编码或持久化权威 |

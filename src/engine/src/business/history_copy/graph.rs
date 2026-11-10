@@ -1,6 +1,8 @@
 //! One complete file-graph projection used by single-file and aggregate moves.
 //! It consumes an admitted occurrence, not a second lookup through an old HEAD.
 use super::*;
+mod commits;
+pub(in crate::business) use commits::{CommitScope, project as project_commits};
 
 #[derive(Clone, Copy)]
 pub(in crate::business) struct IdentityScope<'a> {
@@ -166,76 +168,20 @@ pub(in crate::business) fn project(
             .insert(version.version_id.clone(), placement);
         next.versions.insert(version.version_id.clone(), version);
     }
-    for original in commits.into_iter().filter(|_| aggregate_ids.is_none()) {
-        let mut commit = original.clone();
-        commit.commit_id = mapped(&original.commit_id)?;
-        commit.tree_id = mapped(&original.tree_id)?;
-        commit.history_tree_id = target.history_tree_id.clone();
-        commit.parent_commit_ids = mapped_list(&original.parent_commit_ids)?;
-        if original.parent_commit_ids.is_empty() {
-            commit.parent_commit_ids = vec![
-                next.histories[&target.history_tree_id]
-                    .root_commit_id
-                    .clone(),
-            ];
-            commit.kind = "file_history_projection".into();
-        } else if original.kind == "directory_commit" {
-            // Preserve the file snapshot, not a foreign directory Git marker.
-            commit.kind = "file_history_projection".into();
-        }
-        // Provenance belonging to another file is not part of this projection.
-        // Real file-node/commit/version references are remapped, never borrowed.
-        commit.provenance = original
-            .provenance
-            .as_ref()
-            .and_then(|id| ids.get(id).cloned());
-        commit.entries = original
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.kind == NamespaceEntryKind::File && entry.file_id == source.file
-                    || entry.kind == NamespaceEntryKind::Directory
-                        && original.entries.iter().any(|file| {
-                            file.file_id == source.file
-                                && namespace::is_descendant(file.lookup_key(), entry.lookup_key())
-                        })
-            })
-            .map(|entry| {
-                let mut entry = entry.clone();
-                entry.entry_id = mapped(&entry.entry_id)?;
-                if entry.kind == NamespaceEntryKind::File {
-                    entry.file_id = file.clone();
-                    entry.version_id = mapped(&entry.version_id)?;
-                }
-                Ok(entry)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        commit.pending_file_versions = original
-            .pending_file_versions
-            .get(&source.file)
-            .map(|version| Ok::<_, Error>([(file.clone(), mapped(version)?)].into()))
-            .transpose()?
-            .unwrap_or_default();
-        // A namespace removal has paths, not file IDs. Preserve only removals
-        // that covered this file in the immediately preceding snapshots.
-        if let Some(deleted) = &mut commit.namespace_deletions {
-            deleted.paths.retain(|deleted| {
-                original.parent_commit_ids.iter().any(|parent| {
-                    previous.commits[parent].entries.iter().any(|entry| {
-                        entry.file_id == source.file
-                            && (entry.path() == deleted.path
-                                || namespace::is_descendant(
-                                    entry.lookup_key(),
-                                    &name_policy::path_key(&deleted.path),
-                                ))
-                    })
-                })
-            });
-            if deleted.paths.is_empty() {
-                commit.namespace_deletions = None;
-            }
-        }
-        next.commits.insert(commit.commit_id.clone(), commit);
+    if aggregate_ids.is_none() {
+        project_commits(
+            previous,
+            next,
+            target,
+            commits,
+            CommitScope {
+                ids,
+                files: [source.file.as_str()].into(),
+                directories: BTreeSet::new(),
+                trees: BTreeSet::new(),
+                missing: unsupported,
+            },
+        )?;
     }
     for id in &source.branches {
         let mut branch = previous.branches[id].clone();
