@@ -4,7 +4,8 @@ use crate::{
     api, files,
     ui::{State, feedback},
 };
-use json_codec::{Value, json};
+use data_serialization::Deserialize;
+use json_codec::json;
 use web_interface::{
     components::{ErrorState, Feedback},
     i18n::t,
@@ -12,9 +13,13 @@ use web_interface::{
     tasks::spawn_local,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+mod response;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serialization(rename_all = "snake_case")]
 pub(crate) enum Storage {
     #[default]
+    #[serialization(skip)]
     Unknown,
     Ready,
     ReadOnly,
@@ -29,17 +34,6 @@ impl Storage {
     }
     pub(crate) fn readable(self) -> bool {
         matches!(self, Self::Ready | Self::ReadOnly)
-    }
-    fn parse(value: &Value) -> Self {
-        match value["state"].as_str() {
-            Some("ready") => Self::Ready,
-            Some("read_only") => Self::ReadOnly,
-            Some("unavailable") => Self::Unavailable,
-            Some("unconfigured") => Self::Unconfigured,
-            Some("recovery_required") => Self::RecoveryRequired,
-            Some("terminal_management") => Self::TerminalManagement,
-            _ => Self::Unknown,
-        }
     }
     fn label(self) -> String {
         match self {
@@ -108,11 +102,12 @@ impl Model {
             || self.retry_unknown
     }
 }
-fn accept(model: &mut Model, value: &Value) {
-    model.storage = Storage::parse(&value["storage"]);
-    model.auth_recovery = value["authentication"] == "recovery_required";
-    model.retryable = value["storage"]["retryable"] == true;
-    model.recovering = value["storage"]["recovering"] == true;
+fn accept(model: &mut Model, status: response::Status) {
+    model.auth_recovery = matches!(
+        status.authentication,
+        response::Authentication::RecoveryRequired
+    );
+    status.storage.apply(model);
     model.failure = None;
 }
 fn invalidate_restored_disks(state: &mut State, was_readable: bool) {
@@ -128,9 +123,9 @@ fn needs_disk_refresh(state: &State, was_readable: bool) -> bool {
         && (!was_readable || !state.files.disks_loaded)
 }
 
-fn accept_status(s: &mut State, value: &Value) -> bool {
+fn accept_status(s: &mut State, status: response::Status) -> bool {
     let was_readable = s.management.storage.readable();
-    accept(&mut s.management, value);
+    accept(&mut s.management, status);
     invalidate_restored_disks(s, was_readable);
     // A successful status check resolves the retry admission fence,
     // not any outstanding data mutation's outcome.
@@ -211,7 +206,7 @@ enum StatusCompletion {
 fn complete_load(
     state: &mut State,
     read: &StatusRead,
-    result: Result<Value, api::Error>,
+    result: Result<response::Status, api::Error>,
 ) -> StatusCompletion {
     if state.session_epoch != read.epoch || state.logout_pending() || state.logout_unconfirmed() {
         return StatusCompletion::Obsolete;
@@ -221,8 +216,8 @@ fn complete_load(
         return StatusCompletion::Superseded;
     }
     match result {
-        Ok(value) => {
-            let disks = accept_status(state, &value);
+        Ok(status) => {
+            let disks = accept_status(state, status);
             let folder = read.folder.as_ref() == Some(&FolderRefresh::capture(state))
                 && state.session_active()
                 && state.management.storage.readable()
@@ -258,7 +253,8 @@ fn load_with(state: RwSignal<State>, refresh: Refresh) {
         return;
     };
     spawn_local(async move {
-        let result = api::request("GET", "/api/management/status", None).await;
+        let result =
+            api::validated_request("GET", "/api/management/status", None, response::status).await;
         match state.try_update(|state| complete_load(state, &read, result)) {
             Some(StatusCompletion::Superseded) => load(state),
             Some(StatusCompletion::Accepted { disks, folder }) => {
@@ -295,33 +291,39 @@ fn retry(state: RwSignal<State>) {
         return;
     };
     spawn_local(async move {
-        let result = api::request("POST", "/api/system/storage/retry", Some(json!({}))).await;
+        let result = api::validated_request(
+            "POST",
+            "/api/system/storage/retry",
+            Some(json!({})),
+            response::storage,
+        )
+        .await;
         if !crate::ui::current_session(state, epoch) {
             return;
         }
-        state.update(|s| {
-            s.management.retrying = false;
-            match result {
-                Ok(value) => {
-                    let was_readable = s.management.storage.readable();
-                    s.management.storage = Storage::parse(&value);
-                    s.management.retryable = value["retryable"] == true;
-                    s.management.recovering = value["recovering"] == true;
-                    // Fast recovery may already be ready in the POST response.
-                    // Keep its refresh demand for the following status read too.
-                    invalidate_restored_disks(s, was_readable);
-                }
-                Err(error) => {
-                    s.management.retry_unknown = error.mutation_outcome_unknown();
-                    if error.status == 401 {
-                        s.authenticated = false;
-                    }
-                    s.management.failure = Some(feedback(&error));
-                }
-            }
-        });
+        state.update(|s| complete_retry(s, result));
         load(state);
     });
+}
+fn complete_retry(state: &mut State, result: Result<response::StorageStatus, api::Error>) {
+    state.management.retrying = false;
+    match result {
+        Ok(status) => {
+            let was_readable = state.management.storage.readable();
+            status.apply(&mut state.management);
+            // Fast recovery may already be ready in the POST response.
+            // Keep its refresh demand for the following status read too.
+            invalidate_restored_disks(state, was_readable);
+        }
+        Err(error) => {
+            state.management.storage = Storage::Unknown;
+            state.management.retry_unknown = error.mutation_outcome_unknown();
+            if error.status == 401 {
+                state.authenticated = false;
+            }
+            state.management.failure = Some(feedback(&error));
+        }
+    }
 }
 pub(crate) fn summary(state: RwSignal<State>) -> impl IntoView {
     view! {

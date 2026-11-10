@@ -53,6 +53,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid management status response: {0}")]
+    ManagementStatus(#[source] json_codec::Error),
     #[error("invalid object move input: {0}")]
     ObjectMoveInput(#[source] storage_contract::Error),
     #[error("invalid backup transaction response: {0}")]
