@@ -79,8 +79,33 @@ pub(super) fn initialize_and_commit(browser: &Browser) -> Result<()> {
             {
                 return Err("directory commit message must enforce its UTF-8 byte limit".into());
             }
+            for message in ["Review\twork", "Review\0work", "Review\u{85}work", "   "] {
+                let input = json_codec::to_string(message)?;
+                browser.script(&format!(
+                    "const i=document.querySelector('.zxs-directory-staging input');i.value={input};i.dispatchEvent(new Event('input',{{bubbles:true}}));return true"
+                ))?;
+                browser.css("[data-directory-commit-message-error]")?;
+                let invalid = browser.script(
+                    "const i=document.querySelector('.zxs-directory-staging input');i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));const b=document.querySelector('[data-commit-directory]');b.click();return {disabled:b.disabled,invalid:i.getAttribute('aria-invalid'),writes:window.__zxsDirectoryGit.writes.length}"
+                )?;
+                if invalid["disabled"] != true
+                    || invalid["invalid"] != "true"
+                    || invalid["writes"] != 1
+                {
+                    return Err(format!(
+                        "invalid directory commit text reached publication: {invalid}"
+                    )
+                    .into());
+                }
+            }
             browser.script("const i=document.querySelector('.zxs-directory-staging input');i.value='Review initial naming repository';i.dispatchEvent(new Event('input',{bubbles:true}));return true")?;
             browser.css("[data-commit-directory]:not([disabled])")?;
+            if browser.script(
+                "return !!document.querySelector('[data-directory-commit-message-error]')",
+            )? != false
+            {
+                return Err("corrected directory commit text must clear its input error".into());
+            }
             if browser.script("return window.__zxsDirectoryGit.writes.length")? != 1 {
                 return Err("editing a commit message must not publish".into());
             }
@@ -116,7 +141,7 @@ pub(super) fn initialize_and_commit(browser: &Browser) -> Result<()> {
                 .into());
             }
             println!(
-                "PASS manual directory Git initialization, UTF-8 message bound, explicit commit, exact tree/index generation, duplicate-click fences"
+                "PASS manual directory Git initialization, commit text contract, explicit commit, exact tree/index generation, duplicate-click fences"
             );
             Ok(())
         },

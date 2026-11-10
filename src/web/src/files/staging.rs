@@ -270,6 +270,32 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>, target: Option<Target>) 
         });
     });
 }
+/// A nonempty commit note admitted at the text-input boundary.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CommitMessage(String);
+
+impl CommitMessage {
+    fn validate(value: &str) -> storage_contract::Result<()> {
+        storage_contract::validate_note(value)?;
+        if value.trim().is_empty() {
+            return Err(storage_contract::Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "directory commit message must be nonempty",
+            ));
+        }
+        Ok(())
+    }
+
+    fn parse(value: &str) -> storage_contract::Result<Self> {
+        Self::validate(value)?;
+        Ok(Self(value.to_owned()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Review {
     Initialize {
@@ -282,7 +308,7 @@ enum Review {
         branch: String,
         tree: String,
         index_generation: u64,
-        message: String,
+        message: CommitMessage,
     },
     StageChild {
         repository: String,
@@ -310,14 +336,13 @@ fn initialize_review(state: &State, model: &Model) -> Option<Review> {
 }
 fn commit_review(state: &State, model: &Model) -> Option<Review> {
     let (target, status) = model.ready(state)?;
-    if !status.initialized
-        || status.needs_restage
-        || !status.staged
-        || model.message.trim().is_empty()
-        || model.message.len() > storage_contract::MAX_NOTE_BYTES
-    {
+    if !status.initialized || status.needs_restage || !status.staged {
         return None;
     }
+    let message = match CommitMessage::parse(&model.message) {
+        Ok(message) => message,
+        Err(_) => return None,
+    };
     Some(Review::Commit {
         repository: target.repository.clone(),
         branch: status
@@ -329,7 +354,7 @@ fn commit_review(state: &State, model: &Model) -> Option<Review> {
             .clone()
             .expect("invariant: initialized repository has a working tree"),
         index_generation: status.index_generation,
-        message: model.message.clone(),
+        message,
     })
 }
 fn owned_review(state: &State, model: &Model) -> Option<Review> {
@@ -435,7 +460,7 @@ fn submit(state: RwSignal<State>, model: RwSignal<Model>, review: Option<Review>
             index_generation,
             message,
         }) => {
-            let submitted = message.clone();
+            let submitted = message.as_str().to_owned();
             if let Some(operation) = actions::commit_directory(
                 state,
                 repository,
@@ -600,6 +625,17 @@ fn child_view(
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
+    let message_error = Memo::new(move |_| {
+        model.with(|model| {
+            if model.message.is_empty() {
+                return None;
+            }
+            match CommitMessage::validate(&model.message) {
+                Ok(()) => None,
+                Err(source) => Some(source.to_string()),
+            }
+        })
+    });
     let target = Memo::new(move |_| state.with(Target::capture));
     let branch_source =
         Signal::derive(move || state.with(|state| model.with(|model| branch_review(state, model))));
@@ -713,7 +749,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     children=move |child|child_view(state,model,child)/>
                 <p class="zxs-row">{t("本次只提交已暂存内容和子仓库引用；未暂存的工作更改保持可见，不会加入本次提交。","This commits only staged contents and child references. Unstaged working changes stay visible and are not included.")}</p>
                 <div class="zxs-file-toolbar zxs-flow">
-                    <input class="zxs-input zxs-input--compact" aria-label=t("目录提交说明","Folder commit message") placeholder=t("填写本次提交说明","Describe this commit")
+                    <input class="zxs-input zxs-input--compact" aria-label=t("目录提交说明","Folder commit message") placeholder=t("填写本次提交说明","Describe this commit") aria-invalid=move ||message_error.get().is_some().to_string()
                         prop:value=move ||model.with(|model|model.message.clone()) disabled=move ||!state.with(actions::write_allowed)||model.with(|model|model.reading||model.error.is_some())
                         on:input=move |event|{if state.with_untracked(|state|model.with_untracked(|model|model.ready(state).is_some())){model.update(|model|model.message=event_target_value(&event));}}
                         on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing()&&!event.repeat(){event.prevent_default();let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,model,review);}}/>
@@ -721,7 +757,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                         on:click=move |_|{let review=state.with_untracked(|state|model.with_untracked(|model|commit_review(state,model)));submit(state,model,review);}>{t("提交当前仓库更改","Commit this repository's changes")}</button>
                 </div>
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
-                <Show when=move ||model.with(|model|model.message.len()>storage_contract::MAX_NOTE_BYTES)><p class="zxs-row zxs-inline-error" role="status">{t("提交说明超过长度限制，请缩短后提交。","The commit message exceeds the byte limit. Shorten it before committing.")}</p></Show>
+                {move ||message_error.get().map(|reason|view!{<p class="zxs-row zxs-inline-error" role="status" data-directory-commit-message-error="" title=reason>{t("提交说明须包含非空白内容，最多 128 UTF-8 字节，且不能包含换行或控制字符。", "Enter a nonblank commit message of at most 128 UTF-8 bytes, without line breaks or control characters.")}</p>})}
             </Show>
             {super::directory_history::current_directory_view(state, history_target)}
             {layout::view(state, model)}

@@ -141,11 +141,8 @@ pub(crate) fn commit_directory(
     branch: String,
     expected_tree: String,
     expected_index_generation: u64,
-    message: String,
+    message: crate::files::staging::CommitMessage,
 ) -> Option<String> {
-    if message.trim().is_empty() || message.len() > storage_contract::MAX_NOTE_BYTES {
-        return None;
-    }
     record_mutation(
         state,
         MutationAccess::Current,
@@ -155,7 +152,7 @@ pub(crate) fn commit_directory(
             api::segment(&repository),
             api::segment(&branch)
         ),
-        json!({"expected_tree_id":expected_tree,"expected_index_generation":expected_index_generation.to_string(),"message":message}),
+        json!({"expected_tree_id":expected_tree,"expected_index_generation":expected_index_generation.to_string(),"message":message.as_str()}),
     )
 }
 

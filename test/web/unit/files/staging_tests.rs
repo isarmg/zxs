@@ -174,7 +174,7 @@ fn commit_pins_working_tree_and_index_without_committing_children() {
             branch: id("dbr", 1),
             tree: id("dtree", 1),
             index_generation: 9_007_199_254_740_993,
-            message: "Review current work".into()
+            message: CommitMessage::parse("Review current work").unwrap()
         })
     );
     assert_eq!(
@@ -258,15 +258,29 @@ fn repeated_reads_have_distinct_tokens_and_navigation_discards_draft() {
     assert!(model.message.is_empty() && model.status.is_none());
 }
 #[test]
-fn directory_commit_message_uses_utf8_byte_limit() {
+fn directory_commit_message_uses_the_server_note_contract() {
     let (state, mut model) = reviewed(wire());
-    for message in ["".into(), " \n ".into(), "字".repeat(43)] {
+    for message in [
+        "".into(),
+        " \n ".into(),
+        "\u{2003}".into(),
+        "Review\twork".into(),
+        "Review\0work".into(),
+        "Review\u{85}work".into(),
+        "字".repeat(43),
+    ] {
         model.message = message;
+        assert!(CommitMessage::parse(&model.message).is_err());
         assert!(commit_review(&state, &model).is_none());
     }
     model.message = format!("{}ab", "字".repeat(42));
     assert_eq!(model.message.len(), 128);
     assert!(commit_review(&state, &model).is_some());
+    model.message = "  Review café / 资料  ".into();
+    let Some(Review::Commit { message, .. }) = commit_review(&state, &model) else {
+        panic!("valid commit note must remain available");
+    };
+    assert_eq!(message.as_str(), model.message);
     model.status.as_mut().unwrap().staged = false;
     assert!(commit_review(&state, &model).is_none());
 }
