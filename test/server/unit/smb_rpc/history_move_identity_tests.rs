@@ -312,16 +312,17 @@ fn canonical_source_alias_is_preserved_for_retry_after_the_source_disappears() {
 }
 
 #[test]
-fn published_move_replay_still_requires_both_current_smb_bindings() {
+fn published_object_replay_rejects_revoked_and_reenabled_stale_smb_bindings() {
     for target in [false, true] {
         let roots = roots();
         let operation = OperationId::generate().unwrap();
-        let first = command(&roots, operation);
-        let retry = command(&roots, operation);
+        let first = object_command(&roots, operation);
+        let retry = object_command(&roots, operation);
+        let stale_after_reenable = object_command(&roots, operation);
         let receipt = roots
             .backend
             .inner
-            .move_current_file(&identity(&roots.shared), first)
+            .move_current_object(&identity(&roots.shared), first)
             .unwrap();
         let repository = if target { &roots.target } else { &roots.source };
         let binding = roots
@@ -350,11 +351,50 @@ fn published_move_replay_still_requires_both_current_smb_bindings() {
         let error = roots
             .backend
             .inner
-            .move_current_file(&identity(&roots.shared), retry)
+            .move_current_object(&identity(&roots.shared), retry)
             .unwrap_err();
         assert_eq!(error.code, storage_contract::ErrorCode::SmbRebindRequired);
         roots.backend.inner.test_with_engine_locked(|engine| {
             assert_eq!(engine.state(), &before);
+            assert_eq!(engine.state().operations.get(&operation), Some(&receipt));
+        });
+
+        // Enabling the same namespace again grants a new binding generation,
+        // not permission for an old captured handle to bypass admission.
+        let binding = roots
+            .backend
+            .inner
+            .smb_binding_status(&identity(&roots.shared), &repository.repository_id)
+            .unwrap();
+        roots
+            .backend
+            .inner
+            .update_smb_binding(
+                &identity(&roots.shared),
+                crate::UpdateSmbBinding {
+                    repository: &repository.repository_id,
+                    branch: &repository.main_branch_id,
+                    enabled: true,
+                    expected_history_generation: binding.history_generation,
+                    operation: OperationId::generate().unwrap(),
+                },
+            )
+            .unwrap();
+        let reenabled = roots
+            .backend
+            .inner
+            .test_with_engine_locked(|engine| engine.state().clone());
+        assert_eq!(
+            roots
+                .backend
+                .inner
+                .move_current_object(&identity(&roots.shared), stale_after_reenable)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::SmbRebindRequired
+        );
+        roots.backend.inner.test_with_engine_locked(|engine| {
+            assert_eq!(engine.state(), &reenabled);
             assert_eq!(engine.state().operations.get(&operation), Some(&receipt));
         });
     }

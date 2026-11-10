@@ -2,6 +2,7 @@
 //! sources are not an executed result or physical power-loss / SMB certificate.
 use super::*;
 use std::fs;
+use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
 
 fn path_request(fixture: &Fixture) -> FileHistoryMovePathRequest {
     FileHistoryMovePathRequest {
@@ -11,6 +12,17 @@ fn path_request(fixture: &Fixture) -> FileHistoryMovePathRequest {
         target_name: "moved.txt".into(),
     }
 }
+
+fn retain_original_move(fixture: &mut Fixture, operation: OperationId) {
+    let mut namespace = request(&fixture.engine, &fixture.source, &fixture.target);
+    namespace.target_name = path_request(fixture).target_name;
+    let proposed = super::move_recovery::projection_for(fixture, operation, &namespace);
+    fixture
+        .engine
+        .save_file_history_move_recovery(&proposed, &HistoryWindowCancellation::new())
+        .unwrap();
+}
+
 fn assert_visible(
     engine: &Engine,
     source: &Repository,
@@ -30,7 +42,6 @@ fn assert_visible(
     let deletion = engine.file_deletion(&old.file_id).unwrap();
     assert_eq!(deletion.operation_id, operation);
     let receipt = &engine.state().operations[&operation];
-    assert_eq!(receipt.kind, "file.history.move");
     assert_eq!(receipt.commit_state, CommitState::Published);
     assert_eq!(
         receipt.protection_at_publish,
@@ -137,6 +148,12 @@ fn native_move_publishes_all_retained_bodies_labels_branches_and_three_scopes_to
         .engine
         .move_current_file(&request, "admin", operation)
         .unwrap();
+    assert_eq!(receipt.kind, OBJECT_MOVE_KIND);
+    let fact: ObjectMoveFact =
+        json_codec::from_value(receipt.result["movement"].clone()).unwrap();
+    assert_eq!(fact.request.source_entry_id.as_str(), old.entry_id);
+    assert_eq!(fact.source_file_id.as_ref().unwrap().as_str(), old.file_id);
+    assert_eq!(fact.target_repository_id.as_str(), fixture.target.repository_id);
     assert_visible(
         &fixture.engine,
         &fixture.source,
@@ -247,7 +264,7 @@ fn native_move_publishes_all_retained_bodies_labels_branches_and_three_scopes_to
 }
 
 #[test]
-fn completed_move_releases_only_its_singleton_names_and_a_later_move_keeps_both_receipts() {
+fn completed_object_move_retires_its_binding_and_a_later_move_keeps_both_receipts() {
     let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
     let first = op();
@@ -295,25 +312,24 @@ fn completed_move_releases_only_its_singleton_names_and_a_later_move_keeps_both_
             fixture
                 .temp
                 .path()
-                .join("system/file-history-move-completed")
-                .join(operation.to_string())
-                .join("file-history-move-decision-inputs/joint-choice.json")
+                .join("system/move-completion")
+                .join(format!("{operation}.json"))
                 .is_file()
         );
         assert_eq!(
             fixture.engine.state().operations[&operation].kind,
-            "file.history.move"
+            OBJECT_MOVE_KIND
         );
     }
 }
 
 #[test]
-fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion() {
+fn native_move_rejects_an_occupied_target_without_a_new_intent_or_source_deletion() {
     let mut fixture = Fixture::new(false);
     save(
         &mut fixture.engine,
         &fixture.target,
-        "existing.txt",
+        "moved.txt",
         b"keep target",
     );
     let request = path_request(&fixture);
@@ -324,7 +340,7 @@ fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion()
             .move_current_file(&request, "admin", op())
             .unwrap_err()
             .code(),
-        ErrorCode::UnsupportedOperation
+        ErrorCode::NameCollision
     );
     assert_eq!(fixture.engine.state(), &before);
     assert!(
@@ -337,36 +353,102 @@ fn native_move_rejects_nonempty_target_without_a_new_intent_or_source_deletion()
 }
 
 #[test]
-fn native_move_refuses_membership_transition_instead_of_borrowing_its_authority() {
-    let mut fixture = Fixture::new(true);
+fn native_move_waits_for_membership_activation_then_uses_the_admitted_current() {
+    let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
+    let old = entry(&fixture.engine, &fixture.source, "source.txt");
+    let unused_disk = fixture.engine.config().disks[4].disk_id.clone();
+    fixture
+        .engine
+        .begin_disk_exit(&unused_disk, MembershipExitAction::Deregister, "admin", op())
+        .unwrap();
+    let operation = op();
     let before = fixture.engine.state().clone();
     assert_eq!(
         fixture
             .engine
-            .move_current_file(&request, "admin", op())
+            .move_current_file(&request, "admin", operation)
             .unwrap_err()
             .code(),
-        ErrorCode::UnsupportedOperation
+        ErrorCode::RecoveryRequired
     );
     assert_eq!(fixture.engine.state(), &before);
-}
+    assert_eq!(entry(&fixture.engine, &fixture.source, "source.txt"), old);
+    assert!(
+        !fixture
+            .temp
+            .path()
+            .join("system/move-completion.json")
+            .exists()
+    );
 
-#[cfg(feature = "fault-injection")]
-#[test]
-fn native_move_early_intent_keeps_source_frozen_and_explicit_retry_uses_original_clock() {
-    let mut fixture = Fixture::new(false);
-    let request = path_request(&fixture);
-    let operation = op();
+    let archive = fixture
+        .engine
+        .build_managed_membership_control_archive()
+        .unwrap();
     fixture
         .engine
-        .inject_fault_once("move_after_original_intent");
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
     assert!(
         fixture
             .engine
-            .move_current_file(&request, "admin", operation)
-            .is_err()
+            .resume_membership_joint_decision()
+            .unwrap()
+            .all_certificates_synchronized()
     );
+    fixture.engine.activate_pending_disk_exit().unwrap();
+    let receipt = fixture
+        .engine
+        .move_current_file(&request, "admin", operation)
+        .unwrap();
+    assert_eq!(receipt.kind, OBJECT_MOVE_KIND);
+    let moved = entry(&fixture.engine, &fixture.target, "moved.txt");
+    assert_eq!(bytes(&fixture.engine, &moved.version_id), b"new full body");
+    assert!(
+        fixture
+            .engine
+            .namespace_tree(&fixture.source.main_branch_id)
+            .unwrap()
+            .get("source.txt")
+            .is_none()
+    );
+    assert_eq!(
+        fixture.engine.file_deletion(&old.file_id).unwrap().operation_id,
+        operation
+    );
+    let Fixture {
+        temp,
+        engine,
+        source,
+        target,
+    } = fixture;
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    let published = engine.state().clone();
+    assert_eq!(
+        engine
+            .move_current_file(&request, "admin", operation)
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(engine.state(), &published);
+    assert!(
+        engine
+            .namespace_tree(&source.main_branch_id)
+            .unwrap()
+            .get("source.txt")
+            .is_none()
+    );
+    assert_eq!(entry(&engine, &target, "moved.txt"), moved);
+}
+
+#[test]
+fn retained_file_intent_keeps_source_frozen_and_explicit_retry_uses_original_clock() {
+    let mut fixture = Fixture::new(false);
+    let request = path_request(&fixture);
+    let operation = op();
+    retain_original_move(&mut fixture, operation);
     let retained = fs::read(
         fixture
             .temp
@@ -386,9 +468,10 @@ fn native_move_early_intent_keeps_source_frozen_and_explicit_retry_uses_original
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert!(!engine.state().operations.contains_key(&operation));
-    engine
+    let receipt = engine
         .move_current_file(&request, "admin", operation)
         .unwrap();
+    assert_eq!(receipt.kind, "file.history.move");
     let archived = temp
         .path()
         .join("system/file-history-move-completed")
@@ -399,7 +482,7 @@ fn native_move_early_intent_keeps_source_frozen_and_explicit_retry_uses_original
 
 #[cfg(feature = "fault-injection")]
 #[test]
-fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_activation() {
+fn retained_file_decided_boundaries_recover_the_same_receipt_until_activation() {
     for fault in [
         "after_accept_1",
         "after_accept_2",
@@ -419,6 +502,7 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
         let old = entry(&fixture.engine, &fixture.source, "source.txt");
         let before = fixture.engine.state().clone();
         let operation = op();
+        retain_original_move(&mut fixture, operation);
         fixture.engine.inject_fault_once(fault);
         assert_eq!(
             fixture
@@ -451,6 +535,7 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
         let receipt = engine
             .move_current_file(&request, "admin", operation)
             .unwrap();
+        assert_eq!(receipt.kind, "file.history.move");
         assert_eq!(receipt.sequence, before.sequence + 1);
         assert_eq!(bytes(&engine, &old.version_id), b"new full body");
         assert_eq!(
@@ -467,11 +552,12 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
 
 #[cfg(feature = "fault-injection")]
 #[test]
-fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_from_staging() {
+fn retained_file_move_with_corrupted_ordinary_full_does_not_recreate_from_staging() {
     let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
     let operation = op();
     let old = entry(&fixture.engine, &fixture.source, "source.txt");
+    retain_original_move(&mut fixture, operation);
     fixture.engine.inject_fault_once("after_accept_1");
     assert!(
         fixture
