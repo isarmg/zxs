@@ -1,9 +1,9 @@
 //! Complete readback shared by bounded images and the installed WAL connection.
 //! The caller's frozen State is the comparison source, not a new authority.
 use super::{CURRENT_STATE_TABLE, HISTORY_INDEX, HISTORY_TABLE, MAX_BYTES, scope, system_changes};
-use crate::{Error, ErrorCode, Result, State};
+use crate::{Error, ErrorCode, Result, State, sqlite_connection::load_read_only};
 use sqlite_access::{
-    Connection, Row, SqliteConnection,
+    Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteOwnedBuf},
 };
 
@@ -19,36 +19,13 @@ pub(super) fn verify(
     // encode_state already bounded both the source and the serialized image.
     checkpoint()?;
     let database = SqliteOwnedBuf::try_from(bytes)?;
-    platform_io::sqlite::block_on_sqlite_connection(async {
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
-        let result = async {
-            platform_io::sqlite::apply_connection_limits(
-                &mut connection,
-                platform_io::sqlite::ConnectionLimits::new(MAX_BYTES as u32)
-                    .with_max_sql_bytes(4096)
-                    .with_max_vm_operations(100_000)
-                    .with_max_bind_parameters(16),
-            )
-            .await
-            .map_err(|error| Error::from(std::io::Error::other(error)))?;
-            platform_io::sqlite::enable_defensive(&mut connection)
-                .await
-                .map_err(|error| Error::from(std::io::Error::other(error)))?;
-            connection.deserialize(None, database, true).await?;
-            verify_connection(&mut connection, state, checkpoint).await
-        }
-        .await;
-        match (result, connection.close().await) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error.into()),
-            (Err(error), Err(close)) => Err(Error::Cleanup {
-                operation: Box::new(error),
-                cleanup: std::io::Error::other(close),
-            }),
-        }
-    })
+    crate::sqlite_connection::run(
+        SqliteConnectOptions::new().in_memory(true),
+        async |connection| {
+            load_read_only(connection, database, MAX_BYTES as u32).await?;
+            verify_connection(&mut *connection, state, checkpoint).await
+        },
+    )
 }
 
 /// The caller owns the snapshot: an immutable decoded image or a read

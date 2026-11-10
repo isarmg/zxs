@@ -1,7 +1,7 @@
 //! SQLite is built/read in memory. The disk-facing adapter reads bounded bytes
 //! under the retained I/O gate and gives them to the common safe installer.
 use super::*;
-use platform_io::sqlite::block_on_sqlite_connection;
+use crate::sqlite_connection::load_read_only;
 use sqlite_access::{
     Connection, Executor, Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
@@ -16,25 +16,12 @@ const VERSIONS: &str =
 
 const DIRECTORIES: &str = "CREATE TABLE backup_directories(ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),body TEXT NOT NULL) STRICT";
 
-async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T> {
-    match (result, connection.close().await) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(close)) => Err(Error::Cleanup {
-            operation: Box::new(error),
-            cleanup: std::io::Error::other(close),
-        }),
-    }
-}
-
 pub(super) fn encode(snapshot: &DiskCatalogSnapshot, hash: &str) -> Result<Vec<u8>> {
-    block_on_sqlite_connection(async {
-        let options = SqliteConnectOptions::new()
+    crate::sqlite_connection::run(
+        SqliteConnectOptions::new()
             .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory);
-        let mut connection = SqliteConnection::connect_with(&options).await?;
-        let result = async {
+            .journal_mode(SqliteJournalMode::Memory),
+        async |connection| {
             connection.execute("PRAGMA page_size=4096").await?;
             connection.execute("PRAGMA max_page_count=8192").await?;
             let mut tx = connection.begin().await?;
@@ -72,10 +59,8 @@ pub(super) fn encode(snapshot: &DiskCatalogSnapshot, hash: &str) -> Result<Vec<u
                 return Err(budget());
             }
             Ok(bytes.to_vec())
-        }
-        .await;
-        finish(result, connection).await
-    })
+        },
+    )
 }
 
 pub(super) fn read(
@@ -86,28 +71,13 @@ pub(super) fn read(
         return Err(budget());
     }
     let database = SqliteOwnedBuf::try_from(bytes)?;
-    block_on_sqlite_connection(async {
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
-        let result = async {
-            platform_io::sqlite::apply_connection_limits(
-                &mut connection,
-                platform_io::sqlite::ConnectionLimits::new(MAX_DATABASE_BYTES as u32)
-                    .with_max_sql_bytes(4096)
-                    .with_max_vm_operations(100_000)
-                    .with_max_bind_parameters(16),
-            )
-            .await
-            .map_err(|error| Error::from(std::io::Error::other(error)))?;
-            platform_io::sqlite::enable_defensive(&mut connection)
-                .await
-                .map_err(|error| Error::from(std::io::Error::other(error)))?;
-            connection.deserialize(None, database, true).await?;
-            read_connection(&mut connection, identity).await
-        }
-        .await;
-        finish(result, connection).await
-    })
+    crate::sqlite_connection::run(
+        SqliteConnectOptions::new().in_memory(true),
+        async |connection| {
+            load_read_only(connection, database, MAX_DATABASE_BYTES as u32).await?;
+            read_connection(&mut *connection, identity).await
+        },
+    )
 }
 
 async fn read_connection(

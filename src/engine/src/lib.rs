@@ -21,6 +21,7 @@ pub use business::{
 };
 mod container_storage;
 mod database_install;
+mod sqlite_connection;
 mod sqlite_integrity;
 pub use container_storage::{
     DirectoryLayoutReceipt, MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial,

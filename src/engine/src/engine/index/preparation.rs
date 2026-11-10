@@ -51,12 +51,11 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
     // Bound the entire input before SQL rows duplicate parts of it. This is a
     // preparation budget, not a limit silently truncating the serving index.
     crate::disk::encode_metadata(state, MAX_BYTES)?;
-    let bytes = platform_io::sqlite::block_on_sqlite_connection(async {
-        let options = SqliteConnectOptions::new()
+    let bytes = crate::sqlite_connection::run(
+        SqliteConnectOptions::new()
             .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory);
-        let mut connection = sqlite_access::SqliteConnection::connect_with(&options).await?;
-        let result = async {
+            .journal_mode(SqliteJournalMode::Memory),
+        async |connection| {
             connection.execute("PRAGMA page_size=4096").await?;
             connection.execute("PRAGMA max_page_count=16384").await?;
             let mut tx = connection.begin().await?;
@@ -94,18 +93,8 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
                 ));
             }
             Ok(bytes.to_vec())
-        }
-        .await;
-        match (result, connection.close().await) {
-            (Ok(bytes), Ok(())) => Ok(bytes),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Err(error), Err(close)) => Err(Error::Cleanup {
-                operation: Box::new(error),
-                cleanup: std::io::Error::other(close),
-            }),
-        }
-    })?;
+        },
+    )?;
     // Close the encoding connection before decoding the actual serialized
     // image. No stored self-digest can replace the original source State.
     readback::verify(&bytes, state, checkpoint)?;

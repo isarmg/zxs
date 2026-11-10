@@ -3,7 +3,6 @@
 //! elect a publication. SQLite never opens an attacker-replaceable disk pathname.
 use crate::{Error, ErrorCode, Result, State, disk::DiskRoot};
 use data_serialization::Serialize;
-use platform_io::sqlite::block_on_sqlite_connection;
 use sqlite_access::{
     Connection, Executor, Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
@@ -43,18 +42,6 @@ fn budget() -> Error {
     )
 }
 
-async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T> {
-    match (result, connection.close().await) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(close)) => Err(Error::Cleanup {
-            operation: Box::new(error),
-            cleanup: std::io::Error::other(close),
-        }),
-    }
-}
-
 pub(super) fn prepare(state: &State, directory: &str) -> Result<Prepared> {
     let records = projection::records(state, directory)?;
     let hash = storage_contract::object_hash("directory-local-records", &records)?;
@@ -75,12 +62,11 @@ fn encode_records(
     sequence: u64,
     hash: &str,
 ) -> Result<Prepared> {
-    let bytes = block_on_sqlite_connection(async {
-        let options = SqliteConnectOptions::new()
+    let bytes = crate::sqlite_connection::run(
+        SqliteConnectOptions::new()
             .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory);
-        let mut connection = SqliteConnection::connect_with(&options).await?;
-        let result = async {
+            .journal_mode(SqliteJournalMode::Memory),
+        async |connection| {
             connection.execute("PRAGMA page_size=4096").await?;
             connection.execute("PRAGMA max_page_count=4096").await?;
             let mut tx = connection.begin().await?;
@@ -108,10 +94,8 @@ fn encode_records(
                 return Err(budget());
             }
             Ok(bytes.to_vec())
-        }
-        .await;
-        finish(result, connection).await
-    })?;
+        },
+    )?;
     Ok(Prepared { bytes })
 }
 
@@ -181,16 +165,13 @@ fn verify(bytes: &[u8]) -> Result<StoredIdentity> {
         return Err(budget());
     }
     let database = SqliteOwnedBuf::try_from(bytes)?;
-    block_on_sqlite_connection(async {
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
-        let result = async {
+    crate::sqlite_connection::run(
+        SqliteConnectOptions::new().in_memory(true),
+        async |connection| {
             connection.deserialize(None, database, true).await?;
-            verify_connection(&mut connection).await
-        }
-        .await;
-        finish(result, connection).await
-    })
+            verify_connection(&mut *connection).await
+        },
+    )
 }
 
 async fn verify_schema(connection: &mut SqliteConnection) -> Result<()> {

@@ -2,7 +2,6 @@
 //! It never opens a disk pathname through SQLite and never authorizes a move.
 use crate::{Error, ErrorCode, Result, state_projection::StateProjection};
 use data_serialization::Serialize;
-use platform_io::sqlite::block_on_sqlite_connection;
 use sqlite_access::{
     Connection, Executor, Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
@@ -46,18 +45,6 @@ fn budget() -> Error {
         "file database exceeds its bounded record or byte budget",
     )
 }
-async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T> {
-    match (result, connection.close().await) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(close)) => Err(Error::Cleanup {
-            operation: Box::new(error),
-            cleanup: std::io::Error::other(close),
-        }),
-    }
-}
-
 /// Rows originate from the captured State and its tied owner index. The caller
 /// must prove publication admission before installation. Neither this projection
 /// nor its self digest grants authority or proves a complete historical copy.
@@ -148,12 +135,11 @@ fn encode_records(
     sequence: u64,
     hash: &str,
 ) -> Result<Prepared> {
-    let bytes = block_on_sqlite_connection(async {
-        let options = SqliteConnectOptions::new()
+    let bytes = crate::sqlite_connection::run(
+        SqliteConnectOptions::new()
             .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory);
-        let mut connection = SqliteConnection::connect_with(&options).await?;
-        let result = async {
+            .journal_mode(SqliteJournalMode::Memory),
+        async |connection| {
             connection.execute("PRAGMA page_size=4096").await?;
             connection.execute("PRAGMA max_page_count=4096").await?;
             let mut tx = connection.begin().await?;
@@ -181,10 +167,8 @@ fn encode_records(
                 return Err(budget());
             }
             Ok(bytes.to_vec())
-        }
-        .await;
-        finish(result, connection).await
-    })?;
+        },
+    )?;
     Ok(Prepared { bytes })
 }
 
@@ -340,16 +324,13 @@ fn verify_snapshot(bytes: &[u8]) -> Result<VerifiedSnapshot> {
         return Err(budget());
     }
     let database = SqliteOwnedBuf::try_from(bytes)?;
-    block_on_sqlite_connection(async {
-        let mut connection =
-            SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
-        let result = async {
+    crate::sqlite_connection::run(
+        SqliteConnectOptions::new().in_memory(true),
+        async |connection| {
             connection.deserialize(None, database, true).await?;
-            verify_connection(&mut connection).await
-        }
-        .await;
-        finish(result, connection).await
-    })
+            verify_connection(&mut *connection).await
+        },
+    )
 }
 async fn verify_schema(connection: &mut SqliteConnection) -> Result<()> {
     let schemas = sqlite_access::query(
