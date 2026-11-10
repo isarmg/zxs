@@ -539,3 +539,7 @@ fn default_connection_cannot_adopt_reenabled_target_binding_generation() {
             .exists()
     );
 }
+
+#[path = "history_move_identity_tests.rs"]
+mod history_move_identity_tests;
+
