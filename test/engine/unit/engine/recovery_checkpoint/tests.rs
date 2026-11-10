@@ -34,12 +34,9 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     drop(engine);
     (temp, root, config)
 }
-fn reopen(root: &Path) -> (Engine, usize) {
-    SNAPSHOT_LOAD_COUNT.with(|count| count.set(0));
-    let engine = Engine::open(root).unwrap();
-    let count = SNAPSHOT_LOAD_COUNT.with(|count| count.get());
-    (engine, count)
-}
+#[path = "open_decodes.rs"]
+mod open_decodes;
+use open_decodes::reopen;
 #[test]
 fn missing_or_corrupt_selected_snapshot_source_repairs_from_verified_replica() {
     for corrupt in [false, true] {
@@ -70,7 +67,7 @@ fn missing_or_corrupt_selected_snapshot_source_repairs_from_verified_replica() {
         assert_eq!(canonical_json(engine.state()).unwrap(), expected);
         assert_eq!(std::fs::read(&path).unwrap(), original);
         drop(engine);
-        assert_eq!(reopen(&root).1, 1);
+        assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
     }
 }
 #[test]
@@ -105,7 +102,7 @@ fn same_length_legacy_payload_changes_invalidate_coverage() {
     drop(reopen(&root).0);
     std::fs::write(&legacy, b"evil").unwrap();
     assert!(
-        reopen(&root).1 >= 6,
+        reopen(&root).1.recovery_after_histories(&config) >= 6,
         "legacy bytes must invalidate the skip, even at equal length"
     );
     assert!(
@@ -129,11 +126,11 @@ fn clean_checkpoint_reopens_decode_one_snapshot_and_preserve_state() {
     let (_temp, root, config) = setup();
     let (engine, full) = reopen(&root);
     let expected = canonical_json(engine.state()).unwrap();
-    assert!(full >= 6);
+    assert!(full.recovery_after_histories(&config) >= 6);
     assert!(config.disks.iter().all(|d| path(d).exists()));
     drop(engine);
     let (engine, fast) = reopen(&root);
-    assert_eq!(fast, 1);
+    assert_eq!(fast.recovery_after_histories(&config), 1);
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
 }
 #[test]
@@ -176,7 +173,7 @@ fn cold_replay_reuses_member_specific_receipts_across_decision_slots() {
         })
         .collect();
     let (mut engine, full) = reopen(&root);
-    assert!(full >= 9);
+    assert!(full.recovery_after_histories(&config) >= 9);
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
     let warnings = engine.take_recovery_warnings();
     assert!(warnings.checkpoint_load.is_none());
@@ -186,7 +183,7 @@ fn cold_replay_reuses_member_specific_receipts_across_decision_slots() {
     }
     drop(engine);
     let (engine, fast) = reopen(&root);
-    assert_eq!(fast, 1);
+    assert_eq!(fast.recovery_after_histories(&config), 1);
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
 }
 
@@ -231,10 +228,10 @@ fn missing_historical_page_falls_back_and_repairs_replica() {
     assert!(missing.exists());
     std::fs::remove_file(&missing).unwrap();
     let (engine, count) = reopen(&root);
-    assert!(count >= 6);
+    assert!(count.recovery_after_histories(&config) >= 6);
     assert!(missing.exists());
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 fn save_file(engine: &mut Engine, branch: &str, name: &str, bytes: &[u8]) {
     let workspace = engine.create_workspace(branch, "admin").unwrap();
@@ -279,7 +276,7 @@ fn restored_absent_historical_version_directory_requires_full_proof_repair() {
     // exist again must not bypass reconstruction of its historical proof.
     private_dir(&directory).unwrap();
     let (_, count) = reopen(&root);
-    assert!(count >= 7);
+    assert!(count.recovery_after_histories(&config) >= 7);
     assert!(directory.join("publication-proof.json").exists());
 }
 
@@ -319,7 +316,7 @@ fn forked_suffix_cannot_authorize_derived_cache_exception() {
 
 #[test]
 fn repeated_same_file_saves_replay_only_checkpoint_and_suffix() {
-    let (_temp, root, _config) = setup();
+    let (_temp, root, config) = setup();
     let mut engine = Engine::open(&root).unwrap();
     let branch = engine
         .state
@@ -343,12 +340,13 @@ fn repeated_same_file_saves_replay_only_checkpoint_and_suffix() {
     drop(engine);
     let (engine, count) = reopen(&root);
     assert_eq!(
-        count, 4,
+        count.recovery_after_histories(&config),
+        4,
         "one checkpoint snapshot plus three suffix decisions"
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 #[test]
 fn corrupted_container_outside_suffix_forces_full_repair() {
@@ -389,7 +387,7 @@ fn corrupted_container_outside_suffix_forces_full_repair() {
     std::fs::write(&cache, b"{}").unwrap();
     let (_, count) = reopen(&root);
     assert!(
-        count >= 9,
+        count.recovery_after_histories(&config) >= 9,
         "unrelated suffix evidence must not waive this cache"
     );
     assert!(std::fs::read(&cache).unwrap().len() > 2);
@@ -448,10 +446,10 @@ fn missing_local_publication_proof_falls_back_and_repairs() {
     let proof = find_proof(&config.disks[1].root.join("histories")).unwrap();
     std::fs::remove_file(&proof).unwrap();
     let (engine, count) = reopen(&root);
-    assert!(count >= 7);
+    assert!(count.recovery_after_histories(&config) >= 7);
     assert!(proof.exists());
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 
 #[test]
@@ -460,7 +458,7 @@ fn malformed_or_partially_replicated_checkpoint_falls_back() {
     drop(reopen(&root).0);
     std::fs::write(path(&config.disks[0]), b"not a checkpoint").unwrap();
     let (mut engine, count) = reopen(&root);
-    assert!(count >= 6);
+    assert!(count.recovery_after_histories(&config) >= 6);
     let warnings = engine.take_recovery_warnings();
     let error = warnings
         .checkpoint_load
@@ -469,7 +467,7 @@ fn malformed_or_partially_replicated_checkpoint_falls_back() {
     assert!(warnings.checkpoint_save.is_none());
     assert!(engine.take_recovery_warnings().checkpoint_load.is_none());
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 #[test]
 fn checkpoint_never_hides_corrupt_journal_prefix() {
@@ -515,14 +513,14 @@ fn degraded_open_keeps_full_replay_and_visibility_rules() {
     )
     .unwrap();
     let (engine, count) = reopen(&root);
-    assert!(count >= 6);
+    assert!(count.blocked_recovery(&config) >= 6);
     assert!(engine.blocked);
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
 }
 
 #[test]
 fn sealed_suffix_replays_only_new_decision_and_refreshes_checkpoint() {
-    let (_temp, root, _config) = setup();
+    let (_temp, root, config) = setup();
     let (mut engine, _) = reopen(&root);
     engine
         .create_repository(
@@ -536,10 +534,10 @@ fn sealed_suffix_replays_only_new_decision_and_refreshes_checkpoint() {
     let expected = canonical_json(engine.state()).unwrap();
     drop(engine);
     let (engine, count) = reopen(&root);
-    assert_eq!(count, 2);
+    assert_eq!(count.recovery_after_histories(&config), 2);
     assert_eq!(canonical_json(engine.state()).unwrap(), expected);
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 
 #[test]
@@ -552,7 +550,7 @@ fn torn_journal_tail_disables_checkpoint_replay_skip() {
         .unwrap();
     file.write_all(b"ZXSLO").unwrap();
     let (_, count) = reopen(&root);
-    assert!(count >= 6);
+    assert!(count.recovery_after_histories(&config) >= 6);
 }
 
 #[test]
@@ -562,7 +560,7 @@ fn checkpoint_save_failure_is_nonfatal_and_reported_once() {
         std::fs::create_dir(path(disk)).unwrap();
     }
     let (mut engine, count) = reopen(&root);
-    assert!(count >= 6);
+    assert!(count.recovery_after_histories(&config) >= 6);
     let warnings = engine.take_recovery_warnings();
     assert!(warnings.seals.is_empty());
     assert!(warnings.checkpoint_load.is_some());

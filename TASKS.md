@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`624a67e5`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`45e1ad72`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮恢复 checkpoint 解码计量隔离
+
+- CI #1104 的正常 Engine::open 已包含权威恢复后的逐盘完整历史维护；旧 thread-local 总解码计数同时包含两者，19/7 并不能直接证明 checkpoint 快路径失效。
+- 根测试新增私有 OpenDecodes：仍调用真实 Engine::open，只有先验证 Genesis、准确全部配置盘身份、全 Tracked 及持久/观察序列均到当前序列，才扣除一盘一 publication 的已完成历史解码；原全部 27 条数值门槛保持。跳过、失败或未完成维护不能获得零扣除后误过的待遇。
+- degraded 保持原始计数并要求每盘在 capture 前由 RecoveryRequired 拒绝。Exit 不套用 Genesis 公式，保留原总量下限，另直接验证 checkpoint scope 拒绝、无 load/save 警告及所有活跃毒化 checkpoint 未改写；总量不冒称独立恢复预算。
+- 仅四份根测试与本清单变化，生产恢复、维护、计数 hook、持久格式和 I/O 顺序保持。对齐 45e1ad72；固定 Rust 1.99 格式、严格补丁/逐字节及静审通过，未本地编译或执行 Rust 测试，真实结果待 CI。
 
 ## 本轮移动决定缺失 FULL 夹具
 

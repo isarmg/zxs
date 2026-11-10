@@ -232,6 +232,7 @@ fn exercise_lifecycle(recovery: RecoveryPath) {
         }
     }
     let (mut engine, decoded) = reopen(&fixture.root);
+    let decoded = decoded.recovery_after_histories(&fixture.config);
     match recovery {
         RecoveryPath::EligibleCheckpoint => assert_eq!(decoded, 1),
         _ => assert!(
@@ -271,6 +272,7 @@ fn exercise_lifecycle(recovery: RecoveryPath) {
     assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 2);
     drop(engine);
     let (mut engine, decoded) = reopen(&fixture.root);
+    let decoded = decoded.recovery_after_histories(&fixture.config);
     assert_eq!(
         decoded, 2,
         "checkpoint plus the new publication are replayed"

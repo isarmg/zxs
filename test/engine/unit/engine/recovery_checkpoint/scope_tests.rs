@@ -241,14 +241,14 @@ fn checkpoint_scope_missing_context_falls_back_without_erasing_state_or_history(
     }
     drop(engine);
     let (mut engine, decoded) = reopen(&root);
-    assert!(decoded >= 6);
+    assert!(decoded.recovery_after_histories(&config) >= 6);
     assert_eq!(canonical_json(engine.state()).unwrap(), state);
     assert_eq!(journals(&engine), old_journals);
     let warnings = engine.take_recovery_warnings();
     assert!(std::error::Error::source(&warnings.checkpoint_load.unwrap()).is_some());
     assert!(warnings.checkpoint_save.is_none());
     drop(engine);
-    assert_eq!(reopen(&root).1, 1);
+    assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
 
 #[test]
@@ -358,11 +358,20 @@ fn checkpoint_scope_exit_never_skips_d3_or_reopens_the_stopped_directory() {
         assert!(CheckpointScope::admit(&engine).unwrap().is_none());
         let after = canonical_json(engine.state()).unwrap();
         drop(engine);
-        let (engine, decoded) = reopen(&root);
+        let (mut engine, decoded) = reopen(&root);
+        // Current history replay also decodes archived snapshots. Keep the
+        // original total-count floor, and prove checkpoint rejection directly.
         assert!(
-            decoded >= 2,
+            decoded.total >= 2,
             "D3 and the ordinary successor must both replay"
         );
+        assert!(CheckpointScope::admit(&engine).unwrap().is_none());
+        let warnings = engine.take_recovery_warnings();
+        assert!(warnings.checkpoint_load.is_none());
+        assert!(warnings.checkpoint_save.is_none());
+        for disk in engine.members() {
+            assert_eq!(fs::read(path(&disk)).unwrap(), b"must replay exact D3");
+        }
         assert_eq!(canonical_json(engine.state()).unwrap(), after);
         assert_eq!(
             engine.list_tree(&branches[0]).unwrap().len(),
