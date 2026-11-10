@@ -320,15 +320,16 @@ impl ManagementBackend {
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
         }
-        let active_backend = crate::lock(&self.inner.state).backend.engine().cloned();
         if record.status.preview.authority == ExitAuthority::ActiveMembership
             && record.status.preview.request.action == ExitAction::Deregister
-            && let Some(backend) = active_backend
         {
-            let control = ActiveExit::open(&backend, identity, parent)?;
-            let status = control.run_admitted(record, admitted)?;
-            crate::lock(&self.inner.disk_observation).take();
-            return Ok(json_codec::to_value(status).expect("invariant: exit status serializes"));
+            let active_backend = crate::lock(&self.inner.state).backend.engine().cloned();
+            if let Some(backend) = active_backend {
+                let control = ActiveExit::open(&backend, identity, parent)?;
+                let status = control.run_admitted(record, admitted)?;
+                crate::lock(&self.inner.disk_observation).take();
+                return Ok(json_codec::to_value(status).expect("invariant: exit status serializes"));
+            }
         }
         if let Some(result) = self.storage_exit_result(identity, &mut record)? {
             finish(&mut record, result);

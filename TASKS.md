@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`a5228509`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`5f2b363b`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮终态交接自持 Arc 生命周期修复
+
+- CI #1104 的 23 条 terminal-resume/readmission 同类前置失败已追到 storage_exit 自持引用：无条件 clone 的 active_backend 在 TerminalManagement 条件短路后一直存活，导致其后独占交接 Arc::try_unwrap 必然失败，误当作外部作业未排空。
+- 只在 ActiveMembership+Deregister 分支内取得该引用，锁 guard 仍在调用控制器前释放。终态路径不创建无消费者的强引用；原 durable fence、真实外部 owner 等待、queued-work 拒绝与唯一所有权门槛保持。
+- 原 final-voter 真实 owner 测试继续要求持有时拒绝、释放后同一 operation 完成，并补 Weak 无法升级以证明旧 backend 已销毁；所有 terminal 夹具与原成功/拒绝期待不改。
+- 两份源码/根测试及本清单变化。对齐 5f2b363b，固定 Rust 1.99 格式、严格补丁/逐字节及独立静审通过；未本地编译或执行 Rust 测试，23 条失败的实际解除待 CI 确认。
 
 ## 本轮备份列表可撤销删除可见性
 

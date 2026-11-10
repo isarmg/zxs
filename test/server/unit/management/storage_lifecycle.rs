@@ -770,6 +770,7 @@ fn final_voter_deregistration_enters_real_management_and_keeps_data_only_registr
 fn final_voter_waits_for_real_backend_owners_and_keeps_the_original_operation() {
     let f = fixture_with_metadata_members(1);
     let held = f.backend.inner.addition_backend().unwrap();
+    let original_backend = Arc::downgrade(&held);
     let preview: ExitPreview = json_codec::from_value(
         command(
             &f,
@@ -809,6 +810,7 @@ fn final_voter_waits_for_real_backend_owners_and_keeps_the_original_operation() 
     let completed: ExitStatus = json_codec::from_value(resume(&f, &saved).unwrap()).unwrap();
     assert_eq!(completed.state, ExitState::Completed);
     assert_eq!(completed.operation_id, operation);
+    assert!(original_backend.upgrade().is_none());
     assert_eq!(f.backend.disk_status(&f.identity).unwrap().len(), 3);
 }
 
