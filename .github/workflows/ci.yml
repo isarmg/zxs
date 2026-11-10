@@ -1,8 +1,9 @@
-# Manual full CI: all CI checks enabled; automatic triggers and Release remain paused.
+# Full CI: main pushes and manual runs; pull requests, schedules and Release remain paused.
 name: CI
 
 on:
-  # Automatic runs paused by user request; retain manual dispatch only.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Every manual run executes the complete matrix without reuse.
+          # Every main push and manual run executes the complete matrix without reuse.
           fetch-depth: 2
       - name: Check workflows, source governance and script regressions
         run: bash .github/scripts/check.sh static

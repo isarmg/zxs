@@ -60,7 +60,7 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
         spec.loader.exec_module(policy)
         policy.check_workflows(ROOT)
         current = policy.receipt()
-        self.assertEqual(current['mode'], 'manual-full-ci')
+        self.assertEqual(current['mode'], 'full-ci')
         self.assertEqual(current['paused_suites'], [])
         self.assertEqual(current['paused_jobs']['ci.yml'], [])
         self.assertEqual(current['paused_jobs']['smb-sdk.yml'], [])

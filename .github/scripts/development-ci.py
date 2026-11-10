@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reviewed manual full CI policy; no automatic or Release restoration.
+"""Reviewed complete CI policy; automatic main pushes without Release restoration.
 
 The archived workflows are restoration recipes, not executable CI or evidence.
 Only the exact reviewed projection below is allowed in the active directory.
@@ -127,16 +127,16 @@ jobs:
 PAUSE = '    if: ${{ false }}\n'
 PUBLISH_CONDITION = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 HEADER = '# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.\n'
-FULL_HEADER = '# Manual full CI: all CI checks enabled; automatic triggers and Release remain paused.\n'
+FULL_HEADER = '# Full CI: main pushes and manual runs; pull requests, schedules and Release remain paused.\n'
 
 
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
     source = (HEADER if name == 'release.yml' else FULL_HEADER) + original
-    # Automatic CI is paused; retain manual dispatch with no push, schedule or PR trigger.
+    # Enable full CI for main pushes; retain manual dispatch, no schedule or PR trigger.
     if name == 'ci.yml':
         source = source.replace('on:\n  push:\n  pull_request:\n',
-                                'on:\n  # Automatic runs paused by user request; retain manual dispatch only.\n')
+                                'on:\n  push:\n    branches: [main]\n')
         # Each run has its own group so later dispatches cannot replace a queued run.
         source = source.replace(
             '  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n',
@@ -150,7 +150,7 @@ def development_workflow(name, original):
         source = source.replace('    timeout-minutes: 10\n', '    timeout-minutes: 5\n', 1)
     if name == 'ci.yml':
         source = source.replace('# Missing older push bases safely select the full matrix.',
-                                '# Every manual run executes the complete matrix without reuse.')
+                                '# Every main push and manual run executes the complete matrix without reuse.')
         source = source.replace('Select evidenced CI suites', 'Select all CI suites without reuse')
         source = source.replace('python3 .github/scripts/select-ci-suites.py',
                                 'python3 .github/scripts/development-ci.py select')
@@ -186,13 +186,14 @@ def check_workflows(root):
 
 def receipt():
     return {
-        'mode': 'manual-full-ci',
-        'automatic_triggers': False,
+        'mode': 'full-ci',
+        'automatic_triggers': True,
+        'push_branches': ['main'],
         'suites': list(FULL_SUITES),
         'paused_suites': [],
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
         'reused': [],
-        'reason': 'Explicit manual full CI restoration; Release remains paused. Selection is not execution evidence.',
+        'reason': 'Full CI on main pushes and manual dispatch; Release remains paused. Selection is not execution evidence.',
         'static_minutes': 10,
         'suite_minutes': {suite: 120 if suite == 'workspace' else
                          60 if suite == 'foundation-crypto' else 30
@@ -204,9 +205,9 @@ def receipt():
 def check_receipt(value):
     # Validate the actual emitted matrix, not just an unused inventory constant.
     if value != receipt():
-        raise ValueError('manual full CI selection must be the exact thirteen suites without reuse')
+        raise ValueError('full CI selection must be the exact thirteen suites without reuse')
     if len(value['suites']) != 13 or len(set(value['suites'])) != 13:
-        raise ValueError('manual full CI selection must contain thirteen unique suites')
+        raise ValueError('full CI selection must contain thirteen unique suites')
 
 
 def emit(value, *, output=None, summary=None):
@@ -217,7 +218,7 @@ def emit(value, *, output=None, summary=None):
             stream.write('suites=' + json.dumps(value['suites'], separators=(',', ':')) + '\n')
     if summary is not None:
         with open(summary, 'a') as stream:
-            stream.write('### Manual full CI: selected, not yet passed; Release paused\n\n```json\n'
+            stream.write('### Full CI: selected, not yet passed; Release paused\n\n```json\n'
                          + json.dumps(value, indent=2) + '\n```\n')
 
 

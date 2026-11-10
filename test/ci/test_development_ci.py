@@ -1,4 +1,4 @@
-"""Exercise actual full-matrix output and preserve manual-only, non-publishing CI.
+"""Exercise actual full-matrix output and preserve main-push and manual, non-publishing CI.
 
 These are policy and retained-recipe regressions, not Rust/browser/SDK execution.
 """
@@ -54,8 +54,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
         POLICY.check_workflows(ROOT)
         POLICY.check_workflows(self.root)
 
-    def test_manual_ci_keeps_all_automatic_entrypoints_paused(self):
-        for name, triggers in (('ci.yml', ['workflow_dispatch']),
+    def test_main_push_ci_preserves_other_paused_entrypoints(self):
+        for name, triggers in (('ci.yml', ['push', 'workflow_dispatch']),
                                ('release.yml', ['workflow_dispatch']),
                                ('smb-sdk.yml', ['workflow_call'])):
             source = (ROOT / '.github/workflows' / name).read_text()
@@ -65,16 +65,24 @@ class DevelopmentCiPolicy(unittest.TestCase):
             crons = re.findall(r"^    - cron: '([^']+)'$", events, flags=re.MULTILINE)
             self.assertEqual(crons, [])
         receipt = POLICY.receipt()
-        self.assertFalse(receipt['automatic_triggers'])
+        self.assertTrue(receipt['automatic_triggers'])
+        self.assertEqual(receipt['push_branches'], ['main'])
+        self.assertIn('  push:\n    branches: [main]\n', (ROOT / '.github/workflows/ci.yml').read_text())
         self.assertNotIn('scheduled_workflow', receipt)
         self.assertNotIn('schedule', receipt)
 
-    def test_all_automatic_triggers_are_rejected(self):
+    def test_unreviewed_automatic_triggers_are_rejected(self):
         for name in ('ci.yml', 'release.yml', 'smb-sdk.yml'):
             for event in ('push', 'pull_request', 'schedule', 'workflow_run',
                           'repository_dispatch'):
                 with self.subTest(workflow=name, event=event):
                     self.reject_edit(name, 'on:\n', f'on:\n  {event}:\n')
+
+    def test_push_scope_cannot_expand_or_shrink(self):
+        for changed in ('[main, development]', '[development]', '["**"]'):
+            self.reject_edit('ci.yml', '    branches: [main]\n', f'    branches: {changed}\n')
+        self.reject_edit('ci.yml', '    branches: [main]\n', '')
+        self.reject_edit('ci.yml', '    branches: [main]\n', '    branches: [main]\n    tags: ["v*"]\n')
 
     def test_schedule_cannot_return_or_cancel_running_checks(self):
         for cron in ('17 * * * *', '* * * * *', '17 */2 * * *', '17 0 * * *'):
@@ -104,7 +112,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
                 actual = json.loads(result.stdout)
                 self.assertEqual(actual['suites'], EXPECTED)
                 self.assertEqual(actual['paused_suites'], [])
-                self.assertEqual(actual['mode'], 'manual-full-ci')
+                self.assertEqual(actual['mode'], 'full-ci')
                 self.assertEqual(actual['reused'], [])
                 self.assertNotIn('evidence', actual)
                 self.assertEqual(output.read_text(), 'suites=' + json.dumps(EXPECTED, separators=(',', ':')) + '\n')
