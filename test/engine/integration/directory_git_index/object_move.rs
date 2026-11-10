@@ -93,7 +93,7 @@ fn move_to(
         engine.state().repositories.len(),
         repositories + usize::from(destination.repository.is_none())
     );
-    let fact: ObjectMoveFact = json_codec::from_value(receipt.result).unwrap();
+    let fact: ObjectMoveFact = json_codec::from_value(receipt.result["movement"].clone()).unwrap();
     assert_eq!(fact.request, request);
     assert_eq!(fact.principal, "admin");
     assert!(fact.source_file_id.is_none() && fact.displaced_target_file_id.is_none());
@@ -244,6 +244,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             committed
         );
         let git = &engine.state().directory_git_repositories[&after.directory_id];
+        let main = git.main_branch_id.clone();
         let names = git
             .branches
             .keys()
@@ -280,5 +281,43 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             pinned
         );
         assert!(status(&engine, &target, "moved/child").unstaged);
+
+        // Retaining a branch name is insufficient: its old owned contents must
+        // remain selectable without replacing the independent child's work.
+        engine
+            .select_directory_branches(
+                &target.repository_id,
+                Some(&name_policy::LookupPath::parse("moved").unwrap()),
+                &storage_contract::BranchName::parse("topic").unwrap(),
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(bytes(&engine, &target, "moved/owned"), b"committed parent");
+        assert_eq!(bytes(&engine, &target, "moved/child/file"), b"saved child");
+        assert!(
+            engine
+                .namespace_tree(&target.main_branch_id)
+                .unwrap()
+                .get("moved/added")
+                .is_none()
+        );
+        assert!(status(&engine, &target, "moved/child").unstaged);
+        let saved_main = engine
+            .directory_git_main_workspace(&target.repository_id, &after.directory_id)
+            .unwrap();
+        assert_eq!(saved_main.directory_branch_id, main);
+        let owned = saved_main
+            .entries
+            .iter()
+            .find(|entry| entry.path() == "moved/owned")
+            .unwrap();
+        assert_eq!(version_bytes(&engine, &owned.version_id), b"saved parent");
+        assert!(
+            saved_main
+                .entries
+                .iter()
+                .any(|entry| entry.file_id == moved_added.file_id)
+        );
     }
 }
