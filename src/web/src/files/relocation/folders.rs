@@ -145,7 +145,9 @@ fn page_view(state: RwSignal<State>, editor: Editor, listing: Listing) -> impl I
                             navigate(state,editor,generation,path.get_value(),Some(cursor));
                         }
                     }>{t("下一页", "Next page")}</button>
-                <button type="button" class="zxs-button" on:click=move |_|editor.clear_review()>
+                <button type="button" class="zxs-button" on:click=move |_| {
+                    if editor.generation.get_untracked() == generation { editor.clear_review(); }
+                }>
                     {t("收起目录选择", "Close folder picker")}
                 </button>
             </div>
