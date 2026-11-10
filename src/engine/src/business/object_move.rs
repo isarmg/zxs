@@ -10,6 +10,30 @@ mod evidence;
 pub(crate) use evidence::{admit_ordinary_undo, admit_result, deletion_for, retained_for, verify_publication};
 pub(crate) use projection::{plan, read_result, verify_transition, MovePlan, ResultBody};
 
+/// The caller and exact intent are parsed once at the request boundary. This
+/// value borrows the immutable request; its digest cannot outlive different data.
+pub(crate) struct MoveRequest<'a> {
+    request: &'a ObjectMoveRequest,
+    principal: &'a str,
+    digest: String,
+}
+
+impl<'a> MoveRequest<'a> {
+    pub(crate) fn new(request: &'a ObjectMoveRequest, principal: &'a str) -> Result<Self> {
+        Engine::require_actor(principal)?;
+        request.require_target_intent()?;
+        Ok(Self {
+            request,
+            principal,
+            digest: request.digest(principal)?,
+        })
+    }
+
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct NamespaceBasis {
@@ -66,8 +90,9 @@ pub(crate) struct MoveUnit {
     pub(crate) entries: Vec<MoveEntry>,
     pub(crate) directories: BTreeMap<String, MoveDirectory>,
     pub(crate) files: BTreeMap<String, MoveFile>,
-    /// Current destination composition before final operation-bound ID mapping.
-    pub(crate) target_entries: Vec<Entry>,
+    /// Sorted, budgeted destination shape. Identity mapping does not change its
+    /// paths or kinds, so composition can consume it without rebuilding it.
+    target_entries: Vec<Entry>,
     copy_history: bool,
 }
 
@@ -347,8 +372,8 @@ fn file_members(state: &State, entries: &[MoveEntry], directories: &BTreeMap<Str
 
 /// The same capture serves a new request and validation of its exact journal
 /// candidate. It receives admitted current rows, never substitutes an old HEAD.
-fn capture(state: &State, request: &ObjectMoveRequest, basis: &NamespaceBasis, maximum: usize) -> Result<MoveUnit> {
-    request.require_target_intent()?;
+fn capture(state: &State, input: &MoveRequest<'_>, basis: &NamespaceBasis, maximum: usize) -> Result<MoveUnit> {
+    let request = input.request;
     let source_repository = state.repositories.get(request.source_repository_id.as_str())
         .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "move source repository missing"))?;
     let entries = current_entries(state, request, &basis.source_entries)?;

@@ -146,11 +146,9 @@ impl Engine {
     fn move_object_captured(&mut self, request: &ObjectMoveRequest,
         files: Option<CapturedFiles<'_>>, principal: &str, operation: OperationId) -> Result<OperationResult>
     {
-        Self::require_actor(principal)?;
-        request.require_target_intent()?;
-        let digest = request.digest(principal)?;
+        let input = crate::business::object_move::MoveRequest::new(request, principal)?;
         if let Some(original) = self.state.operations.get(&operation) {
-            if original.kind != OBJECT_MOVE_KIND || original.request_digest != digest
+            if original.kind != OBJECT_MOVE_KIND || original.request_digest != input.digest()
                 || self.state.operation_principals.get(&operation).map(String::as_str) != Some(principal)
             { return Err(conflict()); }
             let original_fact = fact(original)?;
@@ -165,9 +163,9 @@ impl Engine {
         self.require_write()?;
         self.require_unfenced_membership()?;
         self.require_native_move_authority()?;
-        let plan = crate::business::object_move::plan(self, request, principal, operation)?;
+        let plan = crate::business::object_move::plan(self, &input, operation)?;
+        require_identity(plan.movement(), files.as_ref())?;
         let (next, prepared, result, retained) = plan.into_parts();
-        require_identity(&fact(&result)?, files.as_ref())?;
         self.publish_move(next, prepared, result, retained)
     }
 }

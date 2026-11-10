@@ -38,8 +38,13 @@ pub(crate) struct MovePlan {
     prepared: Vec<Prepared>,
     receipt: OperationResult,
     retained: Vec<String>,
+    movement: ObjectMoveFact,
 }
 impl MovePlan {
+    pub(crate) fn movement(&self) -> &ObjectMoveFact {
+        &self.movement
+    }
+
     pub(crate) fn into_parts(self) -> (State,Vec<Prepared>,OperationResult,Vec<String>) {
         (self.state,self.prepared,self.receipt,self.retained)
     }
@@ -56,10 +61,11 @@ fn generated(operation:OperationId,prefix:&str,purpose:&str)->Result<String> {
 }
 
 /// Called only for a new operation, after the executor has looked up an original
-/// receipt or journal candidate. This function does not publish any member.
-pub(crate) fn plan(engine:&Engine,request:&ObjectMoveRequest,principal:&str,operation:OperationId)->Result<MovePlan> {
-    Engine::require_actor(principal)?;
-    engine.require_write()?;
+/// receipt or journal candidate and checked write/native-move authority under
+/// its Engine owner. No intervening mutation precedes this borrowed planner.
+/// This function does not publish any member.
+pub(crate) fn plan(engine:&Engine,input:&MoveRequest<'_>,operation:OperationId)->Result<MovePlan> {
+    let request = input.request;
     let source = engine.state.repositories.get(request.source_repository_id.as_str())
         .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound,"move source missing"))?;
     require_writable(engine,source)?;
@@ -71,17 +77,17 @@ pub(crate) fn plan(engine:&Engine,request:&ObjectMoveRequest,principal:&str,oper
     let disk=engine.disk(&request.target_slot_id)?;
     if let Some(view)=engine.admitted_current_namespaces()? { view.require_write_slot(&disk.slot_id)?; }
     let namespace_basis=basis(engine.state(),engine.current_namespaces.as_deref(),request)?;
-    let unit=capture(engine.state(),request,&namespace_basis,engine.config.max_entries)?;
+    let unit=capture(engine.state(),input,&namespace_basis,engine.config.max_entries)?;
     let copies=match &unit.target { MoveTarget::Existing {repository,..}=>repository.target_copies,MoveTarget::EmptyDisk {..}=>1 };
     let slots=engine.planning_context().route(&request.target_slot_id,copies)?;
     let route=CopyRoute {created_at:now()?,bindings:slots.iter()
         .map(|slot| Ok((slot.clone(),engine.disk(slot)?.binding_generation))).collect::<Result<_>>()?,slots};
-    let (state,receipt,result)=compose(engine.state(),unit,namespace_basis,&route,principal,operation,engine.next_slot)?;
+    let (state,receipt,result)=compose(engine.state(),unit,namespace_basis,&route,input,operation,engine.next_slot)?;
     let prepared=result.version_mapping.iter().map(|(source,target)| Ok(Prepared {
         version:state.versions[target].clone(), placement:state.placements[target].clone(),
         source:engine.valid_backup_replica(source)?,
     })).collect::<Result<_>>()?;
-    Ok(MovePlan {state,prepared,receipt,retained:result.retained_version_ids})
+    Ok(MovePlan {state,prepared,receipt,retained:result.retained_version_ids,movement:result.movement})
 }
 
 fn publish_namespace(next:&mut State,repository:&Repository,entries:Vec<Entry>,principal:&str,operation:OperationId,purpose:&str)->Result<String> {
@@ -238,7 +244,8 @@ fn refresh_working(next:&mut State,unit:&MoveUnit,target:&Repository,operation:O
     Ok(())
 }
 
-fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&CopyRoute,principal:&str,operation:OperationId,sequence:u64)->Result<(State,OperationResult,ResultBody)> {
+fn compose(previous:&State,mut unit:MoveUnit,namespace_basis:NamespaceBasis,route:&CopyRoute,input:&MoveRequest<'_>,operation:OperationId,sequence:u64)->Result<(State,OperationResult,ResultBody)> {
+    let principal = input.principal;
     let mut next=previous.clone();next.begin_tracking();
     crate::container_storage::capture_names(&mut next);
     next.sequence=sequence;next.business_generation=increment(previous.business_generation)?;
@@ -258,16 +265,17 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
     let source_occurrences=unit.entries.iter().map(|entry|
         (entry.source.entry_id.as_str(),entry.source.lookup_key())).collect::<BTreeSet<_>>();
     let displaced=match &unit.target {MoveTarget::Existing {displaced_entries,..}=>displaced_entries.as_slice(),MoveTarget::EmptyDisk {..}=>&[]};
-    let displaced_occurrences=displaced.iter().map(|entry|
-        (entry.entry_id.as_str(),entry.lookup_key())).collect::<BTreeSet<_>>();
-    let target_original=match &unit.target {MoveTarget::Existing {namespace,..}=>namespace.as_slice(),MoveTarget::EmptyDisk {..}=>&[]};
-    let mut target_entries=target_original.iter().filter(|entry| {
-        !displaced_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key()))
-            && (target.repository_id!=unit.source_repository.repository_id
-                || !source_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key())))
-    }).cloned().collect::<Vec<_>>();
-    target_entries.extend(arrived.iter().cloned());
-    namespace::validate_entries(&mut target_entries,usize::MAX)?;
+    let mut target_entries = std::mem::take(&mut unit.target_entries);
+    if graph.is_some() {
+        // Capture already checked the complete destination's quota, collision
+        // and parent shape. Only copied member identities differ at this point.
+        for arrival in &arrived {
+            let index = target_entries.binary_search_by(|entry|
+                entry.lookup_key().cmp(arrival.lookup_key()))
+                .expect("invariant: capture includes every arrival in its sorted destination");
+            target_entries[index].clone_from(arrival);
+        }
+    }
     let commit=publish_namespace(&mut next,&target,target_entries,principal,operation,"target")?;
     let mut removed=displaced.iter().map(|entry|storage_contract::DeletedPath {path:entry.path().into(),kind:entry.kind}).collect::<Vec<_>>();
     if target.repository_id==unit.source_repository.repository_id {
@@ -358,7 +366,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
         operation_id:operation,kind:OBJECT_MOVE_KIND.into(),commit_id:Some(commit.clone()),
         history_tree_id:Some(target.history_tree_id),branch_id:Some(target.main_branch_id),
         commit_state:CommitState::Published,protection_at_publish:if result.version_mapping.is_empty() {ProtectionAtPublish::NotApplicable}else{ProtectionAtPublish::TargetMet},
-        current_health:CurrentHealth::Healthy,request_digest:unit.request.digest(principal)?,sequence,result:json!(result),
+        current_health:CurrentHealth::Healthy,request_digest:input.digest.clone(),sequence,result:json!(result),
     };
     next.operations.insert(operation,receipt.clone());next.operation_principals.insert(operation,principal.into());
     next.events.push(Event {sequence,operation_id:operation,kind:OBJECT_MOVE_KIND.into(),object_id:commit});
@@ -372,7 +380,8 @@ pub(crate) fn read_result(receipt:&OperationResult)->Result<ResultBody> {
     if receipt.kind!=OBJECT_MOVE_KIND {return Err(invalid());}
     history_copy::retained::bounded(&receipt.result)?;
     let result:ResultBody=json_codec::from_value(receipt.result.clone())?;
-    if receipt.request_digest!=result.movement.request.digest(&result.movement.principal)?
+    let input = MoveRequest::new(&result.movement.request, &result.movement.principal)?;
+    if receipt.request_digest!=input.digest
         || receipt.commit_id.as_deref()!=Some(result.commit_id.as_str())
         || receipt.branch_id.as_deref()!=Some(result.branch_id.as_str())
         || receipt.history_tree_id.as_deref()!=Some(result.history_tree_id.as_str()) {
@@ -400,11 +409,17 @@ pub(crate) fn read_result(receipt:&OperationResult)->Result<ResultBody> {
 pub(crate) fn verify_transition(previous:&State,next:&State,view:Option<&crate::engine::CurrentNamespaces>,receipt:&OperationResult)->Result<()> {
     if receipt.kind!=OBJECT_MOVE_KIND || receipt.sequence!=next.sequence {return Err(invalid());}
     let original=read_result(receipt)?;
-    if receipt.request_digest!=original.movement.request.digest(&original.movement.principal)?
-        || original.namespace_basis!=basis(previous,view,&original.movement.request)? {return Err(invalid());}
-    let unit=capture(previous,&original.movement.request,&original.namespace_basis,usize::MAX)?;
+    if original.namespace_basis!=basis(previous,view,&original.movement.request)? {return Err(invalid());}
+    // read_result admitted the stored request and its digest together. Preserve
+    // that proof through exact replay instead of hashing the same request again.
+    let input = MoveRequest {
+        request: &original.movement.request,
+        principal: &original.movement.principal,
+        digest: receipt.request_digest.clone(),
+    };
+    let unit=capture(previous,&input,&original.namespace_basis,usize::MAX)?;
     let (expected,expected_receipt,_)=compose(previous,unit,original.namespace_basis,&original.route,
-        &original.movement.principal,receipt.operation_id,receipt.sequence)?;
+        &input,receipt.operation_id,receipt.sequence)?;
     if &expected!=next || expected_receipt!=*receipt {return Err(invalid());}
     Ok(())
 }
