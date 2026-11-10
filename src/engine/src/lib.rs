@@ -147,6 +147,7 @@ mod node_retirement_engine;
 pub use node_retirement_engine::PermanentNodeSeparation;
 mod protection;
 mod publication_evidence;
+mod publication_shape;
 mod repair;
 mod shared_file_topology;
 mod state_projection;

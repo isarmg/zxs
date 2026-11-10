@@ -4,7 +4,7 @@
 use super::*;
 use crate::{CommitState, OperationId, OperationResult, ProtectionAtPublish};
 use json_codec::json;
-use storage_contract::{MapChanges, Note, SequenceChanges, TrackedOperations};
+use storage_contract::{MapChanges, Note};
 
 const KIND: &str = "file.path.metadata";
 
@@ -135,8 +135,13 @@ impl<'a> NoteRequest<'a> {
         {
             return Err(invalid());
         }
-        verify_state_shape(previous, next, operation)?;
-        Ok(())
+        crate::publication_shape::verify(
+            previous,
+            next,
+            receipt,
+            crate::publication_shape::ChangedTable::FilePathNotes,
+            invalid,
+        )
     }
 }
 
@@ -210,107 +215,6 @@ fn notes_unchanged_except(previous: &State, next: &State, node: Option<&str>) ->
             .chain(next.file_path_notes.keys())
             .all(unchanged),
     }
-}
-
-fn appended_operation<T: PartialEq>(
-    previous: &TrackedOperations<T>,
-    next: &TrackedOperations<T>,
-    operation: OperationId,
-) -> bool {
-    if previous.contains_key(&operation)
-        || next.len() != previous.len() + 1
-        || !next.contains_key(&operation)
-    {
-        return false;
-    }
-    let unchanged = |id: &OperationId| *id == operation || previous.get(id) == next.get(id);
-    match next.changes_since(previous) {
-        MapChanges::Keys(keys) => keys.iter().all(unchanged),
-        MapChanges::All => previous.keys().chain(next.keys()).all(unchanged),
-    }
-}
-
-fn verify_state_shape(previous: &State, next: &State, operation: OperationId) -> Result<()> {
-    // A single schema covers every State field. Adding a field must explicitly
-    // decide whether a historical annotation is allowed to mutate it.
-    macro_rules! unchanged_maps {
-        ($($field:ident),* $(,)?) => {{
-            let State {
-                sequence: _, business_generation: _, topology_generation: _,
-                control_auth: _, file_path_notes: _, operations: _,
-                operation_principals: _, events: _, $($field: _,)*
-            } = next;
-            $(let unchanged = match next.$field.changes_since(&previous.$field) {
-                MapChanges::Keys(keys) => keys.iter().all(|key| next.$field.get(key) == previous.$field.get(key)),
-                MapChanges::All => next.$field == previous.$field,
-            };
-            if !unchanged { return Err(invalid()); })*
-        }};
-    }
-    unchanged_maps!(
-        repositories,
-        histories,
-        branches,
-        file_selections,
-        directory_branches,
-        directory_git_repositories,
-        directory_trees,
-        file_write_origins,
-        file_contexts,
-        file_path_nodes,
-        file_metadata_nodes,
-        file_deletions,
-        file_branch_merges,
-        file_branch_aliases,
-        file_node_parents,
-        directory_tree_selections,
-        file_locations,
-        file_backup_paths,
-        file_backup_policies,
-        directory_selections,
-        directory_selection_generations,
-        file_selection_generations,
-        file_notes,
-        version_notes,
-        file_names,
-        commits,
-        versions,
-        placements,
-        merge_links,
-        history_boundaries,
-        content_states,
-        plans,
-        placement_rules,
-        protection_policies,
-    );
-    if next.sequence <= previous.sequence
-        || previous.business_generation.checked_add(1) != Some(next.business_generation)
-        || next.topology_generation != previous.topology_generation
-        || next.control_auth != previous.control_auth
-        || !appended_operation(&previous.operations, &next.operations, operation)
-        || !appended_operation(
-            &previous.operation_principals,
-            &next.operation_principals,
-            operation,
-        )
-        || next.events.len() != previous.events.len() + 1
-    {
-        return Err(invalid());
-    }
-    match next.events.changes_since(&previous.events) {
-        SequenceChanges::Append { start } if start == previous.events.len() => (),
-        SequenceChanges::All if next.events[..previous.events.len()] == previous.events[..] => (),
-        _ => return Err(invalid()),
-    }
-    let event = next.events.last().ok_or_else(invalid)?;
-    if event.sequence != next.sequence
-        || event.operation_id != operation
-        || event.kind != KIND
-        || event.object_id != operation.to_string()
-    {
-        return Err(invalid());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
