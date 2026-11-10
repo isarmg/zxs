@@ -1,10 +1,11 @@
 //! Tags publish immutable children through exact current occurrences. The same
 //! pure plan authenticates every row during live publication and cold replay.
 use super::*;
+use crate::business::file_tags::{TagEdit, TagSelection, TagUpdate, resolve_target, target_branch};
 use crate::{
     Branch, BranchKind, CommitState, CurrentHealth, DirectoryBranch, DirectoryTree, FileContext,
-    FileMetadataKind, FileMetadataNode, FileNodeTagsUpdateRequest, FileTagTarget, MAX_FILE_TAGS,
-    OperationId, OperationResult, ProtectionAtPublish, Repository,
+    FileMetadataKind, FileMetadataNode, FileNodeTagsUpdateRequest, FileTagTarget, OperationId,
+    OperationResult, ProtectionAtPublish, Repository,
 };
 use data_serialization::Deserialize;
 use json_codec::{Value, json};
@@ -288,46 +289,16 @@ impl Planner<'_> {
 
     fn preflight(&mut self) -> Result<()> {
         let input = self.input;
-        if input.targets.is_empty()
-            || input.targets.len() > self.maximum
-            || input.add.len() > MAX_FILE_TAGS
-            || input.remove.len() > MAX_FILE_TAGS
-        {
-            return Err(Error::new(
-                ErrorCode::InvalidRequest,
-                "a bounded nonempty tag target list is required",
-            ));
-        }
-        for tag in input.add.iter().chain(&input.remove) {
-            crate::validate_tag(tag)?;
-        }
-        let added: BTreeSet<_> = input.add.iter().cloned().collect();
-        let removed: BTreeSet<_> = input.remove.iter().cloned().collect();
-        if !added.is_disjoint(&removed) {
-            return Err(Error::new(
-                ErrorCode::InvalidTag,
-                "a tag cannot be added and removed in one operation",
-            ));
-        }
+        let edit = TagEdit::new(&input.targets, &input.add, &input.remove, self.maximum)?;
         let mut seen = BTreeSet::new();
         for target in &input.targets {
-            if !seen.insert((&target.branch_id, &target.source_node_id)) {
+            let branch = target_branch(self.previous, &input.file_id, target, &mut seen)?;
+            if branch.branch_kind != BranchKind::File {
                 return Err(Error::new(
-                    ErrorCode::InvalidRequest,
-                    "duplicate tag target",
+                    ErrorCode::FileBranchNotFound,
+                    "tag target branch missing",
                 ));
             }
-            let branch = self
-                .previous
-                .branches
-                .get(&target.branch_id)
-                .filter(|branch| {
-                    branch.branch_kind == BranchKind::File
-                        && branch.file_id.as_deref() == Some(input.file_id.as_str())
-                })
-                .ok_or_else(|| {
-                    Error::new(ErrorCode::FileBranchNotFound, "tag target branch missing")
-                })?;
             let history = self
                 .previous
                 .histories
@@ -368,85 +339,59 @@ impl Planner<'_> {
             {
                 return Err(invalid());
             }
-            if branch.state != BranchState::Active
-                || self
-                    .previous
-                    .file_branch_aliases
-                    .contains_key(&target.branch_id)
-            {
-                return Err(Error::new(
-                    ErrorCode::BranchNotActive,
-                    "merged aliases are read-only",
-                ));
-            }
-            let head = branch
-                .file_node_id
-                .clone()
-                .or_else(|| {
-                    head_commit
-                        .entries
-                        .iter()
-                        .find(|entry| {
-                            entry.kind == NamespaceEntryKind::File && entry.file_id == input.file_id
+            let TagSelection { version, advance } = resolve_target(
+                self.previous,
+                target,
+                branch,
+                || {
+                    let head = branch
+                        .file_node_id
+                        .clone()
+                        .or_else(|| {
+                            head_commit
+                                .entries
+                                .iter()
+                                .find(|entry| {
+                                    entry.kind == NamespaceEntryKind::File
+                                        && entry.file_id == input.file_id
+                                })
+                                .map(|entry| entry.version_id.clone())
                         })
-                        .map(|entry| entry.version_id.clone())
-                })
-                .ok_or_else(invalid)?;
-            checked_node_version(
-                self.previous,
-                &input.file_id,
-                &head,
-                &branch.history_tree_id,
+                        .ok_or_else(invalid)?;
+                    checked_node_version(
+                        self.previous,
+                        &input.file_id,
+                        &head,
+                        &branch.history_tree_id,
+                    )?;
+                    Ok(head)
+                },
+                || {
+                    checked_node_version(
+                        self.previous,
+                        &input.file_id,
+                        &target.source_node_id,
+                        &branch.history_tree_id,
+                    )
+                },
             )?;
-            if head != target.expected_node_id {
-                return Err(Error::new(
-                    ErrorCode::FileBranchConflict,
-                    "tag target head changed",
-                ));
-            }
-            let version = checked_node_version(
-                self.previous,
-                &input.file_id,
-                &target.source_node_id,
-                &branch.history_tree_id,
-            )?;
-            if !crate::business::file_nodes::belongs_to_branch(
-                self.previous,
-                &target.branch_id,
-                &head,
-                &target.source_node_id,
-            ) {
-                return Err(Error::new(
-                    ErrorCode::FileNodeNotFound,
-                    "tag target node is outside the selected branch",
-                ));
-            }
             self.location(repository)?;
-            let source = if head == target.source_node_id {
+            let source = if advance {
                 Some(self.current_file_source(branch, repository, &version)?)
             } else {
                 None
             };
-            let old = crate::business::file_nodes::node_tags(self.previous, &target.source_node_id);
-            let mut tags = old.clone();
-            tags.retain(|tag| !removed.contains(tag));
-            tags.extend(added.iter().cloned());
-            if tags.len() > MAX_FILE_TAGS {
-                return Err(Error::new(
-                    ErrorCode::TagLimitExceeded,
-                    "a file node supports at most 16 tags",
-                ));
-            }
-            let entries = source.filter(|_| tags != old).map(<[Entry]>::to_vec);
+            let TagUpdate { tags, changed } = edit.apply(self.previous, &target.source_node_id)?;
+            let entries = source.filter(|_| changed).map(<[Entry]>::to_vec);
             self.changes.push(Change {
                 branch: target.branch_id.clone(),
                 source: target.source_node_id.clone(),
                 node: target.source_node_id.clone(),
                 version,
-                changed: tags != old,
+                changed,
                 entries,
                 tags,
-                advance: head == target.source_node_id,
+                advance,
                 directories: BTreeSet::new(),
             });
         }

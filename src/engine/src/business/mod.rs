@@ -35,7 +35,7 @@ pub(crate) mod file_nodes;
 mod file_paths;
 pub(crate) mod file_publication;
 mod file_requests;
-mod file_tags;
+pub(crate) mod file_tags;
 mod history;
 mod namespace;
 mod repository;

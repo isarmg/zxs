@@ -3,6 +3,131 @@ use super::*;
 use json_codec::json;
 use std::collections::BTreeSet;
 
+pub(crate) struct TagEdit {
+    added: BTreeSet<String>,
+    removed: BTreeSet<String>,
+}
+
+pub(crate) struct TagUpdate {
+    pub(crate) tags: BTreeSet<String>,
+    pub(crate) changed: bool,
+}
+
+pub(crate) struct TagSelection {
+    pub(crate) version: String,
+    pub(crate) advance: bool,
+}
+
+pub(crate) fn target_branch<'state, 'target>(
+    state: &'state State,
+    file: &str,
+    target: &'target FileTagTarget,
+    seen: &mut BTreeSet<(&'target str, &'target str)>,
+) -> Result<&'state Branch> {
+    if !seen.insert((&target.branch_id, &target.source_node_id)) {
+        return Err(Error::new(
+            storage_contract::ErrorCode::InvalidRequest,
+            "duplicate tag target",
+        ));
+    }
+    state
+        .branches
+        .get(&target.branch_id)
+        .filter(|branch| branch.file_id.as_deref() == Some(file))
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::FileBranchNotFound,
+                "tag target branch missing",
+            )
+        })
+}
+
+/// Share selection order and branch rules while retaining each publication
+/// path's existing head and source-version admission contract.
+pub(crate) fn resolve_target(
+    state: &State,
+    target: &FileTagTarget,
+    branch: &Branch,
+    head: impl FnOnce() -> Result<String>,
+    version: impl FnOnce() -> Result<String>,
+) -> Result<TagSelection> {
+    if branch.state != BranchState::Active
+        || state.file_branch_aliases.contains_key(&target.branch_id)
+    {
+        return Err(Error::new(
+            storage_contract::ErrorCode::BranchNotActive,
+            "merged aliases are read-only",
+        ));
+    }
+    let head = head()?;
+    if head != target.expected_node_id {
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileBranchConflict,
+            "tag target head changed",
+        ));
+    }
+    let version = version()?;
+    if !file_nodes::belongs_to_branch(state, &target.branch_id, &head, &target.source_node_id) {
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileNodeNotFound,
+            "tag target node is outside the selected branch",
+        ));
+    }
+    Ok(TagSelection {
+        version,
+        advance: head == target.source_node_id,
+    })
+}
+
+impl TagEdit {
+    pub(crate) fn new(
+        targets: &[FileTagTarget],
+        add: &[String],
+        remove: &[String],
+        maximum: usize,
+    ) -> Result<Self> {
+        if targets.is_empty()
+            || targets.len() > maximum
+            || add.len() > MAX_FILE_TAGS
+            || remove.len() > MAX_FILE_TAGS
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::InvalidRequest,
+                "a bounded nonempty tag target list is required",
+            ));
+        }
+        for tag in add.iter().chain(remove) {
+            validate_tag(tag)?;
+        }
+        let added: BTreeSet<_> = add.iter().cloned().collect();
+        let removed: BTreeSet<_> = remove.iter().cloned().collect();
+        if !added.is_disjoint(&removed) {
+            return Err(Error::new(
+                storage_contract::ErrorCode::InvalidTag,
+                "a tag cannot be added and removed in one operation",
+            ));
+        }
+        Ok(Self { added, removed })
+    }
+
+    pub(crate) fn apply(&self, state: &State, source: &str) -> Result<TagUpdate> {
+        let old = file_nodes::node_tags(state, source);
+        let mut tags = old.clone();
+        tags.retain(|tag| !self.removed.contains(tag));
+        tags.extend(self.added.iter().cloned());
+        if tags.len() > MAX_FILE_TAGS {
+            return Err(Error::new(
+                storage_contract::ErrorCode::TagLimitExceeded,
+                "a file node supports at most 16 tags",
+            ));
+        }
+        Ok(TagUpdate {
+            changed: tags != old,
+            tags,
+        })
+    }
+}
+
 struct TagChange {
     target: FileTagTarget,
     history: String,
@@ -26,27 +151,7 @@ impl Engine {
             principal,
             operation_id: operation,
         } = request;
-        if targets.is_empty()
-            || targets.len() > self.config.max_entries
-            || add.len() > MAX_FILE_TAGS
-            || remove.len() > MAX_FILE_TAGS
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "a bounded nonempty tag target list is required",
-            ));
-        }
-        for tag in add.iter().chain(remove) {
-            validate_tag(tag)?;
-        }
-        let added: BTreeSet<_> = add.iter().cloned().collect();
-        let removed: BTreeSet<_> = remove.iter().cloned().collect();
-        if !added.is_disjoint(&removed) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidTag,
-                "a tag cannot be added and removed in one operation",
-            ));
-        }
+        let edit = TagEdit::new(targets, add, remove, self.config.max_entries)?;
         let body = request.body();
         self.mutate("file.tags.update", principal, operation,
             body,
@@ -64,36 +169,23 @@ impl Engine {
                 let mut seen = BTreeSet::new();
                 let mut changes = Vec::new();
                 for target in targets {
-                    if !seen.insert((target.branch_id.clone(),target.source_node_id.clone())) {
-                        return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "duplicate tag target"));
-                    }
-                    let branch = state.branches.get(&target.branch_id)
-                        .filter(|b| b.file_id.as_deref() == Some(file))
-                        .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileBranchNotFound, "tag target branch missing"))?;
+                    let branch = target_branch(state, file, target, &mut seen)?;
                     engine.repository_for_history(&branch.history_tree_id)?;
-                    if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&target.branch_id) {
-                        return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged aliases are read-only"));
-                    }
-                    let head = file_nodes::branch_head(state,&target.branch_id)?;
-                    if head != target.expected_node_id {
-                        return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict, "tag target head changed"));
-                    }
-                    let version = file_nodes::node_version(state,file,&target.source_node_id)?;
-                    if !file_nodes::belongs_to_branch(state,&target.branch_id,&head,&target.source_node_id) {
-                        return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "tag target node is outside the selected branch"));
-                    }
-                    let old = file_nodes::node_tags(state,&target.source_node_id);
-                    let mut tags = old.clone();
-                    tags.retain(|tag| !removed.contains(tag));
-                    tags.extend(added.clone());
-                    if tags.len() > MAX_FILE_TAGS { return Err(Error::new(storage_contract::ErrorCode::TagLimitExceeded, "a file node supports at most 16 tags")); }
+                    let TagSelection { version, advance } = resolve_target(
+                        state,
+                        target,
+                        branch,
+                        || file_nodes::branch_head(state, &target.branch_id),
+                        || file_nodes::node_version(state, file, &target.source_node_id),
+                    )?;
+                    let TagUpdate { tags, changed } = edit.apply(state, &target.source_node_id)?;
                     changes.push(TagChange {
                         target: target.clone(),
                         history: branch.history_tree_id.clone(),
                         version,
-                        changed: tags != old,
+                        changed,
                         tags,
-                        advance: head == target.source_node_id,
+                        advance,
                     });
                 }
                 let mut results = Vec::new();
