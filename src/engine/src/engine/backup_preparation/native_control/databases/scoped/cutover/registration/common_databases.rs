@@ -3,6 +3,7 @@
 //! This stage alone leaves old aliases alone. Later ordinary-alias installation
 //! explicitly suspends old-State consumers before replacing any alias.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -88,16 +89,6 @@ struct Plan {
     common: Vec<u8>,
     report: BackupCommonDatabasesReport,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_DESCRIPTOR {
-        return Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "common Backup database descriptor exceeds 64 KiB",
-        ));
-    }
-    Ok(bytes)
-}
 impl Plan {
     fn capture(
         context: &Context<'_>,
@@ -133,20 +124,23 @@ impl Plan {
             .collect::<Result<Vec<_>>>()?;
         let configuration = registry.configuration();
         let publication = &configuration.publication.publication;
-        let common = bounded(&CommonManifest {
-            format: "zxs-backup-common-published-databases",
-            source_fence_hash: prepared.source_fence_hash(),
-            decision_hash: publication.decision_hash.as_str(),
-            publication_hash: &publication.publication_hash,
-            snapshot_hash: &publication.snapshot_hash,
-            registry: &configuration.registry,
-            system: context.sources.system_binding(),
-            system_writer: context.sources.system_writer_binding(),
-            system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
-            original_bindings: bindings,
-            original_databases: &originals,
-            targets: &published.targets,
-        })?;
+        let common = encode_metadata(
+            &CommonManifest {
+                format: "zxs-backup-common-published-databases",
+                source_fence_hash: prepared.source_fence_hash(),
+                decision_hash: publication.decision_hash.as_str(),
+                publication_hash: &publication.publication_hash,
+                snapshot_hash: &publication.snapshot_hash,
+                registry: &configuration.registry,
+                system: context.sources.system_binding(),
+                system_writer: context.sources.system_writer_binding(),
+                system_database_hash: blake3::hash(scopes.system()).to_hex().to_string(),
+                original_bindings: bindings,
+                original_databases: &originals,
+                targets: &published.targets,
+            },
+            MAX_DESCRIPTOR,
+        )?;
         let report = BackupCommonDatabasesReport {
             published,
             common_manifest_hash: blake3::hash(&common).to_hex().to_string(),
@@ -167,23 +161,26 @@ impl Plan {
         files: impl IntoIterator<Item = (&'a str, &'a [u8])>,
     ) -> Result<PreparedFiles<'a>> {
         let files: BTreeMap<_, _> = files.into_iter().collect();
-        let manifest = bounded(&LocalManifest {
-            format: "zxs-backup-local-published-databases",
-            common_manifest_hash: &self.report.common_manifest_hash,
-            scope,
-            files: files
-                .iter()
-                .map(|(name, bytes)| {
-                    (
-                        *name,
-                        FileReference {
-                            bytes: bytes.len(),
-                            digest: blake3::hash(bytes).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
+        let manifest = encode_metadata(
+            &LocalManifest {
+                format: "zxs-backup-local-published-databases",
+                common_manifest_hash: &self.report.common_manifest_hash,
+                scope,
+                files: files
+                    .iter()
+                    .map(|(name, bytes)| {
+                        (
+                            *name,
+                            FileReference {
+                                bytes: bytes.len(),
+                                digest: blake3::hash(bytes).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            MAX_DESCRIPTOR,
+        )?;
         PreparedFiles::new(
             Namespace::CommonDatabases,
             manifest,
@@ -206,13 +203,12 @@ impl Plan {
             self.scopes.disk(identity)?,
         )
     }
-    fn require_saved(&self, root: &DiskRoot, name: &str) -> Result<()> {
-        if root.read_bytes(&root.path().join(name), MAX_DESCRIPTOR)? != self.common {
-            return Err(invalid(
-                "common database record is not this exact original installation",
-            ));
+    fn record<'a>(&'a self, name: &'a str) -> materials::RootRecord<'a> {
+        materials::RootRecord {
+            name,
+            bytes: &self.common,
+            maximum: MAX_DESCRIPTOR,
         }
-        Ok(())
     }
     fn visit_roots(
         &self,
@@ -268,14 +264,14 @@ impl Plan {
         let mut complete = false;
         self.visit_roots(context, prepared, stop, |root| {
             if preparation_path_exists(root, &root.path().join(COMPLETE))? {
-                self.require_saved(root, COMPLETE)?;
+                self.record(COMPLETE).require(root)?;
                 complete = true;
             }
             Ok(())
         })?;
         let intent = context.system.path().join(INTENT);
         if complete || preparation_path_exists(context.system, &intent)? {
-            self.require_saved(context.system, INTENT)?;
+            self.record(INTENT).require(context.system)?;
         }
         // Any completed participant proves that ALL data was already read back.
         // Missing data is then damage, not permission to downgrade and refill it.
@@ -306,10 +302,10 @@ impl Plan {
         expected: &BackupFirstPublicationHash,
         stop: &AtomicBool,
     ) -> Result<BackupCommonDatabasesReport> {
-        self.require_saved(context.system, INTENT)?;
+        self.record(INTENT).require(context.system)?;
         self.verify_data(context, prepared, decision, expected, stop)?;
         self.visit_roots(context, prepared, stop, |root| {
-            self.require_saved(root, COMPLETE)
+            self.record(COMPLETE).require(root)
         })?;
         Ok(self.report.clone())
     }
@@ -325,11 +321,7 @@ pub(super) fn install(
     let plan = Plan::capture(context, prepared, decision, expected, stop)?;
     plan.preflight(context, prepared, decision, expected, stop)?;
     context.sources.recheck(context.system)?;
-    install_preparation_bytes(
-        context.system,
-        &context.system.path().join(INTENT),
-        &plan.common,
-    )?;
+    plan.record(INTENT).install(context.system)?;
     // These names are deliberately NOT the active index or disk-root aliases.
     // Until the native Current/Config selector is complete, replacing those
     // aliases would let old in-memory State observe the successor's databases.
@@ -341,8 +333,8 @@ pub(super) fn install(
     )?;
     plan.verify_data(context, prepared, decision, expected, stop)?;
     plan.visit_roots(context, prepared, stop, |root| {
-        install_preparation_bytes(root, &root.path().join(COMPLETE), &plan.common)?;
-        plan.require_saved(root, COMPLETE)
+        plan.record(COMPLETE).install(root)?;
+        plan.record(COMPLETE).require(root)
     })?;
     plan.observe(context, prepared, decision, expected, stop)
 }

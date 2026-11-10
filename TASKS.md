@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`74acb9a2`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`d46b2dab`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Backup 根记录存储统一
+
+- generation inputs、control、authority、first candidate、first publication、published registry、published scopes 和 common databases 八阶段共用借用 RootRecord，绑定记录名、预期字节与原读取限额。仅统一既有记录冲突预检、准确读回和原不可覆盖安装，不合并领域发布状态机，不将标记当作数据准入或所有目标完成证明。
+- 删除七份 bounded JSON 编码和一处同义内联检查，直接使用现有 encode_metadata；16 份序列化载荷与编码限额保持。保留完整目标预检、逐次取消／身份／围栏检查、原数据验证与 fsync；已有完成记录的损坏拒绝、SYSTEM intent 顺序及累计容量预算保持。冲突与预算错误码不变，诊断统一为具体记录名／字节上限，底层 I/O 来源直接传播。
+- 九个生产文件净删 43 行（含四行根测试接线），不新增锁、扫描、数据库连接、数据复制或同步，不宣称性能提升。新增五个根测试覆盖缺失、幂等重开、冲突保旧、独立读取上限及符号链接拒绝。固定 Rust 1.99 rustfmt --check、16 份载荷对照、31 个顶层函数调用替换归一对照与独立静态审阅通过；未本地编译、运行 Rust／Clippy或物理掉电验收，实际结果待本提交 CI。
 
 ## 本轮 CI #1092 精确格式修复
 

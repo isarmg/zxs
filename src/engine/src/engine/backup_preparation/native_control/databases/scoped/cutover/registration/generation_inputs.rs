@@ -1,6 +1,7 @@
 //! Native-format unpublished routing snapshots after the original Backup
 //! decision. No success receipt, active generation marker or writer is forged.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -115,39 +116,45 @@ impl Inputs {
         let routes_report = routes.report();
         let decision_hash = decision.hash();
         let first_sequence = decision.intended_first_sequence()?;
-        let manifest = bounded(&Manifest {
-            format: FORMAT,
-            decision_hash: decision_hash.as_str(),
-            source_fence_hash: prepared.source_fence_hash(),
-            original_state_hash: prepared.source_evidence().state_hash(),
-            original_snapshot: &job.snapshot,
-            writer_routes_hash: &routes_report.material_hash,
-            intended_first_sequence: first_sequence,
-            routing_state_hash: object_hash("backup-unpublished-routing-state", &after)?,
-            routing_snapshot_hash: &snapshot.hash,
-            whole_units: routes.units(),
-            targets: &routes_report.targets,
-            objects: files
-                .iter()
-                .map(|(path, bytes)| {
-                    (
-                        path,
-                        Descriptor {
-                            bytes: bytes.len(),
-                            digest: blake3::hash(bytes).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: FORMAT,
+                decision_hash: decision_hash.as_str(),
+                source_fence_hash: prepared.source_fence_hash(),
+                original_state_hash: prepared.source_evidence().state_hash(),
+                original_snapshot: &job.snapshot,
+                writer_routes_hash: &routes_report.material_hash,
+                intended_first_sequence: first_sequence,
+                routing_state_hash: object_hash("backup-unpublished-routing-state", &after)?,
+                routing_snapshot_hash: &snapshot.hash,
+                whole_units: routes.units(),
+                targets: &routes_report.targets,
+                objects: files
+                    .iter()
+                    .map(|(path, bytes)| {
+                        (
+                            path,
+                            Descriptor {
+                                bytes: bytes.len(),
+                                digest: blake3::hash(bytes).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            1024 * 1024,
+        )?;
         let hash = blake3::hash(&manifest).to_hex().to_string();
-        let complete = bounded(&Completion {
-            format: "zxs-backup-generation-routing-inputs-prepared",
-            decision_hash: decision_hash.as_str(),
-            inputs_hash: &hash,
-            routing_snapshot_hash: &snapshot.hash,
-            targets: prepared.targets.len(),
-        })?;
+        let complete = encode_metadata(
+            &Completion {
+                format: "zxs-backup-generation-routing-inputs-prepared",
+                decision_hash: decision_hash.as_str(),
+                inputs_hash: &hash,
+                routing_snapshot_hash: &snapshot.hash,
+                targets: prepared.targets.len(),
+            },
+            1024 * 1024,
+        )?;
         if bytes
             .checked_add(manifest.len())
             .and_then(|total| total.checked_add(complete.len()))
@@ -187,37 +194,24 @@ impl Inputs {
     }
     fn require_capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        let path = root.path().join(COMPLETE);
-        if preparation_path_exists(root, &path)?
-            && root.read_bytes(&path, self.complete.len())? != self.complete
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "generation preparation completion differs; old material retained",
-            ));
-        }
+        self.completion().check_existing(root)?;
         // The material store retains 16 MiB of headroom; completion is bounded
         // to 1 MiB and is installed only after every complete copy reads back.
         Ok(())
     }
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.complete,
+            maximum: self.complete.len(),
+        }
+    }
     fn verify(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::verify(root, &self.files()?, stop)?;
-        if root.read_bytes(&root.path().join(COMPLETE), self.complete.len())? != self.complete {
-            return Err(invalid(
-                "generation completion is not the exact full selected routing snapshot",
-            ));
-        }
-        Ok(())
+        self.completion().require(root)
     }
 }
 
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > 1024 * 1024 {
-        return Err(budget());
-    }
-    Ok(bytes)
-}
 fn budget() -> Error {
     Error::new(
         ErrorCode::ResourceLimit,
@@ -270,11 +264,7 @@ pub(super) fn prepare(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &inputs.complete,
-        )?;
+        inputs.completion().install(&target.root)?;
         inputs.verify(&target.root, stop)?;
     }
     recovery::require_isolated(&prepared.targets)?;

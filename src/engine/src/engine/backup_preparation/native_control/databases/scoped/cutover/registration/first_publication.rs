@@ -2,6 +2,7 @@
 //! when no AVAILABLE version exists to carry a route-local publication proof.
 //! This is not active Current/Config or a target writer/source-unfence permit.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -59,16 +60,6 @@ struct Plan {
     completion: Vec<u8>,
     report: BackupTargetPublicationReport,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_DESCRIPTOR {
-        return Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "Backup Publication descriptor exceeds 16 KiB",
-        ));
-    }
-    Ok(bytes)
-}
 impl Plan {
     fn new(
         prepared: &PreparedBackupRegistry,
@@ -79,36 +70,42 @@ impl Plan {
             (PUBLICATION, evidence.publication_bytes()),
             (SEAL, evidence.seal_bytes()),
         ];
-        let manifest = bounded(&Manifest {
-            format: "zxs-backup-first-publication",
-            source_fence_hash: prepared.source_fence_hash(),
-            decision_hash: report.decision_hash.as_str(),
-            authority_hash: &report.authority_hash,
-            candidate_hash: &report.candidate_hash,
-            publication_hash: &report.publication_hash,
-            snapshot_hash: &report.snapshot_hash,
-            first_sequence: report.first_sequence,
-            targets: prepared.targets.len(),
-            files: files
-                .iter()
-                .map(|(name, bytes)| {
-                    (
-                        *name,
-                        FileReference {
-                            bytes: bytes.len(),
-                            digest: blake3::hash(bytes).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
-        let completion = bounded(&Completion {
-            format: "zxs-backup-first-publication-retained",
-            decision_hash: report.decision_hash.as_str(),
-            publication_hash: &report.publication_hash,
-            manifest_hash: blake3::hash(&manifest).to_hex().as_str(),
-            targets: prepared.targets.len(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: "zxs-backup-first-publication",
+                source_fence_hash: prepared.source_fence_hash(),
+                decision_hash: report.decision_hash.as_str(),
+                authority_hash: &report.authority_hash,
+                candidate_hash: &report.candidate_hash,
+                publication_hash: &report.publication_hash,
+                snapshot_hash: &report.snapshot_hash,
+                first_sequence: report.first_sequence,
+                targets: prepared.targets.len(),
+                files: files
+                    .iter()
+                    .map(|(name, bytes)| {
+                        (
+                            *name,
+                            FileReference {
+                                bytes: bytes.len(),
+                                digest: blake3::hash(bytes).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            MAX_DESCRIPTOR,
+        )?;
+        let completion = encode_metadata(
+            &Completion {
+                format: "zxs-backup-first-publication-retained",
+                decision_hash: report.decision_hash.as_str(),
+                publication_hash: &report.publication_hash,
+                manifest_hash: blake3::hash(&manifest).to_hex().as_str(),
+                targets: prepared.targets.len(),
+            },
+            MAX_DESCRIPTOR,
+        )?;
         let report = BackupTargetPublicationReport {
             publication: report.clone(),
             targets: prepared.targets.len(),
@@ -154,25 +151,19 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        let path = root.path().join(COMPLETE);
-        if preparation_path_exists(root, &path)?
-            && root.read_bytes(&path, MAX_DESCRIPTOR)? != self.completion
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "another Backup Publication completion is preserved; no replacement",
-            ));
-        }
+        self.completion().check_existing(root)?;
         Ok(())
+    }
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: MAX_DESCRIPTOR,
+        }
     }
     fn verify(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::verify(root, &self.files()?, stop)?;
-        if root.read_bytes(&root.path().join(COMPLETE), MAX_DESCRIPTOR)? != self.completion {
-            return Err(invalid(
-                "Backup target lacks its exact original Publication completion",
-            ));
-        }
-        Ok(())
+        self.completion().require(root)
     }
 }
 
@@ -204,11 +195,7 @@ fn install(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &plan.completion,
-        )?;
+        plan.completion().install(&target.root)?;
         plan.verify(&target.root, stop)?;
     }
     decision.verify_targets(prepared, stop)?;

@@ -6,6 +6,45 @@ use crate::history_package::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A borrowed root record recipe. Reading it does not admit its related data
+/// or establish that any other participant completed the publication stage.
+pub(super) struct RootRecord<'a> {
+    pub(super) name: &'a str,
+    pub(super) bytes: &'a [u8],
+    pub(super) maximum: usize,
+}
+impl RootRecord<'_> {
+    pub(super) fn check_existing(&self, root: &DiskRoot) -> Result<()> {
+        let path = root.path().join(self.name);
+        if preparation_path_exists(root, &path)? {
+            self.compare(root, &path, ErrorCode::ObjectCollision)?;
+        }
+        Ok(())
+    }
+    pub(super) fn require(&self, root: &DiskRoot) -> Result<()> {
+        self.compare(
+            root,
+            &root.path().join(self.name),
+            ErrorCode::ConfigConflict,
+        )
+    }
+    fn compare(&self, root: &DiskRoot, path: &std::path::Path, code: ErrorCode) -> Result<()> {
+        if root.read_bytes(path, self.maximum)? != self.bytes {
+            return Err(Error::new(
+                code,
+                format!(
+                    "Backup record {} differs from the expected bytes; existing record retained",
+                    self.name
+                ),
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn install(&self, root: &DiskRoot) -> Result<()> {
+        install_preparation_bytes(root, &root.path().join(self.name), self.bytes)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum Namespace {
     Objects,
@@ -271,3 +310,7 @@ pub(super) fn verify(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../test/engine/unit/backup_material_record_tests.rs"]
+mod tests;

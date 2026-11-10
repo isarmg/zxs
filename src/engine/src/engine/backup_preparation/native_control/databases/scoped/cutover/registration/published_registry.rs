@@ -2,6 +2,7 @@
 //! Every page is independently retained and read back on every selected target.
 //! This is a frozen namespace reader, never Current installation or writer I/O.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -64,13 +65,6 @@ pub(super) struct Plan {
     completion: Vec<u8>,
     bytes: u64,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_MANIFEST {
-        return Err(budget());
-    }
-    Ok(bytes)
-}
 fn budget() -> Error {
     Error::new(
         ErrorCode::ResourceLimit,
@@ -121,41 +115,47 @@ impl Plan {
         }
         // These bytes are an exact recipe, never deserialize-and-admit Config.
         // New roots cannot inherit Genesis I/O by being present in this file.
-        let config = bounded(&resolved.config)?;
+        let config = encode_metadata(&resolved.config, MAX_MANIFEST)?;
         bytes = bytes.checked_add(config.len()).ok_or_else(budget)?;
         files.insert(PathBuf::from(CONFIG), config);
         let publication = &resolved.report.publication.publication;
-        let manifest = bounded(&Manifest {
-            format: "zxs-backup-published-registry",
-            source_fence_hash: prepared.source_fence_hash(),
-            decision_hash: publication.decision_hash.as_str(),
-            publication_hash: &publication.publication_hash,
-            authority_hash: &publication.authority_hash,
-            snapshot_hash: &publication.snapshot_hash,
-            config_hash: &resolved.report.config_hash,
-            registry: resolved.registry.commitment(),
-            targets: prepared.targets.len(),
-            files: files
-                .iter()
-                .map(|(path, value)| {
-                    (
-                        path,
-                        FileReference {
-                            bytes: value.len(),
-                            digest: blake3::hash(value).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
-        let completion = bounded(&Completion {
-            format: "zxs-backup-published-registry-installed",
-            decision_hash: publication.decision_hash.as_str(),
-            publication_hash: &publication.publication_hash,
-            registry: resolved.registry.commitment(),
-            manifest_hash: blake3::hash(&manifest).to_hex().as_str(),
-            targets: prepared.targets.len(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: "zxs-backup-published-registry",
+                source_fence_hash: prepared.source_fence_hash(),
+                decision_hash: publication.decision_hash.as_str(),
+                publication_hash: &publication.publication_hash,
+                authority_hash: &publication.authority_hash,
+                snapshot_hash: &publication.snapshot_hash,
+                config_hash: &resolved.report.config_hash,
+                registry: resolved.registry.commitment(),
+                targets: prepared.targets.len(),
+                files: files
+                    .iter()
+                    .map(|(path, value)| {
+                        (
+                            path,
+                            FileReference {
+                                bytes: value.len(),
+                                digest: blake3::hash(value).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            MAX_MANIFEST,
+        )?;
+        let completion = encode_metadata(
+            &Completion {
+                format: "zxs-backup-published-registry-installed",
+                decision_hash: publication.decision_hash.as_str(),
+                publication_hash: &publication.publication_hash,
+                registry: resolved.registry.commitment(),
+                manifest_hash: blake3::hash(&manifest).to_hex().as_str(),
+                targets: prepared.targets.len(),
+            },
+            MAX_MANIFEST,
+        )?;
         bytes = bytes
             .checked_add(manifest.len())
             .and_then(|bytes| bytes.checked_add(completion.len()))
@@ -193,7 +193,7 @@ impl Plan {
         // fault, not permission to repair by synthesizing a new graph.
         if preparation_path_exists(&target.root, &target.root.path().join(COMPLETE))? {
             self.verify(target, stop)?;
-            self.require_completion(&target.root)?;
+            self.completion().require(&target.root)?;
         }
         materials::require_capacity(&target.root, &self.files()?, stop)
     }
@@ -229,13 +229,12 @@ impl Plan {
         registry.require_config(&self.resolved.config)?;
         Ok(registry)
     }
-    fn require_completion(&self, root: &DiskRoot) -> Result<()> {
-        if root.read_bytes(&root.path().join(COMPLETE), MAX_MANIFEST)? != self.completion {
-            return Err(invalid(
-                "Backup registry has no exact all-target completion",
-            ));
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: MAX_MANIFEST,
         }
-        Ok(())
     }
     pub(super) fn state_at(
         &self,
@@ -391,12 +390,8 @@ pub(super) fn install(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &plan.completion,
-        )?;
-        plan.require_completion(&target.root)?;
+        plan.completion().install(&target.root)?;
+        plan.completion().require(&target.root)?;
     }
     first_publication::observe(prepared, decision, expected, stop)?;
     observe_with_plan(prepared, decision, &plan, stop)
@@ -410,7 +405,7 @@ pub(super) fn observe_with_plan(
 ) -> Result<BackupPublishedRegistryReport> {
     for target in &prepared.targets {
         plan.verify(target, stop)?;
-        plan.require_completion(&target.root)?;
+        plan.completion().require(&target.root)?;
     }
     let state = plan.state_at(&prepared.targets[0], stop)?;
     decision.verify_targets(prepared, stop)?;

@@ -2,6 +2,7 @@
 //! target independently derives the same core from its actual native archive.
 //! This is not generation.json, a first Publication or a writer installation.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -56,16 +57,6 @@ struct Plan {
     completion: Vec<u8>,
     report: BackupGenerationAuthorityReport,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_MANIFEST {
-        return Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "Backup authority manifest exceeds 1 MiB",
-        ));
-    }
-    Ok(bytes)
-}
 impl Plan {
     fn capture(
         prepared: &PreparedBackupRegistry,
@@ -102,27 +93,33 @@ impl Plan {
             .join("membership-generation")
             .join(&authority.hash()[..2])
             .join(format!("{}.json", authority.hash()));
-        let manifest = bounded(&Manifest {
-            format: "zxs-backup-native-authority-inputs",
-            decision_hash: decision_hash.as_str(),
-            source_fence_hash: prepared.source_fence_hash(),
-            authority_hash: authority.hash(),
-            native_control_root: &observed.native_control_root,
-            routing_snapshot_hash: &inputs.routing_snapshot_hash,
-            generation_inputs_hash: &inputs.inputs_hash,
-            control_inputs_hash: &observed.inputs_hash,
-            object_path: &object_path,
-            object_bytes: authority.bytes().len(),
-            object_digest: blake3::hash(authority.bytes()).to_hex().to_string(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: "zxs-backup-native-authority-inputs",
+                decision_hash: decision_hash.as_str(),
+                source_fence_hash: prepared.source_fence_hash(),
+                authority_hash: authority.hash(),
+                native_control_root: &observed.native_control_root,
+                routing_snapshot_hash: &inputs.routing_snapshot_hash,
+                generation_inputs_hash: &inputs.inputs_hash,
+                control_inputs_hash: &observed.inputs_hash,
+                object_path: &object_path,
+                object_bytes: authority.bytes().len(),
+                object_digest: blake3::hash(authority.bytes()).to_hex().to_string(),
+            },
+            MAX_MANIFEST,
+        )?;
         let manifest_hash = blake3::hash(&manifest).to_hex().to_string();
-        let completion = bounded(&Completion {
-            format: "zxs-backup-native-authority-prepared",
-            decision_hash: decision_hash.as_str(),
-            authority_hash: authority.hash(),
-            manifest_hash: &manifest_hash,
-            targets: prepared.targets.len(),
-        })?;
+        let completion = encode_metadata(
+            &Completion {
+                format: "zxs-backup-native-authority-prepared",
+                decision_hash: decision_hash.as_str(),
+                authority_hash: authority.hash(),
+                manifest_hash: &manifest_hash,
+                targets: prepared.targets.len(),
+            },
+            MAX_MANIFEST,
+        )?;
         let report = BackupGenerationAuthorityReport {
             operation_id: decision.operation(),
             decision_hash,
@@ -153,15 +150,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        let path = root.path().join(COMPLETE);
-        if preparation_path_exists(root, &path)?
-            && root.read_bytes(&path, self.completion.len())? != self.completion
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "Backup authority completion conflicts; old material is retained",
-            ));
-        }
+        self.completion().check_existing(root)?;
         // The material store's 16 MiB reserve also covers this <=1 MiB marker.
         Ok(())
     }
@@ -173,13 +162,12 @@ impl Plan {
         )?;
         self.authority.verify_saved(&bytes)
     }
-    fn require_completion(&self, root: &DiskRoot) -> Result<()> {
-        if root.read_bytes(&root.path().join(COMPLETE), self.completion.len())? != self.completion {
-            return Err(invalid(
-                "Backup authority lacks its exact original batch completion",
-            ));
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: self.completion.len(),
         }
-        Ok(())
     }
 }
 
@@ -217,12 +205,8 @@ pub(super) fn prepare(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &first.completion,
-        )?;
-        first.require_completion(&target.root)?;
+        first.completion().install(&target.root)?;
+        first.completion().require(&target.root)?;
     }
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
@@ -242,7 +226,7 @@ pub(super) fn observe(
         preparation_checkpoint(stop)?;
         let plan = Plan::capture(prepared, decision, &inputs, index, stop)?;
         plan.verify(&prepared.targets[index].root, stop)?;
-        plan.require_completion(&prepared.targets[index].root)?;
+        plan.completion().require(&prepared.targets[index].root)?;
         if first
             .as_ref()
             .is_some_and(|first| first.authority_hash != plan.report.authority_hash)
@@ -269,6 +253,6 @@ pub(super) fn read_candidate_input(
 ) -> Result<(PreparedBackupAuthority, AdmittedState)> {
     let (plan, source) = Plan::capture_input(prepared, decision, inputs, index, stop)?;
     plan.verify(&prepared.targets[index].root, stop)?;
-    plan.require_completion(&prepared.targets[index].root)?;
+    plan.completion().require(&prepared.targets[index].root)?;
     Ok((plan.authority, source))
 }

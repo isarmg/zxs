@@ -2,6 +2,7 @@
 //! target's own current/history copies are installed at its held root. Source
 //! roots and active SYSTEM/Current remain untouched until native activation.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -74,17 +75,17 @@ impl Plan {
         }
         let configuration = plan.registry.configuration();
         let publication = &configuration.publication.publication;
-        plan.completion = canonical_json(&Completion {
-            format: "zxs-backup-published-scoped-databases-installed",
-            decision_hash: publication.decision_hash.as_str(),
-            publication_hash: &publication.publication_hash,
-            registry: &configuration.registry,
-            entities: &plan.report.serving.targets,
-            targets: &plan.report.targets,
-        })?;
-        if plan.completion.len() > MAX_COMPLETION {
-            return Err(projection::budget());
-        }
+        plan.completion = encode_metadata(
+            &Completion {
+                format: "zxs-backup-published-scoped-databases-installed",
+                decision_hash: publication.decision_hash.as_str(),
+                publication_hash: &publication.publication_hash,
+                registry: &configuration.registry,
+                entities: &plan.report.serving.targets,
+                targets: &plan.report.targets,
+            },
+            MAX_COMPLETION,
+        )?;
         Ok(plan)
     }
     fn with_scopes<T>(
@@ -110,13 +111,12 @@ impl Plan {
         )?;
         Ok(result)
     }
-    fn require_completion(&self, root: &DiskRoot) -> Result<()> {
-        if root.read_bytes(&root.path().join(COMPLETE), MAX_COMPLETION)? != self.completion {
-            return Err(invalid(
-                "published scopes completion substitutes the original complete set",
-            ));
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: MAX_COMPLETION,
         }
-        Ok(())
     }
     fn observe(
         &self,
@@ -129,7 +129,7 @@ impl Plan {
         for index in 0..prepared.targets.len() {
             self.with_scopes(prepared, index, stop, |root, scopes| {
                 verify(root, scopes, stop)?;
-                self.require_completion(root)
+                self.completion().require(root)
             })?;
         }
         serving::observe(prepared, decision, expected, stop)?;
@@ -199,7 +199,7 @@ pub(super) fn install(
         plan.with_scopes(prepared, index, stop, |root, scopes| {
             if preparation_path_exists(root, &root.path().join(COMPLETE))? {
                 verify(root, scopes, stop)?;
-                plan.require_completion(root)?;
+                plan.completion().require(root)?;
             }
             require_capacity(root, scopes, stop)
         })?;
@@ -230,12 +230,8 @@ pub(super) fn install(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &plan.completion,
-        )?;
-        plan.require_completion(&target.root)?;
+        plan.completion().install(&target.root)?;
+        plan.completion().require(&target.root)?;
     }
     plan.observe(prepared, decision, expected, stop)
 }

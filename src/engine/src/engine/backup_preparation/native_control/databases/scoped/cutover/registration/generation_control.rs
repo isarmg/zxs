@@ -1,6 +1,7 @@
 //! Actual native predecessor archive on every independently held target. This
 //! closes the fenced-original evidence gap, not the new writer publication.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -64,16 +65,6 @@ struct Plan {
     completion: Vec<u8>,
     inputs_hash: String,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_MANIFEST {
-        return Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "native generation control manifest exceeds 4 MiB",
-        ));
-    }
-    Ok(bytes)
-}
 impl Plan {
     fn capture(
         prepared: &PreparedBackupRegistry,
@@ -97,33 +88,39 @@ impl Plan {
         )?;
         let archive = PreparedBackupControl::capture(frozen, prefix, stop)?;
         let decision_hash = decision.hash();
-        let manifest = bounded(&Manifest {
-            format: "zxs-backup-generation-native-control",
-            decision_hash: decision_hash.as_str(),
-            source_fence_hash: prepared.source_fence_hash(),
-            generation_inputs_hash: &generation.inputs_hash,
-            native_control_root: archive.root_hash(),
-            files: archive
-                .files()
-                .map(|(path, bytes)| {
-                    (
-                        PathBuf::from("archive").join(path),
-                        FileRef {
-                            bytes: bytes.len(),
-                            digest: blake3::hash(bytes).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: "zxs-backup-generation-native-control",
+                decision_hash: decision_hash.as_str(),
+                source_fence_hash: prepared.source_fence_hash(),
+                generation_inputs_hash: &generation.inputs_hash,
+                native_control_root: archive.root_hash(),
+                files: archive
+                    .files()
+                    .map(|(path, bytes)| {
+                        (
+                            PathBuf::from("archive").join(path),
+                            FileRef {
+                                bytes: bytes.len(),
+                                digest: blake3::hash(bytes).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            MAX_MANIFEST,
+        )?;
         let inputs_hash = blake3::hash(&manifest).to_hex().to_string();
-        let completion = bounded(&Complete {
-            format: "zxs-backup-generation-native-control-prepared",
-            decision_hash: decision_hash.as_str(),
-            inputs_hash: &inputs_hash,
-            native_control_root: archive.root_hash(),
-            targets: prepared.targets.len(),
-        })?;
+        let completion = encode_metadata(
+            &Complete {
+                format: "zxs-backup-generation-native-control-prepared",
+                decision_hash: decision_hash.as_str(),
+                inputs_hash: &inputs_hash,
+                native_control_root: archive.root_hash(),
+                targets: prepared.targets.len(),
+            },
+            MAX_MANIFEST,
+        )?;
         Ok(Self {
             archive,
             manifest,
@@ -142,15 +139,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        let path = root.path().join(COMPLETE);
-        if preparation_path_exists(root, &path)?
-            && root.read_bytes(&path, self.completion.len())? != self.completion
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "previous native control completion differs; no bytes replaced",
-            ));
-        }
+        self.completion().check_existing(root)?;
         // Existing material-store reserve is 16 MiB; completion <=4 MiB.
         Ok(())
     }
@@ -161,13 +150,12 @@ impl Plan {
             stop,
         )
     }
-    fn require_completion(&self, root: &DiskRoot) -> Result<()> {
-        if root.read_bytes(&root.path().join(COMPLETE), self.completion.len())? != self.completion {
-            return Err(invalid(
-                "native fenced archive lacks its exact all-target completion",
-            ));
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: self.completion.len(),
         }
-        Ok(())
     }
     fn report(
         &self,
@@ -227,12 +215,8 @@ pub(super) fn prepare(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &first.completion,
-        )?;
-        first.require_completion(&target.root)?;
+        first.completion().install(&target.root)?;
+        first.completion().require(&target.root)?;
     }
     decision.verify_targets(prepared, stop)?;
     choices.observe_decision(prepared, stop)?;
@@ -256,7 +240,7 @@ pub(super) fn observe(
         let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
         let plan = Plan::capture(prepared, decision, &frozen, &generation, index, stop)?;
         let inspection = plan.verify(&target.root, stop)?;
-        plan.require_completion(&target.root)?;
+        plan.completion().require(&target.root)?;
         if report
             .as_ref()
             .is_some_and(|first| first.inputs_hash != plan.inputs_hash)
@@ -290,7 +274,7 @@ pub(super) fn read_authority_input(
     let frozen = BackupFrozenControl::read_target(decision, &local, stop)?;
     let plan = Plan::capture(prepared, decision, &frozen, generation, index, stop)?;
     let inspection = plan.verify(&target.root, stop)?;
-    plan.require_completion(&target.root)?;
+    plan.completion().require(&target.root)?;
     let report = plan.report(decision, prepared.targets.len(), &inspection);
     Ok((plan.archive, report))
 }

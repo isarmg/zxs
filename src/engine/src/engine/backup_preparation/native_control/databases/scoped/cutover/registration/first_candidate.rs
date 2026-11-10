@@ -2,6 +2,7 @@
 //! source's genuine decision is required, but no ACCEPT/FINALIZE/Publication is
 //! manufactured from it. Targets do not become voters merely by storing bytes.
 use super::*;
+use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, Namespace, PreparedFiles,
 };
@@ -64,16 +65,6 @@ struct Plan {
     completion: Vec<u8>,
     report: BackupFirstCandidateReport,
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>> {
-    let bytes = canonical_json(value)?;
-    if bytes.len() > MAX_MANIFEST {
-        return Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "first Backup candidate manifest exceeds 4 MiB",
-        ));
-    }
-    Ok(bytes)
-}
 impl Plan {
     fn capture(
         prepared: &PreparedBackupRegistry,
@@ -86,39 +77,45 @@ impl Plan {
             generation_authority::read_candidate_input(prepared, decision, inputs, index, stop)?;
         let candidate = authority.first_candidate(source.state(), stop)?;
         let decision_hash = decision.hash();
-        let manifest = bounded(&Manifest {
-            format: "zxs-backup-native-first-candidate",
-            decision_hash: decision_hash.as_str(),
-            source_fence_hash: prepared.source_fence_hash(),
-            authority_hash: authority.hash(),
-            candidate_hash: candidate.hash(),
-            snapshot_hash: candidate.snapshot_hash(),
-            generation_inputs_hash: &inputs.inputs_hash,
-            first_sequence: candidate.sequence(),
-            original_metadata_members: candidate.members(),
-            available_version_obligations: candidate.available_versions(),
-            files: candidate
-                .files()
-                .map(|(path, bytes)| {
-                    (
-                        path,
-                        FileReference {
-                            bytes: bytes.len(),
-                            digest: blake3::hash(bytes).to_hex().to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        })?;
+        let manifest = encode_metadata(
+            &Manifest {
+                format: "zxs-backup-native-first-candidate",
+                decision_hash: decision_hash.as_str(),
+                source_fence_hash: prepared.source_fence_hash(),
+                authority_hash: authority.hash(),
+                candidate_hash: candidate.hash(),
+                snapshot_hash: candidate.snapshot_hash(),
+                generation_inputs_hash: &inputs.inputs_hash,
+                first_sequence: candidate.sequence(),
+                original_metadata_members: candidate.members(),
+                available_version_obligations: candidate.available_versions(),
+                files: candidate
+                    .files()
+                    .map(|(path, bytes)| {
+                        (
+                            path,
+                            FileReference {
+                                bytes: bytes.len(),
+                                digest: blake3::hash(bytes).to_hex().to_string(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            MAX_MANIFEST,
+        )?;
         let manifest_hash = blake3::hash(&manifest).to_hex().to_string();
-        let completion = bounded(&Completion {
-            format: "zxs-backup-native-first-candidate-prepared",
-            decision_hash: decision_hash.as_str(),
-            authority_hash: authority.hash(),
-            candidate_hash: candidate.hash(),
-            manifest_hash: &manifest_hash,
-            targets: prepared.targets.len(),
-        })?;
+        let completion = encode_metadata(
+            &Completion {
+                format: "zxs-backup-native-first-candidate-prepared",
+                decision_hash: decision_hash.as_str(),
+                authority_hash: authority.hash(),
+                candidate_hash: candidate.hash(),
+                manifest_hash: &manifest_hash,
+                targets: prepared.targets.len(),
+            },
+            MAX_MANIFEST,
+        )?;
         let report = BackupFirstCandidateReport {
             operation_id: decision.operation(),
             decision_hash,
@@ -150,15 +147,7 @@ impl Plan {
     }
     fn capacity(&self, root: &DiskRoot, stop: &AtomicBool) -> Result<()> {
         materials::require_capacity(root, &self.files()?, stop)?;
-        let path = root.path().join(COMPLETE);
-        if preparation_path_exists(root, &path)?
-            && root.read_bytes(&path, self.completion.len())? != self.completion
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCollision,
-                "another first candidate completion is retained; no overwrite or new operation",
-            ));
-        }
+        self.completion().check_existing(root)?;
         // Material-store 16 MiB reserve covers the bounded completion as well.
         Ok(())
     }
@@ -167,11 +156,12 @@ impl Plan {
         self.candidate
             .verify_at(&root.private_child(&root.path().join(DIRECTORY))?, stop)
     }
-    fn require_completion(&self, root: &DiskRoot) -> Result<()> {
-        if root.read_bytes(&root.path().join(COMPLETE), self.completion.len())? != self.completion {
-            return Err(invalid("first candidate has no exact original completion"));
+    fn completion(&self) -> materials::RootRecord<'_> {
+        materials::RootRecord {
+            name: COMPLETE,
+            bytes: &self.completion,
+            maximum: self.completion.len(),
         }
-        Ok(())
     }
 }
 
@@ -211,12 +201,8 @@ pub(super) fn prepare(
         preparation_checkpoint(stop)?;
         recovery::require_isolated(&prepared.targets)?;
         prepared.recheck_names()?;
-        install_preparation_bytes(
-            &target.root,
-            &target.root.path().join(COMPLETE),
-            &first.completion,
-        )?;
-        first.require_completion(&target.root)?;
+        first.completion().install(&target.root)?;
+        first.completion().require(&target.root)?;
     }
     decision.verify_targets(prepared, stop)?;
     recovery::require_isolated(&prepared.targets)?;
@@ -245,7 +231,7 @@ pub(super) fn read_verified(
         preparation_checkpoint(stop)?;
         let plan = Plan::capture(prepared, decision, &inputs, index, stop)?;
         plan.verify(&prepared.targets[index].root, stop)?;
-        plan.require_completion(&prepared.targets[index].root)?;
+        plan.completion().require(&prepared.targets[index].root)?;
         if manifest
             .as_ref()
             .is_some_and(|expected| *expected != plan.manifest)
