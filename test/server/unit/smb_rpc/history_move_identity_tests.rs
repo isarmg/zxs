@@ -15,26 +15,54 @@ fn lookup(roots: &Roots, repository: &Repository, path: &str) -> Option<Entry> {
         .unwrap()
 }
 
+fn reopen_backend(fixture: &Fixture) -> EngineBackend {
+    let backend = EngineBackend::new(Engine::open(&fixture.path().join("state")).unwrap());
+    backend
+        .set_management_auth(crate::lock(&fixture.auth).reader())
+        .unwrap();
+    backend
+}
+
 fn retain_file_intent(
     roots: &Roots,
     operation: OperationId,
 ) -> (storage_contract::State, storage_engine::FileHistoryMoveRecoveryInfo) {
-    // Seed an already retained file operation, not a guessed failpoint in the
-    // new object planner. The SMB bridge must continue its exact old decision.
+    let file = HistoryFileId::parse(&original_entry(roots).file_id).unwrap();
+    let cancellation = storage_contract::history_window::HistoryWindowCancellation::new();
+    // Use the existing real retained-material APIs. Fresh public move methods
+    // may converge on object.move without changing an already selected intent.
     roots.backend.inner.test_with_engine_locked(|engine| {
-        engine.inject_fault_once("move_after_original_intent");
-        let original = storage_engine::FileHistoryMovePathRequest {
+        let before = engine.state().clone();
+        let namespace = storage_engine::FileHistoryCopyRequest {
             source_repository_id: roots.source.repository_id.clone(),
             source_path: "source.txt".into(),
+            expected_source_head: before.branches[&roots.source.main_branch_id]
+                .head_commit_id
+                .clone(),
             target_repository_id: roots.target.repository_id.clone(),
             target_name: "arrived.txt".into(),
+            expected_target_head: before.branches[&roots.target.main_branch_id]
+                .head_commit_id
+                .clone(),
         };
-        assert!(engine.move_current_file(&original, "alice", operation).is_err());
+        let capture = engine
+            .capture_file_history_move(
+                storage_engine::FileHistoryMoveRequest {
+                    namespace: &namespace,
+                    source_file_id: &file,
+                },
+                &cancellation,
+            )
+            .unwrap();
+        let projection = engine
+            .project_file_history_move(capture, "alice", operation, &cancellation)
+            .unwrap();
+        let intent = engine
+            .save_file_history_move_recovery(&projection, &cancellation)
+            .unwrap();
+        assert_eq!(engine.state(), &before);
         assert!(!engine.state().operations.contains_key(&operation));
-        (
-            engine.state().clone(),
-            engine.inspect_file_history_move_recovery().unwrap().unwrap(),
-        )
+        (before, intent)
     })
 }
 
@@ -350,14 +378,7 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
     } = roots;
     drop(shared);
     drop(backend);
-    let reopen = || {
-        let backend = EngineBackend::new(Engine::open(&_fixture.path().join("state")).unwrap());
-        backend
-            .set_management_auth(crate::lock(&_fixture.auth).reader())
-            .unwrap();
-        backend
-    };
-    let backend = reopen();
+    let backend = reopen_backend(&_fixture);
     backend.test_with_engine_locked(|engine| {
         assert!(!engine.state().operations.contains_key(&operation));
         assert_eq!(
@@ -389,7 +410,7 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
         );
     });
     drop(backend);
-    let backend = reopen();
+    let backend = reopen_backend(&_fixture);
     let published = backend.test_with_engine_locked(|engine| engine.state().clone());
     assert_eq!(backend.move_current_file(&actor, replay).unwrap(), receipt);
     backend.test_with_engine_locked(|engine| {
@@ -406,3 +427,6 @@ fn cold_reopened_file_intent_finishes_through_smb_and_replays_its_original_recei
         assert!(engine.inspect_file_history_move_recovery().unwrap().is_none());
     });
 }
+
+#[path = "history_move_completion_tests.rs"]
+mod completion_tests;

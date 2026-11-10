@@ -9,6 +9,7 @@
 | 请求与回执 | `test/contract/unit/lib/object_move.rs` | LookupPath 保留原输入，目标缺失必须显式 null；原 request、principal、digest 与事实一致；空盘完成后不把 None 改为今天的新仓库；旧 kind 不能伪装新 object.move。 |
 | SMB 接纳与原操作续作 | `test/server/unit/smb_rpc/history_move_identity_tests.rs` | 真实 EngineBackend 与原临时盘夹具；同路径新文件不被旧重试搬走；源 entry/file 身份不被忽略；原 intent 使用同一 operation；NFD 源查询的原输入可在源消失后重放。 |
 | 跨盘完整历史与一次发布 | `test/engine/integration/file_history_copy/move_execution.rs` | 保留历史正文、标签、分支和备注；源删除属于同一操作，不拆成 copy/delete；FILE、磁盘、SYSTEM 观察一致。复用现有测试，不另做模拟存储。 |
+| 新对象共用完成屏障 | `test/server/unit/smb_rpc/history_move_completion_tests.rs` | 一条流程参数化首 PREPARE 前与 SYSTEM 后两个边界，冷开完成原候选，三范围可读、原绑定字节退休、单事件及幂等回执。不按对象种类复制矩阵。 |
 | 必要中断与冷恢复 | 同一 `move_execution.rs`、`move_recovery.rs` | 原 intent 后重试；决定后的已有注入边界重开同一操作；损坏正式正文拒绝激活，原证据和源内容保留。不得用新请求替代原操作。 |
 | SMB 协议与空盘 | 既有 `empty_target_move_tests.rs`、`history_move_reply_tests.rs` | 实际 framed RPC、空盘首移、丢回执续作、覆盖模式不得改变；只有完全发布的原操作返回成功。脚本化回执测试仅证明适配器判断，不证明真实发布。 |
 
