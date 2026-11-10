@@ -2,8 +2,7 @@
 name: CI
 
 on:
-  # Run the short CI on every push, and retain manual dispatch.
-  push:
+  # Automatic runs paused by user request; retain manual dispatch only.
   workflow_dispatch:
 
 permissions:

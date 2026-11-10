@@ -54,8 +54,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
         POLICY.check_workflows(ROOT)
         POLICY.check_workflows(self.root)
 
-    def test_push_ci_keeps_dispatch_and_other_automatic_entrypoints_paused(self):
-        for name, triggers in (('ci.yml', ['push', 'workflow_dispatch']),
+    def test_manual_ci_keeps_all_automatic_entrypoints_paused(self):
+        for name, triggers in (('ci.yml', ['workflow_dispatch']),
                                ('release.yml', ['workflow_dispatch']),
                                ('smb-sdk.yml', ['workflow_call'])):
             source = (ROOT / '.github/workflows' / name).read_text()
@@ -65,11 +65,11 @@ class DevelopmentCiPolicy(unittest.TestCase):
             crons = re.findall(r"^    - cron: '([^']+)'$", events, flags=re.MULTILINE)
             self.assertEqual(crons, [])
         receipt = POLICY.receipt()
-        self.assertTrue(receipt['automatic_triggers'])
+        self.assertFalse(receipt['automatic_triggers'])
         self.assertNotIn('scheduled_workflow', receipt)
         self.assertNotIn('schedule', receipt)
 
-    def test_unapproved_or_duplicate_automatic_triggers_are_rejected(self):
+    def test_all_automatic_triggers_are_rejected(self):
         for name in ('ci.yml', 'release.yml', 'smb-sdk.yml'):
             for event in ('push', 'pull_request', 'schedule', 'workflow_run',
                           'repository_dispatch'):

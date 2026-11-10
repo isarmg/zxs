@@ -1,8 +1,8 @@
 # 持续集成
 
-当前按用户最新要求每次 push 自动运行 [开发期短 CI](ci/development-short-ci.md)，保留 `workflow_dispatch` 人工入口。仓内没有 GitHub `schedule` 或 PR 入口，标签发布与其他自动入口仍暂停。本轮不在本地运行程序、编译或测试。短 CI 路径仍为 5 分钟静态预检加 10 分钟七套并行矩阵。长套件、真实 Chrome、SDK、生产 WASM、一期 core 和 Release 长验证固定暂停，直到所有任务完成后另行明确恢复。下文完整入口与产物说明是保留的检查配方，不表示暂停项当前执行或通过。
+当前按 2026-11-10 用户最新要求停止检查并继续编写，[开发期短 CI](ci/development-short-ci.md) 已移除 push，仅保留 `workflow_dispatch` 供以后明确恢复；本轮不触发或继续轮询 CI。仓内没有 GitHub `schedule` 或 PR 入口，标签发布与其他自动入口仍暂停。本轮不在本地运行程序、格式器、编译或测试。短 CI 路径仍为 5 分钟静态预检加 10 分钟七套并行矩阵。长套件、真实 Chrome、SDK、生产 WASM、一期 core 和 Release 长验证固定暂停，直到所有任务完成后另行明确恢复。下文完整入口与产物说明是保留的检查配方，不表示暂停项当前执行或通过。
 
-[GitHub Actions 工作流](../.github/workflows/ci.yml) 的 push 与 `workflow_dispatch` 入口均实际执行完整 static 和固定七套短矩阵，不因没有源码变化而空跑。并发组按 workflow／SHA／run ID 区分，后续轮次不替换排队或运行中的检查。提交后核对自动 push run 的实际 head SHA 与结论，不额外重复触发同一轮；按授权人工发起时选择当前 `main`，不能用旧 run 的 rerun 冒充新检查。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
+[GitHub Actions 工作流](../.github/workflows/ci.yml) 保留的 `workflow_dispatch` 配方仍为完整 static 和固定七套短矩阵，不因没有源码变化而空跑；保留入口不表示本轮已获准运行。并发组按 workflow／SHA／run ID 区分，后续轮次不替换排队或运行中的检查。当前提交后不等待 CI，不发起 dispatch 或 rerun；以后按明确授权人工发起时选择届时当前 `main`，核对实际 head SHA 与结论，不能用旧 run 冒充新检查。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
 
 所有自有 Rust 组件和基础实现由一个根 workspace 管理，命令按包和编译目标选择。统一入口为 [check.sh](../.github/scripts/check.sh)：
 
@@ -29,7 +29,7 @@ CI 的 `browser-smoke` 步骤显式设置 `ZXS_SMOKE_FOREIGN_REVIEW=1`：原完�
 
 该候选只表示此 job 的打包、浏览器及组装检查通过，不代表同次 CI 的其他并行门禁已通过。它不会创建标签、GitHub Release 或公开发布；也不等同于 Release 工作流的 `workflow_dispatch` 演练，后者还通过版本工具验证并等待全部发布验证分片和固定 Samba SDK 检查，最终提供 `release-complete`。正式发布前仍须检查完整工作流结果及首发验收清单。
 
-只需 Python 3.11+、Node.js 和 Bash 即可在仓库根先运行静态门禁，无需 Rust、registry、浏览器或联网安装依赖：
+以下命令是保留的恢复入口，本轮不执行。获准恢复后，只需 Python 3.11+、Node.js 和 Bash 即可在仓库根运行静态门禁，无需 Rust、registry、浏览器或联网安装依赖：
 
 ```sh
 bash .github/scripts/check.sh static
