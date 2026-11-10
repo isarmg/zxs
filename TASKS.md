@@ -88,6 +88,8 @@
 - 新对象 completion 只加一条两边界测试：move_after_completion_binding 与 move_after_system_database。故障后原 State 不前移且写入受围栏阻止；冷重开按保留绑定完成同一候选，核原 object.move、三范围读侧、单事件和绑定原字节退休，再重放不变。旧 file intent 保留真实原材料与 file.history.move，不借新对象 hook 重造；不按对象类别复制矩阵。
 - 泛化 SMB 首次入口改为 MoveCurrentObject 后，同一测试夹具转发并记录新入口；原接纳、路径占用、空盘丢回执及原模式重放用例同步 smb-object-move、显式空目标和精确捕获事实。共用完成屏障直接走泛化 backend；旧 file intent 专测真实历史材料，不要求新请求保留旧 kind。
 - 协议回执增加目录 None 身份必须精确匹配，以及同一 entry 的大小写改名不产生被覆盖文件事实两项；原请求与摘要不改，首次 object spool 不接受旧 file 回执。不另复制发布状态或故障矩阵。
+- 复用真实 framed RPC 增加一次同盘目录 rename：已保存子文件、捕获目录 None 身份、丢回执后重连，源名已消失仍使用原 operation 返回同一结果且 State 不变。原“非空目标拒绝”用例改指真实已占用目标并期待 NameCollision；不再把支持的新跨盘入口当 UnsupportedOperation。
+- 目录及同一 entry 的纯成功回执按真实无新增正文语义使用 Published／NotApplicable／Healthy，不再用 TargetMet 掩盖泛化成功门的契约差异；旧 file 回执完整状态矩阵不变。
 - 本片未执行、编译、格式化或运行 CI，不能称通过或可合入独立产品；待共同业务依赖整合后再按用户许可执行。
 
 ### 首版正常路径：空目录首装、Web 文件导航与 SMB 创建

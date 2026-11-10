@@ -135,7 +135,8 @@ fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
     let mut command = object_request(OperationId::generate().unwrap());
     command.expected_source_file_id = None;
     let expected = MoveReceipt::object(&command).unwrap();
-    let result = object_result(&expected);
+    let mut result = object_result(&expected);
+    result.protection_at_publish = ProtectionAtPublish::NotApplicable;
     let reply = expected.published_object_reply(result, "alice").unwrap();
     assert_eq!(reply["result"]["movement"]["source_file_id"], Value::Null);
 
@@ -173,6 +174,7 @@ fn same_entry_reply_preserves_the_request_without_claiming_a_displaced_file() {
     assert_eq!(expected.movement, command.movement);
     assert_eq!(expected.displaced_target_file_id, None);
     let mut result = object_result(&expected);
+    result.protection_at_publish = ProtectionAtPublish::NotApplicable;
     result.result["movement"]["target_repository_id"] = id("repo", 1).into();
     result.result["movement"]["target_entry_id"] = id("entry", 1).into();
     let reply = expected.published_object_reply(result, "alice").unwrap();

@@ -11,7 +11,7 @@
 | 跨盘完整历史与一次发布 | `test/engine/integration/file_history_copy/move_execution.rs` | 保留历史正文、标签、分支和备注；源删除属于同一操作，不拆成 copy/delete；FILE、磁盘、SYSTEM 观察一致。复用现有测试，不另做模拟存储。 |
 | 新对象共用完成屏障 | `test/server/unit/smb_rpc/history_move_completion_tests.rs` | 一条流程参数化首 PREPARE 前与 SYSTEM 后两个边界，冷开完成原候选，三范围可读、原绑定字节退休、单事件及幂等回执。不按对象种类复制矩阵。 |
 | 必要中断与冷恢复 | 同一 `move_execution.rs`、`move_recovery.rs` | 原 intent 后重试；决定后的已有注入边界重开同一操作；损坏正式正文拒绝激活，原证据和源内容保留。不得用新请求替代原操作。 |
-| SMB 协议与空盘 | 既有 `empty_target_move_tests.rs`、`history_move_reply_tests.rs` | 实际 framed RPC、空盘首移、丢回执续作、覆盖模式不得改变；只有完全发布的原操作返回成功。脚本化回执测试仅证明适配器判断，不证明真实发布。 |
+| SMB 协议与空盘 | `object_move_tests.rs`、既有 `empty_target_move_tests.rs`、`history_move_reply_tests.rs` | 实际 framed RPC 同盘目录改名、空盘首移、丢回执重连及原操作续作，覆盖模式不得改变；只有完全发布的原操作返回成功。脚本化回执测试仅证明适配器判断，不证明真实发布。 |
 
 测试针对业务结果和不可丢失的身份／恢复约束，不追求逐行覆盖。优先在现有夹具上增加明确反例，不新增通用测试框架、生产 hook 或新的恢复协议。
 
