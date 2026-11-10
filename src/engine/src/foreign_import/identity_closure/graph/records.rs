@@ -95,7 +95,7 @@ impl Remap<'_> {
         self.entries(entries)?;
         self.pairs(file_branches, Domain::File, Domain::Branch)?;
         self.contexts(file_contexts)?;
-        self.pairs(inherited_files, Domain::File, Domain::Version)?;
+        self.pairs(inherited_files, Domain::File, Domain::DirectoryBranch)?;
         self.references(directory_refs)?;
         Ok(())
     }
@@ -120,7 +120,7 @@ impl Remap<'_> {
         self.entries(entries)?;
         self.pairs(file_branches, Domain::File, Domain::Branch)?;
         self.contexts(file_contexts)?;
-        self.pairs(inherited_files, Domain::File, Domain::Version)?;
+        self.pairs(inherited_files, Domain::File, Domain::DirectoryBranch)?;
         self.references(directory_refs)?;
         Ok(())
     }

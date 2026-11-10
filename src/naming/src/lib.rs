@@ -312,6 +312,23 @@ impl<'de> data_serialization::Deserialize<'de> for PortablePath {
     }
 }
 
+impl data_serialization::Serialize for LookupPath {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> data_serialization::Deserialize<'de> for LookupPath {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let raw = <String as data_serialization::Deserialize>::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(data_serialization::de::Error::custom)
+    }
+}
+
 impl PartialEq<str> for PortablePath {
     fn eq(&self, other: &str) -> bool {
         self.as_str() == other
