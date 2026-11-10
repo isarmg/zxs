@@ -278,7 +278,12 @@ impl<'a, 'm> Install<'a, 'm> {
         let root = &self.reader.held_target().root;
         let selected = self.read_marker(system, &operation(self.management).join(SELECTED))?;
         let complete = self.read_marker(system, &operation(self.management).join(COMPLETE))?;
-        let exists = root.optional_metadata(&self.generation_path)?.is_some();
+        let generations = self
+            .generation_path
+            .parent()
+            .expect("invariant: generation directory has a parent");
+        let exists = root.optional_metadata(generations)?.is_some()
+            && root.optional_metadata(&self.generation_path)?.is_some();
         if (!selected && (complete || exists)) || (complete && !exists) {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -317,11 +322,7 @@ impl<'a, 'm> Install<'a, 'm> {
         }
         self.preserve_marker(system, &operation(self.management).join(SELECTED))?;
         if !exists {
-            root.private_dir(
-                self.generation_path
-                    .parent()
-                    .expect("invariant: generation directory has a parent"),
-            )?;
+            root.private_dir(generations)?;
             root.create_private_directory_synced(&self.generation_path)?;
         }
         let generation = root.private_child(&self.generation_path)?;

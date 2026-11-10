@@ -2631,6 +2631,7 @@ fn chain_generation_path(
 fn chain_generation_installs_actual_log_and_ordinary_objects_but_no_active_writer() {
     let (mut fixture, operation, proposal, before) = decided_chain_generation_fixture();
     let root = fixture.config.disks[0].root.clone();
+    assert!(!root.join("metadata/membership-generations").exists());
     let source_log = chain_first_target(&fixture, &before).join("first-publication/journal.bin");
     let bytes = fs::read(&source_log).unwrap();
     let seal = fs::read(root.join("disk.json")).unwrap();
@@ -2681,6 +2682,53 @@ fn chain_generation_installs_actual_log_and_ordinary_objects_but_no_active_write
     assert_eq!(locator_bytes(&fixture.system()), locator);
     assert!(fixture.terminal.operation(operation).is_none());
     assert!(fixture.terminal.writer_locks().is_err());
+}
+
+#[test]
+fn first_chain_generation_rejects_non_directory_or_linked_parent_without_selection() {
+    for linked in [false, true] {
+        let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
+        let root = fixture.config.disks[0].root.clone();
+        let parent = root.join("metadata/membership-generations");
+        let outside = fixture.temp.path().join("outside-generations");
+        if linked {
+            crate::disk::private_dir(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, &parent).unwrap();
+        } else {
+            fs::write(&parent, b"unrelated parent bytes").unwrap();
+        }
+        let seal = fs::read(root.join("disk.json")).unwrap();
+        let locator = locator_bytes(&fixture.system());
+        let directory = retained_chain_directory(&fixture);
+        assert!(
+            fixture
+                .terminal
+                .prepare_chain_generation_log(
+                    "admin",
+                    operation,
+                    &proposal.preparation().proposal_digest,
+                    directory,
+                )
+                .is_err()
+        );
+        assert!(
+            !fixture
+                .terminal
+                .store
+                .operation()
+                .path()
+                .join("chain-generation-log-selected.json")
+                .exists()
+        );
+        assert_eq!(fs::read(root.join("disk.json")).unwrap(), seal);
+        assert_eq!(locator_bytes(&fixture.system()), locator);
+        if linked {
+            assert_eq!(fs::read_link(&parent).unwrap(), outside);
+            assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        } else {
+            assert_eq!(fs::read(&parent).unwrap(), b"unrelated parent bytes");
+        }
+    }
 }
 
 #[test]
@@ -2786,7 +2834,7 @@ fn chain_generation_target_complete_source_incomplete_cold_retry_preserves_nativ
 
 #[test]
 fn chain_generation_completed_missing_log_object_or_marker_is_not_rebuilt() {
-    for missing in ["log", "candidate", "completion"] {
+    for missing in ["log", "candidate", "completion", "parent"] {
         let (mut fixture, operation, proposal, _) = decided_chain_generation_fixture();
         let directory = retained_chain_directory(&fixture);
         let status = fixture
@@ -2802,6 +2850,7 @@ fn chain_generation_completed_missing_log_object_or_marker_is_not_rebuilt() {
         let path = match missing {
             "log" => generation.join("journal.bin"),
             "completion" => generation.join("chain-log-complete.json"),
+            "parent" => generation.parent().unwrap().to_path_buf(),
             "candidate" => crate::journal::object_path(
                 &fixture.config.disks[0],
                 "candidate",
@@ -2809,7 +2858,11 @@ fn chain_generation_completed_missing_log_object_or_marker_is_not_rebuilt() {
             ),
             _ => unreachable!(),
         };
-        fs::remove_file(&path).unwrap();
+        if missing == "parent" {
+            fs::rename(&path, fixture.temp.path().join("parked-generations")).unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+        }
         let locator = locator_bytes(&fixture.system());
         let directory = retained_chain_directory(&fixture);
         assert!(
