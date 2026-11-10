@@ -105,14 +105,11 @@ async fn mutate(
     + Send
     + 'static,
 ) -> Result<Response, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let job =
+        crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?;
     // A disconnected HTTP waiter does not cancel an admitted destructive job.
     // Retrying always uses its original operation ID, never a fresh identity.
-    let bytes = crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    let bytes = job
         .run(move |backend| {
             crate::history_window_encode::encode_bounded(
                 &work(backend)?,

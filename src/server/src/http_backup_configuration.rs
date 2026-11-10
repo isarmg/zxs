@@ -122,12 +122,7 @@ pub(crate) async fn read(
         repository_id,
         path: query.remove("path").unwrap_or_default(),
     };
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .backup_configuration(&identity, request)
@@ -148,12 +143,7 @@ pub(crate) async fn configure(
         "repository_id",
         repository,
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .configure_backups(&identity, parse(body)?)
@@ -178,12 +168,7 @@ pub(crate) async fn read_recursive(
     if !query.is_empty() {
         return Err(ApiError::invalid("unknown recursive backup query field"));
     }
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .recursive_backup_configuration(&identity, request)
@@ -207,12 +192,7 @@ pub(crate) async fn configure_recursive(
         "repository_id",
         repository,
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .configure_recursive_backups(&identity, parse_recursive(body)?)
@@ -234,12 +214,7 @@ pub(crate) async fn configure_recursive_tree(
         "repository_id",
         repository,
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .configure_recursive_backup_tree(&identity, parse_recursive(body)?)

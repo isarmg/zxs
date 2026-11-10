@@ -12,12 +12,7 @@ pub(crate) async fn read(
     Extension(identity): Extension<Identity>,
     ApiPath((repository, branch)): ApiPath<(String, String)>,
 ) -> Result<Json<DirectoryStagingStatus>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| backend.directory_staging(&identity, &repository, &branch))
         .await
         .map(Json)
@@ -33,12 +28,7 @@ pub(crate) async fn commit(
         .map_err(ApiError::invalid_source)?;
     storage_contract::validate_id(&body.expected_tree_id, "dtree")
         .map_err(ApiError::invalid_source)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .commit_directory_changes(&identity, &repository, &branch, body)

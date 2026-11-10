@@ -52,16 +52,13 @@ async fn read(
     query: BTreeMap<String, String>,
     target: impl FnOnce() -> Result<HistoryCollection, ApiError> + Send + 'static,
 ) -> Result<Response, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let job =
+        crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?;
     // The awaiting future owns this guard before the blocking job is enqueued,
     // so cancellation is visible even if the worker has not started capture.
     let cancellation = HistoryWindowCancellation::new();
     let _cancel_on_drop = CancelHistoryWindowOnDrop(cancellation.clone());
-    let bytes = crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    let bytes = job
         .run_with_permit(move |backend, permit| {
             let request = crate::history_window_query::parse(&file, target()?, query)?;
             let page = backend.history_window(&identity, request, cancellation)?;

@@ -13,12 +13,7 @@ pub(crate) async fn read(
     ApiPath(slot): ApiPath<String>,
     ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<ListingResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .listing(&identity, ReadListing::parse(slot, query)?)

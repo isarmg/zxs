@@ -8,6 +8,20 @@ pub(crate) struct HttpBackendJob<P> {
     permit: P,
 }
 
+impl HttpBackendJob<tokio::sync::OwnedSemaphorePermit> {
+    /// Admit at the caller's existing boundary without enqueueing work yet.
+    pub(crate) fn admit(
+        backend: Arc<dyn Backend>,
+        auth: Arc<Mutex<AuthStore>>,
+        slots: Arc<tokio::sync::Semaphore>,
+    ) -> Result<Self, ApiError> {
+        let permit = slots.try_acquire_owned().map_err(|source| {
+            ApiError::limit("HTTP backend capacity reached").with_source(source)
+        })?;
+        Ok(Self::new(backend, auth, permit))
+    }
+}
+
 impl<P: Send + 'static> HttpBackendJob<P> {
     pub(crate) fn new(backend: Arc<dyn Backend>, auth: Arc<Mutex<AuthStore>>, permit: P) -> Self {
         Self {

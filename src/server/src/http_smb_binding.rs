@@ -65,12 +65,7 @@ pub(crate) async fn smb_binding(
     ApiPath(repository): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<SmbBindingResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .smb_binding_status(&identity, &repository)
@@ -90,12 +85,7 @@ pub(crate) async fn update_smb_binding(
         "repository_id",
         repository.clone(),
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let body = UpdateBody::parse(
                 body.as_object()

@@ -24,12 +24,7 @@ pub(crate) async fn read(
     ApiPath(slot): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<DiskDetailsRecord>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| backend.disk_details(&identity, &slot))
         .await
         .map(Json)
@@ -42,12 +37,7 @@ pub(crate) async fn update_note(
     request: Request,
 ) -> Result<Json<DiskNoteResponse>, ApiError> {
     let request = parse(crate::json_body(request).await?)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| backend.update_disk_note(&identity, &slot, request))
         .await
         .map(Json)

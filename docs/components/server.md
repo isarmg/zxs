@@ -351,7 +351,7 @@ HTTP spool 必须由服务身份拥有且权限为 `0700`；现有目录不会�
 
 `/readyz` 和 `/api/capabilities` 使用独立的管理池，饱和时可返回 429；`/healthz` 不使用阻塞池准入。上传和正文读取保持独立准入，避免嵌套获取同一许可。认证、会话任务和遥测不受普通后端池控制；它不是进程级后端预算、跨 HTTP/SMB 的磁盘预算或 SMB 文件描述符路径限制。各路由维持原有 body／字段解析、获取许可和当前身份复核的先后顺序；该边界不限制所有连接或请求体，也不增加缓存。
 
-已认证后端工作由 server 私有 `HttpBackendJob` 统一持有 Backend、AuthStore 强所有者及对应许可。消耗型执行入口在返回等待 future 前提交 blocking job；HTTP 取消、排队或超时不会提前释放任务所有权。原始 Semaphore、传输 Permit 不依赖认证；管理请求也不额外取得或保留内部 Engine。下载完成初始授权／打开后只把 read permit 转入 Content lease 或 manifest body，AuthStore 留在已完成的 worker 中释放，不随不可变响应继续保活。已验证内容块的后续 I/O、静态响应、公开 readiness/capabilities 和 spool 盘点不增加认证 owner。迁移范围与待执行验证见[HTTP 任务所有权验收](../validation/http-job-owner.md)。
+已认证后端工作由 server 私有 `HttpBackendJob` 统一持有 Backend、AuthStore 强所有者及对应许可。普通 backend_slots 在原请求准入位置调用 `admit`，统一即时容量拒绝并直接把许可交给 job；准入本身不入队。管理、上传和多许可路径仍由各自边界提供原有许可。消耗型执行入口在返回等待 future 前提交 blocking job；HTTP 取消、排队或超时不会提前释放任务所有权。原始 Semaphore、传输 Permit 不依赖认证；管理请求也不额外取得或保留内部 Engine。下载完成初始授权／打开后只把 read permit 转入 Content lease 或 manifest body，AuthStore 留在已完成的 worker 中释放，不随不可变响应继续保活。已验证内容块的后续 I/O、静态响应、公开 readiness/capabilities 和 spool 盘点不增加认证 owner。迁移范围与待执行验证见[HTTP 任务所有权验收](../validation/http-job-owner.md)。
 
 ### 已提交鉴权快照
 

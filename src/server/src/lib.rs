@@ -3043,12 +3043,7 @@ async fn repositories(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_read::RepositoryListResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .repositories_snapshot(&identity)
@@ -3067,12 +3062,7 @@ async fn disks(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_diagnostics::DisksResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .disk_status(&identity)
@@ -3086,12 +3076,7 @@ async fn events(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_events::EventPageResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let after = storage_contract::parse_u64_decimal(
                 query.get("after").map(String::as_str).unwrap_or("0"),
@@ -3109,12 +3094,7 @@ async fn check(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_diagnostics::CheckResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .integrity_check(&identity)
@@ -3129,12 +3109,7 @@ async fn repository(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_read::RepositoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .repository_snapshot(&identity, &id)
@@ -3150,12 +3125,7 @@ async fn default_branch(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_default_directory::DefaultDirectoryBranchResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .default_directory_branch(&identity, &id)
@@ -3171,12 +3141,7 @@ async fn branch_info(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_branch::BranchResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .branch_snapshot(&identity, &id)
@@ -3191,12 +3156,7 @@ async fn branches(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_branch::BranchListResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend.branches_snapshot(&identity, &id).map(|branches| {
                 backend_branch::BranchListResponse {
@@ -3216,24 +3176,20 @@ async fn tree(
     ApiPath(branch): ApiPath<String>,
     ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<TreeSnapshot>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let job =
+        crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?;
     let commit = query.remove("commit_id");
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend.tree_snapshot(
-                &identity,
-                ReadTree {
-                    branch: &branch,
-                    commit: commit.as_deref(),
-                },
-            )
-        })
-        .await
-        .map(Json)
+    job.run(move |backend| {
+        backend.tree_snapshot(
+            &identity,
+            ReadTree {
+                branch: &branch,
+                commit: commit.as_deref(),
+            },
+        )
+    })
+    .await
+    .map(Json)
 }
 async fn version(
     State(state): State<AppState>,
@@ -3241,12 +3197,7 @@ async fn version(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_read::VersionResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .version_snapshot(&identity, &id)
@@ -3261,12 +3212,7 @@ async fn placement(
     ApiPath(version): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_storage_metadata::PlacementResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .placement_snapshot(&identity, &version)
@@ -3281,12 +3227,7 @@ async fn commit_info(
     ApiPath(commit): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<commit_wire::CommitResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .commit_snapshot(&identity, &commit)
@@ -3301,12 +3242,7 @@ async fn graph(
     ApiPath(history): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_graph::HistoryGraphResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .history_graph(&identity, &history)
@@ -3320,12 +3256,7 @@ async fn topology(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_storage_metadata::TopologyResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .topology_snapshot(&identity)

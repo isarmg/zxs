@@ -40,3 +40,14 @@ R24 原 12 处手动 auth owner 已删除，统一由 job 保证。普通消费�
 请求字节、字段、鉴权、当前身份/Engine 线性化、持久化输入、真实 I/O、JoinError 仍在原边界处理；不移动各 handler 的 acquire/parse/current 先后。类型与所有权保证 worker 的资源期限，不增加业务检查。
 
 已执行限于定向 rustfmt、diff whitespace、架构检查及 Python 架构 fixture；本轮未执行 Cargo（包括 metadata）或构建 target；此前不同基线的 metadata 通过不冒充本轮结果。未执行任何 Rust 编译、Cargo test、负载、socket、SDK、浏览器或 CI。最终集成须跑 server/core/no-core、HTTP、全部新增取消与响应释放、既有撤权矩阵及管理恢复/关闭回归；按最终提交绑定结果。
+
+
+## 2026-11-10 普通 backend 准入统一
+
+本次候选基线 `ee2bee81a7e734ae0288e2f17c35cfa384b8da6a`，上文 R25 的数量与验证记录属于当时批次，不替代当前状态。
+
+- 在已有 `HttpBackendJob<OwnedSemaphorePermit>` 增加 `admit`，统一 43 个 handler 文件共 78 处普通 backend_slots 的即时准入及容量错误映射。许可、Backend 和 AuthStore 立即归同一 owner，`run`／`run_with_permit` 才提交任务；准入本身不需要 Tokio runtime，也不提前提交工作。
+- 原 acquire 所在位置保持，包括取消 guard 建立之前、查询字段取出之前及原解析／鉴权边界。历史响应仍使用 `run_with_permit` 把许可转入实际响应，不缩短存活期；超时仍包住原已提交任务。管理许可、上传授权／发布、双许可 upload_status 和三类流式下载保留原构造方式。
+- 消费原 backend_slots Arc，删除每处为取得 OwnedSemaphorePermit 所做的额外 Arc clone；不增加池、锁、队列、任务、trait、堆分配或业务检查。原泛型执行实现逐字节保持；43 个 handler 的修改逐处机械回代后与基线全部非空白 token 一致。44 个生产文件共 +112/-480，净删 368 行。
+- 根 `backend_admission.rs` 新测试接线：普通耗尽与关闭两种失败均保留 429、ResourceLimitExceeded、准确容量诊断及 Capacity 来源，失败不保留 auth；无 runtime 的成功准入不入队，丢弃未启动 job 释放 permit 与 auth。原正常／错误／panic 释放和排队后取消两个直接生命周期测试改走 `admit`，既有路由取消、当前身份、响应许可和管理保护测试保留。
+- 已执行：固定 Rust 1.99 的 rustfmt --check（45 个修改 Rust 文件）、78 处回代对照、原执行实现及四个特殊模块字节对照。未执行：本地编译、Cargo、Rust 测试、HTTP 运行或 CI；全部运行结论须绑定最终提交，不以静态对照代替运行结果。

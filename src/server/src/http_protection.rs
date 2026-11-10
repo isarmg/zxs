@@ -134,12 +134,7 @@ pub(crate) async fn policy(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<crate::backend_protection::PolicyResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .protection_policy(&identity, &id)
@@ -154,12 +149,7 @@ pub(crate) async fn placement_rule(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<crate::backend_protection::PlacementRuleResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .placement_rule(&identity, &id)
@@ -175,12 +165,7 @@ pub(crate) async fn update_policy(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     let body = bound_body(request, "policy_id", id).await?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let command = parse_policy(body)?;
             backend
@@ -197,12 +182,7 @@ pub(crate) async fn update_placement_rule(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     let body = bound_body(request, "rule_id", id).await?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let command = parse_placement(body)?;
             backend

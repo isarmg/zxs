@@ -1746,13 +1746,10 @@ async fn backend_job_releases_auth_and_admission_after_success_error_and_panic()
             auth: Mutex::new(None),
         });
         let slots = Arc::new(tokio::sync::Semaphore::new(1));
-        let result = http_job::HttpBackendJob::new(
-            backend.clone(),
-            auth,
-            slots.clone().try_acquire_owned().unwrap(),
-        )
-        .run(move |_| backend.wait())
-        .await;
+        let result = http_job::HttpBackendJob::admit(backend.clone(), auth, slots.clone())
+            .unwrap()
+            .run(move |_| backend.wait())
+            .await;
         assert_eq!(result.is_ok(), outcome == 0);
         assert!(weak.upgrade().is_none());
         assert_eq!(slots.available_permits(), 1);
@@ -1797,12 +1794,9 @@ fn queued_backend_job_keeps_auth_and_admission_after_cancellation() {
             .unwrap()
             .forget();
         let slots = Arc::new(tokio::sync::Semaphore::new(1));
-        let waiting = http_job::HttpBackendJob::new(
-            backend.clone(),
-            auth,
-            slots.clone().try_acquire_owned().unwrap(),
-        )
-        .run(move |_| backend.wait());
+        let waiting = http_job::HttpBackendJob::admit(backend.clone(), auth, slots.clone())
+            .unwrap()
+            .run(move |_| backend.wait());
         let waiter = tokio::spawn(waiting);
         waiter.abort();
         assert!(waiter.await.unwrap_err().is_cancelled());
@@ -1888,4 +1882,67 @@ async fn shared_history_http_cancellation_reaches_the_authorized_backend() {
         .unwrap()
         .unwrap()
         .forget();
+}
+
+#[test]
+fn backend_job_admission_preserves_capacity_errors_and_does_not_enqueue() {
+    let root = crate::tests::private_tempdir();
+    let auth = Arc::new(Mutex::new(
+        AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap(),
+    ));
+    let gate = Arc::new(Gate {
+        open: Mutex::new(true),
+        changed: Condvar::new(),
+        started: tokio::sync::Semaphore::new(0),
+        calls: AtomicUsize::new(0),
+        finished: tokio::sync::Semaphore::new(0),
+        cancellations: Mutex::new(Vec::new()),
+    });
+    let backend = Arc::new(BackendProbe {
+        blocked: BlockedEndpoint::Backend,
+        gate: gate.clone(),
+        outcome: 0,
+        auth: Mutex::new(None),
+    });
+    for closed in [false, true] {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = if closed {
+            slots.close();
+            None
+        } else {
+            Some(slots.clone().try_acquire_owned().unwrap())
+        };
+        let before = Arc::strong_count(&auth);
+        let error =
+            match http_job::HttpBackendJob::admit(backend.clone(), auth.clone(), slots.clone()) {
+                Ok(_) => panic!("unavailable backend capacity was admitted"),
+                Err(error) => error,
+            };
+        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::ResourceLimitExceeded
+        );
+        assert_eq!(error.message, "HTTP backend capacity reached");
+        assert!(matches!(
+            error.source.as_deref(),
+            Some(crate::http_boundary::ApiErrorSource::Capacity(_)),
+        ));
+        assert_eq!(Arc::strong_count(&auth), before);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(slots.available_permits(), usize::from(closed));
+        drop(held);
+    }
+    // This test has no Tokio runtime. Admission owns a slot without spawning;
+    // dropping an unstarted job returns that slot and its authentication owner.
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let before = Arc::strong_count(&auth);
+    let job = http_job::HttpBackendJob::admit(backend, auth.clone(), slots.clone()).unwrap();
+    assert_eq!(slots.available_permits(), 0);
+    assert_eq!(Arc::strong_count(&auth), before + 1);
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    drop(job);
+    assert_eq!(slots.available_permits(), 1);
+    assert_eq!(Arc::strong_count(&auth), before);
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
 }

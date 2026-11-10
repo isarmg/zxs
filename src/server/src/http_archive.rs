@@ -39,12 +39,7 @@ pub(crate) async fn archive(
     let Value::Object(body) = body else {
         unreachable!("invariant: with_id binds an object body")
     };
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let request = parse(body)?;
             backend

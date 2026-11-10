@@ -58,12 +58,7 @@ pub(crate) async fn workspace(
         branch_id: body.branch_id,
         source_commit_id: body.source_commit_id,
     };
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .create_workspace(&identity, command)
@@ -87,12 +82,7 @@ pub(crate) async fn abort(
     {
         return Err(ApiError::invalid("path and body identity disagree"));
     }
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend.abort_workspace(&identity, &id)?;
             Ok(Json(AbortedWorkspace {
@@ -109,12 +99,7 @@ pub(crate) async fn workspace_info(
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<std::collections::BTreeMap<String, String>>,
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .workspace(&identity, &id)
@@ -147,12 +132,7 @@ pub(crate) async fn commit(
     request: Request,
 ) -> Result<Json<json_codec::Value>, ApiError> {
     let body = crate::with_id(crate::json_body(request).await?, "workspace_id", id.clone())?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let command = public_commit(&id, body)?;
             backend
@@ -177,12 +157,7 @@ pub(crate) async fn seal(
     {
         return Err(ApiError::invalid("path and body identity disagree"));
     }
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| backend.seal_workspace(&identity, &id))
         .await
         .map(Json)
@@ -237,12 +212,7 @@ pub(crate) async fn namespace(
     request: Request,
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
     let body = crate::with_id(crate::json_body(request).await?, "workspace_id", id)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let command = namespace_command(body)?;
             backend
@@ -266,12 +236,7 @@ pub(crate) async fn write_session(
     request: Request,
 ) -> Result<Json<crate::backend_workspace::WriteSessionResponse>, ApiError> {
     let body = crate::with_id(crate::json_body(request).await?, "branch_id", id)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let body: WriteSessionBody =
                 json_codec::from_value(body).map_err(ApiError::invalid_source)?;

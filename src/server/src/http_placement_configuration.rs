@@ -82,12 +82,7 @@ pub(crate) async fn read(
     ApiQuery(query): ApiQuery<Query>,
 ) -> Result<Json<crate::backend_placement_configuration::PlacementConfigurationResponse>, ApiError>
 {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .placement_configuration(
@@ -114,12 +109,7 @@ pub(crate) async fn configure(
         "repository_id",
         repository,
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .configure_placement(&identity, parse(body)?)

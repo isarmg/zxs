@@ -159,12 +159,7 @@ async fn disks(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_diagnostics::FileManagerDisksResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             let topology = backend.topology_snapshot(&identity)?;
             let disks = backend.disk_status(&identity)?;
@@ -178,12 +173,7 @@ async fn history(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Json<backend_activity::ActivityHistoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .activity_history(&identity)

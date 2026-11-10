@@ -18,15 +18,11 @@ pub(crate) async fn reconcile(
             .map_err(ApiError::invalid_source)?;
     storage_contract::validate_id(&body.expected_namespace_head, "commit")
         .map_err(ApiError::invalid_source)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    let job =
+        crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?;
     // The blocking job retains its permit after the caller disconnects. There
     // is no operation_id or durable job lookup for this current-state repair.
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| backend.reconcile_directory_layout(&identity, &repository, body))
+    job.run(move |backend| backend.reconcile_directory_layout(&identity, &repository, body))
         .await
         .map(Json)
 }

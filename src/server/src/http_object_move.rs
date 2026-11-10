@@ -24,12 +24,7 @@ pub(crate) async fn submit(
     let body: Body = json_codec::from_value(crate::json_body(request).await?)
         .map_err(ApiError::invalid_source)?;
     name_policy::validate_slot(&body.movement.target_slot_id).map_err(ApiError::invalid_source)?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
                 .move_disk_object(
