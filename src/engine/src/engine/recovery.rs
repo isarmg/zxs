@@ -295,8 +295,7 @@ impl Engine {
         mode: RecoveryMode,
         prepared: PreparedRecovery,
     ) -> Result<()> {
-        let move_retained =
-            self.move_completion.is_some() || self.history_move_choice.is_some() || self.history_move_intent.is_some();
+        let move_retained = self.move_is_retained();
         if let Some(selected) = &self.move_completion {
             if prepared.records.keys().any(|sequence| *sequence > selected.sequence()) {
                 return Err(Error::new(ErrorCode::RecoveryRequired,

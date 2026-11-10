@@ -244,9 +244,7 @@ impl Engine {
     }
     fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
         if self.blocked
-            || self.move_completion.is_some()
-            || self.history_move_choice.is_some()
-            || self.history_move_intent.is_some()
+            || self.move_is_retained()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
             || detached.reused_dependencies.as_ref().is_some_and(|reuse| {
                 !reuse.matches(&self.planning_context(), &detached.config_hash)
