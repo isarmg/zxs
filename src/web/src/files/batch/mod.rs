@@ -130,6 +130,16 @@ pub(crate) fn available(model: &Model) -> bool {
         && (!model.checked_entries.is_empty() || model.selected.is_some())
 }
 
+pub(crate) fn path_edit_available(state: &State, entry: Option<&Entry>) -> bool {
+    if !file_actions::write_allowed(state) {
+        return false;
+    }
+    if !state.files.directory_branches_supported {
+        return super::relocation::available(state, entry);
+    }
+    entry.map_or_else(|| available(&state.files), |entry| !entry.read_only())
+}
+
 fn separable_entry(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File && !entry.read_only()
 }

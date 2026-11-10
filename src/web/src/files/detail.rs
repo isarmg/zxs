@@ -203,7 +203,14 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
     let mutation_disabled =
         Signal::derive(move || !can_modify.get() || !state.with(actions::write_allowed));
     let rename_disabled = Signal::derive(move || {
-        mutation_disabled.get() || state.with(|s| !batch::available(&s.files))
+        mutation_disabled.get()
+            || state.with(|state| {
+                selection.with_value(|selection| {
+                    selection
+                        .action_entry(state)
+                        .is_none_or(|entry| !batch::path_edit_available(state, Some(entry)))
+                })
+            })
     });
     let note_disabled = Signal::derive(move || {
         mutation_disabled.get() || state.with(|s| !file_note_ready(&s.files))

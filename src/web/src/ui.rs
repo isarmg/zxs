@@ -175,6 +175,7 @@ pub fn app() -> impl IntoView {
         page: Page::Files,
         ..Default::default()
     });
+    files::provide_relocation(state);
     let setup_state = RwSignal::new(crate::setup::Model::default());
     provide_context(web_interface::components::LanguageSwitchGuard(
         Signal::derive(move || {

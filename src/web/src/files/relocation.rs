@@ -26,12 +26,6 @@ struct Review {
     request: FileRelocation,
 }
 fn selected(state: &State) -> Option<&Entry> {
-    if !actions::write_allowed(state)
-        || !state.files.loaded
-        || state.files.directory_branches_supported
-    {
-        return None;
-    }
     let entries = &state.files.entries;
     let entry = if state.files.checked_entries.is_empty() {
         let selected = state.files.selected.as_ref()?;
@@ -45,13 +39,28 @@ fn selected(state: &State) -> Option<&Entry> {
     } else {
         return None;
     };
-    (!entry.file_id().is_empty()
+    eligible(state, entry).then_some(entry)
+}
+fn eligible(state: &State, entry: &Entry) -> bool {
+    actions::write_allowed(state)
+        && state.files.loaded
+        && !state.files.directory_branches_supported
+        && !entry.file_id().is_empty()
         && !entry.read_only()
         && !entry.backup()
         && !entry.retained_history()
         && !entry.inherited()
-        && entry.repository_id() == Some(state.files.repository_id.as_str()))
-    .then_some(entry)
+        && entry.repository_id() == Some(state.files.repository_id.as_str())
+}
+pub(super) fn available(state: &State, entry: Option<&Entry>) -> bool {
+    match entry {
+        Some(entry) => state
+            .files
+            .entries
+            .iter()
+            .any(|current| current == entry && eligible(state, current)),
+        None => selected(state).is_some(),
+    }
 }
 fn basis(state: &State) -> Option<Basis> {
     let entry = selected(state)?;
@@ -79,31 +88,76 @@ fn request(basis: &Basis, destination: &str) -> storage_contract::Result<FileRel
     })
 }
 
-pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
-    let draft = RwSignal::new(None::<Basis>);
-    let destination = RwSignal::new(String::new());
-    let review = RwSignal::new(None::<Review>);
-    let error = RwSignal::new(None::<String>);
+#[derive(Clone, Copy)]
+struct Editor {
+    draft: RwSignal<Option<Basis>>,
+    destination: RwSignal<String>,
+    review: RwSignal<Option<Review>>,
+    error: RwSignal<Option<String>>,
+}
+
+/// Files and Details open the same editor; only its existing submit path writes.
+pub(crate) fn provide(state: RwSignal<State>) {
+    let editor = Editor {
+        draft: RwSignal::new(None),
+        destination: RwSignal::new(String::new()),
+        review: RwSignal::new(None),
+        error: RwSignal::new(None),
+    };
+    provide_context(editor);
     Effect::new(move |_| {
         let current = state.with(basis);
-        if draft.with_untracked(|draft| draft.is_some() && draft.as_ref() != current.as_ref()) {
-            draft.set(None);
-            review.set(None);
-            error.set(None);
+        if editor
+            .draft
+            .with_untracked(|draft| draft.is_some() && draft.as_ref() != current.as_ref())
+        {
+            editor.draft.set(None);
+            editor.review.set(None);
+            editor.error.set(None);
         }
     });
+}
+
+pub(super) fn start(state: RwSignal<State>, entry: Option<Entry>) {
+    let entry = state.with_untracked(|state| match entry.as_ref() {
+        Some(entry) => state
+            .files
+            .entries
+            .iter()
+            .find(|current| *current == entry && eligible(state, current))
+            .cloned(),
+        None => selected(state).cloned(),
+    });
+    let Some(entry) = entry else {
+        return;
+    };
+    state.update(|state| {
+        state.files.clear_selection();
+        state.files.checked_entries.clear();
+        state.files.selected = Some(entry);
+        state.files.batch = None;
+        state.change_page(crate::ui::Page::Files);
+    });
+    let captured = state
+        .with_untracked(basis)
+        .expect("invariant: opening a move selects its admitted ordinary file");
+    let editor = expect_context::<Editor>();
+    editor.destination.set(captured.source.clone());
+    editor.draft.set(Some(captured));
+    editor.review.set(None);
+    editor.error.set(None);
+}
+
+pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
+    let Editor {
+        draft,
+        destination,
+        review,
+        error,
+    } = expect_context::<Editor>();
     view! {
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.directory_branches_supported)>
             <div class="zxs-stack">
-                <button class="zxs-button" disabled=move ||state.with(|s|basis(s).is_none())
-                    on:click=move |_| {
-                        if let Some(captured) = state.with_untracked(basis) {
-                            destination.set(captured.source.clone());
-                            draft.set(Some(captured));
-                            review.set(None);
-                            error.set(None);
-                        }
-                    }>{t("重命名／同盘移动文件", "Rename / move file on this disk")}</button>
                 <Show when=move ||draft.with(|draft|draft.is_some())>
                     <section class="zxs-surface zxs-stack" data-zxs-ordinary-file-relocation="">
                         <p>{move ||draft.with(|draft|draft.as_ref().map(|draft|format!(

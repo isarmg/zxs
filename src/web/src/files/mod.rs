@@ -36,6 +36,7 @@ pub use directory_history::DecodeError as DirectoryHistoryError;
 pub use history::DecodeError as FileHistoryError;
 pub(crate) use mkdir::{restore as restore_folder_creation, view as folder_creation_recovery};
 pub(crate) use model::{FileOperation, Model, SaveStatus, publication_notice};
+pub(crate) use relocation::provide as provide_relocation;
 pub(crate) use node_retirement::recovery_view as node_retirement_recovery;
 pub use page::DecodeError as DirectoryPageError;
 pub(crate) use view::view;
