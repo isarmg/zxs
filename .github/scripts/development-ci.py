@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed development CI policy; there is no event/input/env full-run override.
+"""Reviewed manual full CI policy; no automatic or Release restoration.
 
 The archived workflows are restoration recipes, not executable CI or evidence.
 Only the exact reviewed projection below is allowed in the active directory.
@@ -11,14 +11,14 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SHORT_SUITES = ('quality', 'security', 'web', 'contracts', 'build-tools',
-                'smb-protocol', 'foundation-platform')
-PAUSED_SUITES = ('rust-sources', 'workspace', 'foundation-crypto', 'foundation-data',
-                 'foundation-language', 'foundation-async')
+FULL_SUITES = ('rust-sources', 'quality', 'security', 'workspace',
+               'foundation-platform', 'foundation-crypto', 'foundation-data',
+               'foundation-language', 'foundation-async', 'web', 'contracts',
+               'build-tools', 'smb-protocol')
 PAUSED_JOBS = {
-    'ci.yml': ('web-production', 'browser-smoke', 'smb-sdk', 'phase-one-core'),
+    'ci.yml': (),
     'release.yml': ('version', 'verify', 'linux-web', 'smb-sdk', 'assemble', 'publish'),
-    'smb-sdk.yml': ('smb-sdk',),
+    'smb-sdk.yml': (),
 }
 SNAPSHOT_SHA256 = {
     'ci.yml': 'c076365d617c9cb94a97c8dfc8c2c5248af7ebae08d510d8209036f781ef177d',
@@ -127,11 +127,12 @@ jobs:
 PAUSE = '    if: ${{ false }}\n'
 PUBLISH_CONDITION = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 HEADER = '# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.\n'
+FULL_HEADER = '# Manual full CI: all CI checks enabled; automatic triggers and Release remain paused.\n'
 
 
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
-    source = HEADER + original
+    source = (HEADER if name == 'release.yml' else FULL_HEADER) + original
     # Automatic CI is paused; retain manual dispatch with no push, schedule or PR trigger.
     if name == 'ci.yml':
         source = source.replace('on:\n  push:\n  pull_request:\n',
@@ -145,19 +146,14 @@ def development_workflow(name, original):
     elif name == 'release.yml':
         source = source.replace("on:\n  push:\n    tags: ['v*']\n",
                                 'on:\n  # Automatic runs paused by user request; restore explicitly before re-enabling.\n')
-    if name in ('ci.yml', 'release.yml'):
+    if name == 'release.yml':
         source = source.replace('    timeout-minutes: 10\n', '    timeout-minutes: 5\n', 1)
     if name == 'ci.yml':
         source = source.replace('# Missing older push bases safely select the full matrix.',
-                                '# Development selection is fixed even without prior evidence.')
-        source = source.replace('Select evidenced CI suites', 'Select fixed development CI suites')
+                                '# Every manual run executes the complete matrix without reuse.')
+        source = source.replace('Select evidenced CI suites', 'Select all CI suites without reuse')
         source = source.replace('python3 .github/scripts/select-ci-suites.py',
                                 'python3 .github/scripts/development-ci.py select')
-        start = source.index('    # Cold crypto runs')
-        end = source.index('    strategy:\n', start)
-        source = source[:start] + ('    # Static (5) + each parallel short suite (10) <= 15 minutes.\n'
-                                  '    # Timeout is a failure; no partial or empty success.\n'
-                                  '    timeout-minutes: 10\n') + source[end:]
     for job in PAUSED_JOBS[name]:
         if job == 'publish':
             # Preserve the tag-only publication restriction even while impossible to run.
@@ -190,28 +186,27 @@ def check_workflows(root):
 
 def receipt():
     return {
-        'mode': 'development-short-ci',
+        'mode': 'manual-full-ci',
         'automatic_triggers': False,
-        'suites': list(SHORT_SUITES),
-        'paused_suites': list(PAUSED_SUITES),
+        'suites': list(FULL_SUITES),
+        'paused_suites': [],
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
         'reused': [],
-        'reason': 'Long checks are paused until explicit restoration after all tasks finish; not passed or reused.',
-        'static_minutes': 5,
-        'suite_minutes': 10,
-        'dependency_path_minutes': 15,
-        'timing_scope': 'execution dependencies; excludes platform queue and runner teardown',
+        'reason': 'Explicit manual full CI restoration; Release remains paused. Selection is not execution evidence.',
+        'static_minutes': 10,
+        'suite_minutes': {suite: 120 if suite == 'workspace' else
+                         60 if suite == 'foundation-crypto' else 30
+                         for suite in FULL_SUITES},
+        'timing_scope': 'execution budgets; excludes platform queue and runner teardown',
     }
 
 
 def check_receipt(value):
     # Validate the actual emitted matrix, not just an unused inventory constant.
     if value != receipt():
-        raise ValueError('development selection must be the exact seven suites and explicit pause receipt')
-    if len(value['suites']) != 7 or len(set(value['suites'])) != 7:
-        raise ValueError('development selection must contain seven unique suites')
-    if set(value['suites']) & set(value['paused_suites']):
-        raise ValueError('paused suite leaked into development selection')
+        raise ValueError('manual full CI selection must be the exact thirteen suites without reuse')
+    if len(value['suites']) != 13 or len(set(value['suites'])) != 13:
+        raise ValueError('manual full CI selection must contain thirteen unique suites')
 
 
 def emit(value, *, output=None, summary=None):
@@ -222,7 +217,7 @@ def emit(value, *, output=None, summary=None):
             stream.write('suites=' + json.dumps(value['suites'], separators=(',', ':')) + '\n')
     if summary is not None:
         with open(summary, 'a') as stream:
-            stream.write('### Development CI: long checks paused, not passed\n\n```json\n'
+            stream.write('### Manual full CI: selected, not yet passed; Release paused\n\n```json\n'
                          + json.dumps(value, indent=2) + '\n```\n')
 
 

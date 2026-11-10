@@ -1,4 +1,4 @@
-# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.
+# Manual full CI: all CI checks enabled; automatic triggers and Release remain paused.
 name: Debian 13 system Samba and matching VFS
 
 on:
@@ -14,7 +14,6 @@ env:
 
 jobs:
   smb-sdk:
-    if: ${{ false }}
     name: Debian 13 apt Samba exact SDK ABI and real SMB acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 45

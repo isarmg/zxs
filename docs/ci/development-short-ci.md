@@ -1,36 +1,33 @@
-# 开发期短 CI 与完整检查恢复
+# 人工全量 CI 与暂停边界
 
 [CI 入口](../ci.md) · [固定策略与校验器](../../.github/scripts/development-ci.py) · [完整工作流恢复快照](../../.github/ci/full-workflows/ci.yml)
 
-2026-11-10 用户最新要求停止检查、直接继续编写，不再运行 CI，取代此前每次提交运行短 CI 的安排。`ci.yml` 移除 push，仅保留 `workflow_dispatch`；不含 schedule 或 pull_request 入口。保留人工入口不是本轮触发授权，恢复运行须另行明确安排。`release.yml` 仅保留人工入口，标签发布、长检查及可复用 SDK job 仍固定暂停。本轮不在本地运行程序、格式器、编译或测试，不发起或继续轮询 CI；不删除 workflow、历史运行或 artifacts，不改仓库权限／保护设置。
+2026-11-10 用户最新明确要求“现在跑全量ci”，覆盖此前暂停长检查与七套短 CI 的安排。本次恢复 `ci.yml` 的全部检查及可复用 `smb-sdk.yml` 的实际执行；只保留 `workflow_dispatch`，不恢复 push、pull_request、schedule 或标签发布，不部署、不访问真实运行池。
 
-将来获准人工触发时，入口仍执行原短配方：`static` 和七套短矩阵 `quality`、`security`、`web`、`contracts`、`build-tools`、`smb-protocol`、`foundation-platform`。这些套件仍运行原入口的全部命令，不按提交有无变化空跑，不把缓存命中、零测试或部分结果当成功。
+## 本轮完整范围
 
-当前提交后不等待 CI，不发起 dispatch、rerun 或额外检查；所有未验范围保持未验证。以后按明确授权人工发起时选择届时当前 `main`，只 dispatch 一次，并记录实际 head SHA 与各 job 结论；触发结果不确定时先查新 run 而非重复点击，不用旧 run 冒充当前提交。仓内没有计时器，外部提醒不属于工作流配置。并发组为 workflow／SHA／run ID，`cancel-in-progress: false`；保留每轮独立、不替换排队轮次或取消运行中检查的配置，本次不处置历史运行。
+- `static` 执行全部既有静态门禁，执行上限恢复为 10 分钟。
+- 矩阵固定为全部 13 套：`rust-sources`、`quality`、`security`、`workspace`、`foundation-platform`、`foundation-crypto`、`foundation-data`、`foundation-language`、`foundation-async`、`web`、`contracts`、`build-tools`、`smb-protocol`。
+- `workspace` 保留原 120 分钟预算，`foundation-crypto` 为 60 分钟，其余矩阵为 30 分钟。所有原命令完整执行，不按有无改动、缓存或历史结果跳过，不把超时、零测试或部分结果当成功。
+- `web-production`、`browser-smoke`、`smb-sdk`、`phase-one-core` 恢复，分别保留原 job 体与预算。实际 Chrome 验收仍依赖 static、生产 WASM 与同 commit SDK；一期 core 独立等待 static，不等待 workspace 长测。
+- `release.yml` 原样保持暂停：人工入口仅可执行原 5 分钟 static；版本、完整验证、Linux/Web、SDK、组装与发布六个 job 仍固定暂停。本次全量 CI 不等于恢复 Release 演练或发布。
 
-`static` job 的执行上限为 5 分钟；成功后启动的每个矩阵 job 上限为 10 分钟，彼此无依赖，也不人为设置串行矩阵槽。唯一活动依赖路径是 5 + 10 = 15 分钟。预算含 checkout、安装、缓存及 job 内所有步骤，不含平台排队和 runner 回收。超时必须失败；冷启动或后续增长不能在 10 分钟内完成时不保证绿灯。七套并行 job 的累计计算时长可能超过 15 分钟，这不是单条依赖路径的执行墙钟预算。
+执行预算包含 checkout、安装、缓存及 job 内全部步骤，不包含 GitHub 排队或 runner 回收；它不是完成时间承诺。矩阵 `fail-fast: false`，保留完整失败与未执行证据。
 
-## 暂停范围与证据边界
+`development-ci.py select` 输出完整 13 套、`automatic_triggers: false`、空 `paused_suites`、仅 Release 的暂停清单与空 `reused`。任何 event、input 或 env 均不能缩短矩阵或恢复发布。旧 `select-ci-suites.py` 与其证据复用回归保留，但活动 CI 不调用它；本轮明确要求全跑，不使用历史复用。
 
-- 矩阵暂停：`rust-sources` 的完整回归、`workspace`、`foundation-crypto`、`foundation-data`、`foundation-language`、`foundation-async`。
-- CI job 暂停：`web-production`、`browser-smoke`、`smb-sdk`、`phase-one-core`。
-- Release 在获准人工触发时只保留 5 分钟的 `static`；版本、完整验证、Linux/Web 产物、SDK、组装和发布全部暂停，标签与手动演练也不能绕过。
-- 可复用的 SDK 工作流自身也固定暂停，不能由另一个调用入口启用。
+## 工作流与证据保证
 
-暂停是未执行，不是成功，也不是复用历史证明。短 CI 通过不证明上述长检查、真实 Chrome、SDK、生产 WASM、完整来源回归或发行产物验收通过；开发期不会生成新的安装候选或 Release。`static` 仍完整执行原静态检查，包括所有 `test/ci` 回归；它不执行 Rust 产品测试。
+`.github/ci/full-workflows/` 保留原三个快照字节与 SHA-256，不直接作为 Actions 入口。活动 CI/SDK 仅施加已审阅的人工触发、独立并发和固定全矩阵选择差异，不改原检查命令、Action SHA、环境初始化、缓存边界、同 commit SDK、失败材料或产物验收。Release 继续使用原暂停投影。
 
-`.github/ci/full-workflows/` 保存切换前的三个工作流原文，位于 Actions 执行目录之外。活动文件保留原 job 体、依赖关系、固定 Action SHA、环境初始化、缓存边界、同 commit SDK、失败材料和产物验收，施加固定暂停、短预算及仅人工入口、独立并发组和不取消策略。校验器核对原快照 SHA-256，并只允许明确的固定差异；新增工作流、恢复 push/schedule 或增加其他触发器、删除暂停、input/env 启用、超时放宽或吞错均使静态检查失败。
+策略校验仍是 static 的第一个命令，必须同步核对活动 YAML 与固定投影。正负回归拒绝额外入口、恢复自动触发、缩小矩阵、隐藏 job、修改预算、吞错、去掉依赖或缺失产物门禁。恢复定义与这些静态回归通过不等于长套件实际通过。
 
-旧 `select-ci-suites.py` 的 13 套完整选择与精确历史复用证明保留供恢复审阅，保留的人工短 CI 配方不调用它。`development-ci.py select` 对 push、dispatch、缺少历史证明及其他非准入事件测试环境都输出同样七套，连同 `automatic_triggers: false`、暂停清单和空 `reused` 列表；不存在完整矩阵 fallback 或手动全跑开关。保留的回归通过 push、dispatch 及伪造 schedule 等环境执行实际 selector，验证环境不能恢复长检查，也不能授予触发权限，同时拒绝新增 push/schedule、空矩阵、任意 job 条件及伪成功命令。
+并发组仍为 workflow／SHA／run ID，`cancel-in-progress: false`；本轮不取消或覆盖其他运行，不删除 workflow、历史运行或 artifacts，不改分支保护或 required checks。原 SQLite 两个固定维护入口不变，本次不触发。
 
-完整 foundation 覆盖映射和旧工作流回归现在明确检查保存的完整 recipe。`retained_recipe_scripts()` 证明的是恢复配方的静态接线，不是当前活动开发覆盖；其中 `executed` 分类表示原完整 recipe 的执行设计，不是本次运行回执。当前活动矩阵由新的正负回归单独核对，不将暂停路由伪装成可运行路由。
+## 执行与结果记录
 
-## 恢复条件与操作
+本次恢复提交合入后，对届时准确 `main` 人工 dispatch 一次，记录 run URL、实际 `head_sha`、每个 job 的最终结论及失败原因。触发结果不确定时先查新 run，不能重复触发。已经启动的短 CI 仍按旧提交和旧配方结算，不能冒充这次全量证据。
 
-当前要求是暂停 CI 运行并继续编写，只保留人工入口供以后明确恢复；不以提交或保留入口推定运行授权。恢复人工运行、push、schedule、PR、标签发布或长检查均须按用户后续明确安排。保留 dispatch 入口不等于某轮已经开始或通过，只有准确提交的实际运行能作为证据。任何后续触发调整仍须在独立提交中同步活动 workflow、`development_workflow()` 固定投影和本页；不能只更改 YAML 导致策略校验失配。
+只把准确源码、实际完成的检查记为通过；明确分列失败、跳过、未执行和环境限制。CI 的安装候选 artifact 只有该 job 完成打包、浏览器和组装后才算候选，不代表其他并行 job 或整个发行验收通过，也不会创建标签或 GitHub Release。
 
-所有当前任务完成后，必须另行明确批准恢复长检查。不得通过 dispatch 参数、环境变量、修改保护规则或临时取消暂停提前恢复。
-
-恢复完整 CI 时，基于保存的完整配方逐项准备独立恢复提交，同时遵守届时明确授权的触发方式；不能把触发方式调整说成长检查恢复，也不能盲目覆盖后续改动。原文快照用于审查每个 job 的命令、120/60/30 分钟原矩阵预算和发布依赖；不要只复制工作流而留下开发策略校验器。
-
-恢复前核对：完整 13 套 selector、前置 static、WASM 与同 commit SDK 到 Chrome 的依赖、全部 Release 验证到组装/发布的依赖、产物缺失失败和原有负向回归全部恢复。新增配置验证与实际长套件执行另行排程；恢复定义不等于其检查已经通过。分支保护和 required checks 均不由本次变更修改。
+后续自动触发、Release 演练或发布仍须用户另行明确安排；本次“现在跑全量”不构成自动循环、发布或操作真实用户数据的授权。

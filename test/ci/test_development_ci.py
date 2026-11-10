@@ -1,4 +1,4 @@
-"""Exercise actual short-matrix output and reject every long-run escape route.
+"""Exercise actual full-matrix output and preserve manual-only, non-publishing CI.
 
 These are policy and retained-recipe regressions, not Rust/browser/SDK execution.
 """
@@ -17,10 +17,10 @@ SCRIPT = ROOT / '.github/scripts/development-ci.py'
 SPEC = importlib.util.spec_from_file_location('development_ci', SCRIPT)
 POLICY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(POLICY)
-EXPECTED = ['quality', 'security', 'web', 'contracts', 'build-tools',
-            'smb-protocol', 'foundation-platform']
-PAUSED = ['rust-sources', 'workspace', 'foundation-crypto', 'foundation-data',
-          'foundation-language', 'foundation-async']
+EXPECTED = ['rust-sources', 'quality', 'security', 'workspace',
+            'foundation-platform', 'foundation-crypto', 'foundation-data',
+            'foundation-language', 'foundation-async', 'web', 'contracts',
+            'build-tools', 'smb-protocol']
 
 
 def jobs(source):
@@ -82,13 +82,13 @@ class DevelopmentCiPolicy(unittest.TestCase):
         self.reject_edit('ci.yml', '  cancel-in-progress: false\n',
                          '  cancel-in-progress: true\n')
 
-    def test_actual_workflow_command_emits_exact_seven_with_no_reuse(self):
+    def test_actual_workflow_command_emits_exact_thirteen_with_no_reuse(self):
         source = (ROOT / '.github/workflows/ci.yml').read_text()
         static = jobs(source)['static']
         self.assertIn('suites: ${{ steps.suites.outputs.suites }}', static)
         self.assertIn('id: suites\n        run: python3 .github/scripts/development-ci.py select', static)
         command = [sys.executable, str(SCRIPT), 'select']
-        # Even malicious inputs/environment/event data cannot re-enable long suites.
+        # Inputs/environment/event data cannot shrink or reuse the complete matrix.
         for event in ('schedule', 'push', 'pull_request', 'workflow_dispatch', 'workflow_call', ''):
             with self.subTest(event=event):
                 output = self.root / f'{event or "missing"}.out'
@@ -98,16 +98,17 @@ class DevelopmentCiPolicy(unittest.TestCase):
                                                   'inputs': {'full_ci': True, 'suite': 'workspace'}}))
                 env = dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary),
                            GITHUB_EVENT_NAME=event, GITHUB_EVENT_PATH=str(event_path),
-                           INPUT_FULL_CI='true', ZXS_FULL_CI='1', CI_SUITES=json.dumps(PAUSED))
+                           INPUT_FULL_CI='true', ZXS_FULL_CI='1', CI_SUITES=json.dumps(['web']))
                 result = subprocess.run(command, cwd=ROOT, env=env, text=True,
                                         capture_output=True, check=True, timeout=10)
                 actual = json.loads(result.stdout)
                 self.assertEqual(actual['suites'], EXPECTED)
-                self.assertEqual(actual['paused_suites'], PAUSED)
+                self.assertEqual(actual['paused_suites'], [])
+                self.assertEqual(actual['mode'], 'manual-full-ci')
                 self.assertEqual(actual['reused'], [])
                 self.assertNotIn('evidence', actual)
                 self.assertEqual(output.read_text(), 'suites=' + json.dumps(EXPECTED, separators=(',', ':')) + '\n')
-                self.assertIn('paused, not passed', summary.read_text())
+                self.assertIn('selected, not yet passed; Release paused', summary.read_text())
                 POLICY.check_receipt(actual)
 
     def test_unrecognized_full_mode_fails_without_any_matrix_output(self):
@@ -120,39 +121,54 @@ class DevelopmentCiPolicy(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(output.exists())
 
-    def test_no_empty_partial_duplicate_or_long_matrix_can_be_emitted(self):
-        for suites in ([], EXPECTED[:-1], EXPECTED + ['workspace'], EXPECTED + [EXPECTED[0]], PAUSED):
+    def test_no_empty_partial_duplicate_or_extra_matrix_can_be_emitted(self):
+        for suites in ([], EXPECTED[:-1], EXPECTED + ['unknown'], EXPECTED + [EXPECTED[0]], ['web']):
             changed = POLICY.receipt()
             changed['suites'] = suites
             with self.subTest(suites=suites), self.assertRaises(ValueError):
                 POLICY.emit(changed, output=self.root / 'bad.out')
             self.assertFalse((self.root / 'bad.out').exists())
         changed = POLICY.receipt()
-        changed['reused'] = PAUSED
+        changed['reused'] = ['workspace']
         with self.assertRaises(ValueError):
             POLICY.check_receipt(changed)
 
-    def test_active_dependency_path_is_five_plus_ten_minutes(self):
+    def test_all_ci_jobs_run_with_original_full_budgets(self):
         ci = jobs((ROOT / '.github/workflows/ci.yml').read_text())
-        self.assertEqual(set(ci) - set(POLICY.PAUSED_JOBS['ci.yml']), {'static', 'tests'})
-        durations = {}
-        for name in ('static', 'tests'):
-            self.assertNotRegex(ci[name], r'(?m)^    (if|continue-on-error):')
-            values = re.findall(r'^    timeout-minutes: (\d+)$', ci[name], flags=re.MULTILINE)
-            self.assertEqual(len(values), 1)
-            durations[name] = int(values[0])
-        self.assertEqual(durations, {'static': 5, 'tests': 10})
+        self.assertEqual(set(ci), {'static', 'tests', 'web-production', 'browser-smoke',
+                                   'smb-sdk', 'phase-one-core'})
+        for name, body in ci.items():
+            self.assertNotRegex(body, r'(?m)^    (if|continue-on-error):')
+        self.assertIn('    timeout-minutes: 10\n', ci['static'])
+        self.assertIn("    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || "
+                      "matrix.suite == 'foundation-crypto' && 60 || 30 }}\n", ci['tests'])
+        self.assertIn('    timeout-minutes: 45\n', ci['web-production'])
+        self.assertIn('    timeout-minutes: 60\n', ci['browser-smoke'])
+        self.assertIn('    timeout-minutes: 60\n', ci['phase-one-core'])
         self.assertNotRegex(ci['static'], r'(?m)^    needs:')
         self.assertEqual(re.findall(r'^    needs: (.+)$', ci['tests'], flags=re.MULTILINE), ['static'])
-        self.assertEqual(sum(durations.values()), 15)
         self.assertIn('suite: ${{ fromJSON(needs.static.outputs.suites) }}', ci['tests'])
         self.assertIn('fail-fast: false', ci['tests'])
         self.assertNotIn('max-parallel:', ci['tests'])
+        self.assertIn('    needs: [static, web-production, smb-sdk]\n', ci['browser-smoke'])
+        self.assertIn('    needs: static\n', ci['smb-sdk'])
+        self.assertIn('    needs: static\n', ci['phase-one-core'])
+        self.assertEqual(POLICY.PAUSED_JOBS['ci.yml'], ())
+        self.assertEqual(POLICY.PAUSED_JOBS['smb-sdk.yml'], ())
+        sdk = jobs((ROOT / '.github/workflows/smb-sdk.yml').read_text())
+        self.assertEqual(set(sdk), {'smb-sdk'})
+        self.assertNotRegex(sdk['smb-sdk'], r'(?m)^    (if|continue-on-error):')
         release = jobs((ROOT / '.github/workflows/release.yml').read_text())
         self.assertEqual(set(release) - set(POLICY.PAUSED_JOBS['release.yml']), {'static'})
         self.assertIn('    timeout-minutes: 5\n', release['static'])
-        self.assertEqual(set(jobs((ROOT / '.github/workflows/smb-sdk.yml').read_text())),
-                         set(POLICY.PAUSED_JOBS['smb-sdk.yml']))
+
+    def test_full_ci_jobs_cannot_be_silently_paused(self):
+        for name in ('ci.yml', 'smb-sdk.yml'):
+            for job in jobs((ROOT / '.github/workflows' / name).read_text()):
+                for condition in ('false', 'inputs.full_ci', 'env.ZXS_FULL_CI'):
+                    with self.subTest(workflow=name, job=job, condition=condition):
+                        self.reject_edit(name, f'  {job}:\n',
+                                         f'  {job}:\n    if: ${{{{ {condition} }}}}\n')
 
     def test_each_pause_is_constant_and_cannot_be_removed_or_enabled(self):
         for name, paused in POLICY.PAUSED_JOBS.items():
@@ -169,8 +185,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
 
     def test_budget_failure_and_nonempty_test_command_cannot_be_weakened(self):
         for old, new in (
-            ('    timeout-minutes: 5\n', '    timeout-minutes: 6\n'),
-            ('    timeout-minutes: 10\n', '    timeout-minutes: 11\n'),
+            ('    timeout-minutes: 10\n', '    timeout-minutes: 5\n'),
+            ("matrix.suite == 'workspace' && 120", "matrix.suite == 'workspace' && 10"),
             ('  tests:\n', '  tests:\n    continue-on-error: true\n'),
             ('  static:\n', '  static:\n    if: false\n'),
             ('  static:\n', "  static:\n    if: github.event_name == 'workflow_dispatch'\n"),
@@ -185,7 +201,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
             with self.subTest(old=old, new=new):
                 self.reject_edit('ci.yml', old, new)
 
-    def test_release_dispatch_and_reusable_sdk_cannot_bypass_pause(self):
+    def test_release_dispatch_and_extra_entrypoints_cannot_expand_scope(self):
         for name in POLICY.SNAPSHOT_SHA256:
             self.reject_edit(name, 'jobs:\n', 'jobs:\n  extra:\n    runs-on: ubuntu-24.04\n'
                              '    steps:\n      - run: bash .github/scripts/check.sh workspace\n')
