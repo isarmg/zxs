@@ -213,20 +213,33 @@ impl EngineBackend {
                     "initialized directory owner not found",
                 )
             })?;
+        let root = &engine.state().repositories[repository];
+        let namespace = engine.list_tree_ref(&root.main_branch_id).map_err(error)?;
+        // D keeps its immutable source path. Current listings use the stable
+        // directory identity's admitted mount, including hidden raw rows.
+        let locations = namespace
+            .iter()
+            .filter(|entry| {
+                entry.kind == storage_contract::NamespaceEntryKind::Directory
+                    && git.deletions.contains_key(&entry.entry_id)
+            })
+            .map(|entry| (entry.entry_id.as_str(), entry))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let lower = request
             .after
             .as_deref()
             .map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded);
         let mut nodes = git
             .deletions
-            .range::<str, _>((lower, std::ops::Bound::Unbounded));
+            .range::<str, _>((lower, std::ops::Bound::Unbounded))
+            .filter_map(|(id, node)| locations.get(id.as_str()).map(|entry| (node, *entry)));
         let entries = nodes
             .by_ref()
             .take(100)
-            .map(|(_, node)| DirectoryDeletionSummary {
+            .map(|(node, entry)| DirectoryDeletionSummary {
                 directory_id: node.directory_id.clone(),
                 deletion_node_id: node.node_id.clone(),
-                path: node.path.clone(),
+                path: entry.path.clone(),
                 operation_id: node.operation_id,
             })
             .collect::<Vec<_>>();

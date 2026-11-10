@@ -15,6 +15,7 @@ use web_interface::{
     tasks::spawn_local,
 };
 
+mod folders;
 mod target;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -93,6 +94,7 @@ struct Editor {
     target_slot: RwSignal<String>,
     destination: RwSignal<String>,
     review: RwSignal<Option<Review>>,
+    folders: RwSignal<Option<folders::Listing>>,
     error: RwSignal<Option<api::Error>>,
     reading: RwSignal<bool>,
     generation: RwSignal<u64>,
@@ -108,6 +110,7 @@ impl Editor {
         self.generation.update(|generation| *generation += 1);
         self.reading.set(false);
         self.review.set(None);
+        self.folders.set(None);
         self.error.set(None);
     }
 }
@@ -119,6 +122,7 @@ pub(crate) fn provide(state: RwSignal<State>) {
         target_slot: RwSignal::new(String::new()),
         destination: RwSignal::new(String::new()),
         review: RwSignal::new(None),
+        folders: RwSignal::new(None),
         error: RwSignal::new(None),
         reading: RwSignal::new(false),
         generation: RwSignal::new(0),
@@ -172,12 +176,25 @@ pub(super) fn start(state: RwSignal<State>, entry: Option<Entry>) {
     editor.draft.set(Some(captured));
 }
 
-fn review_destination(state: RwSignal<State>, editor: Editor) {
-    let Some(captured) = editor.draft.get_untracked() else {
-        return;
-    };
+struct ReadTarget {
+    basis: Basis,
+    slot: String,
+    cancellation: api::ReadCancellation,
+    generation: u64,
+}
+impl ReadTarget {
+    fn current(&self, state: RwSignal<State>, editor: Editor) -> bool {
+        editor.generation.try_with_untracked(|generation| *generation) == Some(self.generation)
+            && editor.target_slot.try_with_untracked(|slot| slot == &self.slot) == Some(true)
+            && state.with_untracked(basis).as_ref() == Some(&self.basis)
+    }
+}
+
+fn begin_read(state: RwSignal<State>, editor: Editor) -> Option<ReadTarget> {
+    editor.clear_review();
+    let captured = editor.draft.get_untracked()?;
     if state.with_untracked(basis).as_ref() != Some(&captured) {
-        return;
+        return None;
     }
     let slot = editor.target_slot.get_untracked();
     if !state.with_untracked(|state| {
@@ -191,32 +208,42 @@ fn review_destination(state: RwSignal<State>, editor: Editor) {
             storage_contract::ErrorCode::InvalidRequest,
             t("请选择在线可写的目标磁盘。", "Choose an online writable destination disk."),
         )));
-        return;
+        return None;
     }
-    editor.clear_review();
-    let destination = match name_policy::PortablePath::parse(&editor.destination.get_untracked()) {
-        Ok(path) => path,
-        Err(source) => {
-            editor.error.set(Some(target::input_error(source.into())));
-            return;
-        }
-    };
     let cancellation = match api::ReadCancellation::new() {
         Ok(cancellation) => cancellation,
         Err(error) => {
             editor.error.set(Some(error));
-            return;
+            return None;
         }
     };
     editor.reading.set(true);
     editor.cancellation.set(Some(cancellation.clone()));
-    let generation = editor.generation.get_untracked();
-    let epoch = captured.epoch;
+    Some(ReadTarget {
+        basis: captured,
+        slot,
+        cancellation,
+        generation: editor.generation.get_untracked(),
+    })
+}
+
+fn review_destination(state: RwSignal<State>, editor: Editor) {
+    let destination = match name_policy::PortablePath::parse(&editor.destination.get_untracked()) {
+        Ok(path) => path,
+        Err(source) => {
+            editor.clear_review();
+            editor.error.set(Some(target::input_error(source.into())));
+            return;
+        }
+    };
+    let Some(read) = begin_read(state, editor) else {
+        return;
+    };
     spawn_local(async move {
-        let result = target::review(captured, slot, destination, cancellation).await;
-        if !accept_read_response(state, epoch, &result)
-            || editor.generation.try_with_untracked(|generation| *generation) != Some(generation)
-        {
+        let result = target::review(
+            read.basis.clone(), read.slot.clone(), destination, read.cancellation.clone(),
+        ).await;
+        if !accept_read_response(state, read.basis.epoch, &result) || !read.current(state, editor) {
             return;
         }
         editor.reading.set(false);
@@ -255,6 +282,7 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
                         editor.clear_review();
                         editor.target_slot.set(slot);
                     })/>
+                {folders::control(state, editor)}
                 <input class="zxs-input" type="text" autocomplete="off" spellcheck="false"
                     aria-label=t("目标完整磁盘相对路径", "Complete disk-relative destination path")
                     prop:value=move ||editor.destination.get() disabled=move ||disabled.get()

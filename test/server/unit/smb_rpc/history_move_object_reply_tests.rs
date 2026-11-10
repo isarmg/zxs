@@ -174,7 +174,7 @@ fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
 }
 
 #[test]
-fn same_entry_reply_preserves_the_request_without_claiming_a_displaced_file() {
+fn object_reply_distinguishes_case_rename_from_a_distinct_alias() {
     let mut command = object_request(OperationId::generate().unwrap());
     command.movement.target_repository_id = Some(command.movement.source_repository_id.clone());
     command.movement.target_entry_id = Some(command.movement.source_entry_id.clone());
@@ -209,6 +209,41 @@ fn same_entry_reply_preserves_the_request_without_claiming_a_displaced_file() {
         MoveReceipt::object(&command).err().unwrap().code,
         storage_contract::ErrorCode::StateInvalid
     );
+
+    // The same entry/file can have another current occurrence. Replacing that
+    // alias consumes a distinct target path, even without a new history graph.
+    command.movement.target_path = name_policy::PortablePath::parse("alias.txt").unwrap();
+    command.expected_target_file_id = command.expected_source_file_id.clone();
+    let expected = MoveReceipt::object(&command).unwrap();
+    assert_eq!(
+        expected.displaced_target_file_id,
+        command.expected_source_file_id
+    );
+    let mut result = object_result(&expected);
+    result.protection_at_publish = ProtectionAtPublish::NotApplicable;
+    result.result["version_mapping"] = json!({});
+    result.result["movement"]["target_repository_id"] = id("repo", 1).into();
+    result.result["movement"]["target_entry_id"] = id("entry", 1).into();
+    result.result["movement"]["displaced_target_file_id"] = json!(command.expected_source_file_id);
+    let exact_result = result.clone();
+    let reply = expected.published_object_reply(result, "alice").unwrap();
+    assert_eq!(
+        reply["request_digest"],
+        command.movement.digest("alice").unwrap()
+    );
+    assert_eq!(
+        reply["result"]["movement"]["displaced_target_file_id"],
+        id("file", 1)
+    );
+    for wrong in [Value::Null, json!(id("file", 4))] {
+        let mut result = exact_result.clone();
+        result.result["movement"]["displaced_target_file_id"] = wrong;
+        assert_eq!(
+            MoveReceipt::object(&command).unwrap()
+                .published_object_reply(result, "alice").unwrap_err().code,
+            storage_contract::ErrorCode::StateInvalid
+        );
+    }
 }
 
 

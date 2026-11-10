@@ -123,3 +123,33 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
     assert!(namespace.get("a/second.txt").is_none());
     assert!(pool.engine.file_deletion(&original.file_id).is_none());
 }
+
+#[test]
+fn moving_non_owner_alias_keeps_the_outside_physical_owner() {
+    let mut pool = Pool::new();
+    let original = selected_root_aliases(&mut pool);
+    let owner = pool.engine.state().file_locations[&original.file_id].clone();
+    assert_eq!(owner, "b/report.txt");
+    let directory = pool.current_entry("a");
+    let request = ObjectMoveRequest {
+        source_repository_id: HistoryRepositoryId::parse(&pool.repo.repository_id).unwrap(),
+        source_entry_id: NamespaceEntryId::parse(&directory.entry_id).unwrap(),
+        source_path: name_policy::LookupPath::parse("a").unwrap(),
+        target_slot_id: "P01".into(),
+        target_repository_id: Some(HistoryRepositoryId::parse(&pool.repo.repository_id).unwrap()),
+        target_path: name_policy::PortablePath::parse("moved").unwrap(),
+        replace: false,
+        target_entry_id: None,
+    };
+    pool.engine
+        .move_object(
+            &request,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(pool.current_entry("moved/report.txt").file_id, original.file_id);
+    assert_eq!(pool.current_entry("b/report.txt").file_id, original.file_id);
+    assert_eq!(pool.engine.state().file_locations[&original.file_id], owner);
+}

@@ -118,6 +118,13 @@ fn deletion(previous:&State,repository:&Repository,entry:&Entry,principal:&str,o
 }
 
 fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:&Repository,graph:Option<&graph::Graph>,arrived:&[Entry],route:&CopyRoute,principal:&str,operation:OperationId)->Result<()> {
+    let same_parent_rename=!unit.copy_history
+        && unit.request.source_path.key().rsplit_once('/').map(|(parent,_)|parent)
+            ==unit.request.target_path.key().rsplit_once('/').map(|(parent,_)|parent);
+    let rename_directory=same_parent_rename && unit.entries.iter()
+        .find(|member|member.source.lookup_key()==unit.request.source_path.key())
+        .expect("invariant: captured move includes its source").source.kind==NamespaceEntryKind::Directory;
+    let mut renamed_locations=BTreeSet::new();
     let mut files=BTreeSet::new();
     let aliased_files=unit.entries.iter().filter(|member|
         member.source.kind==NamespaceEntryKind::File && !files.insert(member.source.file_id.as_str()))
@@ -132,8 +139,17 @@ fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:
     let entries_by_path=target_head.entries.iter().map(|entry|(entry.lookup_key(),entry)).collect::<BTreeMap<_,_>>();
     for (member,entry) in unit.entries.iter().zip(arrived) {
         if entry.kind!=NamespaceEntryKind::File { continue; }
-        next.file_names.insert(entry.file_id.clone(),entry.name().into());
-        next.file_locations.insert(entry.file_id.clone(),entry.path().into());
+        if same_parent_rename {
+            // All aliases of this directory rename have the same physical
+            // outcome. Apply the existing owner-prefix rule once per file.
+            if renamed_locations.insert(entry.file_id.as_str()) {
+                directory::set_namespace_location(next,&member.source,unit.request.source_path.as_str(),
+                    unit.request.target_path.as_str(),storage_contract::DirectoryBatchKind::Rename,rename_directory);
+            }
+        } else {
+            next.file_names.insert(entry.file_id.clone(),entry.name().into());
+            next.file_locations.insert(entry.file_id.clone(),entry.path().into());
+        }
         if previous.file_deletions.contains_key(&member.source.file_id) {continue;}
         let old=match graph {Some(graph)=>graph.entry(&member.source)?,None=>member.source.clone()};
         let original=member.context.as_ref().expect("invariant: captured file has context");
@@ -160,8 +176,10 @@ fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:
             file::relocate_namespace_file_branch_with_ids(next,&context,&entries_by_path,entry,operation,&mut ids)?;
         }
         next.file_contexts.insert(directory::context_key_from_key(&target.repository_id,entry.lookup_key()),context);
-        next.file_names.insert(entry.file_id.clone(),entry.name().into());
-        next.file_locations.insert(entry.file_id.clone(),entry.path().into());
+        if !same_parent_rename {
+            next.file_names.insert(entry.file_id.clone(),entry.name().into());
+            next.file_locations.insert(entry.file_id.clone(),entry.path().into());
+        }
     }
     Ok(())
 }
