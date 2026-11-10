@@ -152,31 +152,46 @@ fn stopped_cleanup_target_retains_original_bytes_and_shared_objects() {
 
 #[test]
 fn cleanup_rejects_shared_payload_identity_without_unlinking_either_name() {
-    let mut pending = PendingCleanup::new();
-    let disk = pending.engine.config.disks[0].clone();
-    let source = pending.payloads[0].clone();
-    let shared = pending.temporary.path().join("shared-payload");
-    fs::hard_link(&source, &shared).unwrap();
-    let inode = fs::metadata(&source).unwrap().ino();
-    let immutable = files_below(&disk.root.join("metadata"));
-    let state = canonical_json(pending.engine.state()).unwrap();
-    assert_eq!(
-        pending.retry().unwrap_err().code(),
-        ErrorCode::ContainerLayoutInvalid
-    );
-    for path in [&source, &shared] {
-        assert_eq!(fs::read(path).unwrap(), b"old body");
-        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
-        assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
-    }
-    assert_files_unchanged(&immutable);
-    assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
-    assert_eq!(
-        fs::read(pending.retained_body(&disk)).unwrap(),
-        b"latest body"
-    );
-    for payload in &pending.payloads[1..] {
-        assert_eq!(fs::read(payload).unwrap(), b"old body");
+    for prepared_location in [false, true] {
+        let mut pending = PendingCleanup::new();
+        let disk = pending.engine.config.disks[0].clone();
+        let installed = pending.payloads[0].clone();
+        let source = if prepared_location {
+            let prepared = pending
+                .directory(&disk)
+                .join("content")
+                .join(&pending.engine.state.versions[&pending.first].creation_name);
+            fs::copy(&installed, &prepared).unwrap();
+            prepared
+        } else {
+            installed.clone()
+        };
+        let installed_inode = fs::metadata(&installed).unwrap().ino();
+        let shared = pending.temporary.path().join("shared-payload");
+        fs::hard_link(&source, &shared).unwrap();
+        let inode = fs::metadata(&source).unwrap().ino();
+        let immutable = files_below(&disk.root.join("metadata"));
+        let state = canonical_json(pending.engine.state()).unwrap();
+        assert_eq!(
+            pending.retry().unwrap_err().code(),
+            ErrorCode::ContainerLayoutInvalid
+        );
+        for path in [&source, &shared] {
+            assert_eq!(fs::read(path).unwrap(), b"old body");
+            assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+            assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
+        }
+        assert_files_unchanged(&immutable);
+        assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
+        assert_eq!(
+            fs::read(pending.retained_body(&disk)).unwrap(),
+            b"latest body"
+        );
+        assert_eq!(fs::read(&installed).unwrap(), b"old body");
+        assert_eq!(fs::metadata(&installed).unwrap().ino(), installed_inode);
+        for payload in &pending.payloads[1..] {
+            assert_eq!(fs::read(payload).unwrap(), b"old body");
+        }
     }
 }
 
@@ -207,6 +222,114 @@ fn cleanup_retry_distinguishes_unlinked_and_absent_payload_without_republishing(
         fs::read(pending.retained_body(&disk)).unwrap(),
         b"latest body"
     );
+}
+
+#[test]
+fn cleanup_retry_finishes_both_payload_locations_without_republishing() {
+    for (installed_present, prepared_present, prepared_parent_present) in [
+        (true, true, true),
+        (true, false, true),
+        (true, false, false),
+        (false, true, true),
+        (false, false, true),
+    ] {
+        let mut pending = PendingCleanup::new();
+        let disk = pending.engine.config.disks[0].clone();
+        let installed = pending.payloads[0].clone();
+        let directory = pending.directory(&disk);
+        let prepared = directory
+            .join("content")
+            .join(&pending.engine.state.versions[&pending.first].creation_name);
+        assert!(prepared.parent().unwrap().is_dir());
+        if prepared_present {
+            fs::copy(&installed, &prepared).unwrap();
+        }
+        if !installed_present {
+            fs::remove_file(&installed).unwrap();
+        }
+        if !prepared_parent_present {
+            fs::remove_dir(prepared.parent().unwrap()).unwrap();
+        }
+        let state = canonical_json(pending.engine.state()).unwrap();
+        let receipt = pending.engine.operation(pending.operation).unwrap();
+        let immutable = files_below(&disk.root.join("metadata"));
+        assert_eq!(pending.retry().unwrap().result, receipt.result);
+        assert!(!installed.exists());
+        assert!(!prepared.exists());
+        assert!(installed.parent().unwrap().is_dir());
+        assert_eq!(prepared.parent().unwrap().is_dir(), prepared_parent_present);
+        assert_eq!(pending.retry().unwrap().result, receipt.result);
+        assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
+        assert_files_unchanged(&immutable);
+        assert_eq!(
+            fs::read(pending.retained_body(&disk)).unwrap(),
+            b"latest body"
+        );
+        assert!(pending.payloads.iter().all(|path| !path.exists()));
+    }
+}
+
+#[test]
+fn cleanup_missing_owner_preserves_a_prepared_copy_until_owner_restoration() {
+    for empty_placeholder in [false, true] {
+        let mut pending = PendingCleanup::new();
+        let disk = pending.engine.config.disks[0].clone();
+        let installed = pending.payloads[0].clone();
+        let directory = pending.directory(&disk);
+        let prepared = directory
+            .join("content")
+            .join(&pending.engine.state.versions[&pending.first].creation_name);
+        fs::copy(&installed, &prepared).unwrap();
+        let container = installed.parent().unwrap().parent().unwrap();
+        let namespace = container.parent().unwrap();
+        assert_eq!(namespace.file_name().unwrap(), "namespace");
+        let namespace_owner: String = read_json(&namespace.join(".zxs-namespace.json")).unwrap();
+        assert_eq!(
+            namespace_owner,
+            pending.engine.state.versions[&pending.first].file_id
+        );
+        assert!(container.join(".zxs-container-owner.json").is_file());
+        let retained = pending.temporary.path().join("retained-container");
+        fs::rename(container, &retained).unwrap();
+        if empty_placeholder {
+            private_dir(&container.join("versions")).unwrap();
+        }
+        let original = files_below(&retained);
+        let immutable = files_below(&disk.root.join("metadata"));
+        let prepared_inode = fs::metadata(&prepared).unwrap().ino();
+        let state = canonical_json(pending.engine.state()).unwrap();
+        let error = pending.retry().unwrap_err();
+        let Error::Filesystem(platform_io::fs_safety::Error::Io(source)) = error else {
+            panic!("missing cleanup owner lost its I/O source: {error}");
+        };
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        assert!(directory.join("purged.json").is_file());
+        assert_eq!(files_below(&retained), original);
+        assert_files_unchanged(&immutable);
+        assert_eq!(fs::read(&prepared).unwrap(), b"old body");
+        assert_eq!(fs::metadata(&prepared).unwrap().ino(), prepared_inode);
+        assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
+        assert_eq!(container.is_dir(), empty_placeholder);
+        if empty_placeholder {
+            assert!(!container.join(".zxs-container-owner.json").exists());
+            assert_eq!(fs::read_dir(container.join("versions")).unwrap().count(), 0);
+        }
+        for payload in &pending.payloads[1..] {
+            assert_eq!(fs::read(payload).unwrap(), b"old body");
+        }
+        if empty_placeholder {
+            fs::remove_dir(container.join("versions")).unwrap();
+            fs::remove_dir(container).unwrap();
+        }
+        fs::rename(&retained, container).unwrap();
+        pending.retry().unwrap();
+        assert!(!installed.exists());
+        assert!(!prepared.exists());
+        assert_eq!(
+            fs::read(pending.retained_body(&disk)).unwrap(),
+            b"latest body"
+        );
+    }
 }
 
 #[test]
@@ -336,19 +459,26 @@ impl Drop for CleanupFsyncGate {
 #[test]
 #[ignore = "requires maintenance/io_tails.c as maintenance_io_tails.so in LD_PRELOAD"]
 fn cleanup_unlink_fsync_cancellation_and_io_errors_keep_count_fence_and_immutable_bytes() {
-    for (already_absent, errno) in [
-        (false, None),
-        (false, Some(5)),
-        (false, Some(2)),
-        (true, None),
-        (true, Some(5)),
-        (true, Some(2)),
-    ] {
+    let mut completed = 0;
+    for (prepared_location, already_absent, errno) in
+        [false, true].into_iter().flat_map(|prepared| {
+            [
+                (false, None),
+                (false, Some(5)),
+                (false, Some(2)),
+                (true, None),
+                (true, Some(5)),
+                (true, Some(2)),
+            ]
+            .into_iter()
+            .map(move |(absent, errno)| (prepared, absent, errno))
+        })
+    {
         let mut pending = PendingCleanup::new();
         let disk = pending.engine.config.disks[0].clone();
         let handle = Arc::clone(pending.engine.disk_resources.get(&disk).unwrap());
         let binding = handle.root.io_binding().unwrap();
-        let payload = pending.payloads[0].clone();
+        let installed = pending.payloads[0].clone();
         let directory = pending.directory(&disk);
         let retained = pending.retained_body(&disk);
         let retained_inode = fs::metadata(&retained).unwrap().ino();
@@ -356,6 +486,16 @@ fn cleanup_unlink_fsync_cancellation_and_io_errors_keep_count_fence_and_immutabl
         let version_files = files_below(&directory);
         assert!(!immutable.is_empty());
         assert!(!version_files.is_empty());
+        let payload = if prepared_location {
+            let prepared = directory
+                .join("content")
+                .join(&pending.engine.state.versions[&pending.first].creation_name);
+            fs::copy(&installed, &prepared).unwrap();
+            fs::remove_file(&installed).unwrap();
+            prepared
+        } else {
+            installed.clone()
+        };
         let state = canonical_json(pending.engine.state()).unwrap();
         let competitor = File::options()
             .read(true)
@@ -413,6 +553,7 @@ fn cleanup_unlink_fsync_cancellation_and_io_errors_keep_count_fence_and_immutabl
             .unwrap();
         });
         assert!(!payload.exists());
+        assert!(!installed.exists());
         assert_eq!(fs::metadata(&retained).unwrap().ino(), retained_inode);
         assert_eq!(fs::read(&retained).unwrap(), b"latest body");
         assert_files_unchanged(&immutable);
@@ -421,5 +562,18 @@ fn cleanup_unlink_fsync_cancellation_and_io_errors_keep_count_fence_and_immutabl
         for payload in &pending.payloads[1..] {
             assert_eq!(fs::read(payload).unwrap(), b"old body");
         }
+        println!(
+            "\nZXS_MAINTENANCE_CLEANUP_SYNC_CASE location={} absent={} errno={}",
+            if prepared_location {
+                "prepared"
+            } else {
+                "installed"
+            },
+            already_absent,
+            errno.unwrap_or(0),
+        );
+        completed += 1;
     }
+    assert_eq!(completed, 12);
+    println!("\nZXS_MAINTENANCE_CLEANUP_SYNC_COMPLETE cases={completed}");
 }

@@ -13,6 +13,14 @@ TARGETS = {"storage_engine": ["lib"], "workspace_commit_replay": ["test"]}
 READ_TEST = "workspace_evidence_io_failure_is_not_absence_or_corrupt_mirror"
 PERMISSION_TEST = "unreadable_workspace_request_is_not_a_missing_mirror"
 SYNC_TEST = "container_storage::tests::existing_body_sync_io_failure_retains_its_cause"
+CLEANUP_TEST = ("maintenance::cleanup_tests::io_tail_tests::"
+                "cleanup_unlink_fsync_cancellation_and_io_errors_keep_count_fence_and_immutable_bytes")
+CLEANUP_CASES = tuple(
+    rf"^ZXS_MAINTENANCE_CLEANUP_SYNC_CASE location={location} absent={absent} errno={errno}$"
+    for location in ("installed", "prepared")
+    for absent in ("false", "true")
+    for errno in (0, 5, 2)
+)
 
 
 def test_artifacts(output):
@@ -78,6 +86,7 @@ def main():
             for name, source in (
                 ("read", "test/engine/integration/workspace_read_error.c"),
                 ("fsync", "test/engine/unit/container_storage/fsync_eio.c"),
+                ("maintenance_io_tails", "test/engine/unit/maintenance/io_tails.c"),
             ):
                 libraries[name] = str(Path(temporary) / f"{name}.so")
                 subprocess.run(["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
@@ -92,6 +101,9 @@ def main():
                       dict(environment, LD_PRELOAD=libraries["fsync"]), (r"^ZXS_TEST_FSYNC_EIO /.+$",))
             run_exact(artifacts["workspace_commit_replay"], PERMISSION_TEST,
                       "ZXS_WORKSPACE_PERMISSION_COMPLETE", environment)
+            run_exact(artifacts["storage_engine"], CLEANUP_TEST,
+                      "ZXS_MAINTENANCE_CLEANUP_SYNC_COMPLETE cases=12",
+                      dict(environment, LD_PRELOAD=libraries["maintenance_io_tails"]), CLEANUP_CASES)
     except subprocess.CalledProcessError as error:
         if error.stdout:
             print(error.stdout, file=sys.stderr)

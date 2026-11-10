@@ -696,19 +696,7 @@ impl Engine {
                     verify_retained_version_publication_at(root, &dir, v, Some(&metadata))?;
                 }
                 root.write_json(&dir.join("purged.json"), &tombstone, true)?;
-                // Both supported locations may coexist after interruption. Each
-                // unlink includes its parent-directory sync. Do not certify a
-                // single chosen path as complete cleanup of both locations.
-                for _ in 0..2 {
-                    match crate::container_storage::content_location_at(root, &dir, v, &mut |_| {
-                        Ok(())
-                    })? {
-                        crate::container_storage::ContentLocation::Present(content) => {
-                            root.remove_file_if_present_synced(&content)?;
-                        }
-                        crate::container_storage::ContentLocation::Absent(_) => break,
-                    }
-                }
+                crate::container_storage::cleanup_version_content_at(root, &dir, v)?;
             }
         }
         Ok(())

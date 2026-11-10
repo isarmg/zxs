@@ -582,18 +582,12 @@ fn content_path_inner(
             history, version,
         )));
     }
-    let container = container_at(
-        root,
-        history,
-        Some(&version.history_tree_id),
-        &version.file_id,
-        observe,
-    )?;
-    let target = match container {
-        Some(named) => {
-            let versions = named.join("versions");
-            let target = versions.join(&version.storage_name);
-            if directory_exists_at(root, &versions)? && file_exists_at(root, &target)? {
+    let target = match installed_content_path_at(root, history, version, observe)? {
+        Some(target) => {
+            let versions = target
+                .parent()
+                .expect("invariant: installed body has a parent");
+            if directory_exists_at(root, versions)? && file_exists_at(root, &target)? {
                 return Ok(ContentLocation::Present(target));
             }
             target
@@ -608,6 +602,66 @@ fn content_path_inner(
         return Ok(ContentLocation::Present(prepared));
     }
     Ok(ContentLocation::Absent(target))
+}
+
+fn installed_content_path_at(
+    root: &DiskRoot,
+    history: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Option<PathBuf>> {
+    Ok(container_at(
+        root,
+        history,
+        Some(&version.history_tree_id),
+        &version.file_id,
+        observe,
+    )?
+    .map(|named| named.join("versions").join(&version.storage_name)))
+}
+
+/// Called only after the caller has persisted the authorized content tombstone.
+/// Complete each location's own unlink/sync tail, including already absent leaves.
+pub(crate) fn cleanup_version_content_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+) -> Result<()> {
+    validate_version(version)?;
+    let history = history_root(directory)?;
+    let installed = match installed_content_path_at(root, history, version, &mut |_| Ok(()))? {
+        Some(installed) => installed,
+        None => {
+            let expected = expected_content_path(history, version);
+            root.directory_identity(
+                expected
+                    .parent()
+                    .expect("invariant: expected body has a parent"),
+            )?;
+            return Err(invalid("published version has no owned container"));
+        }
+    };
+    // A prepared copy is not evidence that a disappeared published owner was
+    // intentionally removed. Reject that missing parent before deleting either copy.
+    root.directory_identity(
+        installed
+            .parent()
+            .expect("invariant: installed body has a parent"),
+    )?;
+    file_exists_at(root, &installed)?;
+    let prepared_parent = directory.join("content");
+    let prepared = if directory_exists_at(root, &prepared_parent)? {
+        let path = prepared_parent.join(&version.creation_name);
+        file_exists_at(root, &path)?;
+        Some(path)
+    } else {
+        None
+    };
+    root.remove_file_if_present_synced(&installed)?;
+    if let Some(prepared) = prepared {
+        root.remove_file_if_present_synced(&prepared)?;
+    }
+    Ok(())
 }
 
 fn verify_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<ReadFile> {

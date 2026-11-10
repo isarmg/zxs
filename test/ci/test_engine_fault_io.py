@@ -83,15 +83,44 @@ class EngineFaultTests(unittest.TestCase):
             build = run.call_args_list[0].args[0]
             self.assertEqual(build, ["cargo", "test", "--locked", "--offline", "-p", "storage-engine",
                                      "--lib", "--test", "workspace_commit_replay", "--no-run", "--message-format=json"])
-            self.assertEqual(run.call_count, 3)  # current build and both real C fixtures
+            self.assertEqual(run.call_count, 4)  # current build and all three real C fixtures
             calls = exact.call_args_list
             self.assertEqual([call.args[1] for call in calls],
-                             [RUNNER["READ_TEST"], RUNNER["READ_TEST"], RUNNER["SYNC_TEST"], RUNNER["PERMISSION_TEST"]])
+                             [RUNNER["READ_TEST"], RUNNER["READ_TEST"], RUNNER["SYNC_TEST"],
+                              RUNNER["PERMISSION_TEST"], RUNNER["CLEANUP_TEST"]])
             self.assertEqual([call.args[3]["ZXS_TEST_WORKSPACE_ERRNO"] for call in calls[:2]], ["5", "13"])
             self.assertEqual([len(call.args[4]) for call in calls[:3]], [2, 2, 1])
             self.assertNotIn("LD_PRELOAD", calls[3].args[3])
             self.assertNotIn("ZXS_TEST_WORKSPACE_ERRNO", calls[3].args[3])
             self.assertNotIn("ZXS_TEST_WORKSPACE_ERRNO", calls[2].args[3])
+            cleanup = calls[4].args
+            self.assertEqual(cleanup[0], artifacts["storage_engine"])
+            self.assertEqual(cleanup[2], "ZXS_MAINTENANCE_CLEANUP_SYNC_COMPLETE cases=12")
+            self.assertEqual(Path(cleanup[3]["LD_PRELOAD"]).name, "maintenance_io_tails.so")
+            self.assertNotIn("ZXS_TEST_WORKSPACE_ERRNO", cleanup[3])
+            self.assertEqual(cleanup[4], RUNNER["CLEANUP_CASES"])
+            self.assertEqual(len(set(cleanup[4])), 12)
+            fixture = run.call_args_list[-1].args[0]
+            self.assertEqual(fixture[:6], ["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC"])
+            self.assertIn("test/engine/unit/maintenance/io_tails.c", fixture)
+
+    def test_cleanup_requires_all_twelve_fault_scenarios(self):
+        name = RUNNER["CLEANUP_TEST"]
+        marker = "ZXS_MAINTENANCE_CLEANUP_SYNC_COMPLETE cases=12"
+        cases = [pattern[1:-1] for pattern in RUNNER["CLEANUP_CASES"]]
+        success = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.01s"
+        complete = "\n".join([*cases, marker, success])
+        for missing in (None, *cases, marker):
+            output = complete if missing is None else complete.replace(missing, "")
+            with self.subTest(missing=missing), patch("subprocess.run") as run:
+                run.side_effect = [subprocess.CompletedProcess([], 0, name + ": test\n"),
+                                   subprocess.CompletedProcess([], 0, output)]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    if missing is None:
+                        RUNNER["run_exact"]("/current/lib", name, marker, {}, RUNNER["CLEANUP_CASES"])
+                    else:
+                        with self.assertRaises(ValueError):
+                            RUNNER["run_exact"]("/current/lib", name, marker, {}, RUNNER["CLEANUP_CASES"])
 
     def test_failed_child_cannot_be_hidden_by_later_success(self):
         main = RUNNER["main"]

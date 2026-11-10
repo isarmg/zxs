@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`ffad0a7d`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`e1b845b7`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮清理双位置同步尾巴
+
+- CI #1104 的缺失正文重试此前在 ContentLocation::Absent 直接结束，既漏掉 unlink 后失败的父目录 fsync，也把已发布容器父目录丢失解释为清理成功。共用原容器定位后，清理先核对 installed 与可选 prepared 两处身份，再分别使用原持有父目录、I/O lease 和取消检查的删除/同步原语；叶节点已经不存在仍完成对应父目录同步。
+- 已发布 owner 缺失时在任何 unlink 前失败并保留 prepared 副本，原 ENOENT 保留；预期路径只探测真实错误，不作为所有者或删除回退。仅 prepared 的 content 叶目录可合法缺失，所需祖先、权限、硬链接和布局错误仍传播。既有 tombstone、路由顺序、Retired 原绑定证明及写入围栏保持。
+- 根测试覆盖双正文/单正文/双缺失、缺失 owner 与未拥有的空占位、prepared 硬链接预检及原收据重试；将既有 ignored fsync 用例接入实际 engine-fault CI，installed/prepared × present/absent × cancel/EIO/ENOENT 共 12 场景逐个要求成功标记，并由 Python 门禁回归拒绝任一缺失标记。
+- 五份源码/测试/CI 文件及本清单。容器定位复用一次；每次重试对每个实际存在的正文父目录各完成一次同步，不宣称性能提升。对齐 e1b845b7，固定 Rust 1.99 格式、Python AST/静态接线、严格补丁及独立静审通过；未本地编译或执行测试，真实故障与行为结果待 CI。
 
 ## 本轮清理路由顺序保留
 
