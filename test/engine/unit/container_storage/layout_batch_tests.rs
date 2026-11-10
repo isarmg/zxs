@@ -619,6 +619,82 @@ fn prepared_root_with_its_final_basename_and_prepared_child_survive_cold_rebuild
 }
 
 #[test]
+fn stopped_after_intent_writes_retains_traversable_sources_before_file_staging() {
+    let fixture = Fixture::new();
+    let parent = fixture.directory('3', "A", "B", &fixture.root_id, &fixture.root_id);
+    let versions = fixture.directory(
+        '4',
+        "A/versions",
+        "B/versions",
+        parent.intent.directory_id(),
+        parent.intent.directory_id(),
+    );
+    let body = fixture.directory(
+        '5',
+        "A/versions/body.txt",
+        "B/versions/body.txt",
+        versions.intent.directory_id(),
+        versions.intent.directory_id(),
+    );
+    let inside = fixture.file(
+        'a',
+        body.intent.directory_id(),
+        "data",
+        address(body.intent.directory_id(), "data"),
+    );
+    let outside = fixture.file('b', &fixture.root_id, "B", address(&fixture.root_id, "A"));
+    let batch = Batch {
+        databases: BTreeMap::new(),
+        directories: vec![fixture.root_change(), parent, versions, body],
+        files: vec![inside.clone(), outside.clone()],
+    };
+    preflight(&fixture.anchor(), &batch, &[], &mut |_| Ok(())).unwrap();
+    let mut stopped = false;
+    assert!(
+        apply(&fixture.anchor(), &batch, &mut |_| {
+            let recorded = load_file(&fixture.anchor(), outside.intent.file_id(), &mut |_| Ok(()))?;
+            if recorded == outside.intent {
+                stopped = true;
+                return Err(invalid(
+                    "injected stop after durable intents before staging",
+                ));
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+    assert!(stopped);
+    for change in &batch.directories {
+        let recorded = load_directory(&fixture.anchor(), change.intent.directory_id(), &mut |_| {
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(recorded.from(), change.intent.from());
+        assert_eq!(recorded.to(), change.intent.from());
+        assert_eq!(recorded.inode(), change.intent.inode());
+        assert_eq!(
+            locate_directory(&fixture.anchor(), &recorded, &mut |_| Ok(())).unwrap(),
+            fixture.history.join(change.intent.from().as_path())
+        );
+    }
+    fixture.assert_file(
+        &inside,
+        &fixture.root_path().join("A/versions/body.txt/data"),
+    );
+    assert_eq!(
+        locate_file(&fixture.anchor(), &outside.intent, &mut |_| Ok(())).unwrap(),
+        fixture.root_path().join("B")
+    );
+    let reloaded = reload_batch(&fixture, &batch);
+    apply(&fixture.anchor(), &reloaded, &mut |_| Ok(())).unwrap();
+    fixture.assert_file(
+        &inside,
+        &fixture.root_path().join("B/versions/body.txt/data"),
+    );
+    fixture.assert_file(&outside, &fixture.root_path().join("A"));
+}
+
+#[test]
 fn staged_ancestor_reloads_following_children_and_old_tails_stop_at_the_new_file() {
     let fixture = Fixture::new();
     let parent = fixture.directory('3', "A", "B", &fixture.root_id, &fixture.root_id);

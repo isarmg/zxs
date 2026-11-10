@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`45e1ad72`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`c37e68af`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮布局目标与当前定位分离
+
+- CI #1104 的 staged ancestor 用例是生产顺序错误：整体交换尚未暂存外移文件时，初始目录 locator 提前记录最终 B/versions/body.txt，严格探测因此走进真实文件容器正文并正确报 NotDirectory。
+- 初始 locator 改为已核对 inode 的 source→source；完整最终路径继续由已准入 State/Batch 持有，目标唯一性、父关系、占用检查及最终落位均显式读取 Batch goal。每次实际迁移前仍先写精确 from/to 及跟随后代过渡，再 no-clobber rename 和同步，不放宽 strict probe 或读取错误。
+- 保留原失败回归，新增全部初始意图落盘但文件尚未 staging 时中断：逐目录核对 source→source、原 inode 和可解析位置，重载持久记录后完成交换。真实 shared_layout 冷重建仍从 State 恢复目标，不从 locator 猜目标；该测试不是物理断电验收，不接纳此前非法未来地址。
+- 一个生产文件、根测试、组件说明及本清单变化；exact-previous、文件 owner/inode、持有根、安全重命名与同步点不变。对齐 c37e68af，固定 Rust 1.99 格式、严格补丁及独立静审通过；未本地编译或执行 Rust 测试，待 CI 验证。
 
 ## 本轮恢复 checkpoint 解码计量隔离
 

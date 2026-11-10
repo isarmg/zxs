@@ -596,13 +596,18 @@ fn prepare_directories(
     for change in &batch.directories {
         let current = previous_directory(anchor, change, observe)?;
         let source = locate_directory(anchor, current.as_ref().unwrap_or(&change.intent), observe)?;
+        // Final goals belong to the admitted batch, not the locating cache.
+        // A future descendant can still be inside an outgoing file container.
+        // Persist only the current source until relocate_directory records the
+        // precise source/destination pair immediately before its physical move.
+        let from = relative(anchor, &source)?;
         let next = DirectoryIntent::new(
             anchor.history_id(),
             change.intent.directory_id().clone(),
             change.intent.binding().clone(),
             change.intent.inode(),
-            relative(anchor, &source)?,
-            change.intent.to().clone(),
+            from.clone(),
+            from,
         )?;
         if let Some(current) = &current
             && change.previous.as_ref() != Some(current)
@@ -625,8 +630,9 @@ fn prepare_directories(
         let id = next.directory_id().clone();
         if change.retired
             || change.previous_parent != change.next_parent
-            || source.file_name() != next.to().as_path().file_name()
-            || (change.next_parent.is_none() && source != anchor.path().join(next.to().as_path()))
+            || source.file_name() != change.intent.to().as_path().file_name()
+            || (change.next_parent.is_none()
+                && source != anchor.path().join(change.intent.to().as_path()))
         {
             prepared.independent_directories.insert(id.clone());
         }
@@ -708,8 +714,13 @@ fn targets(
 ) -> Result<()> {
     let final_directories: BTreeMap<_, _> = prepared
         .directories
-        .iter()
-        .map(|(id, intent)| (id.clone(), anchor.path().join(intent.to().as_path())))
+        .keys()
+        .map(|id| {
+            (
+                id.clone(),
+                anchor.path().join(changes[id].intent.to().as_path()),
+            )
+        })
         .collect();
     let mut finals = BTreeMap::new();
     let mut probes = Vec::new();
@@ -728,7 +739,8 @@ fn targets(
         }
         let path = match &changes[id].next_parent {
             Some(parent) => prepared.directory_sources[parent].join(
-                intent
+                changes[id]
+                    .intent
                     .to()
                     .as_path()
                     .file_name()
@@ -947,7 +959,9 @@ fn move_file(
     sync_retry_tails(anchor, &tails, observe)
 }
 
-/// Persist the complete admitted move set before the first physical rename.
+/// Persist an inode-bound locator for every admitted entity before the first
+/// physical rename. Final goals remain in the State-derived batch; each actual
+/// directory relocation persists its precise source/destination pair first.
 /// Every error, including observer/store/synchronization uncertainty, stops the
 /// batch. The caller reloads exact durable records before any later retry; this
 /// operation never rolls back, deletes an occupant, or retries an uncertain I/O.
@@ -957,10 +971,15 @@ pub(super) fn apply(
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
     let mut prepared = prepare(anchor, batch, &[], observe)?;
-    let final_targets: BTreeMap<_, _> = prepared
+    let final_targets: BTreeMap<_, _> = batch
         .directories
         .iter()
-        .map(|(id, intent)| (id.clone(), intent.to().clone()))
+        .map(|change| {
+            (
+                change.intent.directory_id().clone(),
+                change.intent.to().clone(),
+            )
+        })
         .collect();
     persist(anchor, batch, &prepared, observe)?;
     for id in &prepared.independent_files {
