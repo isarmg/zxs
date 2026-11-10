@@ -89,7 +89,14 @@ impl Fixture {
             Config::development((0..count + added).map(|n| temp.path().join(format!("new-{n}"))))
                 .unwrap();
         let mut directories = Vec::new();
-        for disk in additions.disks.into_iter().skip(count) {
+        for mut disk in additions.disks.into_iter().skip(count) {
+            if prior_stop {
+                // The old primary is stopped. A new independent primary must
+                // not borrow that disabled disk as its backup-chain ancestor.
+                disk.level = 1;
+                disk.upstream_slot_id = None;
+                disk.slot_id = format!("P{:02}", target.disks.len() - count + 2);
+            }
             private_dir(&disk.root).unwrap();
             directories.push(PendingMemberDirectory {
                 disk_id: disk.disk_id.clone(),
