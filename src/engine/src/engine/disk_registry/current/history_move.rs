@@ -111,17 +111,32 @@ impl CurrentNamespaces {
             .filter(|(id, branch)| previous.branches.get(*id) != Some(*branch))
         {
             let entries = &next.commits[&branch.head_commit_id].entries;
+            let old = self.branches.get(id).filter(|_| op.kind == OBJECT_MOVE_KIND);
             Arc::make_mut(&mut view.branches).insert(
                 id.clone(),
                 Arc::new(CurrentScope {
                     head: branch.head_commit_id.clone(),
                     entries: Arc::new(entries.clone()),
-                    source_head: branch.head_commit_id.clone(),
-                    source_entries: Arc::new(entries.clone()),
-                    writable: true,
-                    hidden_paths: BTreeSet::new(),
+                    source_head: old.map(|scope| scope.source_head.clone())
+                        .unwrap_or_else(|| branch.head_commit_id.clone()),
+                    source_entries: old.map(|scope| Arc::clone(&scope.source_entries))
+                        .unwrap_or_else(|| Arc::new(entries.clone())),
+                    writable: old.map(|scope| scope.writable).unwrap_or(true),
+                    hidden_paths: old.map(|scope| scope.hidden_paths.clone()).unwrap_or_default(),
                 }),
             );
+        }
+        if op.kind == OBJECT_MOVE_KIND {
+            // verify_transition above has already admitted every imported and
+            // retained branch, including nonselected nested repository branches.
+            // Do not reclassify those branches as newly-created current forks.
+            for (id, branch) in super::changed_directory_branches(previous, next) {
+                if previous.directory_branches.get(id) == Some(branch) { continue; }
+                let repository = next.repositories.get(&branch.repository_id).ok_or_else(invalid)?;
+                let owner = view.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
+                let scope = self.project_directory_scope(branch, owner);
+                Arc::make_mut(&mut view.directories).insert(id.clone(), scope);
+            }
         }
         view.reserve_history_copy_identities(previous, next);
         Ok(Some(view))

@@ -119,7 +119,7 @@ impl EngineBackend {
         // The retained preliminary root belongs to the original file workflow.
         // Resume that original request; do not rewrite its None intent into a
         // new object operation with a different target-repository fact.
-        engine.move_current_file_captured(&original, &source, None,
+        engine.continue_file_move_after_root(&original, &source, root_operation,
             &current.principal, command.operation_id).map_err(error)
     }
 }

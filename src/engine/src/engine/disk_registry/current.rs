@@ -517,6 +517,23 @@ impl CurrentNamespaces {
 
     /// Derived only before a real publication. Ordinary publication installs the
     /// result atomically with its State; failure leaves the previous view intact.
+    /// Projection only. The normal publication and a complete object-move
+    /// transition have different admission proofs, but preserve the same
+    /// directory registration, source baseline and hidden-path semantics.
+    fn project_directory_scope(&self, branch: &DirectoryBranch, owner: &CurrentScope) -> Arc<CurrentScope> {
+        let old = self.directories.get(&branch.directory_branch_id);
+        Arc::new(CurrentScope {
+            source_head: old.map(|scope| scope.source_head.clone())
+                .unwrap_or_else(|| branch.head_tree_id.clone()),
+            source_entries: old.map(|scope| Arc::clone(&scope.source_entries))
+                .unwrap_or_else(|| Arc::new(branch.entries.clone())),
+            head: branch.head_tree_id.clone(),
+            entries: Arc::new(branch.entries.clone()),
+            writable: old.map(|scope| scope.writable).unwrap_or(owner.writable),
+            hidden_paths: old.map(|scope| scope.hidden_paths.clone()).unwrap_or_default(),
+        })
+    }
+
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
         if let Some(view) = self.advance_history_move(previous, next)? {
@@ -565,13 +582,7 @@ impl CurrentNamespaces {
         // File-branch synchronization may only borrow an owning namespace that
         // this same publication has already passed through its identity fence.
         changed_branches.sort_by_key(|(_, branch)| branch.file_id.is_some());
-        let changed_directories: Vec<_> = match &directory_changes {
-            storage_contract::MapChanges::Keys(keys) => keys
-                .iter()
-                .filter_map(|id| next.directory_branches.get_key_value(id))
-                .collect(),
-            storage_contract::MapChanges::All => next.directory_branches.iter().collect(),
-        };
+        let changed_directories = changed_directory_branches(previous, next);
         let history_sources = self.history_merge_sources(previous, next)?;
         for &(id, branch) in &changed_branches {
             if previous
@@ -687,21 +698,7 @@ impl CurrentNamespaces {
                 &changes,
             )?;
             Arc::make_mut(&mut view.directories).insert(
-                id.clone(),
-                Arc::new(CurrentScope {
-                    source_head: old
-                        .map(|scope| scope.source_head.clone())
-                        .unwrap_or_else(|| branch.head_tree_id.clone()),
-                    source_entries: old
-                        .map(|scope| Arc::clone(&scope.source_entries))
-                        .unwrap_or_else(|| Arc::new(branch.entries.clone())),
-                    head: branch.head_tree_id.clone(),
-                    entries: Arc::new(branch.entries.clone()),
-                    writable: old.map(|scope| scope.writable).unwrap_or(owner.writable),
-                    hidden_paths: old
-                        .map(|scope| scope.hidden_paths.clone())
-                        .unwrap_or_default(),
-                }),
+                id.clone(), self.project_directory_scope(branch, owner),
             );
         }
         for (id, branch) in changed_branches {
@@ -724,6 +721,14 @@ impl CurrentNamespaces {
             }
         }
         Ok(view)
+    }
+}
+
+fn changed_directory_branches<'a>(previous: &State, next: &'a State) -> Vec<(&'a String, &'a DirectoryBranch)> {
+    match next.directory_branches.changes_since(&previous.directory_branches) {
+        storage_contract::MapChanges::Keys(keys) => keys.iter()
+            .filter_map(|id| next.directory_branches.get_key_value(id)).collect(),
+        storage_contract::MapChanges::All => next.directory_branches.iter().collect(),
     }
 }
 
