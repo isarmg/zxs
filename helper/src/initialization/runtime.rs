@@ -1,3 +1,4 @@
+//! Staged preparation of first-install runtime directories.
 mod directories;
 
 use super::Input;
@@ -189,6 +190,8 @@ fn bind_original(mut prepared: Prepared) -> Result<Prepared> {
                         "runtime completion started without its complete original intent".into(),
                     );
                 }
+                // Completion staging is created only after every path exists.
+                // Its absence of a receipt is not authority to recreate paths.
                 prepared
                     .directories
                     .completed(&prepared.preview.request_digest)?;

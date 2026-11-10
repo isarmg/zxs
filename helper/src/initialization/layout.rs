@@ -129,10 +129,15 @@ impl Destination {
         let owner = pending_owner(directory.directory(), self.owner)?;
         self.prepare_children(&directory, &pending, owner, &revalidate)?;
         self.complete_children(&directory)?;
+        // Persist every child name before handing off the staging parent. A
+        // service-owned pending parent must never imply missing children may be
+        // reconstructed after its private preparation has already finished.
         directory.directory().sync_all()?;
         revalidate()?;
         self.lease.recheck()?;
         check_named(&self.root, &pending, directory.identity())?;
+        // This dedicated, exact-request pending tree is never a preexisting live
+        // data root. An interrupted top-level handoff can finish the same plan.
         if owner == PendingOwner::Helper {
             set_owner(directory.directory(), self.owner)?;
         }
@@ -173,6 +178,9 @@ impl Destination {
         revalidate: &impl Fn() -> Result<()>,
     ) -> Result<()> {
         check_names(directory)?;
+        // Hold all existing children after checking the entire original staging
+        // tree, before creating or handing off any inode. A published data tree
+        // never reaches this path.
         let mut children = Vec::with_capacity(CHILDREN.len());
         for name in CHILDREN {
             let entry = EntryName::new(*name)?;
@@ -220,6 +228,9 @@ impl Destination {
             check_named(directory, &entry, child.identity())?;
             empty(&child)?;
             if pending_owner(child.directory(), self.owner)? == PendingOwner::Helper {
+                // mkdir may have succeeded before an earlier process stopped.
+                // This is the held, empty child of the exact original pending
+                // request, not a live directory or a replacement path.
                 set_owner(child.directory(), self.owner)?;
             }
             check_owner(child.directory(), self.owner)?;

@@ -1,3 +1,4 @@
+//! Immutable baseline for the installed payload.
 use super::payload;
 use crate::{
     Result,

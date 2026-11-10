@@ -1,3 +1,4 @@
+//! Explicit no-overwrite publication of the sealed same-source VFS module.
 use super::{InstalledProgram, PayloadMetadata, vfs_payload};
 use crate::{
     Result,

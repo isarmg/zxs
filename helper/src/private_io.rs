@@ -1,3 +1,6 @@
+//! Descriptor-anchored CLI files. Output parents may be public (for example
+//! /tmp); files are owner-only and single-linked. Existing outputs are never
+//! clobbered; draft replacements require a held transaction.
 mod configuration_files;
 mod host_root;
 mod program_repair;
@@ -33,6 +36,8 @@ impl AnchoredPath {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        // Resolve the caller-selected parent once. All subsequent file opens,
+        // publication and cleanup use the held directory descriptor.
         let parent = parent.canonicalize()?;
         Ok(Self {
             directory: OpenAt2Root::open(&parent, MountPolicy::AllowNestedMounts)?,
@@ -41,6 +46,9 @@ impl AnchoredPath {
     }
 }
 
+/// Read an explicitly selected owned draft without following links. Drafts
+/// need not have secret-file permissions, but still use the regular-file and
+/// single-link checks of the descriptor-anchored I/O layer.
 impl AnchoredPath {
     fn read_owned_bytes(&self, maximum: usize) -> Result<Vec<u8>> {
         let file = self.directory.open_file(&self.name.as_relative(), false)?;
@@ -60,6 +68,9 @@ impl AnchoredPath {
         Ok(bytes)
     }
 }
+/// Draft read/validate/backup/replace transaction. The stable parent lock
+/// spans inode replacement and covers aliases and overlapping backup names.
+/// External writers must remain stopped for the transaction.
 pub(crate) struct DraftTransaction {
     target: AnchoredPath,
     _lock: AdvisoryLock,
@@ -85,6 +96,8 @@ impl DraftTransaction {
         self.target.read_owned_bytes(maximum)
     }
 
+    /// Inspect markers and backup names relative to the same held parent as
+    /// the draft. Never recanonicalize a parent that could have been rebound.
     pub(crate) fn entry_exists(&self, name: &OsStr) -> Result<bool> {
         let name = EntryName::new(name)?;
         match statat(
@@ -113,10 +126,13 @@ impl DraftTransaction {
     }
 }
 
+/// Read a user-selected bounded, owned regular input without following its leaf.
 pub(crate) fn read_owned(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     AnchoredPath::open(path)?.read_owned_bytes(maximum)
 }
 
+/// Publish only a complete 0600 file; existing files, directories and links win.
+/// A directory-sync failure after rename preserves PublishedDurabilityUnknown.
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = AnchoredPath::open(path)?;
     write_atomic_at(&target.directory, &target.name, bytes, false)
@@ -126,6 +142,9 @@ pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 #[path = "../../test/helper/unit/private_io/tests.rs"]
 mod tests;
 
+/// Program-only publication into an already trusted parent. Callers choose a
+/// fixed installation path, not an arbitrary browser-supplied destination.
+/// Existing nonmatching files, links, modes or owners are never replaced.
 pub(crate) struct ProgramDestination {
     parent_path: std::path::PathBuf,
     target: AnchoredPath,

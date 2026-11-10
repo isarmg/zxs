@@ -1,3 +1,4 @@
+//! Snapshot the matching offline VFS build product.
 use super::materials;
 use std::{env, fs, path::Path};
 

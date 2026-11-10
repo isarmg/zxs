@@ -1,3 +1,4 @@
+//! VFS module publication in fixed existing system directories.
 use super::*;
 use crate::installation::vfs_payload::{MODULE_DIRECTORY, MODULE_PATH};
 use platform_io::fs_safety::RelativePath;

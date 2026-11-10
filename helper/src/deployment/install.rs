@@ -1,3 +1,4 @@
+//! Confirmed, no-overwrite installation of fixed configuration files.
 pub(crate) mod recovery;
 use super::{Input, model, render};
 use crate::{
@@ -201,6 +202,8 @@ pub(crate) fn preview(input: Input) -> Result<Preview> {
     Ok(build(input)?.preview)
 }
 
+/// A durable intent retains the original request and published files so the
+/// same installation can resume after an error.
 #[derive(Debug)]
 struct InstallationPending {
     request_digest: String,

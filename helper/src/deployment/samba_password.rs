@@ -1,3 +1,5 @@
+//! Confirmed password reset for an existing local Samba account.
+//! Unknown external-command outcomes retain their original request for inspection.
 pub(crate) mod enrollment;
 mod state;
 use super::{Input as DeploymentInput, install};
@@ -143,6 +145,7 @@ fn prepare(input: Input) -> Result<Prepared> {
     let testparm = Executable::open(Program::Testparm)?;
     let pdbedit = Executable::open(Program::Pdbedit)?;
     let smbpasswd = Executable::open(Program::Smbpasswd)?;
+    // The helper-generated configuration fixes the local backend and hooks.
     state::require_local_configuration(&testparm)?;
     configuration.require_existing()?;
     let database = state::Database::open()?;
@@ -186,6 +189,8 @@ pub(super) fn require_activation(
     pdbedit: &Executable,
     account: &crate::account::Snapshot,
 ) -> Result<()> {
+    // pdbedit may initialize a missing passdb, so hold the existing file and
+    // its exact revision before querying it.
     let database = state::Database::open()?;
     state::require_local_configuration(testparm)?;
     state::require_existing_account(pdbedit, account)?;
@@ -245,6 +250,8 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
         return Err("Samba configuration, account, database metadata or fixed programs differ from the exact preview; no password command was admitted".into());
     }
     prepared.unchanged()?;
+    // One-shot intent creation is the admission point. Even a missing receipt
+    // or failed spawn cannot prove a previous external command did not commit.
     let recorded = prepared.configuration.host().read_operation(
         &prepared.name(),
         "plan.json",
@@ -275,6 +282,8 @@ pub(crate) fn reset(input: Reset) -> Result<Status> {
 fn execute(prepared: &Prepared, password: &SecretString) -> Result<Status> {
     prepared.unchanged()?;
     state::require_existing_account(&prepared.pdbedit, &prepared.plan.account)?;
+    // pdbedit is not called with export/hash/modification flags. Unexpected
+    // metadata changes, including its own maintenance, prevent password write.
     prepared.unchanged()?;
     prepared.smbpasswd.password(
         &[

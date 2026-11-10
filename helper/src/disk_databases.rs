@@ -1,3 +1,4 @@
+//! Offline local database inventory.
 use crate::{Result, diagnostic_chain, print, private_io};
 use command_line::{Args, ValueEnum};
 use data_serialization::{Deserialize, Serialize};
@@ -161,6 +162,8 @@ pub(crate) fn run(options: Options) -> Result<()> {
     Ok(())
 }
 
+/// System authority recovery and derived material outcomes are independent.
+/// Keep the successful authority fact even if a particular disk index failed.
 pub(crate) fn report_restored(engine: &Engine) -> Result<()> {
     let current: Vec<_> = engine.disk_catalog_statuses().into_iter().map(|disk| {
         let state = match disk.state {

@@ -1,3 +1,4 @@
+//! Export and reconstruction of standalone object database rescue artifacts.
 use crate::{Result, print, private_io};
 use command_line::Subcommand;
 use data_serialization::Deserialize;
@@ -66,6 +67,8 @@ fn summary(material: &ObjectDatabaseMaterial) -> json_codec::Value {
     })
 }
 
+/// The suffix excludes all normal managed database/authority names. This is
+/// not a serving install entrypoint, even if the chosen parent is on a data disk.
 fn artifact_path(path: &Path, suffix: &str) -> Result<()> {
     if !path
         .file_name()

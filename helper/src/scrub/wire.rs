@@ -1,3 +1,4 @@
+//! The command's JSON view, deliberately separate from the engine domain report.
 use data_serialization::Serialize;
 use std::{borrow::Cow, time::SystemTime};
 use storage_engine::{
@@ -24,6 +25,7 @@ pub(super) struct Report<'a> {
     snapshot_hash: Option<&'a str>,
     started_at: SystemTime,
     finished_at: SystemTime,
+    // This invocation has no earlier success and never reads a write timestamp.
     last_complete_success_at: Option<SystemTime>,
     metadata_members_checked: usize,
     metadata_publications_verified: usize,

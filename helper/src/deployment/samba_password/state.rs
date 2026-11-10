@@ -1,3 +1,4 @@
+//! Observation of an existing local tdbsam target.
 pub(super) mod enrollment;
 use crate::{
     Result,

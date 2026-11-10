@@ -1,3 +1,4 @@
+//! A single offline scrub owns its native worker through actual I/O completion.
 mod wire;
 
 use std::{future::Future, io, path::PathBuf, sync::Arc, thread};
@@ -12,6 +13,7 @@ use tokio::{
 type ScanResult = storage_engine::Result<IntegrityScrubReport>;
 
 pub(crate) fn run(root: PathBuf, limits: Option<RetainedWorkspaceLimits>) -> crate::Result<()> {
+    // This runtime handles signals; the long scan owns a dedicated native thread.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .build()?;
@@ -41,6 +43,8 @@ impl ScrubSignals {
         })
     }
     async fn wait(&mut self) {
+        // This local Signal implementation is an infinite stream; recv never
+        // returns None. Only installation is a fallible boundary.
         tokio::select! {
             _ = self.interrupt.recv() => {},
             _ = self.terminate.recv() => {},
@@ -54,6 +58,8 @@ struct ScrubJob {
     completed: Arc<Notify>,
 }
 
+// Notification happens on success, error and unwinding. Engine and its writer
+// locks are dropped inside the scan before this outer completion guard runs.
 struct Completion(Arc<Notify>);
 impl Drop for Completion {
     fn drop(&mut self) {
@@ -71,6 +77,8 @@ impl ScrubJob {
             .name("zxs-integrity-scrub".into())
             .spawn(move || {
                 let _completion = completion;
+                // Preserve pending decisions: this diagnostic must not choose
+                // to finish an unpublished operation merely to start a scan.
                 let mut engine = Engine::open_for_recovery_with_workspace_limits(&root, limits)?;
                 crate::report_recovery_warnings(&mut engine);
                 engine.scrub(&worker_cancellation)
@@ -95,6 +103,8 @@ impl ScrubJob {
                 completed.await;
             }
         };
+        // A signal requests cancellation, not
+        // detachment. Even a failed scan is joined before releasing its owner.
         let worker = self
             .worker
             .take()
@@ -107,6 +117,8 @@ impl Drop for ScrubJob {
     fn drop(&mut self) {
         self.cancellation.cancel();
         if let Some(worker) = self.worker.take() {
+            // Also covers a cancelled caller future or unwinding. This worker
+            // never depends on the runtime, so synchronous drain cannot strand it.
             if let Err(error) = join_worker(worker) {
                 tracing::error!(error = %error, "integrity scrub drain failed");
             }

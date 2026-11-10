@@ -1,3 +1,5 @@
+//! Version-bound deployment preparation and confirmed fixed-path configuration
+//! installation. Activation is a separate explicit service-manager handoff.
 pub(crate) mod activation;
 pub(crate) mod install;
 mod model;

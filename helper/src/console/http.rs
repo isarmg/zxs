@@ -460,6 +460,7 @@ async fn export(
                 .map_or_else(|| "empty".into(), |value| value.to_string()),
         ),
     ] {
+        // All dynamic fields are protocol-validated ASCII digests, never paths.
         headers.insert(
             name,
             HeaderValue::from_str(&value).expect("invariant: generated digest header is ASCII"),
@@ -884,6 +885,8 @@ async fn secret_input<T: DeserializeOwned>(request: Request) -> Result<T, Failur
     })?
     .map_err(|error| Failure::new(StatusCode::BAD_REQUEST, "credential_request_body", error))?;
     let decoded = json_codec::from_slice::<T>(&bytes);
+    // Clear the uniquely owned transport allocation; SecretString fields
+    // clear their own allocations on drop.
     if let Ok(mut owned) = bytes.try_into_mut() {
         owned.fill(0);
     }
@@ -1046,6 +1049,7 @@ async fn samba_reset_status(
     Ok(Json(status).into_response())
 }
 fn samba_reset_failure(error: Box<dyn std::error::Error + Send + Sync>) -> Failure {
+    // Credential failures use a fixed public diagnostic to keep secrets private.
     Failure::message(
         StatusCode::CONFLICT,
         "local_samba_password_reset",
@@ -1455,6 +1459,8 @@ async fn terminal_chain_generation_read(
     .await
 }
 
+/// The helper is only the HTTP transport for management semantics. The matching
+/// embedded program parses the exact typed request before any host access.
 async fn maintenance_operation(
     state: State,
     request: Request,

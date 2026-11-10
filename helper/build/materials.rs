@@ -1,3 +1,4 @@
+//! Controlled build-input snapshot.
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,

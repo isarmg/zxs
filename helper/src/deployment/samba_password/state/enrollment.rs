@@ -1,3 +1,4 @@
+//! Account-absence proof for the selected native local passdb.
 use super::*;
 use platform_io::fs_safety::Error as FileError;
 use sha2::{Digest, Sha256};
@@ -56,6 +57,7 @@ impl Target {
                     .map(|metadata| FileStamp::of(&metadata))
             })
             .transpose()?;
+        // A list command must never initialize a missing database during preview.
         let accounts = if existing.is_some() {
             accounts(program)?
         } else {

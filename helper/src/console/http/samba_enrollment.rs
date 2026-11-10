@@ -1,3 +1,4 @@
+//! Enrollment shares admission, work ownership and secret redaction with resets.
 use super::*;
 use crate::deployment::samba_password::{self, enrollment};
 

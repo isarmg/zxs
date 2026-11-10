@@ -1,3 +1,4 @@
+//! Restore the exact embedded payload recorded by the installation baseline.
 use super::{
     baseline::{self, PayloadIdentity},
     payload,

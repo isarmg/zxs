@@ -1,3 +1,5 @@
+//! New fixed configuration files only. The parent descriptors and directory
+//! locks outlive every read, no-clobber rename and durability barrier.
 use super::write_atomic_at_mode;
 use crate::Result;
 use data_serialization::Serialize;
@@ -55,6 +57,8 @@ impl Parent {
         Ok(())
     }
 }
+/// Lock order: host lease, program parent, /etc, systemd, system, samba.
+/// External administrators must remain stopped while these advisory locks are held.
 pub(crate) struct ConfigurationFiles {
     etc: Parent,
     systemd: Parent,
@@ -116,6 +120,8 @@ impl ConfigurationFiles {
         self.recheck()?;
         Ok(present)
     }
+    /// The dedicated Samba service is installed only by explicit activation.
+    /// Old configuration-only requests retain their original two-file format.
     pub(crate) fn inspect_smb_unit(&self, bytes: &[u8]) -> Result<bool> {
         self.recheck()?;
         let present = matching(&self.units.root, "zxs-smb.service", bytes)?.is_some();
@@ -197,6 +203,8 @@ fn publish(root: &OpenAt2Root, name: &str, bytes: &[u8]) -> Result<bool> {
             true
         }
     };
+    // Existing names also need a barrier: the earlier publisher may have been
+    // interrupted after rename and before the directory became durable.
     root.directory().sync_all()?;
     let file = matching(root, name, bytes)?.ok_or("published configuration disappeared")?;
     file.sync_all()?;

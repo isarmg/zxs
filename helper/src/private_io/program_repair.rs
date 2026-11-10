@@ -1,3 +1,4 @@
+//! Same-payload repair retains an independent backup and the exchanged inode.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

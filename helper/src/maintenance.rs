@@ -1,3 +1,4 @@
+//! Pipe client for the matching bundled ZXS program.
 use http_routing::http::StatusCode;
 use platform_io::secret::SecretBytes;
 use std::{
@@ -136,7 +137,7 @@ pub(crate) fn run(operation: Operation, body: SecretBytes) -> Result<Vec<u8>, Er
         Ok(())
     })();
     drop(body);
-    drop(input);
+    drop(input); // EOF also terminates a partial request; no retry is automatic.
     let output = child
         .child
         .stdout
@@ -144,6 +145,8 @@ pub(crate) fn run(operation: Operation, body: SecretBytes) -> Result<Vec<u8>, Er
         .expect("invariant: maintenance stdout is piped");
     let mut output = std::io::BufReader::new(output);
     let reply = read_reply(operation, &mut output);
+    // Always drain and join, including invalid/overlong output. A cancelled HTTP
+    // request cannot release its job/lease while the program still owns work.
     let drained = std::io::copy(&mut output, &mut std::io::sink());
     drop(output);
     let status = child.wait().map_err(|source| transport("wait", source))?;

@@ -1,3 +1,4 @@
+//! Frozen readback of an explicitly selected rescue SQLite database.
 use super::*;
 use data_serialization::Serialize;
 use platform_io::publication::PublicationReceipt;
@@ -130,6 +131,7 @@ fn verify_at(
     let sha256 = rescue_digest(&bytes);
     verify(&bytes)?;
     drop(bytes);
+    // Keep the original FD alive: a substituted name cannot recycle its inode.
     let after_bytes = read(&file, maximum)?;
     if rescue_digest(&after_bytes) != sha256 || Stamp::read(&file, maximum)? != before {
         return Err("rescue image changed during SQLite verification".into());
@@ -152,6 +154,7 @@ fn verify_at(
     })
 }
 
+/// Read-only verification of the selected rescue image.
 pub(crate) fn verify_rescue_sqlite(
     path: &Path,
     maximum: usize,
@@ -181,6 +184,8 @@ impl std::error::Error for PublishedUnverified {
     }
 }
 
+/// Bind readback to the exact inode returned by the no-clobber publisher.
+/// A failure after publication leaves the output intact and reports that fact.
 pub(crate) fn publish_rescue_sqlite(
     path: &Path,
     bytes: &[u8],

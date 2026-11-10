@@ -102,6 +102,8 @@ pub(super) fn bridge_socket(service_uid: u32) -> Result<Value> {
     {
         return Err("ZXS bridge socket changed during observation".into());
     }
+    // This reports the native socket inode. RPC authentication is performed
+    // by the daemon when a bridge or SMB session connects.
     Ok(
         json!({"socket_published":true, "device":before.dev().to_string(),
         "inode":before.ino().to_string(), "bridge_protocol_session_verified":false,

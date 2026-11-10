@@ -1,3 +1,4 @@
+//! Exact public license and notice bytes for the bundled payload.
 use crate::{Result, private_io};
 use data_serialization::Serialize;
 use sha2::{Digest, Sha256};

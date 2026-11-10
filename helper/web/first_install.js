@@ -1,4 +1,6 @@
 "use strict";
+// UI sequencing for native installation operations. Plans, locks, recovery
+// and current service readiness come from the native responses.
 (() => {
   const key = "zxs-helper:first-install-tab";
   const maxBytes = 256 * 1024;
@@ -245,6 +247,8 @@
         if (complete(step, value, original)) finish(step);
       }
     } catch (failure) {
+      // A lost first POST may have left no native record. A deliberate retry
+      // uses only the saved original; the native same-request APIs decide.
       inspected = original?.issued === true && (!original.completed || step === 7);
       error(failure.message + (inspected ? " 已保留完整原输入；只允许另行明确重试这个原步骤，不换新请求。" : ""));
     } finally { setBusy(false); render(); }
@@ -377,7 +381,7 @@
     try {
       const next = structuredClone(record);
       next.steps[step].issued = true;
-      persist(next);
+      persist(next); // Save and read back before any mutation or credential POST.
       const request = commitRequest(step, original);
       body = request[1];
       clearPasswords(); inspected = false; liveReady = false;
@@ -465,6 +469,8 @@
     } catch (failure) {
       error(failure.message + " 保留原请求、pending 和全部目录；先查询，不清空、不换批次。");
     } finally { setBusy(false); render(); }
+    // Directory creation and storage genesis retain their original operations.
+    // Read the real storage plan now; initializing it still needs confirmation.
     if (completed && token === epoch) await inspect();
   }
   element("directories-save").addEventListener("click", () => {
@@ -500,6 +506,7 @@
       const reference = original && same(original.input?.deployment, record.input.deployment)
         && /^[0-9a-f]{64}$/.test(original.request_digest)
         ? {kind:original.kind, request_digest:original.request_digest} : null;
+      // Return to the installation flow with a fresh native service observation.
       invalidateSambaPreview();
       ++epoch; inspected = false; directoryInspected = false; liveReady = false;
       clearPasswords(); element("ack").checked = false; element("open").hidden = true;

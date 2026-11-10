@@ -1,3 +1,4 @@
+//! The sealed same-source VFS build product embedded in the helper.
 use crate::Result;
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

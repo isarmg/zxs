@@ -1,3 +1,4 @@
+//! Offline consumer for the opt-in independent disk format.
 pub(crate) mod check;
 use crate::{Result, print, private_io};
 use command_line::{Args, Subcommand};

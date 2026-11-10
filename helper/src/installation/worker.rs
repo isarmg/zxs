@@ -1,3 +1,4 @@
+//! Execute a sealed anonymous copy of the verified embedded payload.
 use crate::Result;
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use std::{fs::File, io::Write, os::unix::fs::PermissionsExt};
