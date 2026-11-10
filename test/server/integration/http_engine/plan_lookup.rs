@@ -257,6 +257,9 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             .iter()
             .map(|directory| fixture_payload(directory, engine.state()))
             .collect::<Vec<_>>();
+        for payload in &payloads {
+            assert_eq!(std::fs::read(payload).unwrap(), b"old bytes");
+        }
         let blocker = directories[0].join("purged.json");
         std::fs::create_dir(&blocker).unwrap();
         let backend = Arc::new(EngineBackend::new(engine));

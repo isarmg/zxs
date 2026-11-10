@@ -87,7 +87,10 @@ fn blocked_cleanup(engine: &Engine, version: &str) -> (PathBuf, Vec<PathBuf>) {
     let payloads = directories
         .iter()
         .map(|directory| crate::container_storage::content_path(directory, body).unwrap())
-        .collect();
+        .collect::<Vec<_>>();
+    for payload in &payloads {
+        assert_eq!(fs::read(payload).unwrap(), b"old body");
+    }
     let blocker = directories[0].join("purged.json");
     // A failed local tombstone write occurs after logical publication.
     fs::create_dir(&blocker).unwrap();

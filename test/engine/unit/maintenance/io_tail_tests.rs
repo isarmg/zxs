@@ -39,6 +39,9 @@ impl PendingCleanup {
             engine.operation(operation).unwrap().commit_state,
             storage_contract::CommitState::Published
         );
+        for payload in &payloads {
+            assert_eq!(fs::read(payload).unwrap(), b"old body");
+        }
         fs::remove_dir(blocker).unwrap();
         Self {
             temporary,

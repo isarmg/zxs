@@ -618,11 +618,13 @@ impl Engine {
                 snapshot: snapshot.clone(),
                 content_state_proof,
             };
+            // Keep the admitted route order: a failure on an earlier replica
+            // must not let later replicas clean up before that failure is seen.
             let mut targets = p
                 .route_slot_ids
                 .iter()
                 .map(|slot| (slot.clone(), p.binding_generations[slot]))
-                .collect::<BTreeSet<_>>();
+                .collect::<Vec<_>>();
             if *state == ContentState::Retired {
                 let bindings = original_bindings.get(id).ok_or_else(|| {
                     Error::new(
@@ -630,10 +632,12 @@ impl Engine {
                         "retired body has no permanent original cleanup bindings",
                     )
                 })?;
+                let mut included = targets.iter().cloned().collect::<BTreeSet<_>>();
                 targets.extend(
                     bindings
                         .iter()
-                        .map(|binding| (binding.slot_id.clone(), binding.binding_generation)),
+                        .map(|binding| (binding.slot_id.clone(), binding.binding_generation))
+                        .filter(|binding| included.insert(binding.clone())),
                 );
             }
             for (slot, generation) in targets {
