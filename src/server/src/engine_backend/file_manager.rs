@@ -852,6 +852,39 @@ pub(super) fn move_file(
         .map_err(error)
 }
 
+/// The HTTP path only admits its disk scope. Object kind, initialized ownership,
+/// empty-target creation and publication all belong to the shared engine move.
+pub(super) fn move_object(
+    engine: &mut Engine,
+    identity: &Identity,
+    command: crate::MoveDiskObject,
+) -> Result<storage_contract::OperationResult, ApiError> {
+    if identity.smb_binding.is_some() {
+        return Err(ApiError::forbidden());
+    }
+    let request = &command.movement;
+    let source = engine
+        .state()
+        .repositories
+        .get(request.source_repository_id.as_str())
+        .ok_or_else(|| ApiError::invalid("the captured source repository is no longer registered"))?;
+    if source.primary_slot_id != command.source_slot_id {
+        return Err(ApiError::invalid("the source repository is not on the requested primary disk"));
+    }
+    for slot in [&command.source_slot_id, &request.target_slot_id] {
+        if disk(engine, slot)?.level != 1 {
+            return Err(ApiError::new(
+                ::http::StatusCode::FORBIDDEN,
+                storage_contract::ErrorCode::DiskReadOnly,
+                "object moves require writable primary disks",
+            ));
+        }
+    }
+    engine
+        .move_object(request, &identity.principal, command.operation_id)
+        .map_err(error)
+}
+
 pub(super) fn write_session(
     engine: &mut Engine,
     identity: &Identity,
