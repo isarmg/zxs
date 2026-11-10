@@ -1,6 +1,6 @@
 # 当前登记的冷恢复前缀与正文准入
 
-本记录对应 `348ff9e89` 后续工作树对 `handoff/2026-11-05-unfinished/prefix-proof.patch` 的整合，不将原候选或历史 CI 结果视为本轮通过证据。相关入口为 `engine/recovery/workspace_receipts.rs`、`payload_admission.rs`、`membership_transition/pending/activation/exit/replay.rs` 和 `degraded_recovery.rs`。
+本记录对应 `348ff9e89` 后续工作树对统一冷恢复前缀证明候选的整合，不将原候选或历史 CI 结果视为本轮通过证据。相关入口为 `engine/recovery/workspace_receipts.rs`、`payload_admission.rs`、`membership_transition/pending/activation/exit/replay.rs` 和 `degraded_recovery.rs`。
 
 ## 真实边界与顺序
 
