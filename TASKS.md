@@ -40,9 +40,11 @@
 
 ### M01／M09 目录分支来源与 Web 原请求恢复
 
-- **完整后继源码候选，尚未提交或验证**：基于准确 main `028a37a93e3720ae60cf9d91f3ca2eb62dbb0bd2`，合流普通文件 move，不单独发布旧十文件来源绑定片。目录创建 HTTP 必须提供已初始化目录的准确 repository/directory/branch、working/head tree、index generation 与 namespace head；首次规划与 Current 冷重推导使用同一来源核验，永久原收据先于新的状态规划，来源变化不得偷换请求。
+- 自动 push [CI `42727221004`](https://github.com/isarmg/zxs/actions/runs/42727221004) 的 contracts job `129537667046` 为 50 通过、5 失败；五项同因停在完整 OpenAPI/schema 镜像检查。目录删除合流已保留 core 中的 `DirectoryGitRepository.deletions` 和六个删除定义，但遗漏 OpenAPI components 同步；目录分支来源定义本身一致。本后继仅补齐这七处镜像，保留全部校验器、断言、路由、请求与错误语义，不降低门禁。未本地运行程序、格式器、编译或测试；该修复仍待准确后继 GitHub CI，不据静态 JSON 一致性称通过。
+
+- **业务切片已于 `b2df52e9` 合入，端到端验收未完成**：基于准确父 `028a37a93e3720ae60cf9d91f3ca2eb62dbb0bd2`，合流普通文件 move，不单独发布旧十文件来源绑定片。目录创建 HTTP 必须提供已初始化目录的准确 repository/directory/branch、working/head tree、index generation 与 namespace head；首次规划与 Current 冷重推导使用同一来源核验，永久原收据先于新的状态规划，来源变化不得偷换请求。
 - Web 从已复核目录状态冻结来源，创建与稳定 ID 默认切换复用既有原请求恢复队列。首次发送前保存并读回完整原 method、目标、body 与 operation；切换仍为 PUT。刷新、登录与导航只恢复原编号查询，明确重试不得产生新 ID 或改用今日来源；未知响应、错误收据、查询缺失及原请求续发遭拒继续保留围栏，只有匹配原种类／摘要／结果的终态才清理。
-- 同步 HTTP fixture、真实入口来源失效／原结果重放源码、权限与排队撤权矩阵、schema/OpenAPI、固定向量和 Rust 共享校验接线。保留普通单文件 move、目录 Git 分离暂存／提交、只读预览与已退役按名 directory-select 的边界。未本地运行项目、脚本、格式器、编译或测试，不改 main、不触发单独 CI；准确完整组合须由统一 GitHub CI 及后续真实浏览器恢复验收，不能据源码称验证通过。
+- 同步 HTTP fixture、真实入口来源失效／原结果重放源码、权限与排队撤权矩阵、schema/OpenAPI、固定向量和 Rust 共享校验接线。保留普通单文件 move、目录 Git 分离暂存／提交、只读预览与已退役按名 directory-select 的边界。未本地运行项目、脚本、格式器、编译或测试；上述组合已自动进入 GitHub CI，仍须通过准确后继检查及真实浏览器恢复验收，不能据源码称验证通过。
 
 ### H03 外来完整低级链的四级及以上材料入口
 

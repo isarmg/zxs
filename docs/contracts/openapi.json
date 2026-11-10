@@ -18857,6 +18857,15 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/DirectoryGitBranch"
             }
+          },
+          "deletions": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/EntryId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DirectoryDeletionNode"
+            }
           }
         },
         "required": [
@@ -18865,7 +18874,8 @@
           "initialized_sequence",
           "main_branch_id",
           "current_branch_id",
-          "branches"
+          "branches",
+          "deletions"
         ],
         "additionalProperties": false,
         "description": "显式初始化目录仓库的持久状态；HEAD、暂存树及独立子仓库精确引用分别保存。"
@@ -20967,6 +20977,181 @@
         ],
         "additionalProperties": false,
         "description": "Whole stable-file soft deletion at the current logical lookup path. File identity is in the URL. The server captures all branch heads, never a caller-supplied subset. Strict JSON body at most 16 KiB; no body/history removal."
+      },
+      "DirectoryDeletionNodeId": {
+        "type": "string",
+        "pattern": "^ddel_[0-9a-f]{32}$"
+      },
+      "DirectoryDeletionMember": {
+        "type": "object",
+        "properties": {
+          "deletion_node_id": {
+            "$ref": "#/components/schemas/FileDeletionNodeId"
+          },
+          "created_by_directory": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deletion_node_id",
+          "created_by_directory"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryDeletionNode": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/DirectoryDeletionNodeId"
+          },
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "owner_directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace_head": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "directory_branch_id": {
+            "$ref": "#/components/schemas/DirectoryBranchId"
+          },
+          "source_tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "author": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "files": {
+            "type": "object",
+            "maxProperties": 100,
+            "propertyNames": {
+              "$ref": "#/components/schemas/FileId"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DirectoryDeletionMember"
+            }
+          }
+        },
+        "required": [
+          "node_id",
+          "repository_id",
+          "history_tree_id",
+          "owner_directory_id",
+          "directory_id",
+          "path",
+          "namespace_head",
+          "directory_branch_id",
+          "source_tree_id",
+          "operation_id",
+          "author",
+          "sequence",
+          "created_at",
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "UndoDirectoryDeletionBody": {
+        "type": "object",
+        "properties": {
+          "owner_directory_id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "directory_id": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "deletion_node_id": {
+            "$ref": "#/components/schemas/DirectoryDeletionNodeId"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "owner_directory_id",
+          "directory_id",
+          "deletion_node_id",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryDeletionSummary": {
+        "type": "object",
+        "properties": {
+          "directory_id": {
+            "$ref": "#/components/schemas/EntryId"
+          },
+          "deletion_node_id": {
+            "$ref": "#/components/schemas/DirectoryDeletionNodeId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "directory_id",
+          "deletion_node_id",
+          "path",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "DirectoryDeletionsPage": {
+        "type": "object",
+        "properties": {
+          "snapshot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/DirectoryDeletionSummary"
+            }
+          },
+          "next_after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "snapshot",
+          "entries",
+          "next_after"
+        ],
+        "additionalProperties": false
       }
     }
   }
