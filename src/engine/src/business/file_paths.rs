@@ -13,6 +13,12 @@ pub(crate) fn source_node(state: &State, file: &str, version: &str, node: &str) 
     Ok(())
 }
 
+pub(super) struct PathChange<'a> {
+    pub(super) old: &'a Entry,
+    pub(super) new: &'a Entry,
+    pub(super) context: Option<FileContext>,
+}
+
 pub(crate) fn rename_node(
     state: &mut State,
     repository: &str,
@@ -25,9 +31,7 @@ pub(crate) fn rename_node(
     rename_node_with_ids(
         state,
         repository,
-        old,
-        new,
-        context,
+        PathChange { old, new, context },
         principal,
         operation,
         now()?,
@@ -38,14 +42,13 @@ pub(crate) fn rename_node(
 pub(super) fn rename_node_with_ids(
     state: &mut State,
     repository: &str,
-    old: &Entry,
-    new: &Entry,
-    context: Option<FileContext>,
+    change: PathChange<'_>,
     principal: &str,
     operation: OperationId,
     timestamp: u64,
     ids: &mut impl FnMut(&str) -> Result<String>,
 ) -> Result<FileContext> {
+    let PathChange { old, new, context } = change;
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::StateInvalid,

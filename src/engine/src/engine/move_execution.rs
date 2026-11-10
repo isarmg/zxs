@@ -56,21 +56,31 @@ impl<O: MoveOutcome> PublishedMove<O> {
     }
 }
 
+pub(super) struct MoveInput<O> {
+    pub(super) candidate: Candidate,
+    pub(super) hash: String,
+    pub(super) projection: super::publication::MoveProjection<O>,
+    pub(super) retained_versions: Vec<String>,
+}
+
 impl Engine {
     /// Freeze once, then publish and install once. Both live execution and an
     /// admitted recovery of that exact candidate use this method. No member of
     /// an aggregate move is submitted as an independent operation.
     pub(in crate::engine) fn finish_move<O: MoveOutcome, S: MoveSelection<O>>(
         &mut self,
-        candidate: Candidate,
-        hash: String,
-        projection: super::publication::MoveProjection<O>,
-        retained_versions: Vec<String>,
+        input: MoveInput<O>,
         existing: Option<Publication>,
         decided: bool,
         prepared_names: Option<crate::container_storage::PreparedNames>,
         mut selection: S,
     ) -> Result<OperationResult> {
+        let MoveInput {
+            candidate,
+            hash,
+            projection,
+            retained_versions,
+        } = input;
         selection.verify(self, &candidate, &hash)?;
         self.require_native_move_authority()?;
         let (outcome, next_namespaces) = projection.into_current(self, &candidate)?;

@@ -426,10 +426,12 @@ impl Engine {
             next: next_current_namespaces,
         };
         self.finish_move(
-            candidate,
-            hash,
-            projection,
-            retained,
+            super::move_execution::MoveInput {
+                candidate,
+                hash,
+                projection,
+                retained_versions: retained,
+            },
             None,
             false,
             Some(names),
@@ -476,10 +478,12 @@ impl Engine {
             },
         )?;
         self.finish_move(
-            candidate,
-            hash,
-            projection,
-            body.retained_version_ids,
+            super::move_execution::MoveInput {
+                candidate,
+                hash,
+                projection,
+                retained_versions: body.retained_version_ids,
+            },
             existing,
             true,
             None,

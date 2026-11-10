@@ -63,9 +63,7 @@ pub(super) fn copy(
     unit: &MoveUnit,
     target: &Repository,
     graph: &Graph,
-    principal: &str,
-    operation: OperationId,
-    created_at: u64,
+    event: &MoveEvent<'_>,
 ) -> Result<Vec<storage_contract::directory_git::DirectoryDeletionNode>> {
     let mut imported = Vec::new();
     for member in unit.directories.values() {
@@ -169,10 +167,10 @@ pub(super) fn copy(
                 node.namespace_head = graph.id(&node.namespace_head)?;
                 node.directory_branch_id = graph.id(&node.directory_branch_id)?;
                 node.source_tree_id = graph.id(&node.source_tree_id)?;
-                node.operation_id = operation;
-                node.author = principal.into();
+                node.operation_id = event.operation;
+                node.author = event.principal.into();
                 node.sequence = next.sequence;
-                node.created_at = created_at;
+                node.created_at = event.created_at;
                 node.files = node
                     .files
                     .into_iter()

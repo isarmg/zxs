@@ -71,10 +71,8 @@ fn generated(operation: OperationId, prefix: &str, purpose: &str) -> Result<Stri
     .generated(prefix, purpose)
 }
 
-/// Called only for a new operation, after the executor has looked up an original
-/// receipt or journal candidate and checked write/native-move authority under
-/// its Engine owner. No intervening mutation precedes this borrowed planner.
-/// This function does not publish any member.
+/// Plan a new operation under the Engine's write/native-move authority, using
+/// the same immutable source after the original receipt/candidate lookup.
 pub(crate) fn plan(
     engine: &Engine,
     input: &MoveRequest<'_>,
@@ -199,15 +197,18 @@ fn publish_namespace(
     Ok(id)
 }
 
+struct MoveEvent<'a> {
+    principal: &'a str,
+    operation: OperationId,
+    created_at: u64,
+}
+
 fn deletion(
     previous: &State,
     next: &mut State,
     repository: &Repository,
     entry: &Entry,
-    principal: &str,
-    operation: OperationId,
-    sequence: u64,
-    time: u64,
+    event: &MoveEvent<'_>,
 ) -> Result<FileDeletionNode> {
     let mut heads = BTreeMap::new();
     for branch in previous
@@ -237,7 +238,7 @@ fn deletion(
         let mut ids = |prefix: &str| {
             ordinal += 1;
             IdentityScope {
-                operation,
+                operation: event.operation,
                 member: Some(&entry.file_id),
             }
             .generated(prefix, &format!("deletion-frontier-{ordinal}"))
@@ -252,17 +253,17 @@ fn deletion(
         .into_iter()
         .collect();
     Ok(FileDeletionNode {
-        node_id: generated(operation, "fdel", &entry.file_id)?,
+        node_id: generated(event.operation, "fdel", &entry.file_id)?,
         repository_id: repository.repository_id.clone(),
         history_tree_id: repository.history_tree_id.clone(),
         file_id: entry.file_id.clone(),
         path: entry.location().clone(),
         branch_heads: heads,
         parent_node_ids: parents,
-        operation_id: operation,
-        author: principal.into(),
-        sequence,
-        created_at: time,
+        operation_id: event.operation,
+        author: event.principal.into(),
+        sequence: next.sequence,
+        created_at: event.created_at,
     })
 }
 
@@ -319,9 +320,7 @@ fn relocate_current_files(
     target: &Repository,
     graph: Option<&graph::Graph>,
     arrived: &[Entry],
-    route: &CopyRoute,
-    principal: &str,
-    operation: OperationId,
+    event: &MoveEvent<'_>,
 ) -> Result<()> {
     if !unit.copy_history {
         relocate_existing_locations(next, unit)?;
@@ -386,7 +385,7 @@ fn relocate_current_files(
                 format!("current-{ordinal}")
             };
             IdentityScope {
-                operation,
+                operation: event.operation,
                 member: Some(&entry.file_id),
             }
             .generated(prefix, &purpose)
@@ -406,12 +405,14 @@ fn relocate_current_files(
                 context = file_paths::rename_node_with_ids(
                     next,
                     &target.repository_id,
-                    &old,
-                    entry,
-                    Some(context),
-                    principal,
-                    operation,
-                    route.created_at,
+                    file_paths::PathChange {
+                        old: &old,
+                        new: entry,
+                        context: Some(context),
+                    },
+                    event.principal,
+                    event.operation,
+                    event.created_at,
                     &mut ids,
                 )?;
             }
@@ -420,7 +421,7 @@ fn relocate_current_files(
                 &context,
                 &entries_by_path,
                 entry,
-                operation,
+                event.operation,
                 &mut ids,
             )?;
         }
@@ -505,6 +506,11 @@ fn compose(
     sequence: u64,
 ) -> Result<(State, OperationResult, ResultBody)> {
     let principal = input.principal;
+    let event = MoveEvent {
+        principal,
+        operation,
+        created_at: route.created_at,
+    };
     let mut next = previous.clone();
     next.begin_tracking();
     crate::container_storage::capture_names(&mut next);
@@ -516,16 +522,8 @@ fn compose(
         let graph = graph::copy(
             previous, &mut next, &unit, &target, route, principal, operation,
         )?;
-        imported_directory_deletions = directories::copy(
-            previous,
-            &mut next,
-            &unit,
-            &target,
-            &graph,
-            principal,
-            operation,
-            route.created_at,
-        )?;
+        imported_directory_deletions =
+            directories::copy(previous, &mut next, &unit, &target, &graph, &event)?;
         Some(graph)
     } else {
         None
@@ -632,9 +630,7 @@ fn compose(
         &target,
         graph.as_ref(),
         &arrived,
-        route,
-        principal,
-        operation,
+        &event,
     )?;
     let mut imported_deletions = Vec::new();
     if let Some(graph) = &graph {
@@ -700,10 +696,7 @@ fn compose(
                     &mut next,
                     &unit.source_repository,
                     &member.source,
-                    principal,
-                    operation,
-                    sequence,
-                    route.created_at,
+                    &event,
                 )?;
                 next.file_deletions
                     .insert(node.file_id.clone(), node.clone());
@@ -725,16 +718,7 @@ fn compose(
                 current.kind == NamespaceEntryKind::File && current.file_id == entry.file_id
             })
         {
-            let node = deletion(
-                previous,
-                &mut next,
-                &target,
-                entry,
-                principal,
-                operation,
-                sequence,
-                route.created_at,
-            )?;
+            let node = deletion(previous, &mut next, &target, entry, &event)?;
             next.file_deletions
                 .insert(node.file_id.clone(), node.clone());
             displaced_deletions.push(node);

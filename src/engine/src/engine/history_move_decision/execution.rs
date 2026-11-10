@@ -436,14 +436,16 @@ impl Engine {
     ) -> Result<OperationResult> {
         let projection_state = crate::engine::publication::MoveProjection::admit(self, outcome)?;
         self.finish_move(
-            candidate,
-            hash,
-            projection_state,
-            projection
-                .capture()
-                .retained_version_ids()
-                .cloned()
-                .collect(),
+            crate::engine::move_execution::MoveInput {
+                candidate,
+                hash,
+                projection: projection_state,
+                retained_versions: projection
+                    .capture()
+                    .retained_version_ids()
+                    .cloned()
+                    .collect(),
+            },
             existing,
             decided,
             None,

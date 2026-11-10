@@ -10,8 +10,7 @@ mod projection;
 pub(crate) use evidence::{admit_ordinary_undo, admit_result, verify_publication};
 pub(crate) use projection::{MovePlan, ResultBody, plan, read_result, verify_transition};
 
-/// The caller and exact intent are parsed once at the request boundary. This
-/// value borrows the immutable request; its digest cannot outlive different data.
+/// Immutable request, caller and digest parsed together at the request boundary.
 pub(crate) struct MoveRequest<'a> {
     request: &'a ObjectMoveRequest,
     principal: &'a str,
@@ -71,12 +70,12 @@ pub(crate) struct MoveFile {
 
 pub(crate) enum MoveTarget {
     Existing {
-        repository: Repository,
+        repository: Box<Repository>,
         namespace: Vec<Entry>,
         displaced: Option<Entry>,
         displaced_entries: Vec<Entry>,
     },
-    /// Create the root in the same candidate; this is not a separate mutation.
+    /// Create the target root in the move candidate.
     EmptyDisk { slot_id: String },
 }
 
@@ -95,8 +94,7 @@ pub(crate) struct MoveUnit {
 }
 
 impl MoveUnit {
-    /// Add an empty target root to the same unpublished State as the movement.
-    /// No nested mutate, root-creation receipt, or separate visible publication.
+    /// Add an empty target root to the movement's unpublished State.
     pub(crate) fn project_target_root(
         &self,
         state: &mut State,
@@ -104,7 +102,7 @@ impl MoveUnit {
         operation: OperationId,
     ) -> Result<Repository> {
         match &self.target {
-            MoveTarget::Existing { repository, .. } => Ok(repository.clone()),
+            MoveTarget::Existing { repository, .. } => Ok((**repository).clone()),
             MoveTarget::EmptyDisk { slot_id, .. } => {
                 let name = storage_contract::RepositoryName::parse(&format!("ZXS disk {slot_id}"))?;
                 repository::project_creation(
@@ -266,7 +264,7 @@ fn target_scope(
         .unwrap_or_default();
     let displaced = displaced.cloned();
     Ok(MoveTarget::Existing {
-        repository: repository.clone(),
+        repository: Box::new(repository.clone()),
         namespace,
         displaced,
         displaced_entries,
