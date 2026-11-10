@@ -805,3 +805,8 @@
 - [x] 所有生产入口直接使用已准入路径类型的 key。双端注册仍在同一个锁内完成；冲突、父子路径和大小写等价、毒锁拒绝、原收据和不确定出版语义保持。
 - [x] 根测试迁到实际所有权，新增“句柄脱离 Session 后仍持锁”和“双端预留遇 unwind 释放”回归；原失败、Close/Detach、断连、撤权、命名空间与跨盘冲突测试继续保留。
 - [ ] 已做静态类型/消费者与资源顺序审阅，rustfmt 和严格补丁验证；未本地编译或执行 Rust 测试，准确提交的 GitHub CI/真实 Samba 待验证。
+
+### 2026-11-10：helper publication 故障验收的离线宿主隔离
+
+- 修复 #1065/#1066 workspace io-2 中实际 helper 缺 /zxs 的前置阻断。Cargo 构建仍不提权；原 publication-io.sh 与两个准确产物通过既有私有 mount namespace/chroot 执行，只在临时 tmpfs 建立 root-owned /zxs，保留清空环境、只读宿主挂载和 240 秒上限。
+- 原 Rust 精确测试入口、全部故障注入、退出码、完成标记及字节保全断言保持。新增 --command 只改变隔离后执行的 argv；9 项 Python 规划/模拟回归、shell 语法及独立静态审阅通过。没有本地编译或真实 namespace 运行，GitHub 后继 CI 验证实际 I/O。

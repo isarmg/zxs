@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one daemon or helper integration test with a private administrative host root."""
+"""Run daemon/helper test commands with a private administrative host root."""
 from pathlib import Path
 import os
 import subprocess
@@ -45,30 +45,34 @@ def prepare_root(root, parent_namespace):
     (root / "zxs").chmod(0o755)
 
 
-def child_command(root, namespace, executable, name):
+def child_command(root, namespace, *arguments):
     return [
         "/usr/bin/sudo", "-n", "--", "/usr/bin/env", "-i",
         "PATH=/usr/bin:/usr/sbin:/bin:/sbin", "TMPDIR=/tmp",
         "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "240s",
         "/usr/bin/unshare", "--mount", "--propagation", "private", "--",
         "/usr/bin/python3", str(Path(__file__).resolve()), "--inside",
-        str(root), namespace, executable, name,
+        str(root), namespace, *arguments,
     ]
 
 
 def main(arguments):
     if arguments[0] == "--inside":
-        _, root, parent_namespace, executable, name = arguments
+        _, root, parent_namespace, *command = arguments
         root = Path(root)
         prepare_root(root, parent_namespace)
         os.chroot(root)
         os.chdir("/")
-        os.environ[CHILD] = name
-        os.execv(executable, [executable, "--exact", name, "--nocapture", "--test-threads=1"])
-    executable, name = arguments
+        if command[0] == "--command":
+            command = command[1:]
+        else:
+            executable, name = command
+            os.environ[CHILD] = name
+            command = [executable, "--exact", name, "--nocapture", "--test-threads=1"]
+        os.execv(command[0], command)
     namespace = os.readlink("/proc/self/ns/mnt")
     with tempfile.TemporaryDirectory(prefix="zxs-service-startup-") as temporary:
-        status = subprocess.run(child_command(Path(temporary), namespace, executable, name))
+        status = subprocess.run(child_command(Path(temporary), namespace, *arguments))
         return status.returncode
 
 

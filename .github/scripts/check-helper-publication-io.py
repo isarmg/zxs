@@ -42,7 +42,9 @@ def main():
         print(error.stdout, file=sys.stderr)
         raise
     subprocess.run(
-        ["bash", "test/helper/unit/private_io/publication-io.sh", *test_artifacts(built.stdout)],
+        [sys.executable, str(ROOT / "test/server/service_namespace.py"), "--command",
+         "/usr/bin/bash", str(ROOT / "test/helper/unit/private_io/publication-io.sh"),
+         *test_artifacts(built.stdout)],
         cwd=ROOT, env=environment, check=True,
     )
 

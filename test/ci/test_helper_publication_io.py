@@ -9,10 +9,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_NAME = "private_io::tests::publication_faults_preserve_phase_identity_and_evidence"
-artifacts = runpy.run_path(str(ROOT / ".github/scripts/check-helper-publication-io.py"))["test_artifacts"]
+GATE = runpy.run_path(str(ROOT / ".github/scripts/check-helper-publication-io.py"))
+artifacts = GATE["test_artifacts"]
 
 
 class HelperPublicationArtifactTests(unittest.TestCase):
@@ -35,6 +37,27 @@ class HelperPublicationArtifactTests(unittest.TestCase):
             message = {"reason": "compiler-message", "message": {"level": level, "message": level}}
             with self.subTest(level=level), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
                 artifacts(encode([test, cli, message, finished]))
+
+    def test_build_is_unprivileged_and_shell_gate_enters_private_namespace(self):
+        artifacts_output = "\n".join(json.dumps(item) for item in [
+            {"reason": "compiler-artifact", "target": {"name": "zxs-helper", "kind": ["bin"]},
+             "profile": {"test": True}, "executable": "/repo/helper-test"},
+            {"reason": "compiler-artifact", "target": {"name": "zxs-helper", "kind": ["bin"]},
+             "profile": {"test": False}, "executable": "/repo/zxs-helper"},
+            {"reason": "build-finished", "success": True},
+        ])
+        with patch.object(runpy, "run_path", return_value={"matrix_environment": lambda: {"BUILD_ONLY": "1"}}), \
+             patch.object(subprocess, "run", side_effect=[
+                 subprocess.CompletedProcess([], 0, artifacts_output),
+                 subprocess.CompletedProcess([], 0),
+             ]) as run:
+            GATE["main"]()
+        self.assertEqual(run.call_args_list[0].args[0][:2], ["cargo", "test"])
+        self.assertEqual(run.call_args_list[1].args[0], [
+            sys.executable, str(ROOT / "test/server/service_namespace.py"), "--command",
+            "/usr/bin/bash", str(ROOT / "test/helper/unit/private_io/publication-io.sh"),
+            "/repo/helper-test", "/repo/zxs-helper"])
+        self.assertTrue(run.call_args_list[1].kwargs["check"])
 
     def test_runner_rejects_missing_test_zero_tests_and_missing_completion(self):
         with tempfile.TemporaryDirectory(prefix="helper-publication-runner-") as temporary:
