@@ -73,7 +73,10 @@ fn helper_identity_is_consistent_without_creating_runtime_state() {
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("Offline auxiliary tool"));
     assert!(help.contains("Usage: zxs-helper"));
-    assert!(help.contains("not yet implemented"));
+    assert!(help.contains("Every helper operation holds the /zxs lifetime lease until exit."));
+    assert!(help.contains(
+        "Explicit handoff exits this helper before starting verified installed service units;"
+    ));
     assert!(help.contains("unauthenticated maintenance Web console"));
     assert!(!help.contains("zxs-rescue"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
