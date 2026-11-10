@@ -66,14 +66,17 @@ fn require_empty(
     path: &name_policy::LookupPath,
     expected_entry: &str,
 ) -> Result<(), ApiError> {
-    let tree = engine.namespace_tree(branch).map_err(error)?;
-    let entry = tree.get_key(path.key()).ok_or_else(|| {
-        ApiError::new(
-            http::StatusCode::NOT_FOUND,
-            storage_contract::ErrorCode::DirectoryNotFound,
-            "directory is no longer visible",
-        )
-    })?;
+    let object = engine
+        .locate_object(branch, path)
+        .map_err(error)?
+        .ok_or_else(|| {
+            ApiError::new(
+                http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::DirectoryNotFound,
+                "directory is no longer visible",
+            )
+        })?;
+    let entry = object.entry();
     if entry.kind != storage_contract::NamespaceEntryKind::Directory {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::NotDirectory,
@@ -86,11 +89,7 @@ fn require_empty(
             "directory identity changed",
         ));
     }
-    let prefix = format!("{}/", entry.lookup_key());
-    if tree
-        .visible_entries()
-        .any(|child| child.lookup_key().starts_with(&prefix))
-    {
+    if object.has_visible_children() {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::DirectoryNotEmpty,
             "SMB directory removal requires an empty visible directory",

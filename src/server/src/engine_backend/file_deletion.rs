@@ -115,14 +115,17 @@ impl EngineBackend {
             // visibility, including after undo or another later deletion.
             return engine.soft_delete_file(request).map_err(error);
         }
-        let namespace = engine.namespace_tree(&command.branch_id).map_err(error)?;
-        let entry = namespace.get_key(command.path.key()).ok_or_else(|| {
-            ApiError::new(
-                http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::FileNotFound,
-                "delete target is no longer visible",
-            )
-        })?;
+        let object = engine
+            .locate_object(&command.branch_id, &command.path)
+            .map_err(error)?
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::FileNotFound,
+                    "delete target is no longer visible",
+                )
+            })?;
+        let entry = object.entry();
         if entry.kind != storage_contract::NamespaceEntryKind::File {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::IsDirectory,

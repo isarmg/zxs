@@ -7,7 +7,7 @@ use super::*;
 pub struct CurrentObject<'a> {
     repository: &'a Repository,
     entry: &'a Entry,
-    initialized_repository_id: Option<&'a str>,
+    namespace: NamespaceTree<'a>,
 }
 
 impl<'a> CurrentObject<'a> {
@@ -22,7 +22,21 @@ impl<'a> CurrentObject<'a> {
     /// Nearest initialized directory repository, including the entry itself
     /// when it is a repository root. Ordinary directories inherit their owner.
     pub fn initialized_repository_id(&self) -> Option<&'a str> {
-        self.initialized_repository_id
+        self.namespace.initialized_repository_id(self.entry.lookup_key())
+    }
+
+    /// Inspect only this object's descendant range in the same published view.
+    /// Hidden files and deleted directory subtrees do not make it nonempty.
+    pub fn has_visible_children(&self) -> bool {
+        let prefix = format!("{}/", self.entry.lookup_key());
+        let start = self
+            .namespace
+            .entries
+            .partition_point(|entry| entry.lookup_key() < prefix.as_str());
+        self.namespace.entries[start..]
+            .iter()
+            .take_while(|entry| entry.lookup_key().starts_with(&prefix))
+            .any(|entry| self.namespace.visible(entry))
     }
 }
 
@@ -149,7 +163,7 @@ impl Engine {
         Ok(Some(CurrentObject {
             repository: self.repository_for_branch(branch_id)?,
             entry,
-            initialized_repository_id: tree.initialized_repository_id(entry.lookup_key()),
+            namespace: tree,
         }))
     }
 
