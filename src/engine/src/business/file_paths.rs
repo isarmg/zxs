@@ -22,6 +22,21 @@ pub(crate) fn rename_node(
     principal: &str,
     operation: OperationId,
 ) -> Result<FileContext> {
+    rename_node_with_ids(state,repository,old,new,context,principal,operation,now()?,
+        &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn rename_node_with_ids(
+    state: &mut State,
+    repository: &str,
+    old: &Entry,
+    new: &Entry,
+    context: Option<FileContext>,
+    principal: &str,
+    operation: OperationId,
+    timestamp: u64,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<FileContext> {
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::StateInvalid,
@@ -50,7 +65,7 @@ pub(crate) fn rename_node(
         FileContext {
             node_id: None,
             selection_generation: 0,
-            branch_id: file::ensure_shared_file_branch(state, &current, old)?,
+            branch_id: file::ensure_shared_file_branch_with_ids(state, &current, old, ids)?,
             inherited_from: None,
         }
     };
@@ -59,7 +74,7 @@ pub(crate) fn rename_node(
         .get(&context.branch_id)
         .is_some_and(|b| b.file_id.as_deref() == Some(&old.file_id))
     {
-        context.branch_id = file::ensure_shared_file_branch(state, &current, old)?;
+        context.branch_id = file::ensure_shared_file_branch_with_ids(state, &current, old, ids)?;
     }
     let parent = context
         .node_id
@@ -96,7 +111,7 @@ pub(crate) fn rename_node(
         }
         new.version_id.clone()
     };
-    let node_id = new_id("fnode")?;
+    let node_id = ids("fnode")?;
     state.file_path_nodes.insert(
         node_id.clone(),
         FilePathNode {
@@ -109,19 +124,20 @@ pub(crate) fn rename_node(
             path: new.path().to_owned(),
             previous_path: old.path().to_owned(),
             sequence: state.sequence,
-            created_at: now()?,
+            created_at: timestamp,
             operation_id: operation,
             author: principal.into(),
         },
     );
     if advance_head {
-        file_publication::advance_branch_node(
+        file_publication::advance_branch_node_with_ids(
             state,
             &context.branch_id,
             &node_id,
             new.version_id != old.version_id,
             principal,
             operation,
+            ids,
         )?;
     }
     context.node_id = Some(node_id);

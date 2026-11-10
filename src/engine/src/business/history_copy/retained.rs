@@ -90,13 +90,21 @@ pub(in crate::business) fn validate(
     file: &str,
     value: &CopiedLifecycle,
 ) -> Result<()> {
-    if !matches!(
-        receipt.kind.as_str(),
-        RETAINED_KIND | DIRECTORY_EXPORT_KIND | crate::business::FILE_HISTORY_MOVE_KIND
-    ) || value.events.len() > 65_536
-        || value.file_id != file
+    if !matches!(receipt.kind.as_str(),
+        RETAINED_KIND | DIRECTORY_EXPORT_KIND | crate::business::FILE_HISTORY_MOVE_KIND)
         || receipt.result["file_id"].as_str() != Some(file)
-        || receipt.result["source_file_id"].as_str() != Some(value.source_file_id.as_str())
+        || receipt.result["source_file_id"].as_str() != Some(value.source_file_id.as_str()) {
+        return Err(invalid());
+    }
+    validate_payload(receipt,file,value)
+}
+
+/// Shared retained-prefix identity rules; the containing operation validates
+/// its own typed envelope rather than forging a single-file receipt.
+pub(in crate::business) fn validate_payload(
+    receipt:&OperationResult,file:&str,value:&CopiedLifecycle,
+)->Result<()> {
+    if value.events.len() > 65_536 || value.file_id != file
         || value.file_id != identity(receipt.operation_id, &value.source_file_id)?
         || receipt.history_tree_id.as_deref() != Some(value.history_tree_id.as_str())
         || value.source_sequence >= receipt.sequence
@@ -165,11 +173,6 @@ pub(in crate::business) fn project(
     let source = sources_for(previous, view, destination)?;
     let request = destination.request();
     let source_history = &previous.repositories[&request.source_repository_id].history_tree_id;
-    let capture = crate::container_storage::file_database::capture_copy(
-        previous,
-        &source.file,
-        source_history,
-    )?;
     let result = super::apply_scoped(
         previous,
         next,
@@ -179,14 +182,26 @@ pub(in crate::business) fn project(
         principal,
         operation,
     )?;
-    let file = identity(operation, &source.file)?;
-    let history = &previous.repositories[&request.target_repository_id].history_tree_id;
+    let lifecycle = capture_mapped(previous, &source.file, source_history,
+        &previous.repositories[&request.target_repository_id].history_tree_id, operation)?;
+    Ok(RetainedProjection { result, lifecycle })
+}
+
+pub(in crate::business) fn capture_mapped(
+    previous: &State,
+    source_file: &str,
+    source_history: &str,
+    history: &str,
+    operation: OperationId,
+) -> Result<CopiedLifecycle> {
+    let capture = crate::container_storage::file_database::capture_copy(previous, source_file, source_history)?;
+    let file = identity(operation, source_file)?;
     let mut events = capture.events;
     for event in &mut events {
         let node = &mut event.node;
         node.node_id = identity(operation, &node.node_id)?;
         node.file_id = file.clone();
-        node.history_tree_id = history.clone();
+        node.history_tree_id = history.to_owned();
         node.branch_heads = node
             .branch_heads
             .iter()
@@ -200,19 +215,16 @@ pub(in crate::business) fn project(
         node.parent_node_ids.sort();
     }
     let copied = CopiedLifecycle {
-        source_file_id: source.file,
-        source_history_tree_id: source_history.clone(),
+        source_file_id: source_file.to_owned(),
+        source_history_tree_id: source_history.to_owned(),
         source_sequence: previous.sequence,
         source_records_hash: capture.records_hash,
         file_id: file,
-        history_tree_id: history.clone(),
+        history_tree_id: history.to_owned(),
         events,
     };
     bounded(&copied)?;
-    Ok(RetainedProjection {
-        result,
-        lifecycle: copied,
-    })
+    Ok(copied)
 }
 
 #[cfg(test)]

@@ -1035,6 +1035,7 @@ fn collect_empty_directories(
 pub(crate) struct PreparedNames {
     cache: Option<PreparedNameCache>,
     layouts: shared_layout::PreparedLayouts,
+    database_scopes: BTreeSet<(String, String, String)>,
 }
 mod unpublished;
 pub(crate) use unpublished::read_unpublished_file_databases;
@@ -1056,6 +1057,12 @@ struct PreparedName {
     database: Option<file_database::install::PreparedFile>,
 }
 impl PreparedNames {
+    /// Exact FILE write set from the candidate's projection, before probing
+    /// container existence. Retained read-only history is not a database write.
+    pub(crate) fn file_database_scopes(&self) -> &BTreeSet<(String, String, String)> {
+        &self.database_scopes
+    }
+
     pub(crate) fn unpublished_file_database_identities(
         &self,
     ) -> Result<BTreeMap<(String, String, String), String>> {
@@ -1466,6 +1473,7 @@ fn prepare_names_inner(
     let mut reservations = crate::database_install::Reservations::default();
     layouts.reserve_databases(&mut reservations)?;
     let mut database_bytes = 0usize;
+    let mut database_scopes = BTreeSet::new();
     let mut files = changed_files(previous.state(), next);
     if !skip_shared {
         files.extend(file_database::changes::affected(previous.state(), next));
@@ -1498,6 +1506,9 @@ fn prepare_names_inner(
                 None if historical => continue,
                 None => resources.get(disk)?,
             };
+            if !skip_shared {
+                database_scopes.insert((slot.clone(), history_id.clone(), file.clone()));
+            }
             let history = disk.root.join("histories").join(&history_id);
             let projected = layouts.projection(&slot, &history_id, &file);
             let (legacy_location, legacy_name) = projection_path(next, &file, &slot);
@@ -1627,7 +1638,7 @@ fn prepare_names_inner(
     if let Some(staged) = &cache {
         staged.file.sync_data()?;
     }
-    Ok(PreparedNames { cache, layouts })
+    Ok(PreparedNames { cache, layouts, database_scopes })
 }
 
 #[cfg(test)]

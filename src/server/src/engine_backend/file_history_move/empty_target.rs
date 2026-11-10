@@ -1,7 +1,6 @@
-//! A fresh displayed disk has no repository binding yet. Initialize only its
-//! empty control namespace, then run the existing complete file move under the
-//! same owner lock. Initialization alone never removes the source or means move
-//! success; its deterministic original receipt is retained for explicit retry.
+//! A fresh displayed disk enters the same object move with an absent target
+//! repository. Its root is part of that operation, not a preliminary mutation.
+//! Already retained original root receipts continue their exact existing move.
 use super::*;
 use json_codec::json;
 
@@ -35,9 +34,8 @@ impl EngineBackend {
         {
             return Err(ApiError::unsupported());
         }
-        let target_path = name_policy::PortablePath::parse(command.target_name.as_str())
-            .map_err(ApiError::invalid_source)?;
-        if target_path.parent().is_some() {
+        let movement = command.movement()?;
+        if movement.target_path.parent().is_some() {
             return Err(ApiError::new(
                 http::StatusCode::NOT_FOUND,
                 storage_contract::ErrorCode::DirectoryNotFound,
@@ -54,16 +52,6 @@ impl EngineBackend {
             || disk.registration_mode != storage_engine::RegistrationMode::Enabled
         {
             return Err(changed());
-        }
-        if engine.state().repositories.values().any(|repository| {
-            repository.primary_slot_id == command.target_slot_id
-                && !repository.file_manager_root
-                && name_policy::lookup_key(&repository.name) == target_path.key()
-        }) {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::NameCollision,
-                "move target conflicts with a named repository",
-            ));
         }
         let digest = storage_contract::object_hash(
             "smb-file-history-move-empty-root",
@@ -87,32 +75,18 @@ impl EngineBackend {
             .parse()
             .map_err(ApiError::contract_input)?;
         let root_recorded = engine.state().operations.contains_key(&root_operation);
-        let published = engine
-            .state()
-            .operations
-            .contains_key(&command.operation_id);
-        if (!root_recorded && published)
-            || (!root_recorded
-                && engine.state().repositories.values().any(|repository| {
-                    repository.file_manager_root
-                        && repository.primary_slot_id == command.target_slot_id
-                }))
-        {
-            return Err(changed());
+        if !root_recorded {
+            let source = storage_engine::CapturedFileMoveSource {
+                entry_id: movement.source_entry_id.clone(),
+                file_id: command.expected_source_file_id,
+            };
+            // One original operation creates the empty root and moves the unit.
+            // A replay reaches the same core before querying today's contents.
+            return engine.move_object_from_file(&movement, &source, None,
+                &current.principal, command.operation_id).map_err(error);
         }
-        if !published {
-            let source = engine
-                .locate_object(&command.source_binding.branch_id, &command.source_path)
-                .map_err(error)?
-                .ok_or_else(changed)?;
-            let entry = source.entry();
-            if entry.kind != storage_contract::NamespaceEntryKind::File
-                || entry.entry_id != command.expected_source_entry_id
-                || entry.file_id != command.expected_source_file_id.as_str()
-            {
-                return Err(changed());
-            }
-        }
+        // A root receipt already retained by this exact original SMB request is
+        // resumed in place. Never create a new preliminary root for a new move.
         let created = engine
             .create_disk_root(&command.target_slot_id, &current.principal, root_operation)
             .map_err(error)?;
@@ -130,21 +104,22 @@ impl EngineBackend {
             branch_id: live.main_branch_id.clone(),
             generation: live.smb_binding_generation,
         };
-        // Recheck both real bindings and source entry through the same ordinary
-        // native adapter. No guessed branch and no second deletion operation.
-        move_current_file_locked(
-            &mut engine,
-            identity,
-            crate::MoveCurrentFile {
-                source_binding: command.source_binding,
-                target_binding,
-                source_path: command.source_path,
-                target_name: command.target_name,
-                expected_source_entry_id: command.expected_source_entry_id,
-                expected_source_file_id: command.expected_source_file_id,
-                operation_id: command.operation_id,
-            },
-        )
+        current.smb_binding = Some(target_binding);
+        current = current_protected_identity(&engine, &current)?;
+        let source = storage_engine::CapturedFileMoveSource {
+            entry_id: movement.source_entry_id,
+            file_id: command.expected_source_file_id,
+        };
+        let original = storage_engine::FileHistoryMovePathRequest {
+            source_repository_id: command.source_binding.repository_id,
+            source_path: command.source_path.as_str().into(),
+            target_repository_id: created.repository_id,
+            target_name: command.target_name.as_str().into(),
+        };
+        // The retained preliminary root belongs to the original file workflow.
+        // Resume that original request; do not rewrite its None intent into a
+        // new object operation with a different target-repository fact.
+        engine.continue_file_move_after_root(&original, &source, root_operation,
+            &current.principal, command.operation_id).map_err(error)
     }
 }
-

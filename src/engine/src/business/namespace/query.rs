@@ -58,6 +58,13 @@ pub struct NamespaceTree<'a> {
 }
 
 impl<'a> NamespaceTree<'a> {
+    /// The caller has already admitted these rows as this repository's current
+    /// main namespace (including its registry projection).
+    pub(in crate::business) fn from_current_state(state: &'a State, repository: &'a str, entries: &'a [Entry]) -> Self {
+        Self { entries, deletions: Some(&state.file_deletions),
+            directories: Some((&state.directory_git_repositories, repository)) }
+    }
+
     // Only this module constructs views. Engine publication validates canonical
     // form through HistoryManifest::from_state; admitted history uses the same
     // validator. No arbitrary Commit, mutable State or entry slice is accepted
@@ -122,7 +129,7 @@ impl<'a> NamespaceTree<'a> {
             .filter(|entry| self.visible(entry))
     }
 
-    fn initialized_repository_id(self, key: &str) -> Option<&'a str> {
+    pub(in crate::business) fn initialized_repository_id(self, key: &str) -> Option<&'a str> {
         let (directories, repository) = self.directories?;
         closest_directory_repository(key, |key| {
             if key.is_empty() {

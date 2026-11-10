@@ -50,6 +50,18 @@ pub(crate) fn relocate_namespace_file_branch(
     file: &Entry,
     operation: OperationId,
 ) -> Result<()> {
+    relocate_namespace_file_branch_with_ids(state,context,entries,file,operation,
+        &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn relocate_namespace_file_branch_with_ids(
+    state: &mut State,
+    context: &FileContext,
+    entries: &std::collections::BTreeMap<&str, &Entry>,
+    file: &Entry,
+    operation: OperationId,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
     let Some(node) = context
         .node_id
         .as_ref()
@@ -92,10 +104,10 @@ pub(crate) fn relocate_namespace_file_branch(
     if previous.entries == snapshot {
         return Ok(());
     }
-    let commit_id = new_id("commit")?;
+    let commit_id = ids("commit")?;
     let next = Commit {
         commit_id: commit_id.clone(),
-        tree_id: new_id("tree")?,
+        tree_id: ids("tree")?,
         parent_commit_ids: vec![previous.commit_id.clone()],
         entries: snapshot,
         ..previous.clone()

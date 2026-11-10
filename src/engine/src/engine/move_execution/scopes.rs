@@ -18,34 +18,6 @@ pub(super) struct Databases {
     pairs: Vec<DiskPair>,
 }
 
-pub(super) fn file_scopes(
-    engine: &Engine,
-    retained_versions: &[String],
-    candidate: &Candidate,
-) -> BTreeSet<(String, String, String)> {
-    let mut files = BTreeSet::new();
-    for id in retained_versions {
-        let version = &engine.state.versions[id];
-        for slot in &engine.state.placements[id].route_slot_ids {
-            files.insert((
-                slot.clone(),
-                version.history_tree_id.clone(),
-                version.file_id.clone(),
-            ));
-        }
-    }
-    for evidence in &candidate.versions {
-        for slot in &evidence.placement.route_slot_ids {
-            files.insert((
-                slot.clone(),
-                evidence.version.history_tree_id.clone(),
-                evidence.version.file_id.clone(),
-            ));
-        }
-    }
-    files
-}
-
 pub(super) fn require_resources(engine: &Engine, candidate: &Candidate) -> Result<()> {
     engine.require_native_move_authority()?;
     for registered in engine

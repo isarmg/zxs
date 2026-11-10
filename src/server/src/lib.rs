@@ -52,7 +52,8 @@ pub use backend_directory_export::{
 };
 mod backend_file_history_move;
 pub use backend_file_history_move::{
-    MoveCurrentFile, MoveCurrentFileToEmptyDisk, MoveTargetName, ReplaceCurrentFile,
+    MoveCurrentFile, MoveCurrentFileToEmptyDisk, MoveCurrentObject, MoveObjectTarget,
+    MoveTargetName, ReplaceCurrentFile,
 };
 mod backend_directory_deletion;
 pub use backend_directory_deletion::{
@@ -831,6 +832,13 @@ pub trait Backend: Send + Sync {
         &self,
         _identity: &Identity,
         _command: crate::MoveCurrentFile,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn move_current_object(
+        &self,
+        _identity: &Identity,
+        _command: crate::MoveCurrentObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         Err(ApiError::unsupported())
     }
@@ -1739,6 +1747,13 @@ impl Backend for AuthorizedBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.backend
             .move_current_file(&self.current(identity)?, command)
+    }
+    fn move_current_object(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentObject,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend.move_current_object(&self.current(identity)?, command)
     }
     fn replace_current_file(
         &self,

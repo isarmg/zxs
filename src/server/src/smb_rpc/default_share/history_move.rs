@@ -1,8 +1,9 @@
-//! Cross-disk rename is one native history move, not a namespace copy/delete pair.
+//! Captured object moves and original file receipts share namespace admission.
 use super::*;
 use crate::smb_rpc::{namespace::NamespaceAdmission, path_reservation::MovePaths};
 
 mod empty_target;
+mod object;
 mod resume;
 
 #[derive(Clone, data_serialization::Serialize, data_serialization::Deserialize)]
@@ -12,139 +13,99 @@ struct ReplacementIntent {
     file_id: String,
 }
 
-impl DefaultShare {
-    pub(super) fn move_file(
-        &mut self,
-        source: SmbPathLocation,
-        target: SmbPathLocation,
-        admission: NamespaceAdmission,
-        replace: bool,
-    ) -> Result<Value, ApiError> {
-        if !source.repository.file_manager_root
-            || !target.repository.file_manager_root
-            || source.repository.primary_slot_id == target.repository.primary_slot_id
-            || source.relative_path.is_empty()
-            || target.relative_path.is_empty()
-        {
-            return Err(ApiError::unsupported());
-        }
-        let source_path = name_policy::LookupPath::parse(&source.relative_path)
-            .map_err(ApiError::invalid_source)?;
-        let target_name = crate::MoveTargetName::parse(&target.relative_path)?;
-        let source = self.pin_binding(source.repository)?;
-        let target = self.pin_binding(target.repository)?;
-        let source_identity = self.bound_identity(&source);
-        let target_identity = self.bound_identity(&target);
-        self.shared
-            .backend
-            .authorize_repository(&source_identity, &source.repository)?;
-        self.shared
-            .backend
-            .authorize_repository(&target_identity, &target.repository)?;
-        // Both locks span the capture, durable intent, backend submission and
-        // result classification. Core choice/authority fences outlive this RPC.
-        let _paths = MovePaths::acquire(
-            &self.shared,
-            [
-                (&source.branch, source_path.as_str()),
-                (&target.branch, target_name.as_str()),
-            ],
-        )?;
-        let entry = self
-            .shared
-            .backend
-            .lookup_current(&source_identity, &source.branch, &source_path)?
-            .ok_or_else(|| {
-                ApiError::new(
-                    http::StatusCode::NOT_FOUND,
-                    storage_contract::ErrorCode::FileNotFound,
-                    "move source is no longer visible",
-                )
-            })?;
-        if entry.kind != storage_contract::NamespaceEntryKind::File {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::IsDirectory,
-                "cross-disk move requires a single file",
-            ));
-        }
-        let replacement = match self.shared.backend.lookup_current(
-            &target_identity,
-            &target.branch,
-            &target_name.lookup(),
-        )? {
-            Some(_) if !replace => {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::NameCollision,
-                    "cross-disk move requires explicit replacement intent",
-                ));
-            }
-            Some(target) if target.kind == storage_contract::NamespaceEntryKind::File => {
-                Some(ReplacementIntent {
-                    entry_id: target.entry_id,
-                    file_id: target.file_id,
-                })
-            }
-            Some(_) => {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::IsDirectory,
-                    "cross-disk file replacement cannot replace a directory",
-                ));
-            }
-            None => None,
-        };
-        let file_id = storage_contract::history_window::HistoryFileId::parse(&entry.file_id)
-            .map_err(ApiError::contract_input)?;
-        let operation_id = admission.operation_id();
-        // Preserve the exact routed request before the first core call. The
-        // record is not a decision, a replay command or a grant to recapture a
-        // changed source. Any uncertain result retains this original identity.
-        admission.record_intent(&json!({
-            "format":if replace { "smb-file-history-move-replace" } else { "smb-file-history-move" },
-            "replacement":replacement,
-            "principal":self.identity.principal,
-            "operation_id":operation_id,
-            "publication_outcome":"unconfirmed",
-            "move_request":{
-                "source_repository_id":source.repository,
-                "source_path":source_path.as_str(),
-                "target_repository_id":target.repository,
-                "target_name":target_name.as_str()
-            },
-            "source_binding":{
-                "repository_id":source.repository,
-                "branch_id":source.branch,
-                "generation":source.generation.to_string()
-            },
-            "target_binding":{
-                "repository_id":target.repository,
-                "branch_id":target.branch,
-                "generation":target.generation.to_string()
-            },
-            "source_entry_id":entry.entry_id,
-            "source_file_id":file_id.as_str(),
-            "account_generation":self.account_generation.to_string()
-        }))?;
-        let result = self.submit_move(
-            crate::MoveCurrentFile {
-                source_binding: source_identity
-                    .smb_binding
-                    .expect("invariant: routed source identity has a pinned binding"),
-                target_binding: target_identity
-                    .smb_binding
-                    .expect("invariant: routed target identity has a pinned binding"),
-                source_path,
-                target_name,
-                expected_source_entry_id: entry.entry_id,
-                expected_source_file_id: file_id,
-                operation_id,
-            },
-            replacement,
-        )?;
-        let reply = published_reply(result, operation_id)?;
-        admission.finish_published();
-        Ok(reply)
+/// The protocol reply binds to the same captured command as the durable intent.
+/// This proves a result; it never resolves a new path or submits another move.
+struct MoveReceipt {
+    operation_id: OperationId,
+    movement: storage_contract::file_relocation::ObjectMoveRequest,
+    source_file_id: Option<storage_contract::history_window::HistoryFileId>,
+    displaced_target_file_id: Option<storage_contract::history_window::HistoryFileId>,
+}
+
+impl MoveReceipt {
+    fn current(
+        request: &crate::MoveCurrentFile,
+        target_slot_id: &str,
+        replacement: Option<&ReplacementIntent>,
+    ) -> Result<Self, ApiError> {
+        Ok(Self {
+            operation_id: request.operation_id,
+            movement: request.movement(target_slot_id, replacement.map(|target| target.entry_id.as_str()))?,
+            source_file_id: Some(request.expected_source_file_id.clone()),
+            displaced_target_file_id: replacement.map(|target| {
+                storage_contract::history_window::HistoryFileId::parse(&target.file_id)
+                    .map_err(ApiError::contract_input)
+            }).transpose()?,
+        })
     }
 
+    fn empty(request: &crate::MoveCurrentFileToEmptyDisk) -> Result<Self, ApiError> {
+        Ok(Self {
+            operation_id: request.operation_id,
+            movement: request.movement()?,
+            source_file_id: Some(request.expected_source_file_id.clone()),
+            displaced_target_file_id: None,
+        })
+    }
+
+    fn published_reply(
+        self,
+        result: storage_contract::OperationResult,
+        principal: &str,
+    ) -> Result<Value, ApiError> {
+        if result.kind != storage_contract::file_relocation::OBJECT_MOVE_KIND {
+            return published_reply(result, self.operation_id);
+        }
+        self.published_object_reply(result, principal)
+    }
+
+    fn object(request: &crate::MoveCurrentObject) -> Result<Self, ApiError> {
+        let same_entry = request.movement.target_repository_id.as_ref()
+            == Some(&request.movement.source_repository_id)
+            && request.movement.target_entry_id.as_ref() == Some(&request.movement.source_entry_id);
+        if same_entry && request.expected_target_file_id.as_ref().is_some_and(|target| {
+            request.expected_source_file_id.as_ref() != Some(target)
+        }) {
+            return Err(receipt_changed());
+        }
+        Ok(Self {
+            operation_id: request.operation_id,
+            movement: request.movement.clone(),
+            source_file_id: request.expected_source_file_id.clone(),
+            displaced_target_file_id: if same_entry { None } else { request.expected_target_file_id.clone() },
+        })
+    }
+
+    fn published_object_reply(
+        self,
+        result: storage_contract::OperationResult,
+        principal: &str,
+    ) -> Result<Value, ApiError> {
+        if result.operation_id != self.operation_id
+            || result.kind != storage_contract::file_relocation::OBJECT_MOVE_KIND
+        {
+            return Err(receipt_changed());
+        }
+        let versions = result.result.get("version_mapping")
+            .and_then(Value::as_object).ok_or_else(receipt_changed)?;
+        let protection = if versions.is_empty() {
+            storage_contract::ProtectionAtPublish::NotApplicable
+        } else {
+            storage_contract::ProtectionAtPublish::TargetMet
+        };
+        let reply = complete_publication_reply(result, protection)?;
+        let fact = &reply["result"]["movement"];
+        if !self.movement.matches_receipt(principal, &reply)
+            || fact["source_file_id"] != json!(self.source_file_id)
+            || fact["displaced_target_file_id"] != json!(self.displaced_target_file_id)
+        {
+            return Err(receipt_changed());
+        }
+        Ok(reply)
+    }
+}
+
+impl DefaultShare {
     fn submit_move(
         &self,
         request: crate::MoveCurrentFile,
@@ -174,14 +135,25 @@ fn published_reply(
     operation_id: OperationId,
 ) -> Result<Value, ApiError> {
     if result.operation_id != operation_id || result.kind != "file.history.move" {
-        return Err(ApiError::new(
-            http::StatusCode::INTERNAL_SERVER_ERROR,
-            storage_contract::ErrorCode::StateInvalid,
-            "native move returned a different operation receipt",
-        ));
+        return Err(receipt_changed());
     }
+    complete_publication_reply(result, storage_contract::ProtectionAtPublish::TargetMet)
+}
+
+fn receipt_changed() -> ApiError {
+    ApiError::new(
+        http::StatusCode::INTERNAL_SERVER_ERROR,
+        storage_contract::ErrorCode::StateInvalid,
+        "native move returned a different operation receipt",
+    )
+}
+
+fn complete_publication_reply(
+    result: storage_contract::OperationResult,
+    protection: storage_contract::ProtectionAtPublish,
+) -> Result<Value, ApiError> {
     if result.commit_state != storage_contract::CommitState::Published
-        || result.protection_at_publish != storage_contract::ProtectionAtPublish::TargetMet
+        || result.protection_at_publish != protection
         || result.current_health != storage_contract::CurrentHealth::Healthy
     {
         return Err(ApiError::conflict(

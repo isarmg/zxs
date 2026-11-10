@@ -4,6 +4,8 @@ use std::{os::unix::net::UnixStream, thread::JoinHandle};
 
 #[path = "empty_target_move_tests.rs"]
 mod empty_target_move_tests;
+#[path = "object_move_tests.rs"]
+mod object_move_tests;
 #[path = "phase1_new_file_tests.rs"]
 mod phase1_new_file_tests;
 
@@ -283,13 +285,13 @@ fn default_share_keeps_primary_paths_separate_and_refuses_nonempty_move_target()
         Request::Namespace {
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "p/same.txt".into(),
-            destination: Some("b/moved.txt".into()),
+            destination: Some("b/same.txt".into()),
             replace: false,
             operation_id: operation_id.clone(),
         },
     );
     assert!(
-        matches!(reply, Response::Error { code: storage_contract::ErrorCode::UnsupportedOperation, operation_id: Some(ref returned), .. } if returned == &operation_id),
+        matches!(reply, Response::Error { code: storage_contract::ErrorCode::NameCollision, operation_id: Some(ref returned), .. } if returned == &operation_id),
         "{reply:?}"
     );
     assert_eq!(directory(&mut stream, "p"), vec!["same.txt"]);

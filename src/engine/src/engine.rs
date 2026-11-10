@@ -249,6 +249,7 @@ pub struct Engine {
     pub(crate) workspace_namespace_baselines: BTreeMap<String, WorkspaceNamespaceBaseline>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
+    move_completion: Option<move_execution::CompletionBinding>,
     history_move_intent: Option<OperationId>,
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
@@ -654,6 +655,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            move_completion: None,
             history_move_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
@@ -851,6 +853,7 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            move_completion: None,
             history_move_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
@@ -877,6 +880,11 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             fault: None,
         };
+        engine.move_completion = move_execution::CompletionBinding::discover(&engine)?;
+        if let Some(selected) = &engine.move_completion {
+            engine.next_slot = engine.next_slot.max(selected.sequence().checked_add(1)
+                .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "selected move sequence exhausted"))?);
+        }
         engine.discover_file_history_move_choice()?;
         Ok(engine)
     }
@@ -1407,7 +1415,7 @@ impl Engine {
     }
     pub(crate) fn require_write(&self) -> Result<()> {
         self.require_move_source_read()?;
-        if self.history_move_choice.is_some() || self.history_move_intent.is_some() {
+        if self.move_completion.is_some() || self.history_move_choice.is_some() || self.history_move_intent.is_some() {
             return Err(Error::new(ErrorCode::RecoveryRequired,
                 "the original joint move choice fences ordinary writes; resume only its retained inputs")
                 .retryable());

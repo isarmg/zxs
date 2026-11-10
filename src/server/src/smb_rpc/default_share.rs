@@ -466,21 +466,11 @@ impl DefaultShare {
                 return Err(ApiError::unsupported());
             }
             let destination = if let Some(path) = destination {
-                let Location::Path { slot, .. } = self.locate(&path)? else {
+                let Location::Path { .. } = self.locate(&path)? else {
                     return Err(ApiError::unsupported());
                 };
-                if slot.slot_id != source.repository.primary_slot_id {
-                    // A missing disk-root namespace is initialized only through
-                    // its durable, exact native-move request, never by Lookup.
-                    let reply = match self.resolve(&path, SmbPathIntent::Lookup) {
-                        Ok(target) => self.move_file(source, target, admission, replace)?,
-                        Err(error)
-                            if error.code == storage_contract::ErrorCode::DirectoryNotFound =>
-                        {
-                            self.move_file_to_empty_disk(source, &path, admission, replace)?
-                        }
-                        Err(error) => return Err(error),
-                    };
+                if source.repository.file_manager_root {
+                    let reply = self.move_object(source, &path, admission, replace)?;
                     return Ok((Reply::Json(reply), None));
                 }
                 let target = self.resolve(&path, SmbPathIntent::Lookup)?;

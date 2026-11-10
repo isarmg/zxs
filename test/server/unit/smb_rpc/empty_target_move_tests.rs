@@ -1,6 +1,7 @@
 //! Empty-disk moves exercise the framed RPC and real native publication.
 //! These tests do not load Samba or replace its separate SDK acceptance.
 use super::*;
+use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
 
 fn move_request(operation: OperationId, replace: bool) -> Request {
     Request::Namespace {
@@ -56,14 +57,32 @@ fn empty_disk_move_accepts_either_replacement_mode_and_keeps_history_after_reope
             1
         );
         let source = root_on(&shared, "P01");
+        let original_operations = backend.inner.test_with_engine_locked(|engine| {
+            engine.state().operations.keys().copied().collect::<BTreeSet<_>>()
+        });
         let operation = OperationId::generate().unwrap();
         let (result, descriptor) = okay(&mut stream, move_request(operation, replace));
         assert!(descriptor.is_none());
-        assert_eq!(result["operation_kind"], "file.history.move");
+        assert_eq!(result["operation_kind"], OBJECT_MOVE_KIND);
         assert!(directory(&mut stream, "p").is_empty());
         assert_eq!(directory(&mut stream, "b"), vec!["arrived.txt"]);
         assert_eq!(read_body(&mut stream, "b/arrived.txt"), b"later");
         let target = root_on(&shared, "P02");
+        let fact: ObjectMoveFact =
+            json_codec::from_value(result["result"]["movement"].clone()).unwrap();
+        assert_eq!(fact.request.target_repository_id, None);
+        assert_eq!(fact.request.target_slot_id, "P02");
+        assert_eq!(fact.target_repository_id.as_str(), target.repository_id);
+        backend.inner.test_with_engine_locked(|engine| {
+            let added: Vec<_> = engine
+                .state()
+                .operations
+                .keys()
+                .filter(|id| !original_operations.contains(*id))
+                .copied()
+                .collect();
+            assert_eq!(added, vec![operation]);
+        });
         assert!(
             !shared
                 .spool
@@ -88,7 +107,7 @@ fn empty_disk_move_accepts_either_replacement_mode_and_keeps_history_after_reope
             assert_eq!(fs::read(output).unwrap(), expected);
         }
         let receipt = engine.state().operations.get(&operation).unwrap();
-        assert_eq!(receipt.kind, "file.history.move");
+        assert_eq!(receipt.kind, OBJECT_MOVE_KIND);
         assert_eq!(
             receipt.commit_state,
             storage_contract::CommitState::Published
@@ -124,14 +143,13 @@ fn empty_disk_move_lost_reply_rejects_changed_mode_then_reconciles_same_operatio
         let record = shared.spool.join(format!("{operation}.namespace.json"));
         let captured = fs::read(&record).unwrap();
         let intent: Value = json_codec::from_slice(&captured).unwrap();
-        assert_eq!(
-            intent["format"],
-            if replace {
-                "smb-file-history-move-empty-target-replace"
-            } else {
-                "smb-file-history-move-empty-target"
-            }
-        );
+        assert_eq!(intent["format"], "smb-object-move");
+        assert_eq!(intent["replace_requested"], replace);
+        assert_eq!(intent["target_binding"], Value::Null);
+        assert_eq!(intent["movement"]["target_repository_id"], Value::Null);
+        assert_eq!(intent["movement"]["target_slot_id"], "P02");
+        assert_eq!(intent["movement"]["target_entry_id"], Value::Null);
+        assert_eq!(intent["target_file_id"], Value::Null);
         // The first call really published and removed the source. Retry must
         // use the retained request, not resolve that now-missing source again.
         assert!(directory(&mut stream, "p").is_empty());
@@ -154,7 +172,7 @@ fn empty_disk_move_lost_reply_rejects_changed_mode_then_reconciles_same_operatio
             assert_eq!(engine.state().sequence, sequence);
             assert_eq!(
                 engine.state().operations[&operation].kind,
-                "file.history.move"
+                OBJECT_MOVE_KIND
             );
         });
         assert!(shared.file_writers.lock().unwrap().is_empty());
@@ -203,3 +221,4 @@ fn empty_disk_replace_intent_never_overwrites_a_target_created_after_capture() {
     assert!(shared.file_writers.lock().unwrap().is_empty());
     close_wire(stream, worker);
 }
+

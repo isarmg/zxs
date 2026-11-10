@@ -1,6 +1,7 @@
 //! Adapter/SMB admission regressions. Scripted replies are not publication proofs.
 use super::*;
 use storage_contract::{CommitState, CurrentHealth, ProtectionAtPublish, Repository};
+use storage_contract::file_relocation::{OBJECT_MOVE_KIND, ObjectMoveFact};
 
 struct Roots {
     _fixture: Fixture,
@@ -95,21 +96,38 @@ fn request(operation: OperationId, destination: &str, replace: bool) -> Request 
 }
 
 fn scripted_result(
+    roots: &Roots,
     operation: OperationId,
     state: CommitState,
+    target_path: &str,
 ) -> storage_contract::OperationResult {
+    let mut request = command(roots, operation);
+    request.target_name = crate::MoveTargetName::parse(target_path).unwrap();
+    let movement = request.movement(&roots.target.primary_slot_id, None).unwrap();
     storage_contract::OperationResult {
         operation_id: operation,
-        kind: "file.history.move".into(),
+        kind: OBJECT_MOVE_KIND.into(),
         commit_id: None,
         history_tree_id: None,
         branch_id: None,
         commit_state: state,
         protection_at_publish: ProtectionAtPublish::TargetMet,
         current_health: CurrentHealth::Healthy,
-        request_digest: "scripted-reply-only".into(),
+        request_digest: movement.digest("alice").unwrap(),
         sequence: 12,
-        result: json!({}),
+        result: json!({
+            "version_mapping": std::collections::BTreeMap::from([(
+                original_entry(roots).version_id,
+                new_id("ver").unwrap(),
+            )]),
+            "movement": ObjectMoveFact {
+            target_repository_id: movement.target_repository_id.clone().unwrap(),
+            target_entry_id: movement.source_entry_id.clone(),
+            source_file_id: Some(request.expected_source_file_id),
+            displaced_target_file_id: None,
+            request: movement,
+            principal: "alice".into(),
+        }}),
     }
 }
 
@@ -147,19 +165,44 @@ fn command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentFile {
     }
 }
 
+fn object_command(roots: &Roots, operation: OperationId) -> crate::MoveCurrentObject {
+    let request = command(roots, operation);
+    let movement = request.movement(&roots.target.primary_slot_id, None).unwrap();
+    let topology = roots.shared.backend.topology_snapshot(&identity(&roots.shared)).unwrap();
+    let source = topology.slots.iter()
+        .find(|slot| slot.slot_id == roots.source.primary_slot_id).unwrap();
+    let target = topology.slots.iter()
+        .find(|slot| slot.slot_id == roots.target.primary_slot_id).unwrap();
+    crate::MoveCurrentObject {
+        source_binding: request.source_binding,
+        source_slot_id: source.slot_id.clone(),
+        source_disk_id: source.disk_id.clone(),
+        source_binding_generation: source.binding_generation,
+        target: crate::MoveObjectTarget::Repository {
+            binding: request.target_binding,
+            disk_id: target.disk_id.clone(),
+            binding_generation: target.binding_generation,
+        },
+        movement,
+        expected_source_file_id: Some(request.expected_source_file_id),
+        expected_target_file_id: None,
+        operation_id: operation,
+    }
+}
+
 #[test]
 fn default_move_passes_both_pinned_bindings_and_cleans_only_confirmed_intent() {
     let roots = roots();
     let entry = original_entry(&roots);
     let operation = OperationId::generate().unwrap();
     *roots.backend.move_result.lock().unwrap() =
-        Some(Ok(scripted_result(operation, CommitState::Published)));
+        Some(Ok(scripted_result(&roots, operation, CommitState::Published, "arrived.txt")));
     let (reply, descriptor) = share(&roots)
         .dispatch(request(operation, "b/arrived.txt", false))
         .unwrap();
     assert!(descriptor.is_none());
     let reply = json_reply(reply);
-    assert_eq!(reply["operation_kind"], "file.history.move");
+    assert_eq!(reply["operation_kind"], OBJECT_MOVE_KIND);
     let calls = roots.backend.move_requests.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0]["source_repository_id"], roots.source.repository_id);
@@ -193,7 +236,7 @@ fn nonpublished_move_retains_original_intent_and_blocks_namespace_replay() {
     let entry = original_entry(&roots);
     let operation = OperationId::generate().unwrap();
     *roots.backend.move_result.lock().unwrap() =
-        Some(Ok(scripted_result(operation, CommitState::Prepared)));
+        Some(Ok(scripted_result(&roots, operation, CommitState::Prepared, "arrived.txt")));
     let mut share = share(&roots);
     let failure = share
         .dispatch(request(operation, "b/arrived.txt", false))
@@ -210,26 +253,28 @@ fn nonpublished_move_retains_original_intent_and_blocks_namespace_replay() {
         .join(format!("{operation}.namespace.json"));
     let bytes = fs::read(&record).unwrap();
     let intent: Value = json_codec::from_slice(&bytes).unwrap();
-    assert_eq!(intent["format"], "smb-file-history-move");
+    assert_eq!(intent["format"], "smb-object-move");
     assert_eq!(intent["operation_id"], operation.to_string());
     assert_eq!(
-        intent["move_request"]["source_repository_id"],
+        intent["movement"]["source_repository_id"],
         roots.source.repository_id
     );
-    assert_eq!(intent["move_request"]["source_path"], "source.txt");
+    assert_eq!(intent["movement"]["source_path"], "source.txt");
     assert_eq!(
-        intent["move_request"]["target_repository_id"],
+        intent["movement"]["target_repository_id"],
         roots.target.repository_id
     );
-    assert_eq!(intent["move_request"]["target_name"], "arrived.txt");
-    assert_eq!(intent["source_entry_id"], entry.entry_id);
+    assert_eq!(intent["movement"]["target_path"], "arrived.txt");
+    assert_eq!(intent["movement"]["source_entry_id"], entry.entry_id);
     assert_eq!(intent["source_file_id"], entry.file_id);
+    assert_eq!(intent["target_file_id"], Value::Null);
+    assert_eq!(intent["replace_requested"], false);
     let replay = share
         .dispatch(request(operation, "b/different.txt", false))
         .unwrap_err();
     assert_eq!(
         replay.error.code,
-        storage_contract::ErrorCode::RecoveryRequired
+        storage_contract::ErrorCode::IdempotencyKeyReused
     );
     assert_eq!(roots.backend.move_requests.lock().unwrap().len(), 1);
     assert_eq!(fs::read(record).unwrap(), bytes);
@@ -297,19 +342,21 @@ fn unsynced_move_intent_prevents_core_submission_and_keeps_available_evidence() 
 }
 
 #[test]
-fn cross_disk_replace_or_directory_destination_never_submits_native_move() {
+fn default_move_forwards_parent_paths_and_does_not_invent_an_absent_replacement() {
     let roots = roots();
     let mut share = share(&roots);
     for (target, replace) in [("b/arrived.txt", true), ("b/folder/arrived.txt", false)] {
         let operation = OperationId::generate().unwrap();
-        let failure = share
-            .dispatch(request(operation, target, replace))
-            .unwrap_err();
-        assert_eq!(
-            failure.error.code,
-            storage_contract::ErrorCode::UnsupportedOperation
-        );
-        assert!(roots.backend.move_requests.lock().unwrap().is_empty());
+        let relative = target.strip_prefix("b/").unwrap();
+        *roots.backend.move_result.lock().unwrap() =
+            Some(Ok(scripted_result(&roots, operation, CommitState::Published, relative)));
+        share.dispatch(request(operation, target, replace)).unwrap();
+        let calls = roots.backend.move_requests.lock().unwrap();
+        let captured = calls.last().unwrap();
+        assert_eq!(captured["movement"]["target_path"], relative);
+        assert_eq!(captured["movement"]["replace"], false);
+        assert_eq!(captured["movement"]["target_entry_id"], Value::Null);
+        assert_eq!(captured["target_file_id"], Value::Null);
         assert!(
             !roots
                 .shared
@@ -405,7 +452,7 @@ fn changed_account_generation_refuses_move_before_record_or_core_admission() {
 fn engine_move_rechecks_either_binding_under_owner_lock() {
     for target in [false, true] {
         let roots = roots();
-        let command = command(&roots, OperationId::generate().unwrap());
+        let command = object_command(&roots, OperationId::generate().unwrap());
         let repository = if target { &roots.target } else { &roots.source };
         let binding = roots
             .backend
@@ -429,7 +476,7 @@ fn engine_move_rechecks_either_binding_under_owner_lock() {
         let error = roots
             .backend
             .inner
-            .move_current_file(&identity(&roots.shared), command)
+            .move_current_object(&identity(&roots.shared), command)
             .unwrap_err();
         assert_eq!(error.code, storage_contract::ErrorCode::SmbRebindRequired);
     }
@@ -439,7 +486,7 @@ fn engine_move_rechecks_either_binding_under_owner_lock() {
 fn engine_move_refuses_changed_captured_source_identity_before_native_capture() {
     let roots = roots();
     let mut command = command(&roots, OperationId::generate().unwrap());
-    command.expected_source_entry_id = "not-the-captured-entry".into();
+    command.expected_source_entry_id = format!("entry_{:032x}", 99);
     let error = roots
         .backend
         .inner
@@ -539,3 +586,7 @@ fn default_connection_cannot_adopt_reenabled_target_binding_generation() {
             .exists()
     );
 }
+
+#[path = "history_move_identity_tests.rs"]
+mod history_move_identity_tests;
+

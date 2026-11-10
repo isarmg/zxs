@@ -13,6 +13,19 @@ pub(crate) fn advance_branch_node(
     principal: &str,
     operation: OperationId,
 ) -> Result<()> {
+    advance_branch_node_with_ids(state,branch,node,materialize,principal,operation,
+        &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn advance_branch_node_with_ids(
+    state: &mut State,
+    branch: &str,
+    node: &str,
+    materialize: bool,
+    principal: &str,
+    operation: OperationId,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
     let previous = state.branches.get(branch).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileBranchNotFound,
@@ -55,7 +68,7 @@ pub(crate) fn advance_branch_node(
     } else {
         previous.pending_file_versions.clone()
     };
-    let id = new_id("commit")?;
+    let id = ids("commit")?;
     state.commits.insert(
         id.clone(),
         Commit {
@@ -64,7 +77,7 @@ pub(crate) fn advance_branch_node(
             history_tree_id: previous.history_tree_id,
             kind: "file_metadata".into(),
             parent_commit_ids: vec![current.commit_id.clone()],
-            tree_id: new_id("tree")?,
+            tree_id: ids("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),

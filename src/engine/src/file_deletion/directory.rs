@@ -16,10 +16,10 @@ use storage_contract::directory_git::{
 mod freeze;
 mod proof;
 mod source;
-pub(crate) use source::retained_entries;
+pub(crate) use source::{retained_entries, mounted_entries};
 pub(crate) mod visibility;
 pub(crate) use freeze::verify as verify_frozen;
-pub(crate) use proof::{admit, node_for, shape as admit_node_shape, verify_publication};
+pub(crate) use proof::{admit, admit_original, node_for, shape as admit_node_shape, verify_publication};
 
 pub(crate) const DELETE: &str = "directory.delete";
 pub(crate) const UNDO: &str = "directory.delete.undo";
@@ -64,7 +64,7 @@ pub(crate) struct Admitted {
     pub(crate) undo: bool,
 }
 
-fn identity(operation: OperationId, prefix: &str, owner: &str) -> Result<String> {
+pub(crate) fn identity(operation: OperationId, prefix: &str, owner: &str) -> Result<String> {
     let hash = crate::object_hash(
         "directory-deletion-identity",
         &json!({"operation_id": operation, "prefix": prefix, "owner": owner}),
@@ -253,7 +253,7 @@ fn apply_undo(
         .operations
         .get(&node.operation_id)
         .ok_or_else(invalid)?;
-    let admitted = proof::admit(previous, original)?;
+    let admitted = proof::admit_original(previous,original,node)?;
     if admitted.undo || admitted.node != *node {
         return Err(invalid());
     }
