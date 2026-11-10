@@ -15,9 +15,9 @@ use web_interface::{
     tasks::spawn_local,
 };
 
+mod completion;
 mod folders;
 mod target;
-mod completion;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Basis {
@@ -104,6 +104,10 @@ struct Editor {
 }
 
 impl Editor {
+    fn owns_generation(self, generation: u64) -> bool {
+        self.generation.try_with_untracked(|current| *current) == Some(generation)
+    }
+
     fn clear_review(self) {
         if let Some(cancellation) = self.cancellation.get_untracked() {
             cancellation.abort();
@@ -134,10 +138,14 @@ pub(crate) fn provide(state: RwSignal<State>) {
     provide_context(editor);
     Effect::new(move |_| {
         let owner = state.with(|state| {
-            state.session_active().then(|| (state.session_epoch, state.principal.clone()))
+            state
+                .session_active()
+                .then(|| (state.session_epoch, state.principal.clone()))
         });
         if editor.completion.with_untracked(|completion| {
-            completion.as_ref().is_some_and(|destination| !destination.owned_by(owner.as_ref()))
+            completion
+                .as_ref()
+                .is_some_and(|destination| !destination.owned_by(owner.as_ref()))
         }) {
             editor.completion.set(None);
         }
@@ -153,7 +161,11 @@ pub(crate) fn provide(state: RwSignal<State>) {
         }
     });
     on_cleanup(move || {
-        if let Some(cancellation) = editor.cancellation.try_with_untracked(Clone::clone).flatten() {
+        if let Some(cancellation) = editor
+            .cancellation
+            .try_with_untracked(Clone::clone)
+            .flatten()
+        {
             cancellation.abort();
         }
     });
@@ -198,8 +210,14 @@ struct ReadTarget {
 }
 impl ReadTarget {
     fn current(&self, state: RwSignal<State>, editor: Editor) -> bool {
-        editor.generation.try_with_untracked(|generation| *generation) == Some(self.generation)
-            && editor.target_slot.try_with_untracked(|slot| slot == &self.slot) == Some(true)
+        editor
+            .generation
+            .try_with_untracked(|generation| *generation)
+            == Some(self.generation)
+            && editor
+                .target_slot
+                .try_with_untracked(|slot| slot == &self.slot)
+                == Some(true)
             && state.with_untracked(basis).as_ref() == Some(&self.basis)
     }
 }
@@ -220,7 +238,10 @@ fn begin_read(state: RwSignal<State>, editor: Editor) -> Option<ReadTarget> {
     }) {
         editor.error.set(Some(api::error(
             storage_contract::ErrorCode::InvalidRequest,
-            t("请选择在线可写的目标磁盘。", "Choose an online writable destination disk."),
+            t(
+                "请选择在线可写的目标磁盘。",
+                "Choose an online writable destination disk.",
+            ),
         )));
         return None;
     }
@@ -254,16 +275,14 @@ fn review_destination(state: RwSignal<State>, editor: Editor) {
         return;
     };
     spawn_local(async move {
-        let result = target::review(
-            read.basis.clone(), read.slot.clone(), destination, read.cancellation.clone(),
-        ).await;
+        let result = target::review(state, editor, &read, destination).await;
         if !accept_read_response(state, read.basis.epoch, &result) || !read.current(state, editor) {
             return;
         }
         editor.reading.set(false);
         editor.cancellation.set(None);
         match result {
-            Ok(review) => editor.review.set(Some(review)),
+            Ok(review) => editor.review.set(review),
             Err(error) => editor.error.set(Some(error)),
         }
     });
@@ -273,7 +292,11 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
     let editor = expect_context::<Editor>();
     let slots = Signal::derive(move || {
         state.with(|state| {
-            state.files.disks.iter().filter(|disk| disk.online && disk.writable)
+            state
+                .files
+                .disks
+                .iter()
+                .filter(|disk| disk.online && disk.writable)
                 .map(|disk| SelectOption::new(disk.slot_id.clone(), disk.name.clone()))
                 .collect::<Vec<_>>()
         })
@@ -326,12 +349,16 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
                             "The destination disk is empty. Its root repository will be created as part of this move; no separate initialization is needed.").to_string(),
                         |repository| format!("{}: {}", t("目标所属仓库", "Destination repository"), repository.as_str()),
                     );
+                    let generation = editor.generation.get_untracked();
                     let captured = StoredValue::new(captured);
                     view! {
                         <p>{label}</p>
                         <p>{target_context}</p>
                         <button class="zxs-button" disabled=move ||disabled.get()
                             on:click=move |_| {
+                                if !editor.owns_generation(generation) {
+                                    return;
+                                }
                                 let captured = captured.get_value();
                                 if state.with_untracked(basis).as_ref() != Some(&captured.basis)
                                     || editor.target_slot.get_untracked() != captured.request.target_slot_id
@@ -362,3 +389,7 @@ pub(super) fn controls(state: RwSignal<State>) -> impl IntoView {
         </Show>
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/web/unit/files/relocation_tests.rs"]
+mod tests;

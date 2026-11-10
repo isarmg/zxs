@@ -53,7 +53,7 @@ fn navigate(
     path: String,
     cursor: Option<String>,
 ) {
-    if editor.generation.get_untracked() == generation {
+    if editor.owns_generation(generation) {
         open(state, editor, path, cursor);
     }
 }
@@ -63,7 +63,7 @@ fn choose(state: RwSignal<State>, editor: Editor, generation: u64) {
         let listing = listing.as_ref()?;
         if !listing.writable
             || listing.generation != generation
-            || editor.generation.get_untracked() != generation
+            || !editor.owns_generation(generation)
             || editor.target_slot.get_untracked() != listing.slot
             || state.with_untracked(basis).as_ref() != Some(&listing.basis)
         {
@@ -146,7 +146,7 @@ fn page_view(state: RwSignal<State>, editor: Editor, listing: Listing) -> impl I
                         }
                     }>{t("下一页", "Next page")}</button>
                 <button type="button" class="zxs-button" on:click=move |_| {
-                    if editor.generation.get_untracked() == generation { editor.clear_review(); }
+                    if editor.owns_generation(generation) { editor.clear_review(); }
                 }>
                     {t("收起目录选择", "Close folder picker")}
                 </button>

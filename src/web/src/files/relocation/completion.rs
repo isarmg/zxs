@@ -67,7 +67,7 @@ pub(super) fn view(
                         } else {
                             t("移动已完成。", "Move completed.")
                         }}</p>
-                        <p class="zxs-row">{label}</p>
+                        <p class="zxs-row">{label.clone()}</p>
                         <p class="zxs-row">{t("打开目标所在文件夹会读取当前位置，不会重新移动。", "Opening the destination folder reads its current contents without moving anything again.")}</p>
                         <div class="zxs-flow">
                             <button class="zxs-button" data-open-move-destination=""
