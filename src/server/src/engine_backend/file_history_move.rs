@@ -16,12 +16,17 @@ impl EngineBackend {
             return Err(ApiError::forbidden());
         }
         require_move_binding(&engine, &mut current, &command.source_binding)?;
-        if command.movement.source_repository_id.as_str() != command.source_binding.repository_id {
+        let source = repository(&engine, &command.source_binding.repository_id)?;
+        if command.movement.source_repository_id.as_str() != command.source_binding.repository_id
+            || source.primary_slot_id != command.source_slot_id
+        {
             return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
                 "move source no longer belongs to its captured namespace binding"));
         }
+        require_move_disk(&engine, &command.source_slot_id,
+            &command.source_disk_id, command.source_binding_generation)?;
         match &command.target {
-            crate::MoveObjectTarget::Repository(binding) => {
+            crate::MoveObjectTarget::Repository { binding, disk_id, binding_generation } => {
                 require_move_binding(&engine, &mut current, binding)?;
                 let target = repository(&engine, &binding.repository_id)?;
                 if command.movement.target_repository_id.as_ref().map(|id| id.as_str())
@@ -31,17 +36,11 @@ impl EngineBackend {
                     return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
                         "move target differs from its captured namespace binding"));
                 }
+                require_move_disk(&engine, &command.movement.target_slot_id, disk_id, *binding_generation)?;
             }
             crate::MoveObjectTarget::EmptyDisk { disk_id, binding_generation } => {
-                let disk = engine.registered_disks()
-                    .find(|disk| disk.slot_id == command.movement.target_slot_id)
-                    .ok_or_else(|| ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
-                        "move destination disk binding disappeared"))?;
-                if disk.disk_id != *disk_id || disk.binding_generation != *binding_generation
-                    || disk.level != 1
-                    || disk.registration_mode != storage_engine::RegistrationMode::Enabled
-                    || command.movement.target_repository_id.is_some()
-                {
+                require_move_disk(&engine, &command.movement.target_slot_id, disk_id, *binding_generation)?;
+                if command.movement.target_repository_id.is_some() {
                     return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
                         "move destination disk binding changed"));
                 }
@@ -85,6 +84,24 @@ impl EngineBackend {
         move_current_file_target_locked(&mut engine, identity, command.request,
             Some(&replacement), Some(target_entry))
     }
+}
+
+fn require_move_disk(
+    engine: &AdmissionEngine,
+    slot: &str,
+    disk_id: &str,
+    binding_generation: u64,
+) -> Result<(), ApiError> {
+    let disk = engine.registered_disks().find(|disk| disk.slot_id == slot)
+        .ok_or_else(|| ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
+            "captured move disk registration disappeared"))?;
+    if disk.disk_id != disk_id || disk.binding_generation != binding_generation
+        || disk.level != 1 || disk.registration_mode != storage_engine::RegistrationMode::Enabled
+    {
+        return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
+            "captured move disk binding changed"));
+    }
+    Ok(())
 }
 
 fn require_move_binding(

@@ -366,3 +366,5 @@
 - 未编译、运行测试或触发 CI；只在统一整合窗口交接完整功能。
 
 - 后继已将旧 path-facing file 新请求替换为统一 object.move；只保留已存原file intent/receipt及原空盘root阶段的续作。Current目录scope与正常更新共用投影，保留原注册属性；完整组合依赖仍未解除。
+
+- 泛化 SMB 搬运命令保留原捕获的两端 slot/disk/generation，由同一 Engine 锁内核对 namespace binding 与实际磁盘身份；复用原 namespace spool，不改变协议记录格式。此两文件片需要泛化 RPC 同步透传，未运行测试或 CI。

@@ -7,6 +7,9 @@ use storage_contract::{OperationId, history_window::HistoryFileId};
 #[derive(Debug)]
 pub struct MoveCurrentObject {
     pub source_binding: SmbBinding,
+    pub source_slot_id: String,
+    pub source_disk_id: String,
+    pub source_binding_generation: u64,
     pub target: MoveObjectTarget,
     pub movement: storage_contract::file_relocation::ObjectMoveRequest,
     pub expected_source_file_id: Option<HistoryFileId>,
@@ -16,7 +19,7 @@ pub struct MoveCurrentObject {
 
 #[derive(Debug)]
 pub enum MoveObjectTarget {
-    Repository(SmbBinding),
+    Repository { binding: SmbBinding, disk_id: String, binding_generation: u64 },
     EmptyDisk { disk_id: String, binding_generation: u64 },
 }
 
