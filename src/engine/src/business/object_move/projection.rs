@@ -101,13 +101,26 @@ fn publish_namespace(next:&mut State,repository:&Repository,entries:Vec<Entry>,p
     Ok(id)
 }
 
-fn deletion(previous:&State,repository:&Repository,entry:&Entry,principal:&str,operation:OperationId,sequence:u64,time:u64)->Result<FileDeletionNode> {
+fn deletion(previous:&State,next:&mut State,repository:&Repository,entry:&Entry,principal:&str,operation:OperationId,sequence:u64,time:u64)->Result<FileDeletionNode> {
     let mut heads=BTreeMap::new();
     for branch in previous.branches.values().filter(|branch| branch.file_id.as_deref()==Some(entry.file_id.as_str())) {
         let node=branch.file_node_id.clone().or_else(|| {
             previous.commits[&branch.head_commit_id].entries.iter().find(|member| member.file_id==entry.file_id).map(|member|member.version_id.clone())
         }).ok_or_else(invalid)?;
         heads.insert(branch.branch_id.clone(),node);
+    }
+    if heads.is_empty() {
+        // Keep a real source frontier even when this ordinary namespace has
+        // not initialized an independent file branch yet.
+        let original = &previous.commits[&previous.branches[&repository.main_branch_id].head_commit_id];
+        let mut ordinal = 0u64;
+        let mut ids = |prefix: &str| {
+            ordinal += 1;
+            IdentityScope { operation, member: Some(&entry.file_id) }
+                .generated(prefix, &format!("deletion-frontier-{ordinal}"))
+        };
+        let branch = file::ensure_shared_file_branch_with_ids(next, original, entry, &mut ids)?;
+        heads.insert(branch.clone(), file_nodes::branch_head(next, &branch)?);
     }
     let parents=heads.values().cloned().collect::<BTreeSet<_>>().into_iter().collect();
     Ok(FileDeletionNode {
@@ -279,7 +292,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
                 && seen.insert(member.source.file_id.as_str()) && !unit.source_namespace.iter().any(|entry|
                 entry.kind==NamespaceEntryKind::File && entry.file_id==member.source.file_id
                     && !source_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key()))) {
-                let node=deletion(previous,&unit.source_repository,&member.source,principal,operation,sequence,route.created_at)?;
+                let node=deletion(previous,&mut next,&unit.source_repository,&member.source,principal,operation,sequence,route.created_at)?;
                 next.file_deletions.insert(node.file_id.clone(),node.clone());source_deletions.push(node);
             }
         }
@@ -289,7 +302,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
         if previous.versions.values().any(|version|version.file_id==entry.file_id)
             && seen.insert(entry.file_id.as_str()) && !next.commits[&commit].entries.iter().any(|current|
             current.kind==NamespaceEntryKind::File && current.file_id==entry.file_id) {
-            let node=deletion(previous,&target,entry,principal,operation,sequence,route.created_at)?;
+            let node=deletion(previous,&mut next,&target,entry,principal,operation,sequence,route.created_at)?;
             next.file_deletions.insert(node.file_id.clone(),node.clone());displaced_deletions.push(node);
         }
     }

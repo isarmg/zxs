@@ -35,6 +35,13 @@ impl Graph {
 
 fn retained_commits(previous:&State,unit:&MoveUnit)->BTreeSet<String> {
     let mut pending=BTreeSet::new();
+    // An ordinary namespace can save files before any independent branch
+    // exists. Their captured main still owns the original save facts.
+    if unit.entries.iter().filter_map(|member| member.context.as_ref())
+        .any(|context| context.branch_id == unit.source_repository.main_branch_id)
+    {
+        pending.insert(previous.branches[&unit.source_repository.main_branch_id].head_commit_id.clone());
+    }
     for branch in unit.files.values().flat_map(|file|&file.branch_ids) {
         let branch=&previous.branches[branch];
         pending.insert(branch.head_commit_id.clone());
