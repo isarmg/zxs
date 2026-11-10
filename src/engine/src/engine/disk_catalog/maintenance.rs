@@ -128,6 +128,9 @@ impl Engine {
         &mut self,
         previous: Option<&Arc<State>>,
     ) {
+        if self.move_is_retained() {
+            return;
+        }
         let dirty = previous.and_then(|before| changed_bindings(before, &self.state));
         let targets: Vec<_> = self
             .registered_disks()

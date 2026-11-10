@@ -56,7 +56,7 @@ pub(crate) fn context_at_key(state: &State, repository: &str, key: &str) -> Opti
 
 // A freshly written namespace has not registered a directory composition yet.
 // Bootstrap its live context here; frozen DirectoryBranch/Tree readers never do.
-fn context_for_entry(state: &State, repo: &Repository, entry: &Entry) -> FileContext {
+pub(super) fn context_for_entry(state: &State, repo: &Repository, entry: &Entry) -> FileContext {
     let branch = state
         .file_selections
         .get(&entry.file_id)

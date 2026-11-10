@@ -1426,6 +1426,13 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.move_current_file_admitted(identity, command)
     }
+    fn move_current_object(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentObject,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.move_current_object_admitted(identity, command)
+    }
     fn replace_current_file(
         &self,
         identity: &Identity,

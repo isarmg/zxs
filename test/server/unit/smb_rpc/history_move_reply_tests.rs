@@ -106,18 +106,21 @@ fn another_operation_or_copy_delete_receipt_cannot_complete_move() {
 }
 
 #[test]
-fn target_name_accepts_one_portable_component_but_not_directory_destinations() {
-    assert_eq!(
-        crate::MoveTargetName::parse("目的.txt").unwrap().as_str(),
-        "目的.txt"
-    );
-    assert_eq!(
-        crate::MoveTargetName::parse("folder/file.txt")
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::UnsupportedOperation
-    );
-    for invalid in ["", ".", "..", "/file.txt", "../file.txt"] {
+fn target_name_accepts_portable_parent_paths_but_not_lookup_only_spellings() {
+    for valid in ["目的.txt", "folder/file.txt"] {
+        assert_eq!(crate::MoveTargetName::parse(valid).unwrap().as_str(), valid);
+    }
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "/file.txt",
+        "../file.txt",
+        "folder/e\u{301}.txt",
+    ] {
         assert!(crate::MoveTargetName::parse(invalid).is_err());
     }
 }
+
+#[path = "history_move_object_reply_tests.rs"]
+mod object_receipt_tests;

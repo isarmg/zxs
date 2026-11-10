@@ -182,6 +182,9 @@ impl Engine {
     /// Normal open only, after authoritative recovery has finished. Never run
     /// per replay prefix, during first initialization, or for PreservePending.
     pub(in crate::engine) fn restore_published_disk_histories(&mut self) {
+        if self.move_is_retained() {
+            return;
+        }
         for identity in self.disk_history_targets() {
             if let Err(source) = self.rebuild_disk_history(&identity.slot_id) {
                 self.record_history_failure(identity, source);

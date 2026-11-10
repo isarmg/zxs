@@ -65,6 +65,9 @@ impl DefaultShare {
         let bytes = admission.retained_move_bytes()?;
         let format: Value =
             storage_contract::decode_strict(&bytes).map_err(ApiError::contract_input)?;
+        if format.get("format").and_then(Value::as_str) == Some(object::FORMAT) {
+            return self.resume_object_move(source, target, replace, admission, &bytes).map(Some);
+        }
         if matches!(
             format.get("format").and_then(Value::as_str),
             Some(empty_target::FORMAT | empty_target::REPLACE_FORMAT)
@@ -127,6 +130,7 @@ impl DefaultShare {
         {
             return Err(changed());
         }
+        let target_slot_id = target_repository.primary_slot_id.clone();
         let source = self.pin_binding(source_repository)?;
         let target = self.pin_binding(target_repository)?;
         if !original.source_binding.matches(&source) || !original.target_binding.matches(&target) {
@@ -154,23 +158,22 @@ impl DefaultShare {
         if admission.retained_move_bytes()? != bytes {
             return Err(changed());
         }
-        let result = self.submit_move(
-            crate::MoveCurrentFile {
-                source_binding: source_identity
-                    .smb_binding
-                    .expect("invariant: pinned source binding"),
-                target_binding: target_identity
-                    .smb_binding
-                    .expect("invariant: pinned target binding"),
-                source_path: original_source,
-                target_name: original_target,
-                expected_source_entry_id: original.source_entry_id,
-                expected_source_file_id: file,
-                operation_id: operation,
-            },
-            original.replacement,
-        )?;
-        let reply = published_reply(result, operation)?;
+        let request = crate::MoveCurrentFile {
+            source_binding: source_identity
+                .smb_binding
+                .expect("invariant: pinned source binding"),
+            target_binding: target_identity
+                .smb_binding
+                .expect("invariant: pinned target binding"),
+            source_path: original_source,
+            target_name: original_target,
+            expected_source_entry_id: original.source_entry_id,
+            expected_source_file_id: file,
+            operation_id: operation,
+        };
+        let receipt = MoveReceipt::current(&request, &target_slot_id, original.replacement.as_ref())?;
+        let result = self.submit_move(request, original.replacement)?;
+        let reply = receipt.published_reply(result, &self.identity.principal)?;
         admission.finish_published();
         Ok(Some(reply))
     }

@@ -613,6 +613,11 @@ impl Engine {
     }
 
     pub(crate) fn rebuild_index(&self) -> Result<()> {
+        // The selected move may already have installed its next SYSTEM view.
+        // Preserve those bytes; finish_move installs the exact candidate below.
+        if self.move_is_retained() {
+            return Ok(());
+        }
         self.rebuild_index_state(&self.state, false)
     }
 

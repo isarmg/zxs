@@ -1,5 +1,5 @@
-//! One vertical native move: exact intent, complete preparation, ordinary joint
-//! decision, required database installation, then one visible State replacement.
+//! Resume retained file-move operations through the shared storage executor.
+//! New path-facing file requests use the unified current-object planner.
 use super::*;
 use crate::business::NativeMoveCandidate;
 use crate::journal::{Candidate, Publication};
@@ -38,7 +38,7 @@ impl CapturedFileMoveSource {
 }
 
 impl FileHistoryMovePathRequest {
-    fn validate(&self) -> Result<()> {
+    pub(in crate::engine) fn validate(&self) -> Result<()> {
         storage_contract::validate_id(&self.source_repository_id, "repo")?;
         storage_contract::validate_id(&self.target_repository_id, "repo")?;
         name_policy::LookupPath::parse(&self.source_path)?;
@@ -64,7 +64,7 @@ impl crate::engine::move_execution::MoveSelection<NativeMoveCandidate> for Origi
     fn verify(&self, engine: &Engine, _: &Candidate, _: &str) -> Result<()> {
         engine.require_move_choice_baseline()
     }
-    fn prepare(&self, _: &mut Engine, _: &Candidate, _: &str) -> Result<()> {
+    fn prepare(&mut self, _: &mut Engine, _: &Candidate, _: &str) -> Result<()> {
         // The existing file input preparation has already retained PREPARE.
         Ok(())
     }
@@ -128,9 +128,9 @@ impl Engine {
         }
     }
 
-    /// Execute one native cross-disk move. The only returned success is the
-    /// original Published receipt after target FULL, both FILEs, disk current /
-    /// complete history and SYSTEM have joined the same ordinary decision.
+    /// Move a current file through the common object operation. The only success
+    /// is its original Published receipt after FULL, FILE, disk current/history
+    /// and SYSTEM have joined the same ordinary decision.
     /// Authentication and both namespace writer reservations belong to callers.
     pub fn move_current_file(
         &mut self,
@@ -138,7 +138,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        self.move_current_file_target(request, None, None, principal, operation)
+        self.move_file_path_as_object(request, None, None, principal, operation)
     }
 
     /// Replace the exact existing ordinary target in the SAME move decision.
@@ -150,7 +150,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        self.move_current_file_target(request, None, Some(replacement), principal, operation)
+        self.move_file_path_as_object(request, None, Some(replacement), principal, operation)
     }
 
     /// Keep externally captured source and displaced-target identity within
@@ -164,7 +164,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        self.move_current_file_target(request, Some(source), replacement, principal, operation)
+        self.move_file_path_as_object(request, Some(source), replacement, principal, operation)
     }
 
     /// An already retained file operation continues with its own exact inputs.
@@ -177,15 +177,48 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<Option<OperationResult>> {
+        self.resume_file_move_path_if_original(request, Some(source), replacement, principal, operation)
+    }
+
+    pub(in crate::engine) fn resume_file_move_path_if_original(
+        &mut self,
+        request: &FileHistoryMovePathRequest,
+        source: Option<&CapturedFileMoveSource>,
+        replacement: Option<&FileHistoryMoveReplacement>,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<Option<OperationResult>> {
         let selected = match self.state.operations.get(&operation) {
             Some(original) => original.kind == crate::business::FILE_HISTORY_MOVE_KIND,
             None => self.original_move_path_intent(request, replacement, principal, operation)?.is_some(),
         };
         if selected {
-            self.move_current_file_captured(request, source, replacement, principal, operation).map(Some)
+            self.move_current_file_target(request, source, replacement, principal, operation).map(Some)
         } else {
             Ok(None)
         }
+    }
+
+    /// Continue the already-published root stage of an original empty-disk
+    /// request. New requests create their root inside object.move instead.
+    pub fn continue_file_move_after_root(
+        &mut self,
+        request: &FileHistoryMovePathRequest,
+        source: &CapturedFileMoveSource,
+        root_operation: OperationId,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        Self::require_actor(principal)?;
+        let root = self.state.operations.get(&root_operation).ok_or_else(conflict)?;
+        if root_operation == operation || root.kind != "repository.create"
+            || self.state.operation_principals.get(&root_operation).map(String::as_str) != Some(principal)
+        { return Err(conflict()); }
+        let created: Repository = json_codec::from_value(root.result["created_repository"].clone())?;
+        if !created.file_manager_root || created.repository_id != request.target_repository_id {
+            return Err(conflict());
+        }
+        self.move_current_file_target(request, Some(source), None, principal, operation)
     }
 
     fn move_current_file_target(
@@ -364,6 +397,6 @@ impl Engine {
     ) -> Result<OperationResult> {
         self.finish_move(candidate, hash, outcome,
             projection.capture().retained_version_ids().cloned().collect(),
-            existing, decided, OriginalFileSelection)
+            existing, decided, None, OriginalFileSelection)
     }
 }

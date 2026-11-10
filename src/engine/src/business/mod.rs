@@ -12,6 +12,7 @@ pub use directory_preview::{DirectoryBranchPreview, DirectoryDefaultSelection};
 pub use directory_staging::DirectoryCommitRequest;
 mod file;
 pub(crate) mod file_relocation;
+pub(crate) mod object_move;
 pub(crate) mod history_copy;
 pub use history_copy::FileHistoryCopyRequest;
 mod history_move;
