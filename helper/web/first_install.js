@@ -150,6 +150,8 @@
   }
   function render() {
     const locked = busy || stopping || !csrf || blocked;
+    const preparesDirectories = record !== null && index() === 6
+      && record.steps[6] === undefined && directoryInspected;
     for (const input of element("form").elements) input.disabled = locked || record !== null;
     element("import").disabled = locked || record !== null;
     element("save").disabled = locked || record === null;
@@ -158,11 +160,9 @@
     element("refresh-preview").hidden = true;
     byId("samba-return-first-install").disabled = locked || record === null;
     byId("samba-return-first-install").hidden = record === null || record.input.deployment.smb === null;
-    element("commit").disabled = locked || record === null || !inspected;
+    element("commit").disabled = locked || record === null || (!inspected && !preparesDirectories);
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
-    element("directories-preview").disabled = locked || record === null;
-    element("directories-prepare").disabled = locked || !directoryInspected;
     element("directories-save").disabled = locked || directoryOriginal === null;
     if (record === null) {
       element("progress").textContent = blocked ? "原请求不可读；未清除记录或发送操作。" : "填一次输入，再逐步核对和确认原生操作。";
@@ -187,8 +187,10 @@
     element("progress").textContent = "第 " + (step + 1) + "/" + names.length + " 步：" + names[step]
       + (original?.issued && !original.completed ? "。已发送或发送结果未知，只续同一请求。" : "")
       + (original?.completed ? "。历史完成记录已保留，请查询当前服务状态。" : "");
-    element("commit").hidden = !original || (step === 7 ? liveReady : original.completed);
-    element("commit").textContent = original?.issued ? "再次确认并仅续作这个原步骤" : "确认执行当前原步骤";
+    element("commit").hidden = !preparesDirectories
+      && (!original || (step === 7 ? liveReady : original.completed));
+    element("commit").textContent = preparesDirectories ? "确认创建原批次空目录"
+      : original?.issued ? "再次确认并仅续作这个原步骤" : "确认执行当前原步骤";
     element("passwords").hidden = step !== 5 || original?.completed;
     element("samba-note").hidden = record.input.deployment.smb === null || step < 4;
     for (const input of element("passwords").querySelectorAll("input")) input.disabled = locked;
@@ -205,11 +207,15 @@
   async function inspect() {
     if (busy || stopping || !csrf || blocked || !record) return;
     const token = ++epoch, step = index(), original = record.steps[step];
-    inspected = false;
+    inspected = false; directoryInspected = false;
     element("open").hidden = true;
     liveReady = false;
     setBusy(true); error(""); render();
     try {
+      if (step === 6 && !original) {
+        const prepared = await inspectDirectories(token);
+        if (token !== epoch || !prepared) return;
+      }
       const [path, input] = previewRequest(step, original);
       const value = await (await post(path, input)).json();
       if (token !== epoch) return;
@@ -293,8 +299,13 @@
     } catch (failure) { error(failure.message); }
   });
   element("commit").addEventListener("click", async () => {
-    if (busy || stopping || !csrf || blocked || !record || !inspected) return;
+    if (busy || stopping || !csrf || blocked || !record) return;
     const step = index(), original = record.steps[step];
+    if (step === 6 && !original && directoryInspected) {
+      await prepareDirectories();
+      return;
+    }
+    if (!inspected) return;
     if (!original || (original.completed && step !== 7)) return;
     if (!element("ack").checked) { error("先确认已停止外部写者与其他安装/服务操作。"); return; }
     if (step === 5 && (!element("password").value
@@ -344,36 +355,31 @@
     }
     return value;
   }
-  element("directories-preview").addEventListener("click", async () => {
-    if (busy || stopping || !csrf || blocked || !record) return;
-    const token = ++epoch;
-    directoryInspected = false;
-    error(""); setBusy(true); render();
-    try {
-      const input = directoryInput();
-      const stored = sessionStorage.getItem(directoryKey);
-      if (stored !== null) {
-        if (new TextEncoder().encode(stored).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
-        directoryOriginal = checkedDirectoryOriginal(JSON.parse(stored), input);
-      }
-      const value = await (await post("/api/initialization/storage-directories-preview", input)).json();
-      if (token !== epoch) return;
-      const original = checkedDirectoryOriginal({input:value.input, request_digest:value.request_digest}, input);
-      if (directoryOriginal && !same(original, directoryOriginal)) {
-        throw new Error("原空目录计划或宿主身份改变；未选择替代计划。");
-      }
-      const text = JSON.stringify(original);
-      if (new TextEncoder().encode(text).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
-      if (sessionStorage.getItem(directoryKey) !== stored) throw new Error("空目录原请求在核对期间改变。");
-      sessionStorage.setItem(directoryKey, text);
-      if (sessionStorage.getItem(directoryKey) !== text) throw new Error("空目录原请求未能准确保存。");
-      directoryOriginal = original;
-      directoryInspected = true;
-      show(value);
-    } catch (failure) { error(failure.message); }
-    finally { setBusy(false); render(); }
-  });
-  element("directories-prepare").addEventListener("click", async () => {
+  async function inspectDirectories(token) {
+    const input = directoryInput();
+    const stored = sessionStorage.getItem(directoryKey);
+    if (stored !== null) {
+      if (new TextEncoder().encode(stored).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
+      directoryOriginal = checkedDirectoryOriginal(JSON.parse(stored), input);
+    }
+    const value = await (await post("/api/initialization/storage-directories-preview", input)).json();
+    if (token !== epoch) return false;
+    const original = checkedDirectoryOriginal({input:value.input, request_digest:value.request_digest}, input);
+    if (directoryOriginal && !same(original, directoryOriginal)) {
+      throw new Error("原空目录计划或宿主身份改变；未选择替代计划。");
+    }
+    const text = JSON.stringify(original);
+    if (new TextEncoder().encode(text).length > 64 * 1024) throw new Error("空目录原请求超过保存上限。");
+    if (sessionStorage.getItem(directoryKey) !== stored) throw new Error("空目录原请求在核对期间改变。");
+    sessionStorage.setItem(directoryKey, text);
+    if (sessionStorage.getItem(directoryKey) !== text) throw new Error("空目录原请求未能准确保存。");
+    directoryOriginal = original;
+    const prepared = value.directories.every(directory => directory.state === "empty_prepared");
+    directoryInspected = !prepared;
+    show(value);
+    return prepared;
+  }
+  async function prepareDirectories() {
     if (busy || stopping || !csrf || blocked || !directoryOriginal || !directoryInspected) return;
     if (!element("ack").checked) { error("先确认已停止外部写者与其他主机管理操作。"); return; }
     const original = directoryOriginal;
@@ -381,6 +387,7 @@
       + "\n只创建缺少的直接子目录并交给原服务 UID/主 GID；不改已有权限、不删数据、不初始化池、不挂载/格式化。"
       + "\n原摘要：" + original.request_digest + "\n中断后只查询和续作同一批次。")) return;
     const token = ++epoch;
+    let completed = false;
     error(""); setBusy(true); directoryInspected = false; render();
     try {
       checkedDirectoryOriginal(original, directoryInput());
@@ -397,11 +404,14 @@
         throw new Error("未收到原目录批次的完成回执；结果仍未知。");
       }
       element("ack").checked = false;
-      error("原空目录已准备；现在点“只读核对当前原步骤”，由原生首存储接口检查实际目录、挂载和生产池约束。目录回执不是池已初始化。");
+      completed = true;
     } catch (failure) {
       error(failure.message + " 保留原请求、pending 和全部目录；先查询，不清空、不换批次。");
     } finally { setBusy(false); render(); }
-  });
+    // Directory creation and storage genesis retain their original operations.
+    // Read the real storage plan now; initializing it still needs confirmation.
+    if (completed && token === epoch) await inspect();
+  }
   element("directories-save").addEventListener("click", () => {
     if (busy || stopping || !directoryOriginal) return;
     save(new Blob([JSON.stringify(directoryOriginal)], {type:"application/json"}), "zxs-first-storage-directories-original.json");
@@ -482,3 +492,4 @@
   } catch (failure) { blocked = true; error(failure.message); }
   render();
 })();
+

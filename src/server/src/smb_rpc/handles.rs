@@ -16,8 +16,8 @@ impl OpenOptions {
         exclusive: bool,
         write_through: bool,
     ) -> Result<Self, ApiError> {
-        if !writable && (create || truncate) {
-            return Err(ApiError::invalid("read handle cannot create or truncate"));
+        if !writable && truncate {
+            return Err(ApiError::invalid("read handle cannot truncate"));
         }
         Ok(Self {
             writable,
@@ -171,7 +171,10 @@ impl Session {
             Some(version) => self.version_mtime(version)?,
             None => smb_protocol::protocol::FileMtime::Unpublished {},
         };
-        let (handle, fd, size, workspace_id) = if writable {
+        // O_RDONLY | O_CREAT creates a missing empty file without granting
+        // data-write access. Only a missing target needs a private workspace;
+        // an existing read-only open stays pinned to its immutable version.
+        let (handle, fd, size, workspace_id) = if writable || (create && existing.is_none()) {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
             self.reserve_paths(&[path.as_str()])?;
             let mut pending_workspace = None;

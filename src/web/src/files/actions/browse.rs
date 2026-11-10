@@ -92,13 +92,41 @@ pub(crate) fn go_root(state: RwSignal<State>) {
     load_disks(state);
 }
 pub(crate) fn go_directory(state: RwSignal<State>, directory: String) {
+    navigate_directory(state, directory, crate::ui::Page::Files);
+}
+
+pub(crate) fn go_directory_details(state: RwSignal<State>, directory: String) {
+    navigate_directory(state, directory, crate::ui::Page::Details);
+}
+
+fn navigate_directory(state: RwSignal<State>, directory: String, page: crate::ui::Page) {
     state.update(|s| {
         s.notices.leave();
         s.files.navigate(Navigation::Directory(directory));
-        s.change_page(crate::ui::Page::Files);
+        s.change_page(page);
     });
     load_entries(state);
 }
+
+/// Explicitly read current SMB changes from page one, keeping the folder and filter.
+pub(crate) fn refresh_directory(state: RwSignal<State>) {
+    if !state.with_untracked(|s| {
+        s.session_active() && !s.files.slot.is_empty() && !s.files.loading && !super::pending(s)
+    }) {
+        return;
+    }
+    state.update(|s| {
+        s.notices.leave();
+        s.files.reset_page();
+        s.files.clear_selection();
+        s.files.batch = None;
+        s.files.deletion.cancel_review();
+        s.files.entries = Default::default();
+        s.files.loaded = false;
+    });
+    load_entries(state);
+}
+
 /// Refresh keeps the current cursor; stale snapshots explicitly restart at page one.
 pub(crate) fn load_entries(state: RwSignal<State>) {
     request_page(state, false);

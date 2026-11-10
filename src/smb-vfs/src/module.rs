@@ -320,10 +320,9 @@ unsafe extern "C" fn pread(
                 return Err(bad());
             }
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            let count = opened
-                .info
-                .read_count(opened.writable, offset as u64, count);
-            if !opened.writable {
+            let private_work = opened.info.workspace_id.is_some();
+            let count = opened.info.read_count(private_work, offset as u64, count);
+            if !private_work {
                 let output = if count == 0 {
                     &mut []
                 } else {
@@ -376,7 +375,7 @@ unsafe extern "C" fn lseek(
             context.client.call(Request::AuthorizeRead {
                 handle: opened.info.handle,
             })?;
-            if !opened.writable {
+            if opened.info.workspace_id.is_none() {
                 // SMB2/3 tracks file position independently of VFS lseek.
                 // The non-content FD proves neither position nor allocation;
                 // reject raw seeks rather than query its directory geometry.
@@ -544,9 +543,8 @@ unsafe extern "C" fn pread_send(
         // SAFETY: The host handle is live on its owning event loop; snapshot duplicates the FD and
         // returns no host pointers to workers.
         let opened = unsafe { snapshot(handle, fsp) }?;
-        let count = opened
-            .info
-            .read_count(opened.writable, offset as u64, count);
+        let private_work = opened.info.workspace_id.is_some();
+        let count = opened.info.read_count(private_work, offset as u64, count);
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(count)
@@ -565,7 +563,7 @@ unsafe extern "C" fn pread_send(
             prepare,
             move |(opened, mut bytes)| {
                 let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-                let result = if opened.writable {
+                let result = if opened.info.workspace_id.is_some() {
                     opened.client.call(Request::AuthorizeRead {
                         handle: opened.info.handle,
                     })?;
@@ -845,15 +843,18 @@ unsafe fn authorized_fstat(
     if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut physical) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // Read-only creation still owns a private empty work file until save.
+    // Descriptor storage and the client's data-write access are distinct.
+    let private_work = opened.info.workspace_id.is_some();
     let size = if opened.info.kind == NamespaceEntryKind::Directory {
         0
-    } else if opened.writable {
+    } else if private_work {
         physical.st_size
     } else {
         i64::try_from(opened.info.size)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
     };
-    let mtime = if opened.writable {
+    let mtime = if private_work {
         metadata.mtime
     } else {
         opened.info.mtime

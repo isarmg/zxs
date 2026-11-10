@@ -34,7 +34,7 @@
     <section class="card" id="first-install">
       <h2>空目录首装：同一输入逐步完成并启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
-      <p class="muted">前提：已有独立非 root Unix 服务账户及主组。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步可明确准备原批次的缺失空直接子目录，随后仍由原首存储接口核验并初始化。本向导不创建 Unix 账户、不挂载或格式化。选择 SMB 还须有独立 Unix 账户、支持的 Samba 与单独确认的 SMB 凭据。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
+      <p class="muted">前提：已有独立非 root Unix 服务账户及主组。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。本向导不创建 Unix 账户、不挂载或格式化。选择 SMB 还须有独立 Unix 账户、支持的 Samba 与单独确认的 SMB 凭据。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
       <form id="first-install-form">
         <div class="fields">
           <label>本机服务账户 <input id="first-install-user" required value="zxs" maxlength="32" autocomplete="off"></label>
@@ -60,13 +60,11 @@
       <p class="muted">预览后环境发生变化时，仅当前步骤从未在本标签页发送，才可明确撤回该预览并重新核对，完整输入和此前步骤仍保留。已发送、结果未知或历史完成的步骤不能这样重选；其他窗口与磁盘原材料仍由原生接口决定能否继续。</p>
       <pre id="first-install-report"></pre>
       <div id="first-install-directory-note" hidden>
-        <p>首次管理员已完成。若原批次空目录尚不存在，可先在这里预览并明确创建。仅限管理账户已完成、存储池尚未开始初始化；当前池、额外目录、未知内容或已有权限不符均拒绝。新目录原 inode 先持久记录再交接／无覆盖发布，完成后缺件不重建。</p>
+        <p>首次管理员已完成。点击“只读核对当前原步骤”：缺少原批次目录时，主按钮会变为“确认创建原批次空目录”；创建成功后会自动读取真实存储计划，仍须确认后才初始化。已有准确空目录直接读取存储计划，无需再执行目录准备。</p>
         <div id="first-install-directories-actions">
-          <button id="first-install-directories-preview" type="button" class="secondary">核对／读取原批次空目录准备</button>
-          <button id="first-install-directories-prepare" type="button">确认仅准备这些空目录</button>
           <button id="first-install-directories-save" type="button" class="secondary">保存原空目录请求</button>
         </div>
-        <p class="muted">目录准备回执不是存储已初始化。完成后再核对本步骤的真实首存储计划；一旦首存储计划已保留，本入口不再重新创建目录。跨标签页恢复可先导入完整首装输入，再由本机固定原计划读取同一目录请求。</p>
+        <p class="muted">目录准备回执不是存储已初始化。创建后自动读取的仍是原首存储接口的真实计划；一旦该计划已保留，本入口不再创建目录。跨标签页恢复可先导入完整首装输入，再由本机固定原计划读取同一目录请求。</p>
       </div>
       <div id="first-install-samba-note" hidden>
         <p>服务配置已进入首装流程。SMB 账户登记／密码仍须在原有独立卡片明确确认，本向导不会代填、保存或重放 SMB 密码。可先带入同一配置，再回到本流程继续。</p>
@@ -500,3 +498,4 @@
   </main>
 </body>
 </html>
+

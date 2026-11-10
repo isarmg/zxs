@@ -477,6 +477,52 @@ fn path_label(path: &str) -> String {
         path.into()
     }
 }
+
+fn repository_destination(state: &State, model: &Model, directory: &str) -> Option<String> {
+    if actions::pending(state) {
+        return None;
+    }
+    let (target, status) = model.reviewed(state)?;
+    if directory == status.directory_id {
+        return None;
+    }
+    let path = status
+        .owner
+        .as_ref()
+        .filter(|owner| owner.directory_id == directory)
+        .map(|owner| owner.path.as_str())
+        .or_else(|| {
+            status
+                .children
+                .iter()
+                .find(|child| child.directory_id == directory)
+                .map(|child| child.path.as_str())
+        })?;
+    // Named repositories have a displayed root prefix; disk-root repositories
+    // do not. Preserve that prefix when leaving the current repository path.
+    let prefix = if target.path.is_empty() {
+        state.files.directory.as_str()
+    } else if name_policy::path_key(&state.files.directory) == name_policy::path_key(&target.path) {
+        ""
+    } else {
+        state.files.directory.split_once('/')?.0
+    };
+    Some(if path.is_empty() {
+        prefix.to_owned()
+    } else {
+        super::model::join_path(prefix, path)
+    })
+}
+
+fn open_repository(state: RwSignal<State>, model: RwSignal<Model>, directory: &str) {
+    let destination = state.with_untracked(|state| {
+        model.with_untracked(|model| repository_destination(state, model, directory))
+    });
+    if let Some(destination) = destination {
+        actions::go_directory_details(state, destination);
+    }
+}
+
 fn child_view(
     state: RwSignal<State>,
     model: RwSignal<Model>,
@@ -485,6 +531,9 @@ fn child_view(
     let id = StoredValue::new(child.directory_id);
     view! {<section class="zxs-frame zxs-stack" data-directory-git-child=id.get_value()>
         <h3 class="zxs-row">{path_label(&child.path)}</h3>
+        <button type="button" class="zxs-button" data-open-directory-child=id.get_value()
+            disabled=move ||state.with(|state|model.with(|model|repository_destination(state,model,&id.get_value()).is_none()))
+            on:click=move |_|open_repository(state,model,&id.get_value())>{t("进入子仓库暂存／提交","Open child repository to stage / commit")}</button>
         <p class="zxs-row">{if child.dirty{t("子仓库有未提交的工作更改；父级不会代为提交。","The child repository has uncommitted work. A parent commit does not commit it.")}else{t("子仓库工作内容已提交。","The child repository has no uncommitted work.")}}</p>
         <p class="zxs-row">{if child.head_tree_id.is_none(){t("子仓库尚无提交，不能暂存引用。","The child repository has no commit to stage.")}else if child.reference_changed{t("子仓库当前提交与父级暂存引用不同。","The child's current commit differs from the parent's staged reference.")}else{t("父级暂存引用已指向子仓库当前提交。","The parent's staged reference points to the child's current commit.")}}</p>
         <p class="zxs-row">{if child.staged{t("该子仓库引用已暂存，等待父级提交。","This child reference is staged for the next parent commit.")}else{t("该子仓库引用没有已暂存更改。","This child reference has no staged change.")}}</p>
@@ -536,7 +585,21 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             {move ||model.with(|model|model.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
             {move ||model.with(|model|model.status.clone()).map(|status|view!{
                 <p class="zxs-row" role="status" data-directory-staging="true" data-directory-git-initialized=status.initialized.to_string() data-directory-git-staged=status.staged.to_string() data-directory-git-unstaged=status.unstaged.to_string() data-directory-git-needs-restage=status.needs_restage.to_string()>{if !status.initialized{t("当前目录尚未初始化独立仓库。","This directory is not an independent repository yet.")}else if status.head_tree_id.is_none(){t("独立仓库已初始化，尚无提交。","The independent repository is initialized and has no commit yet.")}else if status.staged{format!("{} · +{} / ~{} / -{}",t("当前仓库有已暂存更改","This repository has staged changes to commit"),status.added,status.modified,status.deleted)}else if status.unstaged{t("当前仓库有尚未暂存的工作更改。","This repository has working changes that are not staged.")}else{t("当前仓库没有待提交更改。","This repository has no changes to commit.")}}</p>
-                {status.owner.map(|owner|view!{<p class="zxs-row">{format!("{}: {}",t("工作内容所属仓库","Repository owning this work"),path_label(&owner.path))}</p>})}
+                {status.owner.map(|owner| {
+                    let current = owner.directory_id == status.directory_id;
+                    let label = path_label(&owner.path);
+                    let id = StoredValue::new(owner.directory_id);
+                    view! {
+                        <div class="zxs-flow">
+                            <p class="zxs-row">{format!("{}: {}",t("工作内容所属仓库","Repository owning this work"),label)}</p>
+                            {(!current).then(move ||view! {
+                                <button type="button" class="zxs-button" data-open-directory-owner=id.get_value()
+                                    disabled=move ||state.with(|state|model.with(|model|repository_destination(state,model,&id.get_value()).is_none()))
+                                    on:click=move |_|open_repository(state,model,&id.get_value())>{t("进入所属仓库暂存／提交","Open owning repository to stage / commit")}</button>
+                            })}
+                        </div>
+                    }
+                })}
                 <Show when=move ||status.legacy_history><p class="zxs-row">{t("已有目录历史保留；初始化不会删除或重置已有数据。","Existing directory history is retained. Initialization never deletes or resets existing data.")}</p></Show>
             })}
             <Show when=move ||model.with(|model|model.status.as_ref().is_some_and(|status|!status.initialized))>

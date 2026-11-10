@@ -165,6 +165,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             {move ||breadcrumbs(&state.with(|s|s.files.directory.clone())).into_iter().map(move |(name,path)|view!{<span aria-hidden="true">"/"</span><button class="zxs-button" on:click=move |_|actions::go_directory(state,path.clone())>{name}</button>}).collect_view()}
         </nav>
         <div class="zxs-file-toolbar zxs-flow">
+            <button class="zxs-button" data-zxs-refresh-directory="" disabled=move ||state.with(|s|!s.session_active()||s.files.loading||actions::pending(s)) on:click=move |_|actions::refresh_directory(state)>{t("刷新文件夹","Refresh folder")}</button>
             {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Move,None)>{t("移动","Move")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Copy,None)>{t("复制","Copy")}</button>
