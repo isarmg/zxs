@@ -23,11 +23,19 @@ struct Destination {
 }
 
 fn fixture_for(route: Route) -> (tempfile::TempDir, Engine, Repository, Destination) {
+    fixture_with_config(route, |_| {})
+}
+
+fn fixture_with_config(
+    route: Route,
+    configure: impl FnOnce(&mut Config),
+) -> (tempfile::TempDir, Engine, Repository, Destination) {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
         Config::development([temp.path().join("source"), temp.path().join("target")]).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
+    configure(&mut config);
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let source = engine
         .create_disk_root("P01", "admin", OperationId::generate().unwrap())
@@ -62,14 +70,14 @@ fn entry(engine: &Engine, repository: &Repository, path: &str) -> Entry {
         .clone()
 }
 
-fn move_to(
-    engine: &mut Engine,
+fn move_request(
+    engine: &Engine,
     source: &Repository,
     destination: &Destination,
     path: &str,
     target_path: &str,
-) -> Repository {
-    let request = ObjectMoveRequest {
+) -> ObjectMoveRequest {
+    ObjectMoveRequest {
         source_repository_id: HistoryRepositoryId::parse(&source.repository_id).unwrap(),
         source_entry_id: NamespaceEntryId::parse(&entry(engine, source, path).entry_id).unwrap(),
         source_path: name_policy::LookupPath::parse(path).unwrap(),
@@ -81,7 +89,17 @@ fn move_to(
         target_path: name_policy::PortablePath::parse(target_path).unwrap(),
         replace: false,
         target_entry_id: None,
-    };
+    }
+}
+
+fn move_to(
+    engine: &mut Engine,
+    source: &Repository,
+    destination: &Destination,
+    path: &str,
+    target_path: &str,
+) -> Repository {
+    let request = move_request(engine, source, destination, path, target_path);
     let operation = OperationId::generate().unwrap();
     let operations = engine.state().operations.len();
     let repositories = engine.state().repositories.len();
@@ -130,6 +148,63 @@ fn snapshot_files(engine: &Engine, head: &str) -> BTreeMap<String, Vec<u8>> {
             (path.to_owned(), version_bytes(engine, &entry.version_id))
         })
         .collect()
+}
+
+#[test]
+fn hidden_target_directory_rows_count_toward_move_budget() {
+    let (_temp, mut engine, source, destination) =
+        fixture_with_config(Route::ExistingDisk, |config| config.max_entries = 2);
+    let target = destination.repository.as_ref().unwrap();
+    engine
+        .file_namespace(
+            &source.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "incoming", None).unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let incoming = entry(&engine, &source, "incoming");
+    save(&mut engine, target, "retained/file", b"retained body");
+    initialize(&mut engine, target, "");
+    commit(&mut engine, target, "");
+    let directory = entry(&engine, target, "retained");
+    let file = entry(&engine, target, "retained/file");
+    let deletion = engine
+        .prepare_current_directory_deletion(
+            &target.repository_id,
+            &name_policy::LookupPath::parse("retained").unwrap(),
+            &directory.entry_id,
+        )
+        .unwrap()
+        .unwrap();
+    let deleted = engine
+        .directory_namespace_batch(
+            &target.repository_id,
+            &deletion,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(deleted.kind, "directory.delete");
+    let namespace = engine.namespace_tree(&target.main_branch_id).unwrap();
+    let hidden = namespace.entries().to_vec();
+    assert_eq!(hidden.len(), 2);
+    assert_eq!(namespace.visible_entries().count(), 0);
+
+    // The display is empty, but both retained rows still consume the quota.
+    // An unrelated one-entry directory would make the complete target size three.
+    let request = move_request(&engine, &source, &destination, "incoming", "arrived");
+    let before = engine.state().clone();
+    let error = engine
+        .move_object(&request, "admin", OperationId::generate().unwrap())
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(engine.state(), &before);
+    assert_eq!(entry(&engine, &source, "incoming"), incoming);
+    let namespace = engine.namespace_tree(&target.main_branch_id).unwrap();
+    assert_eq!(namespace.entries(), hidden.as_slice());
+    assert_eq!(namespace.visible_entries().count(), 0);
+    assert_eq!(version_bytes(&engine, &file.version_id), b"retained body");
 }
 
 #[test]
