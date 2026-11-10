@@ -145,6 +145,24 @@ impl Fixture {
             ..State::default()
         };
         state.commits.insert(
+            request.expected_target_head.clone(),
+            Commit {
+                commit_id: request.expected_target_head.clone(),
+                history_tree_id: target.history_tree_id.clone(),
+                kind: "root".into(),
+                parent_commit_ids: Vec::new(),
+                tree_id: id("tree", 2),
+                sequence: 10,
+                operation_id: id("op", 2).parse().unwrap(),
+                author: "admin".into(),
+                message: "Original empty target".into(),
+                entries: Vec::new(),
+                namespace_deletions: None,
+                pending_file_versions: BTreeMap::new(),
+                provenance: None,
+            },
+        );
+        state.commits.insert(
             commit_id.clone(),
             Commit {
                 commit_id: commit_id.clone(),
@@ -272,6 +290,7 @@ fn prospective_staging_or_degraded_receipts_do_not_become_cold_success() {
     ];
     for change in changes {
         let mut fixture = Fixture::new();
+        fixture.admit().unwrap();
         change(
             fixture
                 .state
@@ -299,6 +318,7 @@ fn source_node_request_clock_and_both_identity_maps_remain_bound() {
     ];
     for change in changes {
         let mut fixture = Fixture::new();
+        fixture.admit().unwrap();
         change(
             &mut fixture
                 .state
@@ -314,13 +334,16 @@ fn source_node_request_clock_and_both_identity_maps_remain_bound() {
 #[test]
 fn move_event_is_the_exact_arrival_not_a_fabricated_delete_event() {
     let mut fixture = Fixture::new();
+    fixture.admit().unwrap();
     fixture.state.events[0].object_id = fixture.operation.to_string();
     assert!(fixture.admit().is_err());
     let mut fixture = Fixture::new();
+    fixture.admit().unwrap();
     let event = fixture.state.events[0].clone();
     fixture.state.events.push(event);
     assert!(fixture.admit().is_err());
     let mut fixture = Fixture::new();
+    fixture.admit().unwrap();
     let commit = fixture.state.operations[&fixture.operation]
         .commit_id
         .clone()
@@ -332,6 +355,67 @@ fn move_event_is_the_exact_arrival_not_a_fabricated_delete_event() {
         .unwrap()
         .entries
         .clear();
+    assert!(fixture.admit().is_err());
+}
+
+#[test]
+fn arrival_requires_its_original_earlier_target_parent() {
+    let changes: [fn(&mut Commit); 2] = [
+        |parent| parent.history_tree_id = id("history", 99),
+        |parent| parent.sequence = 11,
+    ];
+    for change in changes {
+        let mut fixture = Fixture::new();
+        fixture.admit().unwrap();
+        change(fixture.state.commits.get_mut(&id("commit", 2)).unwrap());
+        assert!(fixture.admit().is_err());
+    }
+    let mut fixture = Fixture::new();
+    fixture.admit().unwrap();
+    fixture.state.commits.remove(&id("commit", 2)).unwrap();
+    assert!(fixture.admit().is_err());
+}
+
+#[test]
+fn arrival_preserves_every_preexisting_target_sibling() {
+    let mut fixture = Fixture::new();
+    fixture.admit().unwrap();
+    let sibling = Entry {
+        entry_id: id("entry", 2),
+        path: name_policy::PortablePath::parse("keep.txt").unwrap(),
+        kind: NamespaceEntryKind::File,
+        file_id: id("file", 2),
+        version_id: id("ver", 2),
+        size: 4,
+    };
+    fixture
+        .state
+        .commits
+        .get_mut(&id("commit", 2))
+        .unwrap()
+        .entries
+        .push(sibling.clone());
+    let arrival = fixture.state.operations[&fixture.operation]
+        .commit_id
+        .clone()
+        .unwrap();
+    fixture
+        .state
+        .commits
+        .get_mut(&arrival)
+        .unwrap()
+        .entries
+        .push(sibling);
+    fixture.admit().unwrap();
+    fixture
+        .state
+        .commits
+        .get_mut(&arrival)
+        .unwrap()
+        .entries
+        .last_mut()
+        .unwrap()
+        .version_id = id("ver", 99);
     assert!(fixture.admit().is_err());
 }
 

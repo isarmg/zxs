@@ -1,6 +1,14 @@
 //! Completion archive absence is a normal first-move state, not a damaged file.
 use super::*;
 
+fn private_root() -> (tempfile::TempDir, DiskRoot) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("disk");
+    crate::disk::private_dir(&path).unwrap();
+    let root = DiskRoot::open(&path).unwrap();
+    (temp, root)
+}
+
 fn binding() -> CompletionBinding {
     CompletionBinding {
         format: Format::MoveCompletion,
@@ -18,17 +26,16 @@ fn binding() -> CompletionBinding {
 
 #[test]
 fn first_move_retains_and_retires_without_a_preexisting_completion_archive() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = DiskRoot::open(temp.path()).unwrap();
+    let (_temp, root) = private_root();
     let original = binding();
     assert!(read_completed(&root, original.operation).unwrap().is_none());
-    assert!(!temp.path().join(COMPLETED).exists());
+    assert!(!root.path().join(COMPLETED).exists());
     original.retain_at(&root).unwrap();
     original.retain_at(&root).unwrap();
     original
         .same(&read(&root, &root.path().join(ACTIVE)).unwrap().unwrap())
         .unwrap();
-    assert!(!temp.path().join(COMPLETED).exists());
+    assert!(!root.path().join(COMPLETED).exists());
 
     original.retire_at(&root).unwrap();
     assert!(read(&root, &root.path().join(ACTIVE)).unwrap().is_none());
@@ -41,8 +48,7 @@ fn first_move_retains_and_retires_without_a_preexisting_completion_archive() {
 
 #[test]
 fn existing_completion_archive_requires_a_directory_and_valid_original_record() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = DiskRoot::open(temp.path()).unwrap();
+    let (_temp, root) = private_root();
     let original = binding();
     let directory = root.path().join(COMPLETED);
     std::fs::write(&directory, b"not a directory").unwrap();
@@ -60,9 +66,8 @@ fn existing_completion_archive_requires_a_directory_and_valid_original_record() 
 
 #[test]
 fn a_completion_archive_symlink_is_not_treated_as_absent() {
-    let temp = tempfile::tempdir().unwrap();
+    let (_temp, root) = private_root();
     let exterior = tempfile::tempdir().unwrap();
-    let root = DiskRoot::open(temp.path()).unwrap();
     std::os::unix::fs::symlink(exterior.path(), root.path().join(COMPLETED)).unwrap();
     assert!(read_completed(&root, binding().operation).is_err());
 }

@@ -98,11 +98,20 @@ fn detached_ordinary_work_captured_before_selection_cannot_cross_the_choice_fenc
 }
 
 #[test]
-fn persisted_choice_parser_rejects_wrong_slot_membership_and_noncanonical_bytes() {
+fn persisted_choice_checks_exact_slot_membership_and_canonical_bytes() {
     let (_temp, engine) = engine();
     let choice = selected(&engine);
     let mut wrong = choice.record.clone();
+    // Decode admits a later retained slot; the live baseline owns its exact value.
     wrong.decision_slot += 1;
+    let later =
+        Choice::decode(&engine.config, &encode_metadata(&wrong, MAX_BYTES).unwrap()).unwrap();
+    assert_eq!(
+        later.require_baseline(&engine).unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    let mut wrong = choice.record.clone();
+    wrong.decision_slot = wrong.source_sequence;
     assert!(Choice::decode(&engine.config, &encode_metadata(&wrong, MAX_BYTES).unwrap()).is_err());
     let mut wrong = choice.record.clone();
     wrong.metadata_members.pop();
