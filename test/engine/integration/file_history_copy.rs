@@ -111,15 +111,8 @@ impl Fixture {
         }
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         let source = engine.create_disk_root("P01", "admin", op()).unwrap();
-        let target = engine
-            .create_repository(
-                &RepositoryName::parse("target").unwrap(),
-                "D04",
-                1,
-                "admin",
-                op(),
-            )
-            .unwrap();
+        let target = engine.create_disk_root("D04", "admin", op()).unwrap();
+        assert!(source.file_manager_root && target.file_manager_root);
         save(&mut engine, &source, "source.txt", b"old full body");
         save(&mut engine, &source, "source.txt", b"new full body");
         if current {

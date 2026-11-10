@@ -25,6 +25,35 @@ fn recheck_error(engine: &Engine, capture: &FileHistoryMoveCapture) -> ErrorCode
 }
 
 #[test]
+fn move_capture_rejects_a_regular_repository_instead_of_treating_it_as_a_disk_root() {
+    let mut fixture = Fixture::new(false);
+    let target = fixture
+        .engine
+        .create_repository(
+            &RepositoryName::parse("ordinary-target").unwrap(),
+            "D05",
+            1,
+            "admin",
+            op(),
+        )
+        .unwrap();
+    assert!(!target.file_manager_root);
+    let original = entry(&fixture.engine, &fixture.source, "source.txt");
+    let before = fixture.engine.state().clone();
+    let result = fixture.engine.capture_file_history_move(
+        FileHistoryMoveRequest {
+            namespace: &request(&fixture.engine, &fixture.source, &target),
+            source_file_id: &HistoryFileId::parse(&original.file_id).unwrap(),
+        },
+        &HistoryWindowCancellation::new(),
+    );
+    assert_eq!(result.err().unwrap().code(), ErrorCode::UnsupportedOperation);
+    assert_eq!(fixture.engine.state(), &before);
+    assert_eq!(entry(&fixture.engine, &fixture.source, "source.txt"), original);
+    assert!(fixture.engine.file_deletion(&original.file_id).is_none());
+}
+
+#[test]
 fn move_capture_retains_all_branch_frontiers_without_copy_or_source_deletion() {
     for current in [false, true] {
         let mut fixture = Fixture::new(current);

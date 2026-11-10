@@ -347,10 +347,31 @@ fn replaced_directory_identity_case(committed: bool) {
     let old = pool.status("docs");
     assert_eq!(old.directory_id, original.entry_id);
     assert_eq!(old.head_tree_id.is_some(), committed);
+    let before = canonical_json(pool.engine.state()).unwrap();
+    let storage = files(pool.temp.path());
+    assert_eq!(
+        pool.engine
+            .file_namespace(
+                &pool.repo.repository_id,
+                NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "docs", None).unwrap(),
+                "admin",
+                op(),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(canonical_json(pool.engine.state()).unwrap(), before);
+    assert_eq!(files(pool.temp.path()), storage);
     pool.engine
         .file_namespace(
             &pool.repo.repository_id,
-            NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "docs", None).unwrap(),
+            NamespaceOperation::parse(
+                NamespaceOperationKind::Rename,
+                "docs",
+                Some("retained-docs"),
+            )
+            .unwrap(),
             "admin",
             op(),
         )
@@ -362,6 +383,11 @@ fn replaced_directory_identity_case(committed: bool) {
         if cold {
             pool = pool.reopen();
         }
+        let retained = pool.status("retained-docs");
+        assert_eq!(retained.directory_id, original.entry_id);
+        assert_eq!(retained.head_tree_id, old.head_tree_id);
+        assert_eq!(retained.directory_branch_id, old.directory_branch_id);
+        assert_eq!(pool.bytes(&pool.entry("retained-docs/file")), b"old");
         let fresh = pool.status("docs");
         assert_eq!(fresh.directory_id, replacement.entry_id);
         assert!(!fresh.initialized);
