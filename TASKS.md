@@ -37,6 +37,11 @@
 - 使用现有已链接二进制，在独立 user／mount namespace 将临时目录映射为 `/zxs`，实际通过 host 首次准备及同摘要重试；正常服务对损坏池保持健康／管理状态／静态页面 HTTP 200，存储 readiness 为 503，SIGINT 正常退出 0，原配置保留。不存在／空系统根均在启动前明确拒绝且无写入。真实主机账户、`/zxs` 与用户磁盘未改变。
 - 下一步：在一致构建上运行新增原生测试，再验收完整非 root 服务账户首装、生产存储初始化、systemd 与 SMB。上述隔离运行不是新候选编译、完整首次安装或生产可用证明。
 
+## 本轮自动全量 CI 最小故障修复
+
+- 基于 `c9003675` 修正 workspace 特性门禁：helper 生产控制台要求 http1/json/tokio、拒绝 Query/Form，server 与 helper dev 仍要求 Query；保留 mount、生产 fault-injection 禁止项。7 项 Python 回归及 14 个真实 consumer/production-dev Cargo 元数据图检查通过，不进行本地编译。
+- 删除一期 core 实际报告的 object_move/projection.rs 未使用 Value 导入，保持 warning 拒绝门禁。此提交不包含批量格式修改，quality 的 rustfmt 失败仍未修复；其余 CI 失败分别继续读取日志处理。GitHub 自动 CI 的实际结果另行核实，不把脚本或元数据检查计为 Rust 测试通过。
+
 ## 本轮 main push 自动全量 CI
 
 - 用户最新明确要求“跑自动ci”。基于 `2ec85f7e` 启用 main 分支 push 自动执行既有完整 CI，保留人工入口；PR、schedule、标签与 Release 发布仍暂停。全 13 套、WASM、Chrome、SDK、一期 core、预算、依赖和不复用策略保持。

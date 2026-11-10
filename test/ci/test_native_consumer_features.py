@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE = runpy.run_path(str(ROOT / ".github/scripts/check-native-consumer-features.py"))
 MINIMAL = "rustix v1.1.5 (/source/rustix)|alloc,default,fs,process,std\n"
 HTTP = "http-routing v0.8.9 (/source/http-routing)|http1,json,query,tokio,tower-log,tracing\n"
+HELPER_HTTP = "http-routing v0.8.9 (/source/http-routing)|http1,json,tokio\n"
 
 
 ENGINE = "storage-engine v0.1.1 (/source/engine)|\n"
@@ -20,7 +21,8 @@ class NativeConsumerFeaturesTests(unittest.TestCase):
         for consumer in GATE["CONSUMERS"]:
             for edges in GATE["EDGES"]:
                 engine = FAULT_ENGINE if edges == "normal,build,dev" else ENGINE
-                GATE["validate"](MINIMAL + HTTP + engine, consumer, edges)
+                http = HELPER_HTTP if consumer == "storage-helper" and edges == "normal,build" else HTTP
+                GATE["validate"](MINIMAL + http + engine, consumer, edges)
         GATE["validate"](MINIMAL, "storage-client", "normal,build")
 
     def test_mount_and_form_regressions_are_rejected_in_every_occurrence(self):
@@ -38,10 +40,21 @@ class NativeConsumerFeaturesTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "missing expected graph entries"):
             GATE["validate"](MINIMAL, "storage-helper", "normal,build,dev")
 
+    def test_helper_production_json_console_is_distinct_from_server_dev_graph(self):
+        GATE["validate"](MINIMAL + HELPER_HTTP + ENGINE, "storage-helper", "normal,build")
+        for http in ("", HELPER_HTTP.replace("json,", ""),
+                     HELPER_HTTP.replace("http1,", ""), HELPER_HTTP.replace("tokio", ""),
+                     HELPER_HTTP.replace("json,", "json,form,"), HTTP):
+            with self.subTest(http=http), self.assertRaises(AssertionError):
+                GATE["validate"](MINIMAL + http + ENGINE, "storage-helper", "normal,build")
+        with self.assertRaisesRegex(AssertionError, "unexpected http-routing capabilities"):
+            GATE["validate"](MINIMAL + HELPER_HTTP + ENGINE, "storage-helper", "normal,build,dev")
+
     def test_each_consumer_and_dependency_scope_is_selected_separately(self):
         def result(command, **kwargs):
             engine = FAULT_ENGINE if "normal,build,dev" in command else ENGINE
-            return subprocess.CompletedProcess(command, 0, MINIMAL + HTTP + engine)
+            http = HELPER_HTTP if "storage-helper" in command and "normal,build" in command else HTTP
+            return subprocess.CompletedProcess(command, 0, MINIMAL + http + engine)
         with mock.patch.object(GATE["subprocess"], "run", side_effect=result) as run:
             GATE["check"](ROOT)
         expected = [mock.call(
@@ -55,7 +68,8 @@ class NativeConsumerFeaturesTests(unittest.TestCase):
         for consumer in GATE["CONSUMERS"]:
             with self.subTest(consumer=consumer):
                 with self.assertRaisesRegex(AssertionError, "production graph enables"):
-                    GATE["validate"](MINIMAL + HTTP + FAULT_ENGINE, consumer, "normal,build")
+                    http = HELPER_HTTP if consumer == "storage-helper" else HTTP
+                    GATE["validate"](MINIMAL + http + FAULT_ENGINE, consumer, "normal,build")
         for consumer in ("storage-engine", "storage-server"):
             with self.assertRaisesRegex(AssertionError, "test graph lacks"):
                 GATE["validate"](MINIMAL + HTTP + ENGINE, consumer, "normal,build,dev")

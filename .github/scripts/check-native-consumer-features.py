@@ -4,7 +4,9 @@
 This is not a package-retirement or binary-size assertion. Foundation tests may
 still explicitly select rustix/all-apis and http-routing/form. Product filesystem
 access uses fs/process, not mount syscalls; server extraction uses JSON and Query,
-not Form. Query retains form-codec and URL form parsing independently of Form.
+not Form. The helper console uses JSON without Query in production; its dev
+graph also includes the server. Query retains form-codec and URL form parsing
+independently of Form.
 """
 from pathlib import Path
 import re
@@ -24,8 +26,7 @@ def validate(output, consumer, edges):
         if match:
             selected.setdefault(match[1], []).append(set(filter(None, match[2].split(","))))
     required = {"rustix"}
-    if consumer in {"storage-server", "browser-smoke"} or (
-            consumer == "storage-helper" and edges == "normal,build,dev"):
+    if consumer in {"storage-server", "storage-helper", "browser-smoke"}:
         required.add("http-routing")
     if consumer in {"storage-engine", "storage-server", "storage-helper", "perf-check", "browser-smoke"}:
         required.add("storage-engine")
@@ -40,8 +41,12 @@ def validate(output, consumer, edges):
             if expected and not all("fault-injection" in features for features in feature_sets):
                 raise AssertionError(f"{consumer}: test graph lacks fault-injection coverage")
             continue
-        needed, forbidden = ({"fs", "process"}, {"mount"}) if package == "rustix" else (
-            {"json", "query"}, {"form"})
+        if package == "rustix":
+            needed, forbidden = {"fs", "process"}, {"mount"}
+        elif consumer == "storage-helper" and edges == "normal,build":
+            needed, forbidden = {"http1", "json", "tokio"}, {"form", "query"}
+        else:
+            needed, forbidden = {"json", "query"}, {"form"}
         if any(not needed <= features or forbidden & features for features in feature_sets):
             raise AssertionError(f"{consumer} ({edges}): unexpected {package} capabilities: {feature_sets}")
 

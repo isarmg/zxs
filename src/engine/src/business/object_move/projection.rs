@@ -2,7 +2,7 @@
 use super::*;
 use crate::engine::Prepared;
 use history_copy::{CopyRoute, graph::IdentityScope, retained::CopiedLifecycle};
-use json_codec::{json, Value};
+use json_codec::json;
 use storage_contract::{CommitState, CurrentHealth, Event, ProtectionAtPublish,
     file_relocation::{ObjectMoveFact, NamespaceEntryId, OBJECT_MOVE_KIND},
     history_window::{HistoryFileId, HistoryRepositoryId}};
