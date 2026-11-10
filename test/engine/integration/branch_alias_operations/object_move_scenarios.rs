@@ -153,3 +153,53 @@ fn moving_non_owner_alias_keeps_the_outside_physical_owner() {
     assert_eq!(pool.current_entry("b/report.txt").file_id, original.file_id);
     assert_eq!(pool.engine.state().file_locations[&original.file_id], owner);
 }
+
+#[test]
+fn cross_parent_alias_move_rejects_conflicting_physical_outcomes_atomically() {
+    let mut pool = Pool::new();
+    let original = selected_root_aliases(&mut pool);
+    let frozen = pool.register("", "second alias source");
+    let selected = pool.engine.state().directory_selections[&pool.repo.repository_id].clone();
+    pool.batch(
+        storage_contract::DirectoryBatchKind::Move,
+        vec![pool.mapping(&frozen, "a/report.txt", &selected, "a/second.txt")],
+    );
+    let entries = ["a/report.txt", "a/second.txt", "b/report.txt"]
+        .map(|path| pool.current_entry(path));
+    assert!(entries.iter().all(|entry| entry.file_id == original.file_id));
+    let owner = pool.engine.state().file_locations[&original.file_id].clone();
+    let directory = pool.current_entry("a");
+    let request = ObjectMoveRequest {
+        source_repository_id: HistoryRepositoryId::parse(&pool.repo.repository_id).unwrap(),
+        source_entry_id: NamespaceEntryId::parse(&directory.entry_id).unwrap(),
+        source_path: name_policy::LookupPath::parse("a").unwrap(),
+        target_slot_id: "P01".into(),
+        target_repository_id: Some(HistoryRepositoryId::parse(&pool.repo.repository_id).unwrap()),
+        target_path: name_policy::PortablePath::parse("b/moved").unwrap(),
+        replace: false,
+        target_entry_id: None,
+    };
+    let before = pool.engine.state().clone();
+    let error = pool
+        .engine
+        .move_object(
+            &request,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::BatchMappingConflict);
+    assert_eq!(pool.engine.state(), &before);
+    assert_eq!(pool.current_entry("a"), directory);
+    for entry in entries {
+        assert_eq!(pool.current_entry(entry.path()), entry);
+    }
+    assert_eq!(pool.engine.state().file_locations[&original.file_id], owner);
+    assert!(
+        pool.engine
+            .namespace_tree(&pool.repo.main_branch_id)
+            .unwrap()
+            .get("b/moved")
+            .is_none()
+    );
+}
