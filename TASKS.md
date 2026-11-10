@@ -2,6 +2,12 @@
 
 状态核对时间：2026-11-10。当前源码父基线：`d0f46798`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
+## 本轮单 ELF 首存储验收前置修复
+
+- CI #1027 的准确提交 `8a253039` 已通过真实 Samba，但单 ELF 在空运行环境缺少 `/zxs` 而退出，未生成安装候选。继续核查确认仅补 host root 仍缺 PreparedService 要求的初始存储，原 development flag 不代替 helper 初始化。
+- 发行验收增加同版 helper 的真实 host preview／prepare；无网络 Debian 容器依次执行私有布局、首管理员、首批空目录与 production 存储 API，原摘要／计划和原生回执逐步留证。停止并回收 helper 后，以相同非 root UID/GID、空附加组启动交付 ELF，必须管理／认证／存储 ready、`/readyz` 成功、内嵌 Web 摘要一致和正常退出。Chrome 的既有业务池使用同一已准备 host root 的镜像；SDK 基础镜像和生产启动门禁保持。
+- Python 请求／回执／失败清理及发行编排回归、Shell 语法和补丁检查通过；未本地编译、构建 Docker 或运行原生程序。真实 helper、冷启动与 Chrome 留给准确提交 CI，当前不宣称通过；APT、Unix 账户创建、systemd 安装／激活和完整首装仍不在本片验收范围。
+
 ## 维护与交付规则
 
 - **每次相关代码、测试或文档提交，同步更新本文件对应任务的状态、实际验证和下一步。** 合入前重新核对最新主线及组合结果，不沿用旧基线的通过结论。

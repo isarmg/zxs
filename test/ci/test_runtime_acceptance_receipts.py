@@ -30,7 +30,7 @@ def reject_before_runtime(gate, output):
             SAMBA.run(SimpleNamespace(output=output))
     else:
         with patch('sys.argv', ['check-debian13-single-binary.py', '--binary', 'unused',
-                                '--web', 'unused', '--output', str(output)]), \
+                                '--helper', 'unused', '--web', 'unused', '--output', str(output)]), \
                 patch.object(SINGLE.platform, 'freedesktop_os_release', return_value={'ID': 'other'}):
             SINGLE.main()
 
@@ -135,27 +135,38 @@ class RuntimeAcceptanceReceipts(unittest.TestCase):
         (web / 'build-manifest.json').write_text(json.dumps({'files': {'index.html': checksum}}))
         child = Mock()
         child.poll.return_value = None
+        child.wait.return_value = 0
 
-        def start_child(*_, **kwargs):
+        def start_child(command, **kwargs):
+            self.assertNotIn('--allow-development-setup', command)
+            self.assertNotIn('--setup-disk', command)
+            self.assertIn('/zxs/data/state', command)
+            self.assertEqual((kwargs['user'], kwargs['group'], kwargs['extra_groups']), (21001, 21001, []))
             self.assertFalse(output.exists())
             kwargs['stdout'].write(b'current single-ELF log')
             kwargs['stdout'].flush()
             return child
 
         ready = Mock(status=200)
+        ready.read.return_value = json.dumps({'management': 'alive', 'authentication': 'ready',
+            'storage': {'state': 'ready', 'recovering': False}, 'auxiliary': {'web_assets': 'ready'}}).encode()
+        probe = Mock(status=200)
+        probe.read.return_value = b'{"ready":true}'
         response = Mock(status=200)
         response.read.return_value = asset if asset_matches else b'wrong asset'
         client = Mock()
-        client.getresponse.side_effect = [ready, response]
+        client.getresponse.side_effect = [ready, probe, response]
         reservation = Mock()
         reservation.__enter__ = Mock(return_value=reservation)
         reservation.__exit__ = Mock(return_value=False)
         reservation.getsockname.return_value = ('127.0.0.1', 12345)
         with patch('sys.argv', ['check-debian13-single-binary.py', '--binary', str(binary),
-                                '--web', str(web), '--output', str(output)]), \
+                                '--helper', 'unused', '--web', str(web), '--output', str(output)]), \
                 patch.object(SINGLE.platform, 'freedesktop_os_release', return_value={'ID': 'debian', 'VERSION_ID': '13'}), \
                 patch.object(SINGLE.platform, 'machine', return_value='x86_64'), \
                 patch.object(SINGLE.shutil, 'which', return_value=None), \
+                patch.object(SINGLE, 'prepare_installation', return_value=(SimpleNamespace(pw_uid=21001, pw_gid=21001), {'test': 'prepared'})), \
+                patch.object(SINGLE.os, 'chown'), \
                 patch.object(SINGLE.subprocess, 'Popen', side_effect=start_child), \
                 patch.object(SINGLE.http.client, 'HTTPConnection', return_value=client), \
                 patch.object(SINGLE.socket, 'socket', return_value=reservation):

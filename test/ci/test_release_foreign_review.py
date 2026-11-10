@@ -104,7 +104,7 @@ class ReleaseForeignReviewExecution(unittest.TestCase):
 
     def assert_call(self, call, extra=()):
         expected = CARGO_ARGS + ['--cli-bin', call['binary'], '--embedded-web',
-                                 '--server-container-image', 'zxs-debian13-runtime']
+                                 '--server-container-image', 'zxs-debian13-service-runtime']
         self.assertEqual(call['args'], expected + list(extra))
 
     def test_unset_switch_keeps_one_full_invocation(self):

@@ -16,6 +16,8 @@
 
 发行 UI 门禁使用宿主正常沙箱的 Google Chrome 作为远端客户端，被测单 ELF 则运行在 Debian 13 容器。测试 launcher 只映射该 ELF 和私有夹具目录、非 root、无新增 capability，服务强制只监听 `127.0.0.1`；容器句柄负责退出和清理。另有无编译器 Debian 13 最小运行环境逐资源 SHA 门禁。此组合不能宣称“容器内 Chromium 已通过”：该尝试的 namespace `EPERM` 诊断保留，未通过关闭 sandbox 或更改宿主安全策略绕过。
 
+单 ELF 运行门禁先以本次交付的同版 helper 在隔离 Debian 镜像中准备 `/zxs`，再在无网络容器中走真实私有布局、首管理员、空目录和 production 首批存储初始化。保留原预览、摘要、完整计划和原生完成收据；helper 停止并回收后，主程序以相同非 root 服务身份冷启动，要求管理、认证、存储均就绪、`/readyz` 成功、内嵌资源逐份匹配并正常退出。Chrome 的已有测试池共用准备过 host root 的镜像。此门禁使用镜像内的既有测试账户，不覆盖 APT、Unix 账户创建、systemd 安装／激活或整套安装向导；对应检查仍须另行完成。
+
 若后续验收失败，`unaccepted-native-提交` 仅保留带原始源码收据的诊断字节；它不是最终发行资产，不能重新标记成其他提交或当作 UI 验收通过。
 
 预发布标签标为 prerelease 且不更新 Latest；正式版由 GitHub 默认规则决定 Latest。

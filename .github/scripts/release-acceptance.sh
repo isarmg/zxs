@@ -22,11 +22,11 @@ fi
 # The actual extracted/copied executable must serve all browser flows from
 # embedded bytes, not a --help stub or a beside-the-binary public directory.
 cargo run --locked --offline --release -p browser-smoke -- \
-  --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-runtime "${screenshot_args[@]}"
+  --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime "${screenshot_args[@]}"
 
 # CI explicitly opts into a separate review-only scenario after the full suite.
 # Keep the same copied ELF and do not pass incompatible screenshot arguments.
 if [[ "$foreign_review" == 1 ]]; then
   cargo run --locked --offline --release -p browser-smoke -- \
-    --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-runtime --foreign-review-only
+    --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime --foreign-review-only
 fi

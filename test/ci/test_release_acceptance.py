@@ -15,7 +15,7 @@ class ReleaseAcceptance(unittest.TestCase):
         self.assertLess(workflow.index('release-acceptance.sh'), release_upload)
         script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
         self.assertIn('cp "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"', script)
-        self.assertIn('--cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-runtime', script)
+        self.assertIn('--cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-service-runtime', script)
         self.assertIn('cargo run --locked --offline --release -p browser-smoke', script)
         self.assertNotIn('--web-dir', script)
         self.assertNotIn('target/native/debug/zxs', script)
