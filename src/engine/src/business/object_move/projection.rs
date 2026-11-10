@@ -118,6 +118,10 @@ fn deletion(previous:&State,repository:&Repository,entry:&Entry,principal:&str,o
 }
 
 fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:&Repository,graph:Option<&graph::Graph>,arrived:&[Entry],route:&CopyRoute,principal:&str,operation:OperationId)->Result<()> {
+    let mut files=BTreeSet::new();
+    let aliased_files=unit.entries.iter().filter(|member|
+        member.source.kind==NamespaceEntryKind::File && !files.insert(member.source.file_id.as_str()))
+        .map(|member|member.source.file_id.as_str()).collect::<BTreeSet<_>>();
     // Clear old keys first, before installing any destination occurrence.
     for member in &unit.entries {
         if member.source.kind==NamespaceEntryKind::File {
@@ -137,7 +141,11 @@ fn relocate_current_files(previous:&State,next:&mut State,unit:&MoveUnit,target:
         let mut ordinal=0u64;
         let mut ids=|prefix:&str| {
             ordinal+=1;
-            IdentityScope {operation,member:Some(&entry.file_id)}.generated(prefix,&format!("current-{ordinal}"))
+            // Preserve the original labels for ordinary single occurrences.
+            let purpose=if aliased_files.contains(member.source.file_id.as_str()) {
+                format!("current:{}:{ordinal}",member.source.lookup_key())
+            } else {format!("current-{ordinal}")};
+            IdentityScope {operation,member:Some(&entry.file_id)}.generated(prefix,&purpose)
         };
         if !next.branches.get(&context.branch_id).is_some_and(|branch|branch.file_id.as_deref()==Some(entry.file_id.as_str())) {
             context.branch_id=file::ensure_shared_file_branch_with_ids(next,&target_head,entry,&mut ids)?;
@@ -197,13 +205,18 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
         let mut entry=match graph.as_ref() {Some(graph)=>graph.entry(&member.source)?,None=>member.source.clone()};
         entry.relocate(member.destination.clone());Ok(entry)
     }).collect::<Result<Vec<_>>>()?;
-    let source_ids=unit.entries.iter().map(|entry|entry.source.entry_id.as_str()).collect::<BTreeSet<_>>();
+    // Stable identities may occur at several paths. Remove only the captured
+    // occurrences, keeping unrelated aliases and their original contexts.
+    let source_occurrences=unit.entries.iter().map(|entry|
+        (entry.source.entry_id.as_str(),entry.source.lookup_key())).collect::<BTreeSet<_>>();
     let displaced=match &unit.target {MoveTarget::Existing {displaced_entries,..}=>displaced_entries.as_slice(),MoveTarget::EmptyDisk {..}=>&[]};
-    let displaced_ids=displaced.iter().map(|entry|entry.entry_id.as_str()).collect::<BTreeSet<_>>();
+    let displaced_occurrences=displaced.iter().map(|entry|
+        (entry.entry_id.as_str(),entry.lookup_key())).collect::<BTreeSet<_>>();
     let target_original=match &unit.target {MoveTarget::Existing {namespace,..}=>namespace.as_slice(),MoveTarget::EmptyDisk {..}=>&[]};
     let mut target_entries=target_original.iter().filter(|entry| {
-        !displaced_ids.contains(entry.entry_id.as_str()) && (target.repository_id!=unit.source_repository.repository_id
-            || !source_ids.contains(entry.entry_id.as_str()))
+        !displaced_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key()))
+            && (target.repository_id!=unit.source_repository.repository_id
+                || !source_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key())))
     }).cloned().collect::<Vec<_>>();
     target_entries.extend(arrived.iter().cloned());
     namespace::validate_entries(&mut target_entries,usize::MAX)?;
@@ -214,7 +227,8 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
     }
     next.commits.get_mut(&commit).expect("invariant: new target commit exists").namespace_deletions=namespace::deletion_record(removed,route.created_at);
     if target.repository_id!=unit.source_repository.repository_id {
-        let source_entries=unit.source_namespace.iter().filter(|entry|!source_ids.contains(entry.entry_id.as_str())).cloned().collect();
+        let source_entries=unit.source_namespace.iter().filter(|entry|
+            !source_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key()))).cloned().collect();
         let source_commit=publish_namespace(&mut next,&unit.source_repository,source_entries,principal,operation,"source")?;
         let removed=unit.entries.iter().map(|entry|storage_contract::DeletedPath {path:entry.source.path().into(),kind:entry.source.kind}).collect();
         next.commits.get_mut(&source_commit).expect("invariant: new source commit exists").namespace_deletions=namespace::deletion_record(removed,route.created_at);
@@ -246,7 +260,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
                 && !committed.contains(&member.source.file_id)
                 && seen.insert(member.source.file_id.as_str()) && !unit.source_namespace.iter().any(|entry|
                 entry.kind==NamespaceEntryKind::File && entry.file_id==member.source.file_id
-                    && !source_ids.contains(entry.entry_id.as_str())) {
+                    && !source_occurrences.contains(&(entry.entry_id.as_str(),entry.lookup_key()))) {
                 let node=deletion(previous,&unit.source_repository,&member.source,principal,operation,sequence,route.created_at)?;
                 next.file_deletions.insert(node.file_id.clone(),node.clone());source_deletions.push(node);
             }
@@ -263,7 +277,7 @@ fn compose(previous:&State,unit:MoveUnit,namespace_basis:NamespaceBasis,route:&C
     }
     refresh_working(&mut next,&unit,&target,operation)?;
     crate::container_storage::capture_changed_names(previous,&mut next);
-    let root=unit.entries.iter().find(|entry|entry.source.entry_id==unit.request.source_entry_id.as_str()).expect("invariant: capture includes root");
+    let root=unit.entries.iter().find(|entry|entry.source.lookup_key()==unit.request.source_path.key()).expect("invariant: capture includes root");
     let arrived_root=arrived.iter().find(|entry|entry.lookup_key()==unit.request.target_path.key()).expect("invariant: projection includes target root");
     let displaced_root=match &unit.target {MoveTarget::Existing {displaced,..}=>displaced.as_ref(),MoveTarget::EmptyDisk {..}=>None};
     let movement=ObjectMoveFact {

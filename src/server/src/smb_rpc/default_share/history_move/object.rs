@@ -160,7 +160,8 @@ impl DefaultShare {
         let displaced = match (&target, &target_identity) {
             (Some(target), Some(identity)) => self.shared.backend.lookup_current(
                 identity, &target.branch, &name_policy::LookupPath::from(&target_path),
-            )?.filter(|current| target.repository != source.repository || current.entry_id != entry.entry_id),
+            )?.filter(|current| target.repository != source.repository
+                || current.entry_id != entry.entry_id || current.lookup_key() != entry.lookup_key()),
             _ => None,
         };
         if displaced.is_some() && !replace {
