@@ -1,6 +1,21 @@
 //! Dirty generations, recovery records and publication acknowledgement.
 use super::*;
 
+impl Writer {
+    /// One canonical request for this save generation, including reconciliation.
+    /// A successor workspace and operation are installed together by Dirty.
+    fn save_request(&self) -> crate::CommitWorkspace {
+        crate::CommitWorkspace {
+            workspace_id: self.workspace.workspace_id.clone(),
+            operation_id: self.operation_id,
+            expected_head: self.workspace.base_head.clone(),
+            fencing_token: self.workspace.fencing_token,
+            message: "SMB full-file save".into(),
+            request_digest: None,
+        }
+    }
+}
+
 pub(super) fn recovery_record(
     writer: &mut Writer,
     principal: &str,
@@ -101,17 +116,9 @@ pub(super) fn finish_publication(
     writer: &mut Writer,
     result: storage_contract::OperationOutcome,
 ) -> Result<Value, ApiError> {
-    shared.backend.require_native_workspace_commit_completion(
-        identity,
-        crate::CommitWorkspace {
-            workspace_id: writer.workspace.workspace_id.clone(),
-            operation_id: writer.operation_id,
-            expected_head: writer.workspace.base_head.clone(),
-            fencing_token: writer.workspace.fencing_token,
-            message: "SMB full-file save".into(),
-            request_digest: None,
-        },
-    )?;
+    shared
+        .backend
+        .require_native_workspace_commit_completion(identity, writer.save_request())?;
     writer.last_head = result
         .commit_id
         .clone()
@@ -373,17 +380,10 @@ impl Session {
                 self.max_file_bytes,
             )?,
         )?;
-        let result = self.shared.backend.commit_workspace(
-            &self.identity,
-            crate::CommitWorkspace {
-                workspace_id: writer.workspace.workspace_id.clone(),
-                operation_id: writer.operation_id,
-                expected_head: writer.workspace.base_head.clone(),
-                fencing_token: writer.workspace.fencing_token,
-                message: "SMB full-file save".into(),
-                request_digest: None,
-            },
-        )?;
+        let result = self
+            .shared
+            .backend
+            .commit_workspace(&self.identity, writer.save_request())?;
         finish_publication(
             &self.shared,
             &self.identity,

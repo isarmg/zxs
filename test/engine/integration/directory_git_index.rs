@@ -1,4 +1,6 @@
 //! Public-engine regressions for explicit index snapshots and live working files.
+#[path = "directory_git_index/empty_initialization.rs"]
+mod empty_initialization;
 #[path = "directory_git_index/file_separation.rs"]
 mod file_separation;
 #[path = "directory_git_index/rename.rs"]

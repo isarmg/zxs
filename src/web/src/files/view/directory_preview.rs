@@ -1,7 +1,7 @@
 //! Preview navigation retains its exact owner; it never publishes a selection.
 use crate::{
     files::{actions, detail, model::directory_branch_name},
-    ui::{Page, State, navigate},
+    ui::State,
 };
 use web_interface::{i18n::t, prelude::*};
 
@@ -84,6 +84,12 @@ fn controls(state: RwSignal<State>, preview: Preview) -> impl IntoView {
                             actions::return_to_default(state);
                         }
                     }>{t("返回当前默认工作视图", "Return to current default work")}</button>
+                <button type="button" class="zxs-button" data-open-preview-origin="" disabled=move ||disabled.get()
+                    on:click=move |_|{
+                        if state.with_untracked(|state|preview.with_value(|preview|preview.current(state))) {
+                            actions::open_preview_origin(state);
+                        }
+                    }>{t("返回原目录详情", "Return to source folder Details")}</button>
                 {working.then(move ||view!{
                     <button type="button" class="zxs-button" data-review-directory-default="" disabled=move ||disabled.get()
                         on:click=move |_|{
@@ -92,8 +98,7 @@ fn controls(state: RwSignal<State>, preview: Preview) -> impl IntoView {
                                 if state.with_untracked(|state|state.files.directory==root) {
                                     detail::open_current_directory(state);
                                 } else {
-                                    actions::go_directory(state,root);
-                                    navigate(state,Page::Details);
+                                    actions::go_directory_details(state,root);
                                 }
                             }
                         }>{t("打开分支目录详情", "Open branch folder Details")}</button>

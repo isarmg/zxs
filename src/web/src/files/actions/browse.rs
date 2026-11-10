@@ -240,6 +240,29 @@ pub(crate) fn return_to_default(state: RwSignal<State>) {
     load_entries(state);
 }
 
+/// Leave a historical subtree at its source folder, not at a child path that
+/// may exist only in that snapshot. The ordinary details read owns all writes.
+pub(crate) fn open_preview_origin(state: RwSignal<State>) {
+    let root = state.with_untracked(|state| {
+        if !state.session_active() || super::pending(state) {
+            return None;
+        }
+        state
+            .files
+            .directory_preview
+            .as_ref()
+            .map(|preview| preview.path.clone())
+    });
+    let Some(root) = root else {
+        return;
+    };
+    state.update(|state| {
+        state.files.directory_preview = None;
+        state.files.file_preview = None;
+    });
+    go_directory_details(state, root);
+}
+
 pub(crate) fn change_page(state: RwSignal<State>, next: bool) {
     let cursor = state.with_untracked(|s| {
         if s.files.loading || super::pending(s) {
