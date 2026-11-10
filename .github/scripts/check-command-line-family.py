@@ -5,6 +5,7 @@ if not __debug__:
     raise RuntimeError('Validation requires assertions; do not use Python optimization (-O/-OO or PYTHONOPTIMIZE).')
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -360,7 +361,13 @@ def check_consumers(root):
         )
         expected = (case["code"], case["stdout"], case["stderr"])
         actual = (result.returncode, result.stdout, result.stderr)
-        assert actual == expected, f'CLI contract drift: {case["binary"]} {case["args"]}'
+        if actual != expected:
+            diff = "".join(difflib.unified_diff(
+                json.dumps(expected, ensure_ascii=False, indent=2).splitlines(keepends=True),
+                json.dumps(actual, ensure_ascii=False, indent=2).splitlines(keepends=True),
+                fromfile="expected exit/stdout/stderr", tofile="actual exit/stdout/stderr",
+            ))
+            raise AssertionError(f'CLI contract drift: {case["binary"]} {case["args"]}\n{diff}')
     print("actual daemon/helper/web-build CLI outputs and exit statuses match fixed baseline")
 
 

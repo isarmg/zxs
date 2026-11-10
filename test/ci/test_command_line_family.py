@@ -174,6 +174,16 @@ class NamingGate(unittest.TestCase):
                     self.assertRaisesRegex(AssertionError, 'CLI contract drift'):
                 self.check_consumer_result(subprocess.CompletedProcess([], status, stdout, error))
 
+    def test_consumer_drift_reports_exact_expected_and_actual_diagnostics(self):
+        result = subprocess.CompletedProcess([], 2, "", "error: unrecognized subcommand 'serve'\n")
+        with self.assertRaises(AssertionError) as failure:
+            self.check_consumer_result(result)
+        diagnostic = str(failure.exception)
+        self.assertIn("expected exit/stdout/stderr", diagnostic)
+        self.assertIn("actual exit/stdout/stderr", diagnostic)
+        self.assertIn("Error: unknown option --invalid", diagnostic)
+        self.assertIn("error: unrecognized subcommand 'serve'", diagnostic)
+
     def test_only_temporary_fixture_generates_a_lock(self):
         fixture = self.root / 'test/command-line-family.rs'
         fixture.parent.mkdir()

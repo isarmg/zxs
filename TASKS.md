@@ -30,6 +30,12 @@
 - 向导只允许第 7 步尚未保留空目录请求或存储计划时明确更正 roots；此前六步、账户和配置不变。更正只保存本标签页输入，重新预览仍由原生准入；已有原请求、刷新、已发送和未知结果不允许换批次，不清理磁盘或持久计划。
 - 根 `test/server/` 扩展名称接受／拒绝及共用规则回归；根 `test/helper/` 新增真实 JS 处理器的拒绝→更正→准备目录→初始化续作、原请求冻结、刷新、记录变化和忙状态回归，并接入 static 的 Python unittest discovery。Node 处理器测试、Python 接线、JS 语法与七个 Rust 文件 rustfmt 检查通过；按最新要求未本地编译或运行 Rust 测试。真实浏览器、非 root 服务身份、systemd、生产存储与 SMB 完整首装仍待统一 CI／隔离验收。
 
+## 本轮 CLI 基线漂移修复
+
+- 本片对齐 `1e2f001c`，仅 CLI 测试基线、诊断和本条交付记录。
+- 全量 CI #997 的 foundation-language 在 `zxs serve` 的精确输出比对失败：当前 daemon 已有隐藏维护子命令，serve／init 仍以 exit 2 在参数解析阶段拒绝，只是诊断为 unrecognized subcommand；与 `/zxs` 首启门禁无关，不修改运行代码或放宽启动条件。
+- 同步两项 daemon 拒绝 golden 和过时的 helper --help 功能清单；比对仍严格核对退出码、stdout、stderr，失败时输出完整 expected／actual 差异。实际本地已链接二进制的 main.rs 与本次最新主线逐 blob 一致，18 项 zxs/helper 固定案例通过；web-build 无现成二进制未执行。21 项 Python 回归通过，包括颜色、回溯和任意输出漂移拒绝。未本地编译，完整 foundation-language 留给准确提交 CI。
+
 ## 本轮活动历史重复扫描收敛
 
 - M09 本片对齐 `01feeb1f`，三个修改文件均与原审阅基线逐 blob 一致。文件活动在同一不可变 Engine 借用中一次建立 file→首版本投影，每个涉及主分支的当前命名空间只索引一次；保留原版本顺序、首个别名、路径节点优先、删除后创建名称回退和准入错误，不把已证明存在的首版本替换为空默认值。
