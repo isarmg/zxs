@@ -27,9 +27,10 @@ impl Records {
         Ok(())
     }
 }
-pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<Vec<Record>> {
+pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<ProjectedRecords> {
     let events = crate::file_deletion::retained::events(view, file)?;
-    with_events(view, file, &events)
+    let records = with_events(view, file, &events)?;
+    Ok(ProjectedRecords { records, events })
 }
 
 /// Unpublished copied facts supplied by the exact joint move projection. No

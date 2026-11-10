@@ -450,6 +450,32 @@ pub(crate) struct StateProjection<'a> {
     moves: &'a move_receipts::MoveReceipts<'a>,
 }
 
+/// A call-local, read-only projection of one immutable State. It derives
+/// membership and decoded facts, not publication or physical-disk authority.
+pub(crate) struct ProjectionSnapshot<'a> {
+    state: &'a State,
+    owners: DerivedOwners,
+    moves: move_receipts::MoveReceipts<'a>,
+}
+
+impl<'a> ProjectionSnapshot<'a> {
+    pub(crate) fn new(state: &'a State) -> Self {
+        Self {
+            state,
+            owners: DerivedOwners::from_state(state),
+            moves: move_receipts::MoveReceipts::new(state),
+        }
+    }
+
+    pub(crate) fn view(&self) -> StateProjection<'_> {
+        StateProjection {
+            state: self.state,
+            owners: &self.owners,
+            moves: &self.moves,
+        }
+    }
+}
+
 impl<'a> StateProjection<'a> {
     pub(crate) fn state(self) -> &'a State {
         self.state

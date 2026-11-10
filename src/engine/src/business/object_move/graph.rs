@@ -220,6 +220,7 @@ fn occurrence<'a>(previous: &'a State, unit: &'a MoveUnit, file: &str) -> Result
 pub(super) fn copy(previous: &State, next: &mut State, unit: &MoveUnit, target: &Repository, route: &CopyRoute, principal: &str, operation: OperationId) -> Result<Graph> {
     let mut graph = identities(previous, unit, target, operation)?;
     commits(previous, next, unit, target, &graph)?;
+    let mut source_projection = None;
     for (file, member) in &unit.files {
         let (entry, context, target_path) = occurrence(previous,unit,file)?;
         let source = CopySources { file:file.clone(),versions:member.version_ids.clone(),branches:member.branch_ids.clone() };
@@ -229,8 +230,15 @@ pub(super) fn copy(previous: &State, next: &mut State, unit: &MoveUnit, target: 
             aggregate_ids:Some(&graph.ids),
         })?;
         if !member.version_ids.is_empty() {
-            graph.lifecycle.push(history_copy::retained::capture_mapped(previous, file,
-                &unit.source_repository.history_tree_id, &target.history_tree_id, operation)?);
+            let projection = source_projection
+                .get_or_insert_with(|| crate::state_projection::ProjectionSnapshot::new(previous));
+            graph.lifecycle.push(history_copy::retained::capture_mapped(
+                projection.view(),
+                file,
+                &unit.source_repository.history_tree_id,
+                &target.history_tree_id,
+                operation,
+            )?);
         }
     }
     Ok(graph)

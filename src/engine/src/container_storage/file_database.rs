@@ -29,6 +29,11 @@ struct Record {
     id: String,
     body: String,
 }
+
+struct ProjectedRecords {
+    records: Vec<Record>,
+    events: Vec<crate::file_deletion::retained::LifecycleRow>,
+}
 pub(super) struct Prepared {
     pub(super) bytes: Vec<u8>,
 }
@@ -56,10 +61,14 @@ async fn finish<T>(result: Result<T>, connection: SqliteConnection) -> Result<T>
 /// Rows originate from the captured State and its tied owner index. The caller
 /// must prove publication admission before installation. Neither this projection
 /// nor its self digest grants authority or proves a complete historical copy.
-fn validated_records(view: StateProjection<'_>, file: &str, history: &str) -> Result<Vec<Record>> {
+fn validated_records(
+    view: StateProjection<'_>,
+    file: &str,
+    history: &str,
+) -> Result<ProjectedRecords> {
     validate_owner(view, file, history)?;
     let records = projection::records(view, file)?;
-    validate_records(&records, file, history, view.state().sequence)?;
+    validate_records(&records.records, file, history, view.state().sequence)?;
     Ok(records)
 }
 
@@ -96,8 +105,17 @@ pub(crate) struct CopyCapture {
 /// The copy publication separately proves body sources and installs the exact
 /// target database. A move cannot use this alone as its three-scope proof.
 pub(crate) fn capture_copy(state: &crate::State, file: &str, history: &str) -> Result<CopyCapture> {
-    let transition = crate::state_projection::ProjectionTransition::new(state, state, None)?;
-    let view = transition.previous();
+    let projection = crate::state_projection::ProjectionSnapshot::new(state);
+    capture_projected_copy(projection.view(), file, history)
+}
+
+/// Aggregate moves reuse this bound source view across all retained files.
+pub(crate) fn capture_projected_copy(
+    view: StateProjection<'_>,
+    file: &str,
+    history: &str,
+) -> Result<CopyCapture> {
+    let state = view.state();
     if view.owners().file_rows(file).is_some_and(|rows| {
         rows.history_copies
             .keys()
@@ -108,19 +126,8 @@ pub(crate) fn capture_copy(state: &crate::State, file: &str, history: &str) -> R
             "the older graph-only copy has no retained lifecycle closure; preserve it without upgrading its receipt",
         ));
     }
-    let records = validated_records(view, file, history)?;
+    let ProjectedRecords { records, events } = validated_records(view, file, history)?;
     let records_hash = storage_contract::object_hash("file-local-records", &records)?;
-    let mut events = records
-        .iter()
-        .filter(|record| record.kind == "lifecycle")
-        .map(|record| {
-            storage_contract::decode_strict::<crate::file_deletion::retained::LifecycleRow>(
-                record.body.as_bytes(),
-            )
-            .map_err(Error::from)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    events.sort_by_key(|event| event.sequence);
     Ok(CopyCapture {
         records_hash,
         events,
@@ -128,7 +135,7 @@ pub(crate) fn capture_copy(state: &crate::State, file: &str, history: &str) -> R
 }
 
 pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
-    let records = validated_records(view, file, history)?;
+    let ProjectedRecords { records, .. } = validated_records(view, file, history)?;
     let hash = storage_contract::object_hash("file-local-records", &records)?;
     let sequence = view.state().sequence;
     encode_records(records, file, history, sequence, &hash)

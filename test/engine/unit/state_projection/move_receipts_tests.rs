@@ -131,6 +131,23 @@ fn one_projection_reuses_one_decode_for_every_file_and_lifecycle_kind() {
 }
 
 #[test]
+fn one_source_snapshot_shares_membership_and_move_receipts_across_file_captures() {
+    let fixture = fixture();
+    let projection = ProjectionSnapshot::new(&fixture.state);
+    let first = projection.view();
+    let decoded = first.object_move(fixture.operation).unwrap();
+    for file in [&fixture.source, &fixture.displaced, &fixture.imported] {
+        let view = projection.view();
+        assert!(std::ptr::eq(first.owners(), view.owners()));
+        assert!(!retained::events(view, file).unwrap().is_empty());
+        assert!(Arc::ptr_eq(
+            &decoded,
+            &view.object_move(fixture.operation).unwrap()
+        ));
+    }
+}
+
+#[test]
 fn receipt_reuse_never_crosses_previous_next_or_new_transition_boundaries() {
     let fixture = fixture();
     let mut changed = fixture.state.clone();

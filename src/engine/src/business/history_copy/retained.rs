@@ -182,19 +182,29 @@ pub(in crate::business) fn project(
         principal,
         operation,
     )?;
-    let lifecycle = capture_mapped(previous, &source.file, source_history,
-        &previous.repositories[&request.target_repository_id].history_tree_id, operation)?;
+    let projection = crate::state_projection::ProjectionSnapshot::new(previous);
+    let lifecycle = capture_mapped(
+        projection.view(),
+        &source.file,
+        source_history,
+        &previous.repositories[&request.target_repository_id].history_tree_id,
+        operation,
+    )?;
     Ok(RetainedProjection { result, lifecycle })
 }
 
 pub(in crate::business) fn capture_mapped(
-    previous: &State,
+    source: crate::state_projection::StateProjection<'_>,
     source_file: &str,
     source_history: &str,
     history: &str,
     operation: OperationId,
 ) -> Result<CopiedLifecycle> {
-    let capture = crate::container_storage::file_database::capture_copy(previous, source_file, source_history)?;
+    let capture = crate::container_storage::file_database::capture_projected_copy(
+        source,
+        source_file,
+        source_history,
+    )?;
     let file = identity(operation, source_file)?;
     let mut events = capture.events;
     for event in &mut events {
@@ -217,7 +227,7 @@ pub(in crate::business) fn capture_mapped(
     let copied = CopiedLifecycle {
         source_file_id: source_file.to_owned(),
         source_history_tree_id: source_history.to_owned(),
-        source_sequence: previous.sequence,
+        source_sequence: source.state().sequence,
         source_records_hash: capture.records_hash,
         file_id: file,
         history_tree_id: history.to_owned(),

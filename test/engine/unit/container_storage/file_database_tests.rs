@@ -700,3 +700,52 @@ fn file_rescue_readback_requires_all_records_from_the_exact_selected_capture() {
             .is_err()
     );
 }
+
+#[test]
+fn typed_copy_capture_preserves_record_hash_and_exact_lifecycle_without_json_roundtrip() {
+    fn check(fixture: &Fixture, count: usize) {
+        let projection = crate::state_projection::ProjectionSnapshot::new(fixture.engine.state());
+        let file = &fixture.file.file_id;
+        let history = &fixture.repo.history_tree_id;
+        let projected = validated_records(projection.view(), file, history).unwrap();
+        // The former reader is an independent test oracle, not production work.
+        let mut decoded = projected
+            .records
+            .iter()
+            .filter(|record| record.kind == "lifecycle")
+            .map(|record| {
+                storage_contract::decode_strict::<crate::file_deletion::retained::LifecycleRow>(
+                    record.body.as_bytes(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        decoded.sort_by_key(|event| event.sequence);
+        assert_eq!(decoded.len(), count);
+        assert_eq!(projected.events, decoded);
+        let expected_hash =
+            storage_contract::object_hash("file-local-records", &projected.records).unwrap();
+        let shared = capture_projected_copy(projection.view(), file, history).unwrap();
+        let standalone = capture_copy(fixture.engine.state(), file, history).unwrap();
+        assert_eq!(shared.events, decoded);
+        assert_eq!(standalone.events, decoded);
+        assert_eq!(shared.records_hash, expected_hash);
+        assert_eq!(standalone.records_hash, expected_hash);
+    }
+
+    let mut fixture = Fixture::new();
+    check(&fixture, 0);
+    let deleted = fixture.delete();
+    check(&fixture, 1);
+    fixture
+        .engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &HistoryFileId::parse(&fixture.file.file_id).unwrap(),
+            deletion_node_id: &deleted.node_id,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    fixture.delete();
+    check(&fixture, 3);
+}
