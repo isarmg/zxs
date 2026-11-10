@@ -324,3 +324,50 @@ fn complete_activation_is_an_empty_command_and_bootstrap_disk_commands_are_remov
         .is_err()
     );
 }
+
+#[test]
+fn typed_forwarders_recheck_management_availability_before_required_and_optional_calls() {
+    let root = crate::tests::private_tempdir();
+    let (backend, _auth) =
+        open_service(&root.path().join("data"), &root.path().join("management")).unwrap();
+    let identity = Identity {
+        admission_session: None,
+        smb_binding: None,
+        principal: "not-yet-admitted".into(),
+    };
+    let lookup = name_policy::LookupPath::parse("file").unwrap();
+    for stopped in [false, true] {
+        if stopped {
+            backend.stop_management();
+        }
+        let expected = match backend.inner.backend() {
+            Ok(_) => panic!("a fresh service has no admitted storage engine"),
+            Err(error) => error,
+        };
+        assert_eq!(expected.status, ::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            expected.code,
+            if stopped {
+                ErrorCode::ServiceStopping
+            } else {
+                ErrorCode::StorageUnavailable
+            }
+        );
+        for result in [
+            backend.workspace_capacity(&identity).map(|_| ()),
+            backend
+                .lookup_at(&identity, "branch", "commit", &lookup)
+                .map(|_| ()),
+            backend.checksums(&identity, "version").map(|_| ()),
+            backend
+                .workspace_content(&identity, "workspace", "file")
+                .map(|_| ()),
+        ] {
+            let actual = result.unwrap_err();
+            assert_eq!(actual.status, expected.status);
+            assert_eq!(actual.code, expected.code);
+            assert_eq!(actual.message, expected.message);
+            assert_eq!(actual.retryable, expected.retryable);
+        }
+    }
+}
