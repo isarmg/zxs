@@ -602,6 +602,8 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
 #[cfg(feature = "fault-injection")]
 #[test]
 fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_from_staging() {
+    use std::os::unix::fs::PermissionsExt;
+
     let mut fixture = Fixture::new(false);
     let request = path_request(&fixture);
     let operation = op();
@@ -634,13 +636,33 @@ fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_fr
         .join("namespace/moved.txt/versions")
         .join(&version.storage_name);
     let original = fs::read(&body).unwrap();
-    fs::write(&body, b"incomplete").unwrap();
+    let metadata = fs::metadata(&body).unwrap();
+    let permissions = metadata.permissions();
+    let modified = metadata.modified().unwrap();
+    assert_eq!(permissions.mode() & 0o777, 0o400);
+    let mut damaged = original.clone();
+    damaged[0] ^= 1;
+    fs::set_permissions(&body, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&body, &damaged).unwrap();
+    fs::File::open(&body)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    fs::set_permissions(&body, permissions.clone()).unwrap();
     assert_eq!(bytes(&fixture.engine, &old.version_id), b"new full body");
     let Fixture { temp, engine, .. } = fixture;
     drop(engine);
     assert!(Engine::open(&temp.path().join("system")).is_err());
-    assert_eq!(fs::read(&body).unwrap(), b"incomplete");
+    assert_eq!(fs::read(&body).unwrap(), damaged);
+    assert_eq!(fs::metadata(&body).unwrap().permissions(), permissions);
+    assert_eq!(fs::metadata(&body).unwrap().modified().unwrap(), modified);
+    fs::set_permissions(&body, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&body, original).unwrap();
+    fs::File::open(&body)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    fs::set_permissions(&body, permissions).unwrap();
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(
         engine
