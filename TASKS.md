@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`ea6c3024`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`af0fbee6`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Backup 已发布路由顺序修复
+
+- CI #1113 的七项 transaction_serving 已越过首槽 ENOENT，却共同在已发布配置检查报 explicit route has no complete primary root。证据生产者 retained_payload_slots 已返回 P01→B01，configuration 又反转为 B01→P01，把二级备份当主盘交给严格拓扑检查。
+- 删除消费者的第二次反转，生产者注释明确 primary-first；保留 exact topology、完整祖先、唯一选中集合、原发布/目标证明、配置绑定及未激活写入围栏。只减少一次 O(保留链长) 的冗余翻转，不改变格式、I/O 或同步预算。
+- 原真实双目标 serving 回归在激活前检查已发布路由恰为 P01/B01/C02/C03、替换旧末端仍为 C01、原配置完整不变且源保持只读；原正文、同操作重试、后继发布与冷重开断言全部保留。
+- 三份源码/根测试及本清单。对齐 af0fbee6，固定 Rust 1.99 格式、严格补丁及独立静审通过；未本地编译或执行测试，七项行为实际解除待 CI。后续重心转向 Backup/成员事务的大块重复模型与操作链。
 
 ## 本轮浏览器管理导航契约对齐
 

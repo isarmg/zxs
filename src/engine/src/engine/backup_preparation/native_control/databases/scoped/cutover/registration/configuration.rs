@@ -70,7 +70,6 @@ pub(super) fn resolve(
         prepared.projection(),
     )?;
     let mut route = prepared.source_evidence().retained_payload_slots();
-    route.reverse();
     let primary = route
         .first()
         .ok_or_else(|| invalid("Backup selection lacks its primary"))?

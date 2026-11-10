@@ -164,6 +164,18 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     );
     let operation = request.preparation.operation_id;
     prepared(&mut engine, &request);
+    // The admitted source chain already runs primary-first. The published
+    // configuration must preserve it before appending the selected fanout.
+    let configured = engine
+        .inspect_backup_published_configuration(operation, "admin")
+        .unwrap();
+    assert_eq!(configured.complete_data_route, ["P01", "B01", "C02", "C03"]);
+    assert_eq!(configured.retained_replaced_terminal.slot_id, "C01");
+    assert_eq!(
+        json_codec::to_value(&engine.config().disks).unwrap(),
+        json_codec::to_value(&originals).unwrap()
+    );
+    assert!(engine.is_read_only());
     let result = engine
         .complete_backup_registry_placement_decision(operation, "admin")
         .unwrap();

@@ -96,7 +96,7 @@ impl BackupSourceFenceEvidence {
     pub(in crate::engine) fn state_hash(&self) -> &str {
         &self.task.scoped.objects.state_hash
     }
-    /// The exact unchanged ancestors of the selected source, excluding the
+    /// The exact unchanged chain from primary to selected source, excluding the
     /// replaced terminal. Only these original disks owe new payload receipts;
     /// targets are admitted independently and are never original voters.
     pub(in crate::engine) fn retained_payload_slots(&self) -> Vec<String> {
