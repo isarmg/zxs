@@ -3,6 +3,14 @@ use std::os::unix::fs::PermissionsExt;
 #[test]
 fn program_selection_is_fixed_and_has_no_shell_or_caller_path() {
     assert_eq!(
+        Program::AptGet.location(),
+        ("bin", "apt-get", "/usr/bin/apt-get")
+    );
+    assert_eq!(
+        Program::DpkgQuery.location(),
+        ("bin", "dpkg-query", "/usr/bin/dpkg-query")
+    );
+    assert_eq!(
         Program::SystemdSysusers.location(),
         ("bin", "systemd-sysusers", "/usr/bin/systemd-sysusers")
     );

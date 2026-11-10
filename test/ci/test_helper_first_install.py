@@ -7,6 +7,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class HelperFirstInstallTests(unittest.TestCase):
+    def test_system_package_installation_and_finish(self):
+        subprocess.run(["node", "test/helper/packages_console.mjs"],
+                       cwd=ROOT, check=True, timeout=30)
+
     def test_explicit_service_account_preparation_and_recovery(self):
         subprocess.run(["node", "test/helper/service_account_console.mjs"],
                        cwd=ROOT, check=True, timeout=30)

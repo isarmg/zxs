@@ -80,11 +80,15 @@ pub(crate) enum Program {
     Systemctl,
     SystemdAnalyze,
     SystemdSysusers,
+    AptGet,
+    DpkgQuery,
     Smbd,
 }
 impl Program {
     fn location(self) -> (&'static str, &'static str, &'static str) {
         match self {
+            Self::AptGet => ("bin", "apt-get", "/usr/bin/apt-get"),
+            Self::DpkgQuery => ("bin", "dpkg-query", "/usr/bin/dpkg-query"),
             Self::Testparm => ("bin", "testparm", "/usr/bin/testparm"),
             Self::Pdbedit => ("bin", "pdbedit", "/usr/bin/pdbedit"),
             Self::Smbpasswd => ("bin", "smbpasswd", "/usr/bin/smbpasswd"),
@@ -191,6 +195,26 @@ impl Executable {
         self.recheck()?;
         Ok((status, bytes))
     }
+    pub(crate) fn package_command(&self, args: &[&str]) -> Result<()> {
+        if !matches!(self.kind, Program::AptGet) {
+            return Err("only the fixed APT executable owns package transactions".into());
+        }
+        let child = self
+            .command(args)?
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .env("NEEDRESTART_MODE", "l")
+            .env("SYSTEMD_OFFLINE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()?;
+        let mut joined = Joined::new(child);
+        joined.budget = Duration::from_secs(20 * 60);
+        let status = joined.wait()?;
+        if !status.success() {
+            return Err(format!("APT returned {status}; package state may have changed").into());
+        }
+        Ok(())
+    }
     pub(crate) fn password(&self, args: &[&str], password: &SecretString) -> Result<()> {
         // Only smbpasswd's silent local input protocol uses this method. No
         // argv/environment, output capture or receipt contains password bytes.
@@ -267,6 +291,7 @@ fn snapshot(file: &File, path: &str) -> Result<Snapshot> {
 struct Joined {
     child: Child,
     started: Instant,
+    budget: Duration,
     reaped: bool,
 }
 impl Joined {
@@ -274,18 +299,19 @@ impl Joined {
         Self {
             child,
             started: Instant::now(),
+            budget: COMMAND_BUDGET,
             reaped: false,
         }
     }
     fn remaining(&self) -> io::Result<Duration> {
         let elapsed = self.started.elapsed();
-        if elapsed >= COMMAND_BUDGET {
+        if elapsed >= self.budget {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "fixed system command exceeded its 30-second execution budget; preserve any original operation, do not automatically replay it",
+                "fixed system command exceeded its execution budget; preserve any original operation, do not automatically replay it",
             ));
         }
-        Ok(COMMAND_BUDGET - elapsed)
+        Ok(self.budget - elapsed)
     }
     fn pause(&self) -> io::Result<()> {
         std::thread::sleep(PIPE_RETRY_INTERVAL.min(self.remaining()?));
