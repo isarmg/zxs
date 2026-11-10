@@ -69,7 +69,10 @@ fn empty_root_initialization_and_first_file_keep_work_index_and_head_distinct() 
     stage_owned(&mut engine, &repo, "");
     let reviewed = status(&engine, &repo, "");
     assert!(reviewed.staged && !reviewed.unstaged);
-    assert_eq!((reviewed.added, reviewed.modified, reviewed.deleted), (1, 0, 0));
+    assert_eq!(
+        (reviewed.added, reviewed.modified, reviewed.deleted),
+        (1, 0, 0)
+    );
     let saved = commit_reviewed(
         &mut engine,
         &repo,
@@ -79,7 +82,10 @@ fn empty_root_initialization_and_first_file_keep_work_index_and_head_distinct() 
     .unwrap();
     let saved_head = saved.result["head_tree_id"].as_str().unwrap();
     let saved_tree = &engine.state().directory_trees[saved_head];
-    assert_eq!(saved_tree.parent_tree_id.as_deref(), Some(empty_head.as_str()));
+    assert_eq!(
+        saved_tree.parent_tree_id.as_deref(),
+        Some(empty_head.as_str())
+    );
     assert_eq!(saved_tree.entries.len(), 1);
     assert_eq!(saved_tree.entries[0].path(), "first.txt");
     assert_eq!(
@@ -146,7 +152,10 @@ fn empty_child_repository_is_pinned_only_after_its_own_explicit_commit() {
     );
     let boundary = status(&engine, &repo, "");
     assert!(boundary.needs_restage);
-    assert_eq!(boundary.head_tree_id.as_deref(), Some(parent_before.as_str()));
+    assert_eq!(
+        boundary.head_tree_id.as_deref(),
+        Some(parent_before.as_str())
+    );
     assert_eq!(boundary.children.len(), 1);
     assert_eq!(boundary.children[0].directory_id, child.directory_id);
     assert!(boundary.children[0].head_tree_id.is_none());
@@ -171,10 +180,18 @@ fn empty_child_repository_is_pinned_only_after_its_own_explicit_commit() {
     assert_eq!(parent_tree.directory_refs.len(), 1);
 
     // Saving into the once-empty child does not create a child or parent commit.
-    save(&mut engine, &repo, "child/first.txt", b"child saved contents");
+    save(
+        &mut engine,
+        &repo,
+        "child/first.txt",
+        b"child saved contents",
+    );
     let child_dirty = status(&engine, &repo, "child");
     assert!(!child_dirty.staged && child_dirty.unstaged);
-    assert_eq!(child_dirty.head_tree_id.as_deref(), Some(child_empty.as_str()));
+    assert_eq!(
+        child_dirty.head_tree_id.as_deref(),
+        Some(child_empty.as_str())
+    );
     let parent = status(&engine, &repo, "");
     assert!(!parent.staged && !parent.unstaged && !parent.needs_restage);
     assert!(parent.children[0].dirty);
@@ -219,5 +236,8 @@ fn empty_child_repository_is_pinned_only_after_its_own_explicit_commit() {
     assert_eq!(status(&engine, &repo, "child"), child_after);
     assert_eq!(engine.state().directory_trees[&pinned], parent_tree);
     assert_eq!(engine.state().directory_trees[&child_empty], empty_tree);
-    assert_eq!(bytes(&engine, &repo, "child/first.txt"), b"child saved contents");
+    assert_eq!(
+        bytes(&engine, &repo, "child/first.txt"),
+        b"child saved contents"
+    );
 }

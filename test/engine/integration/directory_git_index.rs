@@ -3,10 +3,10 @@
 mod empty_initialization;
 #[path = "directory_git_index/file_separation.rs"]
 mod file_separation;
-#[path = "directory_git_index/rename.rs"]
-mod rename;
 #[path = "directory_git_index/object_move.rs"]
 mod object_move;
+#[path = "directory_git_index/rename.rs"]
+mod rename;
 use std::io::Read;
 use storage_engine::{
     CommitRequest, Config, DirectoryCommitRequest, Engine, ErrorCode, OperationId, OperationResult,
