@@ -81,3 +81,36 @@ fn graph_content_and_budget_remain_authenticated_at_the_loader_boundary() {
         Err(error) if error.code() == ErrorCode::ResourceLimit
     ));
 }
+
+#[test]
+fn graph_visitor_keeps_canonical_order_and_propagates_consumer_errors() {
+    let objects = collect_objects(
+        [
+            ("second", "z", &br#"{ "b": 2, "a": 1 }"#[..]),
+            ("first", "a", &b"null"[..]),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    visit_objects(&objects, &mut |kind, hash, bytes| {
+        seen.push((kind.to_owned(), hash.to_owned(), bytes.to_vec()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        seen,
+        vec![
+            ("first".into(), "a".into(), b"null".to_vec()),
+            ("second".into(), "z".into(), br#"{"a":1,"b":2}"#.to_vec()),
+        ]
+    );
+    let mut calls = 0;
+    let error = visit_objects(&objects, &mut |_, _, _| {
+        calls += 1;
+        Err(Error::new(ErrorCode::IoError, "consumer stopped"))
+    })
+    .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IoError);
+    assert_eq!(calls, 1);
+}

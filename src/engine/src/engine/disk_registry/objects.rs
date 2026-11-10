@@ -32,6 +32,18 @@ pub(in crate::engine) fn read_objects(
     Ok(json_codec::to_vec(&object.value)?)
 }
 
+/// Visit the canonical page bytes in their persisted address order.
+pub(in crate::engine) fn visit_objects(
+    objects: &GraphObjects,
+    visit: &mut impl FnMut(&str, &str, &[u8]) -> Result<()>,
+) -> Result<()> {
+    for (hash, object) in objects {
+        let bytes = crate::canonical_json(&object.value)?;
+        visit(&object.kind, hash, &bytes)?;
+    }
+    Ok(())
+}
+
 /// Collect the unique object set emitted by one prepared graph.
 pub(in crate::engine) fn collect_objects<'a>(
     values: impl Iterator<Item = (&'static str, &'a str, &'a [u8])>,

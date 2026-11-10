@@ -82,11 +82,14 @@ if [[ "$mode" == build-only ]]; then
   exit 0
 fi
 # Build the real-engine fixture once; runtime acceptance runs it without Cargo.
-cargo test --locked --offline -p storage-server --lib --no-run --message-format=json > "$cache/fixture-build.jsonl"
+# Keep artifact JSON in the uploaded product while Cargo renders diagnostics to
+# stderr even when its nonzero status stops this script before path extraction.
+cargo test --locked --offline -p storage-server --lib --no-run \
+  --message-format=json-render-diagnostics > "$cache/product/fixture-build.jsonl"
 python3 - "$cache" <<'PYFIXTURE'
 import json, pathlib, sys
 cache=pathlib.Path(sys.argv[1]); candidates=[]
-for line in (cache/'fixture-build.jsonl').read_text().splitlines():
+for line in (cache/'product/fixture-build.jsonl').read_text().splitlines():
     item=json.loads(line)
     if item.get('reason')=='compiler-artifact' and item.get('executable') and item['target']['name']=='storage_server':
         candidates.append(item['executable'])

@@ -21,6 +21,12 @@
 - CI #1062 的 quality、core、workspace 在六处旧私有比较函数调用报 E0425。三份根测试改为当前共享 unchanged_except，并显式保留原拓扑代数及控制身份断言；Backup 的四张允许表、取消的 Plans、SMB 的 Repositories/Histories 与生产入口一致。不恢复旧生产复制体，生产代码未变。
 - 格式与精确补丁检查通过；未本地编译或运行 Rust，新的准确提交 CI 尚待验证。
 
+## 本轮图对象消费者与 SDK 编译诊断修复
+
+- CI #1067 quality 的三条编译诊断已核实：ExitCore 最终准入子模块仍调用已删除的 self.read；retirement readmission 的旧遍历器还直接访问图对象两个私有字段。分别迁移共享 read_objects 与只读 visit_objects，保留原 verify_mask、canonical_json、地址顺序与消费错误传播，不开放可变字段、不恢复旧包装，也不删 namespace／D3 检查。根测试补充规范字节遍历及首错立即返回。
+- CI #1067 的真实 Samba 夹具编译失败时，Cargo JSON 被重定向到未上传位置，日志只保留错误总数。SDK 改用 json-render-diagnostics 将编译详情送 stderr，完整机器流保存在现有必上传 product 中；失败仍立即退出，不跳过夹具或验收。
+- 固定 Rust 格式、精确补丁与 Shell 语法检查通过；8 项 Python SDK 编排替身回归通过。未本地编译或执行 Rust／真实 Samba。三条已知编译错误均已对应修改，准确后继 CI 仍待验证，未宣称运行通过。
+
 ## 本轮控制信封图对象统一
 
 - membership 的 Exit、登记续作、readmission、terminal/resume 与 terminal retirement 的七种信封改用一份持久图对象模型，删除六份 `{kind,value}` 定义、六份先编码哈希再交下层认证的 read，以及复制的合并器。当前 JSON 字段、严格未知字段拒绝、冲突错误分类与业务图验证保持；合并使用 Entry 移动对象，删除对整棵 Value 的克隆。

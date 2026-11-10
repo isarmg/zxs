@@ -70,7 +70,9 @@ impl ExitCore {
             RegistryExitEffect::Detach {
                 occurrence_mask_hash,
             } => source
-                .verify_mask(occurrence_mask_hash, |kind, hash| self.read(kind, hash))
+                .verify_mask(occurrence_mask_hash, |kind, hash| {
+                    read_objects(&self.objects, kind, hash)
+                })
                 .map_err(projection_error)?
                 .prepare_current_namespaces(&successor)
                 .map_err(projection_error),

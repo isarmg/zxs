@@ -27,6 +27,11 @@ elif name=='cargo':
         p=pathlib.Path(os.environ['CARGO_TARGET_DIR'])/'release/libsmb_vfs.so'
         p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'fake module, not a runtime proof')
     if 'storage-server' in sys.argv:
+        if os.environ.get('FIXTURE_BUILD_ERROR'):
+            if '--message-format=json-render-diagnostics' in sys.argv:
+                print('error[E0425]: fixture compiler diagnostic', file=sys.stderr)
+            print(json.dumps({'reason':'build-finished','success':False}))
+            sys.exit(101)
         print(json.dumps({'reason':'compiler-artifact','executable':'/fixture/test-binary','target':{'name':'storage_server'}}))
 '''
 
@@ -84,6 +89,17 @@ class SmbBuildOnly(unittest.TestCase):
         receipt = json.loads((self.root / 'target/smb-debian13/product/VFS-BUILD.json').read_text())
         self.assertEqual(receipt['validation_mode'], 'full')
         self.assertEqual(receipt['runtime_acceptance'], 'not-run-by-build-script')
+
+    def test_fixture_compile_failure_renders_diagnostics_and_retains_build_stream(self):
+        self.env['FIXTURE_BUILD_ERROR'] = '1'
+        result = self.run_script()
+        self.assertEqual(result.returncode, 101, result.stderr)
+        self.assertIn('error[E0425]: fixture compiler diagnostic', result.stderr)
+        product = self.root / 'target/smb-debian13/product'
+        self.assertEqual(json.loads((product / 'fixture-build.jsonl').read_text()),
+                         {'reason': 'build-finished', 'success': False})
+        self.assertFalse((product.parent / 'fixture-path.txt').exists())
+        self.assertEqual(len([c for c in self.recorded() if 'storage-server' in c]), 1)
 
     def test_build_only_still_prepares_sdk_and_links_exact_release_module(self):
         result = self.run_script('--build-only')

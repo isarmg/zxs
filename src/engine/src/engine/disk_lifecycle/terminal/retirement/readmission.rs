@@ -1,7 +1,9 @@
 //! A complete retirement checkpoint can prepare one exact retained metadata
 //! successor. This is not ResumeCore: no decision, active Current or I/O token.
 use super::*;
-use crate::engine::disk_registry::objects::{GraphObjects, collect_objects, read_objects};
+use crate::engine::disk_registry::objects::{
+    GraphObjects, collect_objects, read_objects, visit_objects,
+};
 use crate::{
     disk::{DiskSealFormat, MAX_METADATA},
     engine::membership_transition::terminal_resume::stopped_source,
@@ -302,11 +304,7 @@ impl Proposal {
         &self,
         visit: &mut impl FnMut(&str, &str, &[u8]) -> Result<()>,
     ) -> Result<()> {
-        for (hash, object) in &self.objects {
-            let bytes = crate::canonical_json(&object.value)?;
-            visit(&object.kind, hash, &bytes)?;
-        }
-        Ok(())
+        visit_objects(&self.objects, visit)
     }
     pub(in crate::engine) fn checkpoint_digest(&self) -> &str {
         &self.checkpoint_digest
