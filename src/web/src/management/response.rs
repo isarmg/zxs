@@ -72,19 +72,13 @@ impl StorageStatus {
 }
 
 fn invalid(source: json_codec::Error) -> api::Error {
-    api::Error {
-        status: 200,
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: t(
+    api::Error::invalid_response(
+        t(
             "管理状态响应无效，请重新检查。",
             "The management status response is invalid. Check again.",
         ),
-        retryable: false,
-        request_id: None,
-        source: Some(std::sync::Arc::new(api::ErrorSource::ManagementStatus(
-            source,
-        ))),
-    }
+        api::ErrorSource::ManagementStatus(source),
+    )
 }
 
 pub(super) fn status(value: Value) -> Result<Status, api::Error> {

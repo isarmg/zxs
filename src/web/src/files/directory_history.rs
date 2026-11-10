@@ -5,7 +5,7 @@ use crate::{
     ui::{State, accept_read_response},
 };
 use data_serialization::Deserialize;
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 use storage_contract::directory_history::{
     DirectoryHistoryCollection as Collection, DirectoryHistoryPage, DirectoryHistoryRequest,
 };
@@ -24,15 +24,10 @@ pub enum DecodeError {
 }
 impl From<DecodeError> for api::Error {
     fn from(source: DecodeError) -> Self {
-        Self {
-            status: 200,
-            code: storage_contract::ErrorCode::InvalidResponse,
-            message: "The directory history did not match the requested folder and history root."
-                .into(),
-            retryable: false,
-            request_id: None,
-            source: Some(Arc::new(api::ErrorSource::DirectoryHistory(source))),
-        }
+        Self::invalid_response(
+            "The directory history did not match the requested folder and history root.",
+            api::ErrorSource::DirectoryHistory(source),
+        )
     }
 }
 

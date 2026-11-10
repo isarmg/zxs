@@ -219,17 +219,13 @@ fn focus_wizard() {
 }
 
 fn invalid(source: ResponseError) -> api::Error {
-    api::Error {
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: t(
+    api::Error::invalid_response(
+        t(
             "存储管理响应未确认，请刷新状态核对。",
             "The storage management response is unconfirmed. Refresh status to check.",
         ),
-        retryable: false,
-        status: 200,
-        request_id: None,
-        source: Some(Arc::new(api::ErrorSource::StorageManagement(source))),
-    }
+        api::ErrorSource::StorageManagement(source),
+    )
 }
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, api::Error> {
     json_codec::from_value(value).map_err(|source| invalid(ResponseError::Decode(source)))

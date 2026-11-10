@@ -2,7 +2,7 @@
 use crate::api;
 use data_serialization::{Deserialize, Deserializer};
 use json_codec::{Value, json};
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 use storage_contract::{
     FileDeletionNode, OperationId,
     client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES,
@@ -13,14 +13,10 @@ use storage_contract::{
 const MAX_FILES: usize = 100;
 
 fn error(source: json_codec::Error) -> api::Error {
-    api::Error {
-        status: 200,
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: "The directory deletion response did not match its request or contract.".into(),
-        retryable: false,
-        request_id: None,
-        source: Some(Arc::new(api::ErrorSource::FileDeletion(source))),
-    }
+    api::Error::invalid_response(
+        "The directory deletion response did not match its request or contract.",
+        api::ErrorSource::FileDeletion(source),
+    )
 }
 fn invalid(message: &str) -> api::Error {
     error(<json_codec::Error as data_serialization::de::Error>::custom(message))

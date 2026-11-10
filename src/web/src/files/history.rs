@@ -30,14 +30,10 @@ pub enum DecodeError {
 }
 impl From<DecodeError> for api::Error {
     fn from(source: DecodeError) -> Self {
-        Self {
-            status: 200,
-            code: storage_contract::ErrorCode::InvalidResponse,
-            message: "The history window did not match the server contract.".into(),
-            retryable: false,
-            request_id: None,
-            source: Some(std::sync::Arc::new(api::ErrorSource::FileHistory(source))),
-        }
+        Self::invalid_response(
+            "The history window did not match the server contract.",
+            api::ErrorSource::FileHistory(source),
+        )
     }
 }
 

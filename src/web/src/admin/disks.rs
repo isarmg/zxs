@@ -38,17 +38,13 @@ pub enum DecodeError {
 }
 
 fn invalid(source: DecodeError) -> api::Error {
-    api::Error {
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: t(
+    api::Error::invalid_response(
+        t(
             "硬盘管理响应无效，请刷新核对。",
             "The disk management response is invalid. Refresh to check.",
         ),
-        retryable: false,
-        status: 200,
-        request_id: None,
-        source: Some(Arc::new(api::ErrorSource::DiskDetails(source))),
-    }
+        api::ErrorSource::DiskDetails(source),
+    )
 }
 
 fn identity(field: &'static str, expected: &str, actual: &str) -> Result<(), api::Error> {

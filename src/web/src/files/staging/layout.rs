@@ -4,7 +4,6 @@ use crate::{
     api,
     ui::{State, accept_read_response, current_session},
 };
-use std::sync::Arc;
 use storage_contract::directory_git::DirectoryLayoutResult;
 use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_local};
 
@@ -56,16 +55,14 @@ fn release(state: &mut State, target: &Target) -> bool {
 }
 fn decode(value: json_codec::Value, target: &Target) -> Result<DirectoryLayoutResult, api::Error> {
     let result: DirectoryLayoutResult =
-        json_codec::from_value(value).map_err(|source| api::Error {
-            status: 200,
-            code: storage_contract::ErrorCode::InvalidResponse,
-            message: t(
-                "布局结果格式无效；不能据此判断操作未执行。",
-                "The layout result is invalid; this does not mean the repair was not executed.",
-            ),
-            retryable: false,
-            request_id: None,
-            source: Some(Arc::new(api::ErrorSource::DirectoryLayout(source))),
+        json_codec::from_value(value).map_err(|source| {
+            api::Error::invalid_response(
+                t(
+                    "布局结果格式无效；不能据此判断操作未执行。",
+                    "The layout result is invalid; this does not mean the repair was not executed.",
+                ),
+                api::ErrorSource::DirectoryLayout(source),
+            )
         })?;
     if result.repository_id != target.repository {
         return Err(api::error(

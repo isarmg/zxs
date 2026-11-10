@@ -59,19 +59,13 @@ fn read_configuration(value: Value) -> Result<Configuration, api::Error> {
     Configuration::deserialize(value).map_err(configuration_error)
 }
 fn configuration_error(source: json_codec::Error) -> api::Error {
-    api::Error {
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: t(
+    api::Error::invalid_response(
+        t(
             "备份配置响应无效，请关闭后重新读取。",
             "The backup configuration response is invalid. Close and reload.",
         ),
-        retryable: false,
-        status: 200,
-        request_id: None,
-        source: Some(std::sync::Arc::new(api::ErrorSource::BackupConfiguration(
-            source,
-        ))),
-    }
+        api::ErrorSource::BackupConfiguration(source),
+    )
 }
 pub(crate) fn start_entry(state: RwSignal<State>, entry: super::page::Entry) {
     let Some((repository, path)) = file_context(&entry) else {

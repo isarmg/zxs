@@ -89,14 +89,10 @@ pub(crate) fn available(state: &State) -> bool {
     chosen(state, None).is_some() || batch::available(state)
 }
 fn identity_error(source: storage_contract::Error) -> api::Error {
-    api::Error {
-        status: 200,
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: "The selected file does not carry a valid deletion identity.".into(),
-        retryable: false,
-        request_id: None,
-        source: Some(Arc::new(api::ErrorSource::Path(source))),
-    }
+    api::Error::invalid_response(
+        "The selected file does not carry a valid deletion identity.",
+        api::ErrorSource::Path(source),
+    )
 }
 fn capture(state: &State, explicit: Option<&Entry>) -> Result<Option<Review>, api::Error> {
     let Some(entry) = chosen(state, explicit) else {

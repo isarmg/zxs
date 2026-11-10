@@ -61,19 +61,13 @@ fn nullable_rule<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<St
     Option::deserialize(deserializer)
 }
 fn decode_error(source: json_codec::Error) -> api::Error {
-    api::Error {
-        code: storage_contract::ErrorCode::InvalidResponse,
-        message: t(
+    api::Error::invalid_response(
+        t(
             "主盘规则响应无效，请重新读取。",
             "The primary-placement response is invalid. Reload it.",
         ),
-        retryable: false,
-        status: 200,
-        request_id: None,
-        source: Some(std::sync::Arc::new(
-            api::ErrorSource::PlacementConfiguration(source),
-        )),
-    }
+        api::ErrorSource::PlacementConfiguration(source),
+    )
 }
 fn read_configuration(value: Value, draft: &Draft) -> Result<Configuration, api::Error> {
     let configuration = Configuration::deserialize(value).map_err(decode_error)?;

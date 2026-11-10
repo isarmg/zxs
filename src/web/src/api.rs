@@ -127,6 +127,18 @@ impl From<storage_contract::client_protocol::ResponseError> for Error {
 }
 
 impl Error {
+    /// A success response that fails a domain contract cannot prove rejection.
+    pub(crate) fn invalid_response(message: impl Into<String>, source: ErrorSource) -> Self {
+        Self {
+            code: storage_contract::ErrorCode::InvalidResponse,
+            message: message.into(),
+            retryable: false,
+            status: 200,
+            request_id: None,
+            source: Some(std::sync::Arc::new(source)),
+        }
+    }
+
     /// After a mutation request, only a client-error response proves rejection.
     /// A malformed success response can follow a completed publication.
     pub(crate) fn mutation_outcome_unknown(&self) -> bool {

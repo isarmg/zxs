@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn invalid_domain_response_retains_uncertainty_and_the_original_source() {
+    use std::error::Error as _;
+
+    let source = json_codec::from_str::<Value>("{").unwrap_err();
+    let original = source.to_string();
+    let error = Error::invalid_response(
+        "The original operation is unconfirmed.",
+        ErrorSource::FileDeletion(source),
+    );
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
+    assert_eq!(error.status, 200);
+    assert_eq!(error.message, "The original operation is unconfirmed.");
+    assert!(!error.retryable);
+    assert!(error.request_id.is_none());
+    assert!(error.mutation_outcome_unknown());
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(ErrorSource::FileDeletion(_))
+    ));
+    let cause = error.source().unwrap().source().unwrap();
+    assert!(cause.is::<json_codec::Error>());
+    assert_eq!(cause.to_string(), original);
+
+    let cloned = error.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        error.source.as_ref().unwrap(),
+        cloned.source.as_ref().unwrap()
+    ));
+}
+
+#[test]
 fn old_401_keeps_new_credentials_and_their_queued_management_read() {
     use std::{
         future::Future,
