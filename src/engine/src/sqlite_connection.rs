@@ -1,7 +1,7 @@
 //! Run an operation and close its SQLite connection before returning.
 use crate::{Error, ErrorCode, Result};
 use sqlite_access::{
-    Connection, Executor, Row, SqliteConnection,
+    Connection, Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteOwnedBuf},
 };
 
@@ -45,14 +45,13 @@ pub(crate) fn materialize(
     budget: impl Fn() -> Error,
     write: impl std::ops::AsyncFnOnce(&mut SqliteConnection) -> Result<()>,
 ) -> Result<Vec<u8>> {
-    let page_limit = format!("PRAGMA max_page_count={}", max_bytes / 4096);
     run(
         SqliteConnectOptions::new()
             .in_memory(true)
-            .journal_mode(SqliteJournalMode::Memory),
+            .journal_mode(SqliteJournalMode::Memory)
+            .page_size(4096)
+            .pragma("max_page_count", (max_bytes / 4096).to_string()),
         async move |connection| {
-            connection.execute("PRAGMA page_size=4096").await?;
-            connection.execute(page_limit.as_str()).await?;
             let mut tx = connection.begin().await?;
             write(&mut tx).await?;
             tx.commit().await?;

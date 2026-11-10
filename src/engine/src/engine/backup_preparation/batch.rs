@@ -26,7 +26,7 @@ impl Batch {
         &self.request
     }
 
-    fn first(&self) -> &Job {
+    pub(super) fn first(&self) -> &Job {
         self.targets
             .first()
             .expect("invariant: admitted nonempty batch")

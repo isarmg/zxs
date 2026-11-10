@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`926c328d`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`d9240480`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 SQLite 页额与 Backup 可见性编译修复
+
+- CI #1096 证明此前 async move 仍不能解决 E0597：本仓 SqlSafeStr 的普通字符串只支持 &'static str。materialize 改用既有 SqliteConnectOptions 的 page_size(4096) 与拥有数字字符串的 max_page_count 配置，不泄漏字符串、不放宽 SQL 安全 trait，也不在业务层添加 AssertSqlSafe。页大小先于 journal mode，页额在连接返回及业务事务前生效；事务、序列化与最终字节预算保持。
+- 初始化 PRAGMA 失败现在走连接建立错误路径，不再经过 run 对回调错误的显式 close 错误组合；成功连接后的回调和关闭路径不变。差分测试中的同类动态 SQL 改为原 16／32 MiB 两组对应的静态语句，并增加实际页大小断言；六项既有精确镜像、只读拒写及原始错误测试全部保留。
+- 修复同次 CI 的 E0624：Batch::first 仅改为 pub(super)，使兄弟 native_control 复用已有非空批次不变量，不新增索引或重复验证。两份生产文件和一份根测试；固定 Rust 1.99 格式、准确基线／静态调用链和独立审阅通过，未本地编译或运行 Rust，实际编译与回归结果待本提交 CI。
 
 ## 本轮程序安装读回所有权统一
 

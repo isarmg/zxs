@@ -84,7 +84,10 @@ fn loaded_image_keeps_its_rows_and_rejects_writes() {
 #[test]
 fn common_materialization_keeps_page_quota_transaction_and_exact_image() {
     const DDL: &str = "CREATE TABLE sample(value INTEGER)";
-    for max_bytes in [16 * 1024 * 1024, 32 * 1024 * 1024] {
+    for (max_bytes, page_limit) in [
+        (16 * 1024 * 1024, "PRAGMA max_page_count=4096"),
+        (32 * 1024 * 1024, "PRAGMA max_page_count=8192"),
+    ] {
         let bytes = materialize(
             max_bytes,
             || Error::new(ErrorCode::ResourceLimit, "image budget"),
@@ -93,6 +96,10 @@ fn common_materialization_keeps_page_quota_transaction_and_exact_image() {
                     .fetch_one(&mut *connection)
                     .await?;
                 assert_eq!(pages, (max_bytes / 4096) as i64);
+                let page_size: i64 = sqlite_access::query_scalar("PRAGMA page_size")
+                    .fetch_one(&mut *connection)
+                    .await?;
+                assert_eq!(page_size, 4096);
                 connection.execute(DDL).await?;
                 connection.execute("INSERT INTO sample VALUES(7)").await?;
                 Ok(())
@@ -105,8 +112,7 @@ fn common_materialization_keeps_page_quota_transaction_and_exact_image() {
                 .journal_mode(SqliteJournalMode::Memory),
             async |connection| {
                 connection.execute("PRAGMA page_size=4096").await?;
-                let pragma = format!("PRAGMA max_page_count={}", max_bytes / 4096);
-                connection.execute(pragma.as_str()).await?;
+                connection.execute(page_limit).await?;
                 let mut tx = connection.begin().await?;
                 tx.execute(DDL).await?;
                 tx.execute("INSERT INTO sample VALUES(7)").await?;
