@@ -70,7 +70,7 @@ pub(super) fn target_directory(
     for name in prefix {
         path.push(name);
     }
-    path.push(parts.as_path());
+    path.extend(parts);
     relative(&path)
 }
 

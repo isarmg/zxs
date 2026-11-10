@@ -1,9 +1,14 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`94c810d6`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`de23d229`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 Backup 根路径 CI 修复
+
+- 修复 CI #1085 三项 Backup 根布局失败的共同根因：target_directory 对无剩余组件的根仓库不再 push 空路径；改用组件 extend，避免生成被 HistoryRelative 拒绝的尾斜杠。原稳定根 ID、直接上游前缀、嵌套目录、严格路径验证及普通缺 locator 库存扫描保持。
+- 一行生产替换，原测试文件新增根／嵌套乘空／两级前缀四组合，保留原完整实体和森林几何用例。固定 Rust 1.99 rustfmt --check 与独立静态审阅通过；未本地编译或执行 Rust，三项原失败的真实回归结果待本提交 CI。
 
 ## 本轮 SQLite 异步捕获 CI 修复
 

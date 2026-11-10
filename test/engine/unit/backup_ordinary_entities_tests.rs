@@ -253,3 +253,19 @@ fn prefixed_managed_entity_stays_in_the_normal_absence_inventory() {
     );
     assert!(root.path().join(home).is_dir());
 }
+
+#[test]
+fn target_directory_keeps_root_and_nested_paths_canonical() {
+    let root = format!("directory-repositories/repo_{}", "3".repeat(32));
+    let prefix = vec!["Primary".into(), "Second".into()];
+    for (suffix, prefix, expected) in [
+        ("", &[][..], ""),
+        ("/Box/Child", &[][..], "/Box/Child"),
+        ("", prefix.as_slice(), "/Primary/Second"),
+        ("/Box/Child", prefix.as_slice(), "/Primary/Second/Box/Child"),
+    ] {
+        let goal = HistoryRelative::parse(&format!("{root}{suffix}")).unwrap();
+        let actual = target_directory(&goal, prefix).unwrap();
+        assert_eq!(actual.as_str(), format!("{root}{expected}"));
+    }
+}
