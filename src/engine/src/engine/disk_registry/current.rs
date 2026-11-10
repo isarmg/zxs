@@ -34,8 +34,8 @@ mod smb_bindings;
 mod terminal_chain;
 mod workspace;
 use crate::{
-    BranchState, Commit, Entry, Error, ErrorCode, NamespaceEntryKind, NamespaceOperation, Result,
-    State, Workspace, WorkspacePurpose,
+    BranchState, Commit, DirectoryBranch, Entry, Error, ErrorCode, NamespaceEntryKind,
+    NamespaceOperation, Result, State, Workspace, WorkspacePurpose,
 };
 use relocation::VerifiedEntryChanges;
 use std::{
