@@ -19,8 +19,15 @@ pub struct MoveCurrentObject {
 
 #[derive(Debug)]
 pub enum MoveObjectTarget {
-    Repository { binding: SmbBinding, disk_id: String, binding_generation: u64 },
-    EmptyDisk { disk_id: String, binding_generation: u64 },
+    Repository {
+        binding: SmbBinding,
+        disk_id: String,
+        binding_generation: u64,
+    },
+    EmptyDisk {
+        disk_id: String,
+        binding_generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -89,12 +96,16 @@ impl MoveCurrentFile {
                 .map_err(crate::ApiError::contract_input)?,
             source_path: self.source_path.clone(),
             target_slot_id: target_slot_id.to_owned(),
-            target_repository_id: Some(HistoryRepositoryId::parse(&self.target_binding.repository_id)
-                .map_err(crate::ApiError::contract_input)?),
+            target_repository_id: Some(
+                HistoryRepositoryId::parse(&self.target_binding.repository_id)
+                    .map_err(crate::ApiError::contract_input)?,
+            ),
             target_path: self.target_name.0.clone(),
             replace: target_entry_id.is_some(),
-            target_entry_id: target_entry_id.map(NamespaceEntryId::parse)
-                .transpose().map_err(crate::ApiError::contract_input)?,
+            target_entry_id: target_entry_id
+                .map(NamespaceEntryId::parse)
+                .transpose()
+                .map_err(crate::ApiError::contract_input)?,
         })
     }
 }

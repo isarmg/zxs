@@ -82,8 +82,15 @@ impl EngineBackend {
             };
             // One original operation creates the empty root and moves the unit.
             // A replay reaches the same core before querying today's contents.
-            return engine.move_object_from_file(&movement, &source, None,
-                &current.principal, command.operation_id).map_err(error);
+            return engine
+                .move_object_from_file(
+                    &movement,
+                    &source,
+                    None,
+                    &current.principal,
+                    command.operation_id,
+                )
+                .map_err(error);
         }
         // A root receipt already retained by this exact original SMB request is
         // resumed in place. Never create a new preliminary root for a new move.
@@ -119,7 +126,14 @@ impl EngineBackend {
         // The retained preliminary root belongs to the original file workflow.
         // Resume that original request; do not rewrite its None intent into a
         // new object operation with a different target-repository fact.
-        engine.continue_file_move_after_root(&original, &source, root_operation,
-            &current.principal, command.operation_id).map_err(error)
+        engine
+            .continue_file_move_after_root(
+                &original,
+                &source,
+                root_operation,
+                &current.principal,
+                command.operation_id,
+            )
+            .map_err(error)
     }
 }

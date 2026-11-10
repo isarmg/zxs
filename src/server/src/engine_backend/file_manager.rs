@@ -849,9 +849,13 @@ pub(super) fn move_object(
         .state()
         .repositories
         .get(request.source_repository_id.as_str())
-        .ok_or_else(|| ApiError::invalid("the captured source repository is no longer registered"))?;
+        .ok_or_else(|| {
+            ApiError::invalid("the captured source repository is no longer registered")
+        })?;
     if source.primary_slot_id != command.source_slot_id {
-        return Err(ApiError::invalid("the source repository is not on the requested primary disk"));
+        return Err(ApiError::invalid(
+            "the source repository is not on the requested primary disk",
+        ));
     }
     for slot in [&command.source_slot_id, &request.target_slot_id] {
         if disk(engine, slot)?.level != 1 {

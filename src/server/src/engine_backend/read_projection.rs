@@ -367,4 +367,3 @@ fn encoded_size(value: &impl data_serialization::Serialize) -> Result<usize, jso
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/read_projection/tests.rs"]
 mod tests;
-

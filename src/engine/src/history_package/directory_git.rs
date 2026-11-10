@@ -178,15 +178,25 @@ impl HistoryManifest {
                 .iter()
                 .filter(|entry| within(entry.lookup_key(), root.lookup_key()))
                 .collect::<Vec<_>>();
-            let source_rows=crate::file_deletion::directory::retained_entries(node,original,source)?;
-            if before!=source_rows.iter().collect::<Vec<_>>() {
+            let source_rows =
+                crate::file_deletion::directory::retained_entries(node, original, source)?;
+            if before != source_rows.iter().collect::<Vec<_>>() {
                 return Err(invalid("deleted directory retained contents changed"));
             }
-            if let Some(mounted)=crate::file_deletion::directory::mounted_entries(node,original,source,current)? {
-                let root=mounted.first().ok_or_else(||invalid("deleted directory retained root is missing"))?;
-                let after=current.iter().filter(|entry|within(entry.lookup_key(),root.lookup_key())).collect::<Vec<_>>();
-                if after!=mounted.iter().collect::<Vec<_>>() {
-                    return Err(invalid("deleted directory current relative contents or owner changed"));
+            if let Some(mounted) =
+                crate::file_deletion::directory::mounted_entries(node, original, source, current)?
+            {
+                let root = mounted
+                    .first()
+                    .ok_or_else(|| invalid("deleted directory retained root is missing"))?;
+                let after = current
+                    .iter()
+                    .filter(|entry| within(entry.lookup_key(), root.lookup_key()))
+                    .collect::<Vec<_>>();
+                if after != mounted.iter().collect::<Vec<_>>() {
+                    return Err(invalid(
+                        "deleted directory current relative contents or owner changed",
+                    ));
                 }
             }
             let mut files = BTreeSet::new();
@@ -217,8 +227,10 @@ impl HistoryManifest {
                         && (deletion.operation_id != node.operation_id
                             || deletion.sequence != node.sequence
                             || deletion.author != node.author))
-                    || (!member.created_by_directory && (deletion.sequence > node.sequence
-                        || (deletion.sequence==node.sequence && deletion.operation_id!=node.operation_id)))
+                    || (!member.created_by_directory
+                        && (deletion.sequence > node.sequence
+                            || (deletion.sequence == node.sequence
+                                && deletion.operation_id != node.operation_id)))
                 {
                     return Err(invalid(
                         "directory deletion member's original lifecycle differs",
@@ -558,4 +570,3 @@ fn reject_nested_boundaries(paths: &BTreeSet<String>) -> Result<()> {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/history_package/directory_git_tests.rs"]
 mod tests;
-
