@@ -1175,6 +1175,9 @@ mod diagnostics_tests;
 #[path = "default_directory_tests.rs"]
 mod default_directory_tests;
 
+#[path = "directory_deletion_tests.rs"]
+mod directory_deletion_tests;
+
 #[path = "directory_scopes_tests.rs"]
 mod directory_scopes_tests;
 
