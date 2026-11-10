@@ -200,6 +200,10 @@ impl ProgramDestination {
         self.target.directory.identity()
     }
     pub(crate) fn matches_or_absent(&self, expected: &[u8]) -> Result<bool> {
+        Ok(self.matching_file(expected)?.is_some())
+    }
+    // Keep the verified inode available to the caller through its durability barrier.
+    fn matching_file(&self, expected: &[u8]) -> Result<Option<File>> {
         self.recheck_parent()?;
         let file = match self
             .target
@@ -210,7 +214,7 @@ impl ProgramDestination {
             Err(platform_io::fs_safety::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound =>
             {
-                return Ok(false);
+                return Ok(None);
             }
             Err(error) => return Err(error.into()),
         };
@@ -230,28 +234,22 @@ impl ProgramDestination {
         if bytes != expected {
             return Err("existing program differs from the embedded payload; ordinary installation did not overwrite it; explicit same-payload repair requires the original installation baseline".into());
         }
-        let named = statat(
-            self.target.directory.directory(),
-            self.target.name.as_os_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )?;
-        if (named.st_dev, named.st_ino) != (identity.device, identity.inode) {
-            return Err("program identity changed during inspection".into());
-        }
+        self.target
+            .directory
+            .verify_entry_identity(&self.target.name, identity)?;
         self.recheck_parent()?;
-        Ok(true)
+        Ok(Some(file))
     }
     pub(crate) fn install(&self, bytes: &[u8]) -> Result<bool> {
-        if self.matches_or_absent(bytes)? {
-            let file = self
-                .target
-                .directory
-                .open_file(&self.target.name.as_relative(), false)?;
+        if let Some(file) = self.matching_file(bytes)? {
             file.sync_all()?;
             self.target.directory.directory().sync_all()?;
             if !self.matches_or_absent(bytes)? {
                 return Err("program disappeared while resolving its existing publication".into());
             }
+            self.target
+                .directory
+                .verify_entry_identity(&self.target.name, FileIdentity::from_fd(&file)?)?;
             return Ok(false);
         }
         write_atomic_at_mode(

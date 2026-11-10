@@ -403,3 +403,55 @@ fn program_destination_refuses_links_shared_inodes_unsafe_parents_and_competing_
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
     assert!(ProgramDestination::open(&path).is_err());
 }
+
+#[test]
+fn verified_program_file_keeps_its_inode_through_synchronization_and_name_replacement() {
+    use std::os::unix::fs::FileExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("zxs");
+    let original = root.path().join("original");
+    let destination = ProgramDestination::open(&path).unwrap();
+    let payload = b"exact embedded program";
+    assert!(destination.matching_file(payload).unwrap().is_none());
+    assert!(destination.install(payload).unwrap());
+    let held = destination.matching_file(payload).unwrap().unwrap();
+    let identity = FileIdentity::from_fd(&held).unwrap();
+    fs::rename(&path, &original).unwrap();
+    fs::write(&path, payload).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+
+    held.sync_all().unwrap();
+    let mut bytes = [0_u8; 22];
+    held.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(&bytes, payload);
+    assert_eq!(FileIdentity::from_fd(&held).unwrap(), identity);
+    assert_eq!(
+        FileIdentity::from_fd(File::open(&original).unwrap()).unwrap(),
+        identity
+    );
+    assert_ne!(
+        FileIdentity::from_fd(File::open(&path).unwrap()).unwrap(),
+        identity
+    );
+    let error = destination
+        .target
+        .directory
+        .verify_entry_identity(&destination.target.name, identity)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        platform_io::fs_safety::Error::IdentityChanged(_)
+    ));
+    // Same bytes do not make the replacement the inode synchronized through held.
+    assert!(destination.matches_or_absent(payload).unwrap());
+    // A fresh installation attempt may verify and synchronize that new inode itself.
+    assert!(!destination.install(payload).unwrap());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&path, b"different program").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(destination.matches_or_absent(payload).is_err());
+    assert!(destination.install(payload).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"different program");
+    assert_eq!(fs::read(&original).unwrap(), payload);
+}

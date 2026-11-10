@@ -73,7 +73,9 @@ impl ProgramDestination {
             bytes: metadata.len(),
             sha256: platform_io::lower_hex(&Sha256::digest(&bytes)),
         };
-        self.check_repair_name(name, identity)?;
+        self.target
+            .directory
+            .verify_entry_identity(name, identity)?;
         self.recheck_parent()?;
         Ok(Some(Captured {
             file,
@@ -249,18 +251,6 @@ impl ProgramDestination {
             );
         }
         Ok(final_file.snapshot)
-    }
-
-    fn check_repair_name(&self, name: &EntryName, identity: FileIdentity) -> Result<()> {
-        let named = statat(
-            self.target.directory.directory(),
-            name.as_os_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )?;
-        if (named.st_dev, named.st_ino) != (identity.device, identity.inode) {
-            return Err("program identity changed during repair inspection".into());
-        }
-        Ok(())
     }
 }
 
