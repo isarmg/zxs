@@ -30,12 +30,17 @@ impl MoveReceipt {
     ) -> Result<Self, ApiError> {
         Ok(Self {
             operation_id: request.operation_id,
-            movement: request.movement(target_slot_id, replacement.map(|target| target.entry_id.as_str()))?,
+            movement: request.movement(
+                target_slot_id,
+                replacement.map(|target| target.entry_id.as_str()),
+            )?,
             source_file_id: Some(request.expected_source_file_id.clone()),
-            displaced_target_file_id: replacement.map(|target| {
-                storage_contract::history_window::HistoryFileId::parse(&target.file_id)
-                    .map_err(ApiError::contract_input)
-            }).transpose()?,
+            displaced_target_file_id: replacement
+                .map(|target| {
+                    storage_contract::history_window::HistoryFileId::parse(&target.file_id)
+                        .map_err(ApiError::contract_input)
+                })
+                .transpose()?,
         })
     }
 
@@ -64,16 +69,23 @@ impl MoveReceipt {
             == Some(&request.movement.source_repository_id)
             && request.movement.target_entry_id.as_ref() == Some(&request.movement.source_entry_id)
             && request.movement.target_path.key() == request.movement.source_path.key();
-        if same_entry && request.expected_target_file_id.as_ref().is_some_and(|target| {
-            request.expected_source_file_id.as_ref() != Some(target)
-        }) {
+        if same_entry
+            && request
+                .expected_target_file_id
+                .as_ref()
+                .is_some_and(|target| request.expected_source_file_id.as_ref() != Some(target))
+        {
             return Err(receipt_changed());
         }
         Ok(Self {
             operation_id: request.operation_id,
             movement: request.movement.clone(),
             source_file_id: request.expected_source_file_id.clone(),
-            displaced_target_file_id: if same_entry { None } else { request.expected_target_file_id.clone() },
+            displaced_target_file_id: if same_entry {
+                None
+            } else {
+                request.expected_target_file_id.clone()
+            },
         })
     }
 
@@ -87,8 +99,11 @@ impl MoveReceipt {
         {
             return Err(receipt_changed());
         }
-        let versions = result.result.get("version_mapping")
-            .and_then(Value::as_object).ok_or_else(receipt_changed)?;
+        let versions = result
+            .result
+            .get("version_mapping")
+            .and_then(Value::as_object)
+            .ok_or_else(receipt_changed)?;
         let protection = if versions.is_empty() {
             storage_contract::ProtectionAtPublish::NotApplicable
         } else {

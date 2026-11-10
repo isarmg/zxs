@@ -22,7 +22,8 @@ impl<'a> CurrentObject<'a> {
     /// Nearest initialized directory repository, including the entry itself
     /// when it is a repository root. Ordinary directories inherit their owner.
     pub fn initialized_repository_id(&self) -> Option<&'a str> {
-        self.namespace.initialized_repository_id(self.entry.lookup_key())
+        self.namespace
+            .initialized_repository_id(self.entry.lookup_key())
     }
 
     /// Inspect only this object's descendant range in the same published view.
@@ -60,9 +61,16 @@ pub struct NamespaceTree<'a> {
 impl<'a> NamespaceTree<'a> {
     /// The caller has already admitted these rows as this repository's current
     /// main namespace (including its registry projection).
-    pub(in crate::business) fn from_current_state(state: &'a State, repository: &'a str, entries: &'a [Entry]) -> Self {
-        Self { entries, deletions: Some(&state.file_deletions),
-            directories: Some((&state.directory_git_repositories, repository)) }
+    pub(in crate::business) fn from_current_state(
+        state: &'a State,
+        repository: &'a str,
+        entries: &'a [Entry],
+    ) -> Self {
+        Self {
+            entries,
+            deletions: Some(&state.file_deletions),
+            directories: Some((&state.directory_git_repositories, repository)),
+        }
     }
 
     // Only this module constructs views. Engine publication validates canonical
@@ -180,9 +188,11 @@ impl Engine {
         repository_id: &str,
         path: &name_policy::LookupPath,
     ) -> Result<CurrentObject<'_>> {
-        let repository = self.state().repositories.get(repository_id).ok_or_else(|| {
-            Error::new(ErrorCode::RepositoryNotFound, "repository missing")
-        })?;
+        let repository = self
+            .state()
+            .repositories
+            .get(repository_id)
+            .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository missing"))?;
         self.locate_object(&repository.main_branch_id, path)?
             .ok_or_else(|| Error::new(ErrorCode::EntryNotFound, "object is absent at this path"))
     }

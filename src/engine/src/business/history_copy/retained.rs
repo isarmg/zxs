@@ -90,21 +90,26 @@ pub(in crate::business) fn validate(
     file: &str,
     value: &CopiedLifecycle,
 ) -> Result<()> {
-    if !matches!(receipt.kind.as_str(),
-        RETAINED_KIND | DIRECTORY_EXPORT_KIND | crate::business::FILE_HISTORY_MOVE_KIND)
-        || receipt.result["file_id"].as_str() != Some(file)
-        || receipt.result["source_file_id"].as_str() != Some(value.source_file_id.as_str()) {
+    if !matches!(
+        receipt.kind.as_str(),
+        RETAINED_KIND | DIRECTORY_EXPORT_KIND | crate::business::FILE_HISTORY_MOVE_KIND
+    ) || receipt.result["file_id"].as_str() != Some(file)
+        || receipt.result["source_file_id"].as_str() != Some(value.source_file_id.as_str())
+    {
         return Err(invalid());
     }
-    validate_payload(receipt,file,value)
+    validate_payload(receipt, file, value)
 }
 
 /// Shared retained-prefix identity rules; the containing operation validates
 /// its own typed envelope rather than forging a single-file receipt.
 pub(in crate::business) fn validate_payload(
-    receipt:&OperationResult,file:&str,value:&CopiedLifecycle,
-)->Result<()> {
-    if value.events.len() > 65_536 || value.file_id != file
+    receipt: &OperationResult,
+    file: &str,
+    value: &CopiedLifecycle,
+) -> Result<()> {
+    if value.events.len() > 65_536
+        || value.file_id != file
         || value.file_id != identity(receipt.operation_id, &value.source_file_id)?
         || receipt.history_tree_id.as_deref() != Some(value.history_tree_id.as_str())
         || value.source_sequence >= receipt.sequence

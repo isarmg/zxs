@@ -349,16 +349,31 @@ pub(super) fn retained<'a>(
 
 /// A marker freezes the unit's internal rows, not its exterior mount. Locate
 /// that exact directory identity in current state before comparing relative rows.
-pub(crate) fn mounted_entries(node:&DirectoryDeletionNode,original:&crate::Commit,tree:&crate::DirectoryTree,current:&[Entry])->Result<Option<Vec<Entry>>> {
-    let frozen=retained_entries(node,original,tree)?;
-    let Some(root)=current.iter().find(|entry|entry.entry_id==node.directory_id
-        && entry.kind==NamespaceEntryKind::Directory) else {return Ok(None)};
-    let depth=node.path.as_str().split('/').count();
-    let rows=frozen.into_iter().map(|mut entry| {
-        let location=if entry.entry_id==node.directory_id {root.location().clone()}
-            else {entry.location().rebase(depth,root.location())?};
-        entry.relocate(location);Ok(entry)
-    }).collect::<Result<Vec<_>>>()?;
+pub(crate) fn mounted_entries(
+    node: &DirectoryDeletionNode,
+    original: &crate::Commit,
+    tree: &crate::DirectoryTree,
+    current: &[Entry],
+) -> Result<Option<Vec<Entry>>> {
+    let frozen = retained_entries(node, original, tree)?;
+    let Some(root) = current.iter().find(|entry| {
+        entry.entry_id == node.directory_id && entry.kind == NamespaceEntryKind::Directory
+    }) else {
+        return Ok(None);
+    };
+    let depth = node.path.as_str().split('/').count();
+    let rows = frozen
+        .into_iter()
+        .map(|mut entry| {
+            let location = if entry.entry_id == node.directory_id {
+                root.location().clone()
+            } else {
+                entry.location().rebase(depth, root.location())?
+            };
+            entry.relocate(location);
+            Ok(entry)
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(Some(rows))
 }
 
@@ -378,18 +393,22 @@ pub(super) fn require_restore(
         return Err(invalid());
     }
     let (_, retained, entries) = namespace(state, current, &node.repository_id)?;
-    let tree=&state.directory_trees[&node.source_tree_id];
-    let expected=mounted_entries(node,original,tree,entries)?.ok_or_else(||conflict("deleted directory owner is no longer current"))?;
-    let root=expected.first().ok_or_else(invalid)?;
-    if subtree(entries,root.lookup_key())!=expected.iter().collect::<Vec<_>>()
-        || subtree(&retained.entries,root.lookup_key())!=expected.iter().collect::<Vec<_>>() {
-        return Err(conflict("deleted directory ownership or retained contents changed"));
+    let tree = &state.directory_trees[&node.source_tree_id];
+    let expected = mounted_entries(node, original, tree, entries)?
+        .ok_or_else(|| conflict("deleted directory owner is no longer current"))?;
+    let root = expected.first().ok_or_else(invalid)?;
+    if subtree(entries, root.lookup_key()) != expected.iter().collect::<Vec<_>>()
+        || subtree(&retained.entries, root.lookup_key()) != expected.iter().collect::<Vec<_>>()
+    {
+        return Err(conflict(
+            "deleted directory ownership or retained contents changed",
+        ));
     }
     let admitted = current
         .map(|view| view.batch_scope(state, &branch.directory_branch_id))
         .transpose()?;
     let scope = admitted.as_ref().map_or(branch, |scope| scope.branch());
-    if subtree(&scope.entries,root.lookup_key()) != expected.iter().collect::<Vec<_>>() {
+    if subtree(&scope.entries, root.lookup_key()) != expected.iter().collect::<Vec<_>>() {
         return Err(conflict(
             "selected directory composition differs from the deletion",
         ));
@@ -484,4 +503,3 @@ pub(super) fn prepare(
     )?;
     Ok(Some(request))
 }
-

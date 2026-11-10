@@ -58,7 +58,12 @@ fn empty_disk_move_accepts_either_replacement_mode_and_keeps_history_after_reope
         );
         let source = root_on(&shared, "P01");
         let original_operations = backend.inner.test_with_engine_locked(|engine| {
-            engine.state().operations.keys().copied().collect::<BTreeSet<_>>()
+            engine
+                .state()
+                .operations
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>()
         });
         let operation = OperationId::generate().unwrap();
         let (result, descriptor) = okay(&mut stream, move_request(operation, replace));
@@ -157,12 +162,15 @@ fn empty_disk_move_lost_reply_rejects_changed_mode_then_reconciles_same_operatio
         let sequence = backend
             .inner
             .test_with_engine_locked(|engine| engine.state().sequence);
-        let (reply, _) =
-            binding_tests::exchange(&mut stream, move_request(operation, !replace));
+        let (reply, _) = binding_tests::exchange(&mut stream, move_request(operation, !replace));
         assert!(
-            matches!(reply, Response::Error {
-                code: storage_contract::ErrorCode::IdempotencyKeyReused, ..
-            }),
+            matches!(
+                reply,
+                Response::Error {
+                    code: storage_contract::ErrorCode::IdempotencyKeyReused,
+                    ..
+                }
+            ),
             "{reply:?}"
         );
         assert_eq!(fs::read(&record).unwrap(), captured);
@@ -170,10 +178,7 @@ fn empty_disk_move_lost_reply_rejects_changed_mode_then_reconciles_same_operatio
         assert!(!record.exists());
         backend.inner.test_with_engine_locked(|engine| {
             assert_eq!(engine.state().sequence, sequence);
-            assert_eq!(
-                engine.state().operations[&operation].kind,
-                OBJECT_MOVE_KIND
-            );
+            assert_eq!(engine.state().operations[&operation].kind, OBJECT_MOVE_KIND);
         });
         assert!(shared.file_writers.lock().unwrap().is_empty());
         close_wire(stream, worker);
@@ -186,13 +191,9 @@ fn empty_disk_replace_intent_never_overwrites_a_target_created_after_capture() {
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     seed_source(&mut stream);
     let generation = shared.account.read().unwrap().selection().generation;
-    let mut share = default_share::DefaultShare::new(
-        shared.clone(),
-        identity(&shared),
-        generation,
-        4096,
-    )
-    .unwrap();
+    let mut share =
+        default_share::DefaultShare::new(shared.clone(), identity(&shared), generation, 4096)
+            .unwrap();
     let operation = OperationId::generate().unwrap();
     // This injection is thread-local, so dispatch on this test thread. It
     // retains the intent but stops before target-root creation or native move.
@@ -221,4 +222,3 @@ fn empty_disk_replace_intent_never_overwrites_a_target_created_after_capture() {
     assert!(shared.file_writers.lock().unwrap().is_empty());
     close_wire(stream, worker);
 }
-

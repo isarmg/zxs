@@ -436,9 +436,14 @@ fn submit(state: RwSignal<State>, model: RwSignal<Model>, review: Option<Review>
             message,
         }) => {
             let submitted = message.clone();
-            if let Some(operation) =
-                actions::commit_directory(state, repository, branch, tree, index_generation, message)
-            {
+            if let Some(operation) = actions::commit_directory(
+                state,
+                repository,
+                branch,
+                tree,
+                index_generation,
+                message,
+            ) {
                 model.update(|model| model.submitted_message = Some((operation, submitted)));
             }
         }
@@ -643,7 +648,10 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         if let Some(status) = status.filter(|status| *status != super::SaveStatus::Unknown) {
             model.update(|model| {
                 if let Some((_, submitted)) = model.submitted_message.take()
-                    && matches!(status, super::SaveStatus::Published | super::SaveStatus::Degraded)
+                    && matches!(
+                        status,
+                        super::SaveStatus::Published | super::SaveStatus::Degraded
+                    )
                     && model.message == submitted
                 {
                     model.message.clear();
@@ -724,4 +732,3 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 #[cfg(test)]
 #[path = "../../../../test/web/unit/files/staging_tests.rs"]
 mod tests;
-

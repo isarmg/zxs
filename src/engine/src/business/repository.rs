@@ -209,10 +209,18 @@ impl Engine {
                 // Current routes authorize a new root, never overwrite the
                 // meaning of a permanent creation receipt after a later exit.
                 engine.route(primary, copies)?;
-                let repository = project_creation(state, RepositoryCreation {
-                    name, primary: &engine.disk(primary)?.slot_id, copies,
-                    file_manager_root, principal, operation,
-                }, RepositoryIds::random()?)?;
+                let repository = project_creation(
+                    state,
+                    RepositoryCreation {
+                        name,
+                        primary: &engine.disk(primary)?.slot_id,
+                        copies,
+                        file_manager_root,
+                        principal,
+                        operation,
+                    },
+                    RepositoryIds::random()?,
+                )?;
                 let repo_id = &repository.repository_id;
                 let history_id = &repository.history_tree_id;
                 let branch_id = &repository.main_branch_id;
@@ -237,7 +245,6 @@ impl Engine {
     }
 }
 
-
 pub(super) struct RepositoryCreation<'a> {
     pub(super) name: &'a storage_contract::RepositoryName,
     pub(super) primary: &'a str,
@@ -257,8 +264,11 @@ pub(super) struct RepositoryIds {
 impl RepositoryIds {
     fn random() -> Result<Self> {
         Ok(Self {
-            repository: new_id("repo")?, history: new_id("history")?,
-            branch: new_id("br")?, commit: new_id("commit")?, tree: new_id("tree")?,
+            repository: new_id("repo")?,
+            history: new_id("history")?,
+            branch: new_id("br")?,
+            commit: new_id("commit")?,
+            tree: new_id("tree")?,
         })
     }
 
@@ -268,8 +278,11 @@ impl RepositoryIds {
             Ok(format!("{prefix}_{}", &digest[..32]))
         };
         Ok(Self {
-            repository: id("repo")?, history: id("history")?, branch: id("br")?,
-            commit: id("commit")?, tree: id("tree")?,
+            repository: id("repo")?,
+            history: id("history")?,
+            branch: id("br")?,
+            commit: id("commit")?,
+            tree: id("tree")?,
         })
     }
 }
@@ -281,13 +294,30 @@ pub(super) fn project_creation(
     creation: RepositoryCreation<'_>,
     ids: RepositoryIds,
 ) -> Result<Repository> {
-    let RepositoryCreation { name, primary, copies, file_manager_root, principal, operation } = creation;
-    if state.repositories.values().any(|repository| name_policy::lookup_key(&repository.name) == name.key()) {
-        return Err(Error::new(ErrorCode::NameCollision, "repository name already exists"));
+    let RepositoryCreation {
+        name,
+        primary,
+        copies,
+        file_manager_root,
+        principal,
+        operation,
+    } = creation;
+    if state
+        .repositories
+        .values()
+        .any(|repository| name_policy::lookup_key(&repository.name) == name.key())
+    {
+        return Err(Error::new(
+            ErrorCode::NameCollision,
+            "repository name already exists",
+        ));
     }
     let RepositoryIds {
-        repository: repo_id, history: history_id, branch: branch_id,
-        commit: commit_id, tree: tree_id,
+        repository: repo_id,
+        history: history_id,
+        branch: branch_id,
+        commit: commit_id,
+        tree: tree_id,
     } = ids;
     let repository = Repository {
         repository_id: repo_id.clone(),
@@ -353,7 +383,6 @@ pub(super) fn project_creation(
         .insert(repo_id.clone(), repository.clone());
     Ok(repository)
 }
-
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/repository/tests.rs"]

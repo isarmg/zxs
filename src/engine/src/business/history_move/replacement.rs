@@ -21,9 +21,13 @@ impl FileHistoryMoveReplacement {
         })
     }
 
-    pub fn entry_id(&self) -> &str { &self.entry_id }
+    pub fn entry_id(&self) -> &str {
+        &self.entry_id
+    }
 
-    pub fn file_id(&self) -> &str { &self.file_id }
+    pub fn file_id(&self) -> &str {
+        &self.file_id
+    }
 
     pub(in crate::business) fn matches(&self, entry: &Entry) -> bool {
         entry.kind == NamespaceEntryKind::File

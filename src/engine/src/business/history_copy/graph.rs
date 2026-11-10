@@ -45,14 +45,28 @@ pub(in crate::business) fn project(
     next: &mut State,
     input: GraphInput<'_>,
 ) -> Result<CopiedGraph> {
-    let GraphInput { source_repo, target, source, entry: old_entry, context,
-        target_path, route, principal, scope, aggregate_ids } = input;
+    let GraphInput {
+        source_repo,
+        target,
+        source,
+        entry: old_entry,
+        context,
+        target_path,
+        route,
+        principal,
+        scope,
+        aggregate_ids,
+    } = input;
     let operation = scope.operation;
     let commits = if aggregate_ids.is_none() {
-        previous.commits.values()
+        previous
+            .commits
+            .values()
             .filter(|commit| commit.history_tree_id == source_repo.history_tree_id)
             .collect::<Vec<_>>()
-    } else { Vec::new() };
+    } else {
+        Vec::new()
+    };
     let links = previous
         .merge_links
         .values()
@@ -116,9 +130,10 @@ pub(in crate::business) fn project(
             .collect::<Result<Vec<_>>>()
     };
     let file = mapped(&source.file)?;
-    if source.versions.iter().any(|id| {
-        ids.get(id).is_some_and(|id| next.versions.contains_key(id))
-    })
+    if source
+        .versions
+        .iter()
+        .any(|id| ids.get(id).is_some_and(|id| next.versions.contains_key(id)))
         || next.file_names.contains_key(&file)
     {
         return Err(invalid());
@@ -330,8 +345,9 @@ pub(in crate::business) fn project(
         next.file_notes.insert(file.clone(), note.clone());
     }
     if let Some(origin) = previous.file_write_origins.get(&source.file) {
-        if let Some(mapped_origin) = ids.get(origin).filter(|id|id.starts_with("dbr_")) {
-            next.file_write_origins.insert(file.clone(), mapped_origin.clone());
+        if let Some(mapped_origin) = ids.get(origin).filter(|id| id.starts_with("dbr_")) {
+            next.file_write_origins
+                .insert(file.clone(), mapped_origin.clone());
         }
     }
     if let Some(generation) = previous.file_selection_generations.get(&source.file) {
@@ -339,7 +355,11 @@ pub(in crate::business) fn project(
             .insert(file.clone(), *generation);
     }
     let selected = mapped(&context.branch_id)?;
-    if next.branches.get(&selected).is_some_and(|branch| branch.file_id.as_deref()==Some(file.as_str())) {
+    if next
+        .branches
+        .get(&selected)
+        .is_some_and(|branch| branch.file_id.as_deref() == Some(file.as_str()))
+    {
         next.file_selections.insert(file.clone(), selected.clone());
     }
     next.file_names.insert(
@@ -361,8 +381,12 @@ pub(in crate::business) fn project(
     let mut copied_context = context.clone();
     copied_context.branch_id = selected.clone();
     copied_context.node_id = context.node_id.as_deref().map(mapped).transpose()?;
-    copied_context.inherited_from = context.inherited_from.as_ref().and_then(|id| ids.get(id))
-        .filter(|id|id.starts_with("dbr_")).cloned();
+    copied_context.inherited_from = context
+        .inherited_from
+        .as_ref()
+        .and_then(|id| ids.get(id))
+        .filter(|id| id.starts_with("dbr_"))
+        .cloned();
     // The current occurrence has a new destination path. Historic paths remain
     // immutable, with an explicit new path node continuing the copied head.
     if aggregate_ids.is_none() && old_entry.path() != target_path.as_str() {
@@ -396,5 +420,8 @@ pub(in crate::business) fn project(
             copied_context.clone(),
         );
     }
-    Ok(CopiedGraph { entry, context: copied_context })
+    Ok(CopiedGraph {
+        entry,
+        context: copied_context,
+    })
 }

@@ -19,7 +19,7 @@ pub(crate) fn verify(
     next: &State,
     current: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<()> {
-    if crate::business::object_move::verify_publication(previous,next,current)? {
+    if crate::business::object_move::verify_publication(previous, next, current)? {
         return Ok(());
     }
     if super::directory::verify_publication(previous, next, current)? {
@@ -409,4 +409,3 @@ fn verify_shape(previous: &State, next: &State, receipt: &OperationResult) -> Re
     }
     Ok(())
 }
-

@@ -124,7 +124,10 @@ fn deletion_list_tracks_current_mounts_after_parent_and_whole_owner_moves() {
     assert_eq!(relocated.entries[0].directory_id, hidden.entry_id);
     assert_eq!(relocated.entries[0].deletion_node_id, original.node_id);
     assert_eq!(relocated.entries[0].operation_id, original.operation_id);
-    assert_eq!(relocated.entries[0].path.as_str(), "project/relocated/hidden");
+    assert_eq!(
+        relocated.entries[0].path.as_str(),
+        "project/relocated/hidden"
+    );
     assert!(relocated.next_after.is_none());
     let (target_owner, imported) = {
         let mut engine = backend.engine.lock().unwrap();

@@ -249,10 +249,16 @@ impl Engine {
         if let Some(selected) = &self.move_completion {
             // A selector may be retained before the first PREPARE. Keep an
             // in-memory cursor to its exact stored candidate, not a fake frame.
-            records.entry(selected.sequence()).or_default()
-                .entry(selected.candidate_hash().to_owned()).or_default();
-            self.next_slot = self.next_slot.max(selected.sequence().checked_add(1)
-                .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "selected move sequence exhausted"))?);
+            records
+                .entry(selected.sequence())
+                .or_default()
+                .entry(selected.candidate_hash().to_owned())
+                .or_default();
+            self.next_slot = self
+                .next_slot
+                .max(selected.sequence().checked_add(1).ok_or_else(|| {
+                    Error::new(ErrorCode::ResourceLimit, "selected move sequence exhausted")
+                })?);
         }
         let journaled = records
             .values()
@@ -297,9 +303,15 @@ impl Engine {
     ) -> Result<()> {
         let move_retained = self.move_is_retained();
         if let Some(selected) = &self.move_completion {
-            if prepared.records.keys().any(|sequence| *sequence > selected.sequence()) {
-                return Err(Error::new(ErrorCode::RecoveryRequired,
-                    "journal extends beyond the retained complete move candidate"));
+            if prepared
+                .records
+                .keys()
+                .any(|sequence| *sequence > selected.sequence())
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "journal extends beyond the retained complete move candidate",
+                ));
             }
         }
         if let Some(choice) = &self.history_move_choice {
@@ -372,9 +384,9 @@ impl Engine {
             let active = records
                 .into_iter()
                 .filter(|(hash, rs)| {
-                    self.move_completion.as_ref().is_some_and(|selected|
-                        selected.sequence() == sequence && selected.candidate_hash() == hash)
-                    || rs.iter().any(|receipt| {
+                    self.move_completion.as_ref().is_some_and(|selected| {
+                        selected.sequence() == sequence && selected.candidate_hash() == hash
+                    }) || rs.iter().any(|receipt| {
                         matches!(
                             receipt.record.record_type,
                             RecordType::Accept | RecordType::Publication
@@ -419,12 +431,14 @@ impl Engine {
                         source,
                     });
             }
-            if publication.as_ref().is_some_and(|published|
-                published.result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND)
-                && !self.move_completion.as_ref().is_some_and(|selected|
-                    selected.sequence() == candidate.sequence && selected.candidate_hash() == hash)
-            {
-                super::move_execution::CompletionBinding::require_completed(self, &candidate, &hash)?;
+            if publication.as_ref().is_some_and(|published| {
+                published.result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND
+            }) && !self.move_completion.as_ref().is_some_and(|selected| {
+                selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
+            }) {
+                super::move_execution::CompletionBinding::require_completed(
+                    self, &candidate, &hash,
+                )?;
             }
             if let Some(checkpoint) = checkpoint
                 .as_ref()
@@ -517,10 +531,14 @@ impl Engine {
             if self.current_namespaces.is_some() {
                 self.verify_current_recovery_candidate(&candidate, next)?;
             }
-            if self.move_completion.as_ref().is_some_and(|selected|
-                selected.sequence() == candidate.sequence && selected.candidate_hash() == hash)
-                && next.operations.get(&candidate.operation_id).is_some_and(|receipt|
-                    receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND)
+            if self.move_completion.as_ref().is_some_and(|selected| {
+                selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
+            }) && next
+                .operations
+                .get(&candidate.operation_id)
+                .is_some_and(|receipt| {
+                    receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND
+                })
             {
                 if !members_ready || mode == RecoveryMode::PreservePending {
                     self.blocked = true;
@@ -528,19 +546,24 @@ impl Engine {
                 }
                 self.recover_selected_object_move(candidate, hash, next, publication)?;
                 for disk in &online {
-                    let history = scanned_journals.get_mut(&disk.disk_id)
+                    let history = scanned_journals
+                        .get_mut(&disk.disk_id)
                         .expect("invariant: scanned original move member");
                     retain_replayed_records(history, self.journals[&disk.disk_id].records());
                 }
                 continue;
             }
-            if self.move_completion.as_ref().is_some_and(|selected|
-                selected.sequence() == candidate.sequence && selected.candidate_hash() == hash)
-                && !self.history_move_choice.as_ref().is_some_and(|choice|
-                    choice.decision_slot() == candidate.sequence)
+            if self.move_completion.as_ref().is_some_and(|selected| {
+                selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
+            }) && !self
+                .history_move_choice
+                .as_ref()
+                .is_some_and(|choice| choice.decision_slot() == candidate.sequence)
             {
-                return Err(Error::new(ErrorCode::RecoveryRequired,
-                    "retained file move lost its original business selection; preserve the candidate and both ends"));
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "retained file move lost its original business selection; preserve the candidate and both ends",
+                ));
             }
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;

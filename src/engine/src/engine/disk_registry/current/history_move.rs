@@ -14,29 +14,31 @@ fn invalid() -> Error {
 
 fn receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
     let mut found = None;
-    let mut inspect =
-        |id: &OperationId| -> Result<()> {
-            let before = previous.operations.get(id);
-            let after = next.operations.get(id);
-            if before == after {
-                return Ok(());
+    let mut inspect = |id: &OperationId| -> Result<()> {
+        let before = previous.operations.get(id);
+        let after = next.operations.get(id);
+        if before == after {
+            return Ok(());
+        }
+        if before.into_iter().chain(after).any(|op| {
+            matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
+                || op.result.get("move_request").is_some()
+                || op.result.get("movement").is_some()
+        }) {
+            let current = after.ok_or_else(invalid)?;
+            if before.is_some()
+                || current.operation_id != *id
+                || !matches!(
+                    current.kind.as_str(),
+                    FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND
+                )
+                || found.replace(current).is_some()
+            {
+                return Err(invalid());
             }
-            if before.into_iter().chain(after).any(|op| {
-                matches!(op.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
-                    || op.result.get("move_request").is_some()
-                    || op.result.get("movement").is_some()
-            }) {
-                let current = after.ok_or_else(invalid)?;
-                if before.is_some()
-                    || current.operation_id != *id
-                    || !matches!(current.kind.as_str(), FILE_HISTORY_MOVE_KIND | OBJECT_MOVE_KIND)
-                    || found.replace(current).is_some()
-                {
-                    return Err(invalid());
-                }
-            }
-            Ok(())
-        };
+        }
+        Ok(())
+    };
     match next.operations.changes_since(&previous.operations) {
         storage_contract::MapChanges::Keys(keys) => {
             for id in keys.iter() {
@@ -111,18 +113,25 @@ impl CurrentNamespaces {
             .filter(|(id, branch)| previous.branches.get(*id) != Some(*branch))
         {
             let entries = &next.commits[&branch.head_commit_id].entries;
-            let old = self.branches.get(id).filter(|_| op.kind == OBJECT_MOVE_KIND);
+            let old = self
+                .branches
+                .get(id)
+                .filter(|_| op.kind == OBJECT_MOVE_KIND);
             Arc::make_mut(&mut view.branches).insert(
                 id.clone(),
                 Arc::new(CurrentScope {
                     head: branch.head_commit_id.clone(),
                     entries: Arc::new(entries.clone()),
-                    source_head: old.map(|scope| scope.source_head.clone())
+                    source_head: old
+                        .map(|scope| scope.source_head.clone())
                         .unwrap_or_else(|| branch.head_commit_id.clone()),
-                    source_entries: old.map(|scope| Arc::clone(&scope.source_entries))
+                    source_entries: old
+                        .map(|scope| Arc::clone(&scope.source_entries))
                         .unwrap_or_else(|| Arc::new(entries.clone())),
                     writable: old.map(|scope| scope.writable).unwrap_or(true),
-                    hidden_paths: old.map(|scope| scope.hidden_paths.clone()).unwrap_or_default(),
+                    hidden_paths: old
+                        .map(|scope| scope.hidden_paths.clone())
+                        .unwrap_or_default(),
                 }),
             );
         }
@@ -131,9 +140,17 @@ impl CurrentNamespaces {
             // retained branch, including nonselected nested repository branches.
             // Do not reclassify those branches as newly-created current forks.
             for (id, branch) in super::changed_directory_branches(previous, next) {
-                if previous.directory_branches.get(id) == Some(branch) { continue; }
-                let repository = next.repositories.get(&branch.repository_id).ok_or_else(invalid)?;
-                let owner = view.branches.get(&repository.main_branch_id).ok_or_else(invalid)?;
+                if previous.directory_branches.get(id) == Some(branch) {
+                    continue;
+                }
+                let repository = next
+                    .repositories
+                    .get(&branch.repository_id)
+                    .ok_or_else(invalid)?;
+                let owner = view
+                    .branches
+                    .get(&repository.main_branch_id)
+                    .ok_or_else(invalid)?;
                 let scope = self.project_directory_scope(branch, owner);
                 Arc::make_mut(&mut view.directories).insert(id.clone(), scope);
             }
@@ -159,9 +176,17 @@ impl CurrentNamespaces {
             return Err(invalid());
         }
         let versions: Vec<&json_codec::Value> = if op.kind == OBJECT_MOVE_KIND {
-            op.result["version_mapping"].as_object().ok_or_else(invalid)?.values().collect()
+            op.result["version_mapping"]
+                .as_object()
+                .ok_or_else(invalid)?
+                .values()
+                .collect()
         } else {
-            op.result["version_ids"].as_array().ok_or_else(invalid)?.iter().collect()
+            op.result["version_ids"]
+                .as_array()
+                .ok_or_else(invalid)?
+                .iter()
+                .collect()
         };
         if versions.len() != candidate.versions.len() {
             return Err(invalid());

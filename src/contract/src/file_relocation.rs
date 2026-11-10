@@ -46,9 +46,7 @@ fn required_target_entry<'de, D: Deserializer<'de>>(
     Option::<NamespaceEntryId>::deserialize(decoder)
 }
 
-fn required_file<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<HistoryFileId>, D::Error> {
+fn required_file<'de, D: Deserializer<'de>>(decoder: D) -> Result<Option<HistoryFileId>, D::Error> {
     Option::<HistoryFileId>::deserialize(decoder)
 }
 
@@ -71,9 +69,12 @@ impl ObjectMoveRequest {
 
     /// Use the same domain request digest as Engine::native_request_digest.
     pub fn digest(&self, principal: &str) -> crate::Result<String> {
-        crate::object_hash("request", &json_codec::json!({
-            "kind": OBJECT_MOVE_KIND, "principal": principal, "body": self,
-        }))
+        crate::object_hash(
+            "request",
+            &json_codec::json!({
+                "kind": OBJECT_MOVE_KIND, "principal": principal, "body": self,
+            }),
+        )
     }
 
     /// Match original publication facts, never today's source path or owner.
@@ -82,14 +83,18 @@ impl ObjectMoveRequest {
         let Ok(digest) = self.digest(principal) else {
             return false;
         };
-        let Ok(fact) = json_codec::from_value::<ObjectMoveFact>(receipt["result"]["movement"].clone()) else {
+        let Ok(fact) =
+            json_codec::from_value::<ObjectMoveFact>(receipt["result"]["movement"].clone())
+        else {
             return false;
         };
         receipt["operation_kind"] == OBJECT_MOVE_KIND
             && receipt["request_digest"] == digest
             && fact.request == *self
             && fact.principal == principal
-            && self.target_repository_id.as_ref()
+            && self
+                .target_repository_id
+                .as_ref()
                 .is_none_or(|repository| repository == &fact.target_repository_id)
     }
 }

@@ -59,7 +59,9 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
         assert_eq!(entry.entry_id, outside.entry_id);
         assert_eq!(entry.file_id, outside.file_id);
     }
-    let contents = inside.each_ref().map(|(entry, _)| pool.bytes(&entry.version_id));
+    let contents = inside
+        .each_ref()
+        .map(|(entry, _)| pool.bytes(&entry.version_id));
     assert_ne!(inside[0].0.version_id, inside[1].0.version_id);
     assert_ne!(inside[0].1.branch_id, inside[1].1.branch_id);
     assert_ne!(inside[0].1.branch_id, outside_context.branch_id);
@@ -98,7 +100,10 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
             .file_context(&pool.repo.repository_id, path)
             .unwrap()
     });
-    for (index, path) in ["moved/report.txt", "moved/second.txt"].into_iter().enumerate() {
+    for (index, path) in ["moved/report.txt", "moved/second.txt"]
+        .into_iter()
+        .enumerate()
+    {
         let moved = pool.current_entry(path);
         let (original, original_context) = &inside[index];
         assert_eq!(moved.entry_id, original.entry_id);
@@ -149,7 +154,10 @@ fn moving_non_owner_alias_keeps_the_outside_physical_owner() {
         )
         .unwrap();
 
-    assert_eq!(pool.current_entry("moved/report.txt").file_id, original.file_id);
+    assert_eq!(
+        pool.current_entry("moved/report.txt").file_id,
+        original.file_id
+    );
     assert_eq!(pool.current_entry("b/report.txt").file_id, original.file_id);
     assert_eq!(pool.engine.state().file_locations[&original.file_id], owner);
 }
@@ -164,9 +172,13 @@ fn cross_parent_alias_move_rejects_conflicting_physical_outcomes_atomically() {
         storage_contract::DirectoryBatchKind::Move,
         vec![pool.mapping(&frozen, "a/report.txt", &selected, "a/second.txt")],
     );
-    let entries = ["a/report.txt", "a/second.txt", "b/report.txt"]
-        .map(|path| pool.current_entry(path));
-    assert!(entries.iter().all(|entry| entry.file_id == original.file_id));
+    let entries =
+        ["a/report.txt", "a/second.txt", "b/report.txt"].map(|path| pool.current_entry(path));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.file_id == original.file_id)
+    );
     let owner = pool.engine.state().file_locations[&original.file_id].clone();
     let directory = pool.current_entry("a");
     let request = ObjectMoveRequest {
@@ -188,7 +200,10 @@ fn cross_parent_alias_move_rejects_conflicting_physical_outcomes_atomically() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
-    assert_eq!(error.code(), storage_contract::ErrorCode::BatchMappingConflict);
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::BatchMappingConflict
+    );
     assert_eq!(pool.engine.state(), &before);
     assert_eq!(pool.current_entry("a"), directory);
     for entry in entries {

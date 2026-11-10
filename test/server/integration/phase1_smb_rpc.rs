@@ -551,8 +551,14 @@ fn public_smb_bridge_read_only_create_existing_keeps_pinned_content_without_a_wr
     drop(client);
     let (root, engine) = fixture.cold_open();
     assert_eq!(engine.file_history(&before.file_id).unwrap().len(), 2);
-    assert_eq!(exported(&engine, root.path(), &before.version_id), b"before");
-    assert_eq!(exported(&engine, root.path(), &current.version_id), b"after");
+    assert_eq!(
+        exported(&engine, root.path(), &before.version_id),
+        b"before"
+    );
+    assert_eq!(
+        exported(&engine, root.path(), &current.version_id),
+        b"after"
+    );
 }
 
 #[path = "phase1_smb_rpc/http_soft_deletion.rs"]

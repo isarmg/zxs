@@ -172,4 +172,3 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
     }
     Ok(events.into_values().collect())
 }
-

@@ -31,9 +31,9 @@ impl Engine {
         let mut published = None;
         for (sequence, candidates) in &prepared.records {
             let mut active = candidates.iter().filter(|(hash, receipts)| {
-                self.move_completion.as_ref().is_some_and(|selected|
-                    selected.sequence() == *sequence && selected.candidate_hash() == hash.as_str())
-                || receipts.iter().any(|receipt| {
+                self.move_completion.as_ref().is_some_and(|selected| {
+                    selected.sequence() == *sequence && selected.candidate_hash() == hash.as_str()
+                }) || receipts.iter().any(|receipt| {
                     matches!(
                         receipt.record.record_type,
                         RecordType::Accept | RecordType::Publication
@@ -60,9 +60,9 @@ impl Engine {
                     namespaces: namespaces.as_ref(),
                 },
             )?;
-            if self.move_completion.as_ref().is_some_and(|selected|
-                selected.sequence() == *sequence && selected.candidate_hash() == hash)
-            {
+            if self.move_completion.as_ref().is_some_and(|selected| {
+                selected.sequence() == *sequence && selected.candidate_hash() == hash
+            }) {
                 // Publication alone is not the move serving-scope barrier.
                 // Keep the original predecessor for workspace admission.
                 prepared.candidates.insert(*sequence, candidate);
@@ -91,11 +91,13 @@ impl Engine {
                     break;
                 }
             };
-            if candidate.publication.as_ref().is_some_and(|publication|
-                publication.result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND)
-            {
+            if candidate.publication.as_ref().is_some_and(|publication| {
+                publication.result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND
+            }) {
                 super::super::move_execution::CompletionBinding::require_completed(
-                    self, &candidate.candidate, hash,
+                    self,
+                    &candidate.candidate,
+                    hash,
                 )?;
             }
             if candidate.candidate.registry().is_some()

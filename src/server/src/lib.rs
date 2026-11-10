@@ -1771,7 +1771,8 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         command: crate::MoveCurrentObject,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.backend.move_current_object(&self.current(identity)?, command)
+        self.backend
+            .move_current_object(&self.current(identity)?, command)
     }
     fn replace_current_file(
         &self,

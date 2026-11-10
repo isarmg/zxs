@@ -7,8 +7,8 @@ use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
 mod files;
-mod move_receipts;
 pub(crate) mod lifecycles;
+mod move_receipts;
 pub(crate) use files::FileRows;
 
 // One schema drives State coverage, row lookup, membership, and graph field names.

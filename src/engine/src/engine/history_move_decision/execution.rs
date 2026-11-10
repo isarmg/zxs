@@ -2,8 +2,8 @@
 //! New path-facing file requests use the unified current-object planner.
 use super::*;
 use crate::business::NativeMoveCandidate;
-use crate::journal::{Candidate, Publication};
 use crate::engine::move_execution::PublishedMove;
+use crate::journal::{Candidate, Publication};
 use storage_contract::{file_relocation::NamespaceEntryId, history_window::HistoryFileId};
 
 mod archive;
@@ -27,13 +27,18 @@ pub struct CapturedFileMoveSource {
 
 impl CapturedFileMoveSource {
     fn matches(&self, state: &State, original: &FileHistoryCopyRequest) -> Result<bool> {
-        let commit = state.commits.get(&original.expected_source_head)
+        let commit = state
+            .commits
+            .get(&original.expected_source_head)
             .ok_or_else(|| invalid("move original source namespace is missing"))?;
         let path = name_policy::LookupPath::parse(&original.source_path)?;
-        Ok(crate::business::find_unordered_key(&commit.entries, path.key())
-            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File
-                && entry.entry_id == self.entry_id.as_str()
-                && entry.file_id == self.file_id.as_str()))
+        Ok(
+            crate::business::find_unordered_key(&commit.entries, path.key()).is_some_and(|entry| {
+                entry.kind == NamespaceEntryKind::File
+                    && entry.entry_id == self.entry_id.as_str()
+                    && entry.file_id == self.file_id.as_str()
+            }),
+        )
     }
 }
 
@@ -54,9 +59,15 @@ impl FileHistoryMovePathRequest {
 }
 
 impl crate::engine::move_execution::MoveOutcome for NativeMoveCandidate {
-    fn state(&self) -> &State { self.state() }
-    fn result(&self) -> &OperationResult { self.result() }
-    fn into_state(self) -> State { self.into_state() }
+    fn state(&self) -> &State {
+        self.state()
+    }
+    fn result(&self) -> &OperationResult {
+        self.result()
+    }
+    fn into_state(self) -> State {
+        self.into_state()
+    }
 }
 
 struct OriginalFileSelection;
@@ -69,8 +80,11 @@ impl crate::engine::move_execution::MoveSelection<NativeMoveCandidate> for Origi
         Ok(())
     }
     fn mark_decided(&self, engine: &mut Engine) {
-        engine.history_move_prepare.as_mut()
-            .expect("invariant: every move starts with its PREPARE").mark_decided();
+        engine
+            .history_move_prepare
+            .as_mut()
+            .expect("invariant: every move starts with its PREPARE")
+            .mark_decided();
     }
     fn retire(&self, engine: &mut Engine, published: &PublishedMove) -> Result<()> {
         archive::retire(engine, published)
@@ -177,7 +191,13 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<Option<OperationResult>> {
-        self.resume_file_move_path_if_original(request, Some(source), replacement, principal, operation)
+        self.resume_file_move_path_if_original(
+            request,
+            Some(source),
+            replacement,
+            principal,
+            operation,
+        )
     }
 
     pub(in crate::engine) fn resume_file_move_path_if_original(
@@ -190,10 +210,13 @@ impl Engine {
     ) -> Result<Option<OperationResult>> {
         let selected = match self.state.operations.get(&operation) {
             Some(original) => original.kind == crate::business::FILE_HISTORY_MOVE_KIND,
-            None => self.original_move_path_intent(request, replacement, principal, operation)?.is_some(),
+            None => self
+                .original_move_path_intent(request, replacement, principal, operation)?
+                .is_some(),
         };
         if selected {
-            self.move_current_file_target(request, source, replacement, principal, operation).map(Some)
+            self.move_current_file_target(request, source, replacement, principal, operation)
+                .map(Some)
         } else {
             Ok(None)
         }
@@ -210,11 +233,24 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         Self::require_actor(principal)?;
-        let root = self.state.operations.get(&root_operation).ok_or_else(conflict)?;
-        if root_operation == operation || root.kind != "repository.create"
-            || self.state.operation_principals.get(&root_operation).map(String::as_str) != Some(principal)
-        { return Err(conflict()); }
-        let created: Repository = json_codec::from_value(root.result["created_repository"].clone())?;
+        let root = self
+            .state
+            .operations
+            .get(&root_operation)
+            .ok_or_else(conflict)?;
+        if root_operation == operation
+            || root.kind != "repository.create"
+            || self
+                .state
+                .operation_principals
+                .get(&root_operation)
+                .map(String::as_str)
+                != Some(principal)
+        {
+            return Err(conflict());
+        }
+        let created: Repository =
+            json_codec::from_value(root.result["created_repository"].clone())?;
         if !created.file_manager_root || created.repository_id != request.target_repository_id {
             return Err(conflict());
         }
@@ -248,7 +284,9 @@ impl Engine {
                 return Err(conflict());
             }
             if let Some(source) = captured_source {
-                if !source.matches(&self.state, &namespace)? { return Err(conflict()); }
+                if !source.matches(&self.state, &namespace)? {
+                    return Err(conflict());
+                }
             }
             return Ok(original.clone());
         }
@@ -289,8 +327,10 @@ impl Engine {
             if source.file_id != *projection.capture().source_file_id()
                 || !source.matches(&self.state, projection.capture().namespace())?
             {
-                return Err(Error::new(ErrorCode::WorkspaceChanged,
-                    "move source differs from the originally captured entry and file"));
+                return Err(Error::new(
+                    ErrorCode::WorkspaceChanged,
+                    "move source differs from the originally captured entry and file",
+                ));
             }
         }
         let original = self.save_file_history_move_recovery(&projection, &cancellation)?;
@@ -396,8 +436,19 @@ impl Engine {
         decided: bool,
     ) -> Result<OperationResult> {
         let projection_state = crate::engine::publication::MoveProjection::admit(self, outcome)?;
-        self.finish_move(candidate, hash, projection_state,
-            projection.capture().retained_version_ids().cloned().collect(),
-            existing, decided, None, OriginalFileSelection)
+        self.finish_move(
+            candidate,
+            hash,
+            projection_state,
+            projection
+                .capture()
+                .retained_version_ids()
+                .cloned()
+                .collect(),
+            existing,
+            decided,
+            None,
+            OriginalFileSelection,
+        )
     }
 }

@@ -499,4 +499,3 @@ pub(crate) fn select_entry(state: RwSignal<State>, entry: Entry) {
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/actions/browse/tests.rs"]
 mod tests;
-

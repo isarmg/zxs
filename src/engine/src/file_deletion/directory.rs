@@ -16,10 +16,12 @@ use storage_contract::directory_git::{
 mod freeze;
 mod proof;
 mod source;
-pub(crate) use source::{retained_entries, mounted_entries};
+pub(crate) use source::{mounted_entries, retained_entries};
 pub(crate) mod visibility;
 pub(crate) use freeze::verify as verify_frozen;
-pub(crate) use proof::{admit, admit_original, node_for, shape as admit_node_shape, verify_publication};
+pub(crate) use proof::{
+    admit, admit_original, node_for, shape as admit_node_shape, verify_publication,
+};
 
 pub(crate) const DELETE: &str = "directory.delete";
 pub(crate) const UNDO: &str = "directory.delete.undo";
@@ -253,7 +255,7 @@ fn apply_undo(
         .operations
         .get(&node.operation_id)
         .ok_or_else(invalid)?;
-    let admitted = proof::admit_original(previous,original,node)?;
+    let admitted = proof::admit_original(previous, original, node)?;
     if admitted.undo || admitted.node != *node {
         return Err(invalid());
     }

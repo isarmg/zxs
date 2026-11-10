@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) const KIND: &str = "file.history.copy";
 pub(crate) const RETAINED_KIND: &str = "file.history.copy.retained";
 pub(crate) const DIRECTORY_EXPORT_KIND: &str = "file.directory.export";
-pub(crate) mod retained;
 pub(in crate::business) mod graph;
+pub(crate) mod retained;
 pub(crate) fn is_kind(kind: &str) -> bool {
     matches!(kind, KIND | RETAINED_KIND | DIRECTORY_EXPORT_KIND)
 }
@@ -485,10 +485,21 @@ pub(in crate::business) fn apply_scoped(
     let context = &previous.file_contexts
         [&directory::context_key_from_key(&source_repo.repository_id, old_entry.lookup_key())];
     let graph = graph::project(
-        previous, next, graph::GraphInput {
-            source_repo, target, source: &source, entry: old_entry, context,
+        previous,
+        next,
+        graph::GraphInput {
+            source_repo,
+            target,
+            source: &source,
+            entry: old_entry,
+            context,
             target_path: &name_policy::PortablePath::parse(&request.target_name)?,
-            route, principal, scope: graph::IdentityScope { operation, member: None },
+            route,
+            principal,
+            scope: graph::IdentityScope {
+                operation,
+                member: None,
+            },
             aggregate_ids: None,
         },
     )?;

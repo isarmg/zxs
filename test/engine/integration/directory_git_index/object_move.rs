@@ -297,7 +297,10 @@ fn unborn_empty_repository_moves_before_its_first_user_commit() {
     let working = status(&engine, &target, "moved");
     assert!(!working.staged && working.unstaged);
     assert_eq!(working.head_tree_id.as_deref(), Some(empty_head.as_str()));
-    assert_eq!(bytes(&engine, &target, "moved/first"), b"first saved contents");
+    assert_eq!(
+        bytes(&engine, &target, "moved/first"),
+        b"first saved contents"
+    );
     stage_owned(&mut engine, &target, "moved");
     let reviewed = status(&engine, &target, "moved");
     assert!(reviewed.staged && !reviewed.unstaged);
@@ -329,7 +332,12 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
     for route in [Route::SameDisk, Route::ExistingDisk, Route::EmptyDisk] {
         let (_temp, mut engine, source, destination) = fixture_for(route);
         save(&mut engine, &source, "project/owned", b"committed parent");
-        save(&mut engine, &source, "project/child/file", b"committed child");
+        save(
+            &mut engine,
+            &source,
+            "project/child/file",
+            b"committed child",
+        );
         initialize(&mut engine, &source, "project/child");
         commit(&mut engine, &source, "project/child");
         initialize(&mut engine, &source, "project");
@@ -356,7 +364,12 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         // These are real saves after the user commit, not staged fixture edits.
         save(&mut engine, &source, "project/owned", b"saved parent");
         save(&mut engine, &source, "project/child/file", b"saved child");
-        save(&mut engine, &source, "project/added", b"never user committed");
+        save(
+            &mut engine,
+            &source,
+            "project/added",
+            b"never user committed",
+        );
         let added = entry(&engine, &source, "project/added");
         let context = engine
             .file_context(&source.repository_id, "project/added")
@@ -408,7 +421,10 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
         assert_eq!(after.children.len(), 1);
         assert_eq!(after.children[0].directory_id, child_after.directory_id);
         assert!(after.children[0].dirty && !after.children[0].reference_changed);
-        assert_eq!(after.children[0].committed_tree_id, child_after.head_tree_id);
+        assert_eq!(
+            after.children[0].committed_tree_id,
+            child_after.head_tree_id
+        );
         assert_eq!(
             snapshot_files(&engine, after.head_tree_id.as_deref().unwrap()),
             committed
@@ -574,13 +590,20 @@ fn same_disk_move_refreshes_both_parent_workspaces_without_committing_either() {
     let parents = ["a", "b"].map(|path| {
         let status = status(&engine, &source, path);
         let git = &engine.state().directory_git_repositories[&status.directory_id];
-        (path, status.directory_id, git.branches[&git.main_branch_id].clone())
+        (
+            path,
+            status.directory_id,
+            git.branches[&git.main_branch_id].clone(),
+        )
     });
 
     move_to(&mut engine, &source, &destination, "a/empty", "b/moved");
     for (path, directory, original_index) in &parents {
         let moved = status(&engine, &source, path);
-        assert!(!moved.staged && moved.unstaged && !moved.needs_restage, "{path}");
+        assert!(
+            !moved.staged && moved.unstaged && !moved.needs_restage,
+            "{path}"
+        );
         let git = &engine.state().directory_git_repositories[directory];
         assert_eq!(&git.branches[&git.main_branch_id], original_index);
     }
@@ -600,7 +623,11 @@ fn same_disk_move_refreshes_both_parent_workspaces_without_committing_either() {
         engine.state().directory_trees[&source_head].entries[0].path(),
         "a/empty"
     );
-    assert!(engine.state().directory_trees[&target_head].entries.is_empty());
+    assert!(
+        engine.state().directory_trees[&target_head]
+            .entries
+            .is_empty()
+    );
 
     let removed = commit(&mut engine, &source, "a");
     assert!(engine.state().directory_trees[&removed].entries.is_empty());

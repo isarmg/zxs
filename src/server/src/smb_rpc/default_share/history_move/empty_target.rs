@@ -7,11 +7,7 @@ pub(super) const FORMAT: &str = "smb-file-history-move-empty-target";
 pub(super) const REPLACE_FORMAT: &str = "smb-file-history-move-empty-target-replace";
 
 fn intent_format(replace: bool) -> &'static str {
-    if replace {
-        REPLACE_FORMAT
-    } else {
-        FORMAT
-    }
+    if replace { REPLACE_FORMAT } else { FORMAT }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -186,10 +182,10 @@ impl DefaultShare {
             operation_id: operation,
         };
         let receipt = MoveReceipt::empty(&request)?;
-        let result = self.shared.backend.move_current_file_to_empty_disk(
-            &self.identity,
-            request,
-        )?;
+        let result = self
+            .shared
+            .backend
+            .move_current_file_to_empty_disk(&self.identity, request)?;
         let reply = receipt.published_reply(result, &self.identity.principal)?;
         admission.finish_published();
         Ok(reply)

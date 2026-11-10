@@ -133,7 +133,10 @@ impl<O: super::move_execution::MoveOutcome> MoveProjection<O> {
             None => {
                 if outcome.result().kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
                     crate::business::object_move::verify_transition(
-                        &engine.state, outcome.state(), None, outcome.result(),
+                        &engine.state,
+                        outcome.state(),
+                        None,
+                        outcome.result(),
                     )?;
                 }
                 None
@@ -158,14 +161,22 @@ impl<O: super::move_execution::MoveOutcome> MoveProjection<O> {
             _ => false,
         };
         if !std::sync::Arc::ptr_eq(&self.previous, &engine.state) || !same_current {
-            return Err(Error::new(ErrorCode::PreparationStale,
-                "move projection no longer extends its admitted State and Current"));
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "move projection no longer extends its admitted State and Current",
+            ));
         }
         if let Some(view) = &self.current
-            && !view.verify_history_move_candidate(&self.previous, self.outcome.state(), candidate)?
+            && !view.verify_history_move_candidate(
+                &self.previous,
+                self.outcome.state(),
+                candidate,
+            )?
         {
-            return Err(Error::new(ErrorCode::PreparationStale,
-                "move candidate has no exact Current transition"));
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "move candidate has no exact Current transition",
+            ));
         }
         Ok((self.outcome, self.next))
     }
@@ -176,9 +187,15 @@ struct ObjectMoveOutcome {
     operation: OperationId,
 }
 impl super::move_execution::MoveOutcome for ObjectMoveOutcome {
-    fn state(&self) -> &State { &self.state }
-    fn result(&self) -> &OperationResult { &self.state.operations[&self.operation] }
-    fn into_state(self) -> State { self.state }
+    fn state(&self) -> &State {
+        &self.state
+    }
+    fn result(&self) -> &OperationResult {
+        &self.state.operations[&self.operation]
+    }
+    fn into_state(self) -> State {
+        self.state
+    }
 }
 
 struct ObjectMoveProof {
@@ -199,52 +216,79 @@ struct ObjectMoveSelection {
 impl super::move_execution::MoveSelection<ObjectMoveOutcome> for ObjectMoveSelection {
     fn verify(&self, engine: &Engine, candidate: &Candidate, hash: &str) -> Result<()> {
         let expected_slot = if self.prepared || self.recovered {
-            candidate.sequence.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit,
-                "move decision sequence exhausted"))?
-        } else { self.next_slot };
-        if engine.snapshot != self.previous_snapshot || engine.state.sequence != self.previous_sequence
+            candidate.sequence.checked_add(1).ok_or_else(|| {
+                Error::new(ErrorCode::ResourceLimit, "move decision sequence exhausted")
+            })?
+        } else {
+            self.next_slot
+        };
+        if engine.snapshot != self.previous_snapshot
+            || engine.state.sequence != self.previous_sequence
             || candidate.previous_snapshot != self.previous_snapshot
-            || candidate.sequence != self.next_slot || engine.next_slot != expected_slot
+            || candidate.sequence != self.next_slot
+            || engine.next_slot != expected_slot
             || hash != self.candidate_hash
         {
-            return Err(Error::new(ErrorCode::PreparationStale,
-                "move journal selection no longer extends the original namespace"));
+            return Err(Error::new(
+                ErrorCode::PreparationStale,
+                "move journal selection no longer extends the original namespace",
+            ));
         }
         if let Some(proof) = &self.live {
             proof.verified.validate(&engine.config, candidate)?;
             if object_hash("publication-config", &engine.config)? != proof.config_hash
                 || !proof.prepared_epoch.matches(&engine.metadata_integrity)
-                || proof.reused_dependencies.as_ref().is_some_and(|reuse|
-                    !reuse.matches(&engine.planning_context(), &proof.config_hash))
+                || proof.reused_dependencies.as_ref().is_some_and(|reuse| {
+                    !reuse.matches(&engine.planning_context(), &proof.config_hash)
+                })
             {
-                return Err(Error::new(ErrorCode::PreparationStale,
-                    "move payload and metadata preparation authority changed"));
+                return Err(Error::new(
+                    ErrorCode::PreparationStale,
+                    "move payload and metadata preparation authority changed",
+                ));
             }
         }
         Ok(())
     }
 
     fn prepare(&mut self, engine: &mut Engine, candidate: &Candidate, hash: &str) -> Result<()> {
-        engine.next_slot = candidate.sequence.checked_add(1)
-            .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "move decision sequence exhausted"))?;
+        engine.next_slot = candidate.sequence.checked_add(1).ok_or_else(|| {
+            Error::new(ErrorCode::ResourceLimit, "move decision sequence exhausted")
+        })?;
         for disk in engine.members() {
             if self.recovered {
-                engine.append_recovered_journal(&disk, RecordType::Prepare,
-                    candidate.sequence, hash, &candidate.snapshot_hash)?;
+                engine.append_recovered_journal(
+                    &disk,
+                    RecordType::Prepare,
+                    candidate.sequence,
+                    hash,
+                    &candidate.snapshot_hash,
+                )?;
             } else {
-                engine.append_journal(&disk, RecordType::Prepare,
-                    candidate.sequence, hash, &candidate.snapshot_hash)?;
+                engine.append_journal(
+                    &disk,
+                    RecordType::Prepare,
+                    candidate.sequence,
+                    hash,
+                    &candidate.snapshot_hash,
+                )?;
             }
         }
         self.prepared = true;
-        super::provenance::validate_candidate_seals(&engine.config, &engine.disk_resources,
-            candidate, &engine.metadata_integrity)?;
+        super::provenance::validate_candidate_seals(
+            &engine.config,
+            &engine.disk_resources,
+            candidate,
+            &engine.metadata_integrity,
+        )?;
         if let Some(proof) = &mut self.live {
             if let Some(reuse) = proof.reused_dependencies.take() {
                 reuse.admit(&engine.planning_context(), &proof.config_hash)?;
             } else if !proof.prepared_epoch.matches(&engine.metadata_integrity) {
-                return Err(Error::new(ErrorCode::PreparationStale,
-                    "move metadata changed after complete dependency preparation"));
+                return Err(Error::new(
+                    ErrorCode::PreparationStale,
+                    "move metadata changed after complete dependency preparation",
+                ));
             }
         }
         Ok(())
@@ -252,8 +296,11 @@ impl super::move_execution::MoveSelection<ObjectMoveOutcome> for ObjectMoveSelec
     fn mark_decided(&self, _: &mut Engine) {
         // The common CompletionBinding and original PREPARE retain this choice.
     }
-    fn retire(&self, _: &mut Engine,
-        _: &super::move_execution::PublishedMove<ObjectMoveOutcome>) -> Result<()> {
+    fn retire(
+        &self,
+        _: &mut Engine,
+        _: &super::move_execution::PublishedMove<ObjectMoveOutcome>,
+    ) -> Result<()> {
         // No object-specific archive exists. finish_move retires the shared
         // binding only after all serving scopes and original history roots.
         Ok(())
@@ -328,57 +375,116 @@ impl Engine {
 
     /// Reuse ordinary payload/snapshot preparation, then enter the one strict
     /// move executor. Ordinary decide_publication must not expose this State.
-    pub(crate) fn publish_move(&mut self, plan: crate::business::object_move::MovePlan)
-        -> Result<OperationResult>
-    {
+    pub(crate) fn publish_move(
+        &mut self,
+        plan: crate::business::object_move::MovePlan,
+    ) -> Result<OperationResult> {
         let (next, prepared, result, retained) = plan.into_parts();
         let detached = self.prepare_publication(next, prepared, result, MAX_METADATA)?;
         self.require_detached_publication(&detached)?;
-        let DetachedPublication { next, next_current_namespaces, candidate, result, verified, names,
-            prepared_epoch, reused_dependencies, config_hash,
-            base_snapshot, base_sequence, base_next_slot, .. } = detached;
+        let DetachedPublication {
+            next,
+            next_current_namespaces,
+            candidate,
+            result,
+            verified,
+            names,
+            prepared_epoch,
+            reused_dependencies,
+            config_hash,
+            base_snapshot,
+            base_sequence,
+            base_next_slot,
+            ..
+        } = detached;
         let object = PreparedMetadataObject::new("candidate", &candidate, MAX_METADATA)?;
         // A retained selector must always be able to find this complete object.
         // Storing an unselected immutable candidate does not change visibility.
         object.store_at(&self.disk_resources, &self.members())?;
         let hash = object.hash.clone();
         let selection = ObjectMoveSelection {
-            previous_snapshot: base_snapshot, previous_sequence: base_sequence,
-            next_slot: base_next_slot, candidate_hash: hash.clone(),
-            recovered: false, prepared: false,
-            live: Some(ObjectMoveProof { verified, prepared_epoch,
-                reused_dependencies, config_hash }),
+            previous_snapshot: base_snapshot,
+            previous_sequence: base_sequence,
+            next_slot: base_next_slot,
+            candidate_hash: hash.clone(),
+            recovered: false,
+            prepared: false,
+            live: Some(ObjectMoveProof {
+                verified,
+                prepared_epoch,
+                reused_dependencies,
+                config_hash,
+            }),
         };
         let projection = MoveProjection {
-            outcome: ObjectMoveOutcome { state: next, operation: result.operation_id },
+            outcome: ObjectMoveOutcome {
+                state: next,
+                operation: result.operation_id,
+            },
             previous: std::sync::Arc::clone(&self.state),
             current: self.current_namespaces.clone(),
             next: next_current_namespaces,
         };
-        self.finish_move(candidate, hash, projection,
-            retained, None, false, Some(names), selection)
+        self.finish_move(
+            candidate,
+            hash,
+            projection,
+            retained,
+            None,
+            false,
+            Some(names),
+            selection,
+        )
     }
 
-    pub(in crate::engine) fn recover_selected_object_move(&mut self, candidate: Candidate,
-        hash: String, next: &State, existing: Option<Publication>) -> Result<OperationResult>
-    {
-        let binding = self.move_completion.as_ref()
-            .ok_or_else(|| Error::new(ErrorCode::RecoveryRequired,
-                "object move recovery lost its original completion binding"))?;
+    pub(in crate::engine) fn recover_selected_object_move(
+        &mut self,
+        candidate: Candidate,
+        hash: String,
+        next: &State,
+        existing: Option<Publication>,
+    ) -> Result<OperationResult> {
+        let binding = self.move_completion.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "object move recovery lost its original completion binding",
+            )
+        })?;
         binding.require_candidate(&candidate, &hash)?;
-        let receipt = next.operations.get(&candidate.operation_id)
-            .ok_or_else(|| Error::new(ErrorCode::PublicationInvalid, "object move result missing"))?;
+        let receipt = next
+            .operations
+            .get(&candidate.operation_id)
+            .ok_or_else(|| {
+                Error::new(ErrorCode::PublicationInvalid, "object move result missing")
+            })?;
         let body = crate::business::object_move::read_result(receipt)?;
         let selection = ObjectMoveSelection {
-            previous_snapshot: self.snapshot.clone(), previous_sequence: self.state.sequence,
-            next_slot: candidate.sequence, candidate_hash: hash.clone(),
-            recovered: true, prepared: false, live: None,
+            previous_snapshot: self.snapshot.clone(),
+            previous_sequence: self.state.sequence,
+            next_slot: candidate.sequence,
+            candidate_hash: hash.clone(),
+            recovered: true,
+            prepared: false,
+            live: None,
         };
         let operation = candidate.operation_id;
-        let projection = MoveProjection::admit(self,
-            ObjectMoveOutcome { state: next.clone(), operation })?;
-        self.finish_move(candidate, hash, projection,
-            body.retained_version_ids, existing, true, None, selection)
+        let projection = MoveProjection::admit(
+            self,
+            ObjectMoveOutcome {
+                state: next.clone(),
+                operation,
+            },
+        )?;
+        self.finish_move(
+            candidate,
+            hash,
+            projection,
+            body.retained_version_ids,
+            existing,
+            true,
+            None,
+            selection,
+        )
     }
 
     pub(crate) fn decide_publication(
@@ -561,15 +667,21 @@ impl Engine {
             if publication.recovery.is_some()
                 || next.operations.get(&candidate.operation_id) != Some(&publication.result)
             {
-                return Err(Error::new(ErrorCode::PublicationInvalid,
-                    "move publication differs from the selected original outcome"));
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "move publication differs from the selected original outcome",
+                ));
             }
             // An existing receipt does not discharge the selected move's
             // serving-scope closure. Install its exact names before resuming
             // the original publication; never recapture today's namespace.
             names.apply()?;
             return self.complete_candidate_verified(
-                candidate, hash, next, existing, Completion::Recovery,
+                candidate,
+                hash,
+                next,
+                existing,
+                Completion::Recovery,
             );
         }
         self.complete_candidate_verified(
@@ -1171,7 +1283,9 @@ impl crate::engine::PlanningContext<'_> {
             Some(view) => Some(std::sync::Arc::new(view.advance(self.state, &next)?)),
             None => {
                 if result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
-                    crate::business::object_move::verify_transition(self.state, &next, None, &result)?;
+                    crate::business::object_move::verify_transition(
+                        self.state, &next, None, &result,
+                    )?;
                 }
                 None
             }

@@ -20,8 +20,13 @@ fn open(state: RwSignal<State>, editor: Editor, path: String, cursor: Option<Str
     };
     spawn_local(async move {
         let result = target::folder_page(
-            &read.slot, &path, PAGE_SIZE, cursor.as_deref(), read.cancellation.clone(),
-        ).await;
+            &read.slot,
+            &path,
+            PAGE_SIZE,
+            cursor.as_deref(),
+            read.cancellation.clone(),
+        )
+        .await;
         if !accept_read_response(state, read.basis.epoch, &result) || !read.current(state, editor) {
             return;
         }
@@ -33,10 +38,15 @@ fn open(state: RwSignal<State>, editor: Editor, path: String, cursor: Option<Str
                 generation: read.generation,
                 slot: read.slot,
                 path,
-                folders: page.entries.into_iter().filter(|entry| {
-                    entry.kind() == storage_contract::NamespaceEntryKind::Directory
-                        && !entry.backup() && !entry.retained_history()
-                }).collect(),
+                folders: page
+                    .entries
+                    .into_iter()
+                    .filter(|entry| {
+                        entry.kind() == storage_contract::NamespaceEntryKind::Directory
+                            && !entry.backup()
+                            && !entry.retained_history()
+                    })
+                    .collect(),
                 next: page.next,
                 previous: page.previous,
                 writable: page.writable,
@@ -69,7 +79,11 @@ fn choose(state: RwSignal<State>, editor: Editor, generation: u64) {
         {
             return None;
         }
-        let name = listing.basis.display_path.rsplit('/').next()
+        let name = listing
+            .basis
+            .display_path
+            .rsplit('/')
+            .next()
             .expect("invariant: an admitted move source has a name");
         Some(super::super::model::join_path(&listing.path, name))
     });
@@ -89,12 +103,17 @@ fn page_view(state: RwSignal<State>, editor: Editor, listing: Listing) -> impl I
     let has_previous = listing.previous.is_some();
     let label = format!("{}/{}", listing.slot, listing.path);
     let at_root = listing.path.is_empty();
-    let parent = listing.path.rsplit_once('/').map_or("", |(parent, _)| parent).to_owned();
+    let parent = listing
+        .path
+        .rsplit_once('/')
+        .map_or("", |(parent, _)| parent)
+        .to_owned();
     let path = StoredValue::new(listing.path);
     let next = StoredValue::new(listing.next);
     let previous = StoredValue::new(listing.previous);
     let folders = StoredValue::new(listing.folders);
-    let disabled = Signal::derive(move || !state.with(actions::write_allowed) || editor.reading.get());
+    let disabled =
+        Signal::derive(move || !state.with(actions::write_allowed) || editor.reading.get());
     view! {
         <section class="zxs-frame zxs-stack" data-zxs-move-folder-picker="">
             <p class="zxs-row">{label}</p>

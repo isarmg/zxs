@@ -4,7 +4,7 @@ use crate::file_relocation::{
     NamespaceEntryId, OBJECT_MOVE_KIND, ObjectMoveFact, ObjectMoveRequest,
 };
 use crate::history_window::{HistoryFileId, HistoryRepositoryId};
-use json_codec::{json, Value};
+use json_codec::{Value, json};
 
 fn request(empty: bool) -> ObjectMoveRequest {
     ObjectMoveRequest {
@@ -161,7 +161,6 @@ fn request_digest_alone_cannot_substitute_another_fact_or_legacy_move_receipt() 
     wrong_digest["request_digest"] = original.digest("bob").unwrap().into();
     assert!(!original.matches_receipt("alice", &wrong_digest));
 }
-
 
 #[test]
 fn fact_retains_explicit_source_and_displaced_file_identities_for_core_replay() {

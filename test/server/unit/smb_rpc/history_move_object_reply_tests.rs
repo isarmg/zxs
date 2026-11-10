@@ -152,9 +152,16 @@ fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
     let expected = MoveReceipt::object(&command).unwrap();
     let mut missing_mapping = object_result(&expected);
     missing_mapping.protection_at_publish = ProtectionAtPublish::NotApplicable;
-    missing_mapping.result.as_object_mut().unwrap().remove("version_mapping");
+    missing_mapping
+        .result
+        .as_object_mut()
+        .unwrap()
+        .remove("version_mapping");
     assert_eq!(
-        expected.published_object_reply(missing_mapping, "alice").unwrap_err().code,
+        expected
+            .published_object_reply(missing_mapping, "alice")
+            .unwrap_err()
+            .code,
         storage_contract::ErrorCode::StateInvalid
     );
 
@@ -162,13 +169,19 @@ fn captured_directory_reply_requires_null_file_identity_and_the_object_kind() {
     let mut wrong_file = object_result(&expected);
     wrong_file.result["movement"]["source_file_id"] = id("file", 1).into();
     assert_eq!(
-        expected.published_object_reply(wrong_file, "alice").unwrap_err().code,
+        expected
+            .published_object_reply(wrong_file, "alice")
+            .unwrap_err()
+            .code,
         storage_contract::ErrorCode::StateInvalid
     );
     // A newly captured object spool cannot consume a legacy file receipt.
     assert_eq!(
-        MoveReceipt::object(&command).unwrap()
-            .published_object_reply(receipt(command.operation_id), "alice").unwrap_err().code,
+        MoveReceipt::object(&command)
+            .unwrap()
+            .published_object_reply(receipt(command.operation_id), "alice")
+            .unwrap_err()
+            .code,
         storage_contract::ErrorCode::StateInvalid
     );
 }
@@ -202,7 +215,10 @@ fn object_reply_distinguishes_case_rename_from_a_distinct_alias() {
     result.result["movement"]["target_entry_id"] = id("entry", 1).into();
     let reply = expected.published_object_reply(result, "alice").unwrap();
     assert_eq!(reply["request_digest"], digest);
-    assert_eq!(reply["result"]["movement"]["displaced_target_file_id"], Value::Null);
+    assert_eq!(
+        reply["result"]["movement"]["displaced_target_file_id"],
+        Value::Null
+    );
 
     command.expected_target_file_id = Some(HistoryFileId::parse(&id("file", 4)).unwrap());
     assert_eq!(
@@ -239,11 +255,12 @@ fn object_reply_distinguishes_case_rename_from_a_distinct_alias() {
         let mut result = exact_result.clone();
         result.result["movement"]["displaced_target_file_id"] = wrong;
         assert_eq!(
-            MoveReceipt::object(&command).unwrap()
-                .published_object_reply(result, "alice").unwrap_err().code,
+            MoveReceipt::object(&command)
+                .unwrap()
+                .published_object_reply(result, "alice")
+                .unwrap_err()
+                .code,
             storage_contract::ErrorCode::StateInvalid
         );
     }
 }
-
-

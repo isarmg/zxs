@@ -16,14 +16,22 @@ struct Binding {
 }
 impl Binding {
     fn capture(key: &SessionKey) -> Self {
-        Self { repository_id: key.repository.clone(), branch_id: key.branch.clone(), generation: key.generation }
+        Self {
+            repository_id: key.repository.clone(),
+            branch_id: key.branch.clone(),
+            generation: key.generation,
+        }
     }
     fn matches(&self, key: &SessionKey) -> bool {
-        self.repository_id == key.repository && self.branch_id == key.branch && self.generation == key.generation
+        self.repository_id == key.repository
+            && self.branch_id == key.branch
+            && self.generation == key.generation
     }
     fn identity(&self) -> crate::auth::SmbBinding {
         crate::auth::SmbBinding {
-            repository_id: self.repository_id.clone(), branch_id: self.branch_id.clone(), generation: self.generation,
+            repository_id: self.repository_id.clone(),
+            branch_id: self.branch_id.clone(),
+            generation: self.generation,
         }
     }
 }
@@ -37,14 +45,21 @@ struct DiskIdentity {
 }
 impl DiskIdentity {
     fn capture(slot: &TopologySlot) -> Self {
-        Self { disk_id: slot.disk_id.clone(), binding_generation: slot.binding_generation }
+        Self {
+            disk_id: slot.disk_id.clone(),
+            binding_generation: slot.binding_generation,
+        }
     }
     fn matches(&self, slot: &TopologySlot) -> bool {
-        self.disk_id == slot.disk_id && self.binding_generation == slot.binding_generation && slot.level == 1
+        self.disk_id == slot.disk_id
+            && self.binding_generation == slot.binding_generation
+            && slot.level == 1
     }
 }
 
-fn required<'de, D: Deserializer<'de>, T: Deserialize<'de>>(decoder: D) -> Result<Option<T>, D::Error> {
+fn required<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    decoder: D,
+) -> Result<Option<T>, D::Error> {
     Option::deserialize(decoder)
 }
 
@@ -97,13 +112,16 @@ impl Intent {
 }
 
 fn changed() -> ApiError {
-    ApiError::conflict(storage_contract::ErrorCode::IdempotencyKeyReused,
-        "object move differs from its original actor, bindings, disks or paths")
+    ApiError::conflict(
+        storage_contract::ErrorCode::IdempotencyKeyReused,
+        "object move differs from its original actor, bindings, disks or paths",
+    )
 }
 fn file_identity(entry: &Entry) -> Result<Option<HistoryFileId>, ApiError> {
     match entry.kind {
-        storage_contract::NamespaceEntryKind::File =>
-            HistoryFileId::parse(&entry.file_id).map(Some).map_err(ApiError::contract_input),
+        storage_contract::NamespaceEntryKind::File => HistoryFileId::parse(&entry.file_id)
+            .map(Some)
+            .map_err(ApiError::contract_input),
         storage_contract::NamespaceEntryKind::Directory => Ok(None),
     }
 }
@@ -119,17 +137,29 @@ impl DefaultShare {
         if source.relative_path.is_empty() {
             return Err(ApiError::unsupported());
         }
-        let Location::Path { slot: target_slot, path: destination_path } = self.locate(destination)? else {
+        let Location::Path {
+            slot: target_slot,
+            path: destination_path,
+        } = self.locate(destination)?
+        else {
             return Err(ApiError::unsupported());
         };
         let source_path = name_policy::LookupPath::parse(&source.relative_path)
             .map_err(ApiError::invalid_source)?;
         let source_slot_id = source.repository.primary_slot_id.clone();
-        let source_slot = self.shared.backend.topology_snapshot(&self.identity)?.slots
-            .into_iter().find(|slot| slot.slot_id == source_slot_id).ok_or_else(changed)?;
+        let source_slot = self
+            .shared
+            .backend
+            .topology_snapshot(&self.identity)?
+            .slots
+            .into_iter()
+            .find(|slot| slot.slot_id == source_slot_id)
+            .ok_or_else(changed)?;
         let source = self.pin_binding(source.repository)?;
         let source_identity = self.bound_identity(&source);
-        self.shared.backend.authorize_repository(&source_identity, &source.repository)?;
+        self.shared
+            .backend
+            .authorize_repository(&source_identity, &source.repository)?;
         let (target, target_path) = match self.resolve_at(
             &target_slot,
             destination_path.clone(),
@@ -143,38 +173,70 @@ impl DefaultShare {
                     .map_err(ApiError::invalid_source)?;
                 let key = self.pin_binding(location.repository)?;
                 let identity = self.bound_identity(&key);
-                self.shared.backend.authorize_repository(&identity, &key.repository)?;
+                self.shared
+                    .backend
+                    .authorize_repository(&identity, &key.repository)?;
                 (Some(key), target_path)
             }
-            Err(error) if error.code == storage_contract::ErrorCode::DirectoryNotFound
-                && !destination_path.as_str().contains('/') => {
-                    let target_path = name_policy::PortablePath::parse(destination_path.as_str())
-                        .map_err(ApiError::invalid_source)?;
-                    (None, target_path)
-                }
+            Err(error)
+                if error.code == storage_contract::ErrorCode::DirectoryNotFound
+                    && !destination_path.as_str().contains('/') =>
+            {
+                let target_path = name_policy::PortablePath::parse(destination_path.as_str())
+                    .map_err(ApiError::invalid_source)?;
+                (None, target_path)
+            }
             Err(error) => return Err(error),
         };
         let target_identity = target.as_ref().map(|key| self.bound_identity(key));
         let target_scope = target.as_ref().map_or_else(
-            || format!("@empty-disk:{}:{}", target_slot.slot_id, target_slot.binding_generation),
+            || {
+                format!(
+                    "@empty-disk:{}:{}",
+                    target_slot.slot_id, target_slot.binding_generation
+                )
+            },
             |key| key.branch.clone(),
         );
-        let _paths = MovePaths::acquire(&self.shared, [
-            (&source.branch, source_path.as_str()), (&target_scope, target_path.as_str()),
-        ])?;
-        let entry = self.shared.backend.lookup_current(&source_identity, &source.branch, &source_path)?
-            .ok_or_else(|| ApiError::new(http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound, "move source is no longer visible"))?;
+        let _paths = MovePaths::acquire(
+            &self.shared,
+            [
+                (&source.branch, source_path.as_str()),
+                (&target_scope, target_path.as_str()),
+            ],
+        )?;
+        let entry = self
+            .shared
+            .backend
+            .lookup_current(&source_identity, &source.branch, &source_path)?
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "move source is no longer visible",
+                )
+            })?;
         let displaced = match (&target, &target_identity) {
-            (Some(target), Some(identity)) => self.shared.backend.lookup_current(
-                identity, &target.branch, &name_policy::LookupPath::from(&target_path),
-            )?.filter(|current| target.repository != source.repository
-                || current.entry_id != entry.entry_id || current.lookup_key() != entry.lookup_key()),
+            (Some(target), Some(identity)) => self
+                .shared
+                .backend
+                .lookup_current(
+                    identity,
+                    &target.branch,
+                    &name_policy::LookupPath::from(&target_path),
+                )?
+                .filter(|current| {
+                    target.repository != source.repository
+                        || current.entry_id != entry.entry_id
+                        || current.lookup_key() != entry.lookup_key()
+                }),
             _ => None,
         };
         if displaced.is_some() && !replace {
-            return Err(ApiError::conflict(storage_contract::ErrorCode::NameCollision,
-                "move destination exists without replacement intent"));
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::NameCollision,
+                "move destination exists without replacement intent",
+            ));
         }
         let intent = Intent {
             format: FORMAT.into(),
@@ -193,18 +255,26 @@ impl DefaultShare {
             movement: ObjectMoveRequest {
                 source_repository_id: HistoryRepositoryId::parse(&source.repository)
                     .map_err(ApiError::contract_input)?,
-                source_entry_id: NamespaceEntryId::parse(&entry.entry_id).map_err(ApiError::contract_input)?,
+                source_entry_id: NamespaceEntryId::parse(&entry.entry_id)
+                    .map_err(ApiError::contract_input)?,
                 source_path,
                 target_slot_id: target_slot.slot_id,
-                target_repository_id: target.as_ref().map(|key| HistoryRepositoryId::parse(&key.repository))
-                    .transpose().map_err(ApiError::contract_input)?,
+                target_repository_id: target
+                    .as_ref()
+                    .map(|key| HistoryRepositoryId::parse(&key.repository))
+                    .transpose()
+                    .map_err(ApiError::contract_input)?,
                 target_path,
                 replace: displaced.is_some(),
-                target_entry_id: displaced.as_ref().map(|entry| NamespaceEntryId::parse(&entry.entry_id))
-                    .transpose().map_err(ApiError::contract_input)?,
+                target_entry_id: displaced
+                    .as_ref()
+                    .map(|entry| NamespaceEntryId::parse(&entry.entry_id))
+                    .transpose()
+                    .map_err(ApiError::contract_input)?,
             },
         };
-        admission.record_intent(&json_codec::to_value(&intent).map_err(ApiError::invalid_source)?)?;
+        admission
+            .record_intent(&json_codec::to_value(&intent).map_err(ApiError::invalid_source)?)?;
         let bytes = admission.retained_move_bytes()?;
         self.submit_object_move(intent, admission, &bytes, Some(_paths))
     }
@@ -217,14 +287,20 @@ impl DefaultShare {
         admission: NamespaceAdmission,
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
-        let intent: Intent = storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
+        let intent: Intent =
+            storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
         let Location::Path {
             slot: source_slot,
             path: source_path,
-        } = self.locate(source)? else {
+        } = self.locate(source)?
+        else {
             return Err(changed());
         };
-        let Location::Path { slot: target_slot, path: target_path } = self.locate(target)? else {
+        let Location::Path {
+            slot: target_slot,
+            path: target_path,
+        } = self.locate(target)?
+        else {
             return Err(changed());
         };
         if intent.replace_requested != replace
@@ -240,7 +316,9 @@ impl DefaultShare {
         let source = self.resolve_at(&source_slot, source_path, SmbPathIntent::Lookup)?;
         let source_path = name_policy::LookupPath::parse(&source.relative_path)
             .map_err(ApiError::invalid_source)?;
-        if !intent.source_binding.matches(&self.pin_binding(source.repository)?)
+        if !intent
+            .source_binding
+            .matches(&self.pin_binding(source.repository)?)
             || source_path.key() != intent.movement.source_path.key()
         {
             return Err(changed());
@@ -256,14 +334,19 @@ impl DefaultShare {
             }
             // An originally empty disk may now own the published root. Keep
             // the captured None intent rather than resolving it as a new target.
-            None if target_path.as_str() != intent.movement.target_path.as_str() => return Err(changed()),
+            None if target_path.as_str() != intent.movement.target_path.as_str() => {
+                return Err(changed());
+            }
             None => {}
         }
         self.submit_object_move(intent, admission, bytes, None)
     }
 
     fn require_object_binding(&mut self, binding: &Binding, slot: &str) -> Result<(), ApiError> {
-        let repository = self.shared.backend.repository_snapshot(&self.identity, &binding.repository_id)?;
+        let repository = self
+            .shared
+            .backend
+            .repository_snapshot(&self.identity, &binding.repository_id)?;
         if repository.primary_slot_id != slot {
             return Err(changed());
         }
@@ -271,7 +354,9 @@ impl DefaultShare {
         if !binding.matches(&key) {
             return Err(changed());
         }
-        self.shared.backend.authorize_repository(&self.bound_identity(&key), &key.repository)
+        self.shared
+            .backend
+            .authorize_repository(&self.bound_identity(&key), &key.repository)
     }
 
     fn submit_object_move(
@@ -287,17 +372,33 @@ impl DefaultShare {
             || intent.account_generation != self.account_generation
             || intent.publication_outcome != "unconfirmed"
             || intent.movement.source_repository_id.as_str() != intent.source_binding.repository_id
-            || intent.movement.target_repository_id.as_ref().map(|id| id.as_str())
-                != intent.target_binding.as_ref().map(|binding| binding.repository_id.as_str())
+            || intent
+                .movement
+                .target_repository_id
+                .as_ref()
+                .map(|id| id.as_str())
+                != intent
+                    .target_binding
+                    .as_ref()
+                    .map(|binding| binding.repository_id.as_str())
             || (!intent.replace_requested && intent.movement.replace)
             || (intent.movement.target_entry_id.is_none() && intent.target_file_id.is_some())
         {
             return Err(changed());
         }
-        intent.movement.require_target_intent().map_err(ApiError::contract_input)?;
+        intent
+            .movement
+            .require_target_intent()
+            .map_err(ApiError::contract_input)?;
         let slots = self.shared.backend.topology_snapshot(&self.identity)?.slots;
-        let source = slots.iter().find(|slot| slot.slot_id == intent.source_slot_id).ok_or_else(changed)?;
-        let target = slots.iter().find(|slot| slot.slot_id == intent.movement.target_slot_id).ok_or_else(changed)?;
+        let source = slots
+            .iter()
+            .find(|slot| slot.slot_id == intent.source_slot_id)
+            .ok_or_else(changed)?;
+        let target = slots
+            .iter()
+            .find(|slot| slot.slot_id == intent.movement.target_slot_id)
+            .ok_or_else(changed)?;
         if !intent.source_disk.matches(source) || !intent.target_disk.matches(target) {
             return Err(changed());
         }
@@ -306,22 +407,36 @@ impl DefaultShare {
             self.require_object_binding(binding, &intent.movement.target_slot_id)?;
         }
         let target_scope = intent.target_binding.as_ref().map_or_else(
-            || format!("@empty-disk:{}:{}", intent.movement.target_slot_id, intent.target_disk.binding_generation),
+            || {
+                format!(
+                    "@empty-disk:{}:{}",
+                    intent.movement.target_slot_id, intent.target_disk.binding_generation
+                )
+            },
             |binding| binding.branch_id.clone(),
         );
         let _paths = match captured_paths {
             Some(paths) => paths,
-            None => MovePaths::acquire(&self.shared, [
-                (&intent.source_binding.branch_id, intent.movement.source_path.as_str()),
-                (&target_scope, intent.movement.target_path.as_str()),
-            ])?,
+            None => MovePaths::acquire(
+                &self.shared,
+                [
+                    (
+                        &intent.source_binding.branch_id,
+                        intent.movement.source_path.as_str(),
+                    ),
+                    (&target_scope, intent.movement.target_path.as_str()),
+                ],
+            )?,
         };
         if admission.retained_move_bytes()?.as_slice() != bytes {
             return Err(changed());
         }
         let command = intent.command();
         let receipt = MoveReceipt::object(&command)?;
-        let result = self.shared.backend.move_current_object(&self.identity, command)?;
+        let result = self
+            .shared
+            .backend
+            .move_current_object(&self.identity, command)?;
         let reply = receipt.published_object_reply(result, &self.identity.principal)?;
         admission.finish_published();
         Ok(reply)

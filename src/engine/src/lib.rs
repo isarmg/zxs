@@ -76,9 +76,9 @@ pub use engine::{
     BackupTransactionCancelOutcome, BackupTransactionCancellation, BackupTransactionRequest,
 };
 pub use engine::{
-    FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
+    CapturedFileMoveSource, FileHistoryMoveCandidatePreparation, FileHistoryMoveDecisionDigest,
     FileHistoryMoveDecisionInputs, FileHistoryMoveDecisionObligation, FileHistoryMoveJointChoice,
-    CapturedFileMoveSource, FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
+    FileHistoryMoveJournalPreparation, FileHistoryMoveNativePreparation,
     FileHistoryMoveOrdinaryPreparation, FileHistoryMovePathRequest,
     FileHistoryMoveScopedPreparation,
 };

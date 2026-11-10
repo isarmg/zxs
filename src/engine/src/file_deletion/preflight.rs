@@ -88,13 +88,21 @@ pub(super) fn require_undo_scope(
     current: Option<&crate::engine::CurrentNamespaces>,
     node: &crate::FileDeletionNode,
 ) -> Result<()> {
-    let entries = crate::business::directory_git::current_entries(state, current, &node.repository_id)?;
+    let entries =
+        crate::business::directory_git::current_entries(state, current, &node.repository_id)?;
     let repository = &state.repositories[&node.repository_id];
     require_scope_writable(
-        state, current, repository, entries, &node.file_id,
+        state,
+        current,
+        repository,
+        entries,
+        &node.file_id,
         &HistoryWindowCancellation::default(),
     )?;
-    if !entries.iter().any(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == node.file_id) {
+    if !entries
+        .iter()
+        .any(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == node.file_id)
+    {
         return Err(Error::new(
             ErrorCode::UnsupportedOperation,
             "the deleted file has no retained occurrence in its current namespace; keep its deletion",

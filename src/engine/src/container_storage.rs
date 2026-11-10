@@ -1638,7 +1638,11 @@ fn prepare_names_inner(
     if let Some(staged) = &cache {
         staged.file.sync_data()?;
     }
-    Ok(PreparedNames { cache, layouts, database_scopes })
+    Ok(PreparedNames {
+        cache,
+        layouts,
+        database_scopes,
+    })
 }
 
 #[cfg(test)]

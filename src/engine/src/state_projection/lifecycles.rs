@@ -11,17 +11,21 @@ pub(crate) enum DeletionOwner<'a> {
     Files(Vec<&'a str>),
     Malformed,
 }
-fn object_members<'a>(receipt:&'a OperationResult,fields:&[&str])->DeletionOwner<'a> {
-    let mut files=std::collections::BTreeSet::new();
+fn object_members<'a>(receipt: &'a OperationResult, fields: &[&str]) -> DeletionOwner<'a> {
+    let mut files = std::collections::BTreeSet::new();
     for field in fields {
-        let Some(rows)=receipt.result.get(*field).and_then(json_codec::Value::as_array) else {
+        let Some(rows) = receipt
+            .result
+            .get(*field)
+            .and_then(json_codec::Value::as_array)
+        else {
             return DeletionOwner::Malformed;
         };
         for row in rows {
-            let Some(file)=row.get("file_id").and_then(json_codec::Value::as_str) else {
+            let Some(file) = row.get("file_id").and_then(json_codec::Value::as_str) else {
                 return DeletionOwner::Malformed;
             };
-            if storage_contract::validate_id(file,"file").is_err() || !files.insert(file) {
+            if storage_contract::validate_id(file, "file").is_err() || !files.insert(file) {
                 return DeletionOwner::Malformed;
             }
         }
@@ -29,8 +33,15 @@ fn object_members<'a>(receipt:&'a OperationResult,fields:&[&str])->DeletionOwner
     DeletionOwner::Files(files.into_iter().collect())
 }
 pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
-    if receipt.kind==storage_contract::file_relocation::OBJECT_MOVE_KIND {
-        return object_members(receipt,&["source_deletions","displaced_deletions","imported_deletions"]);
+    if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+        return object_members(
+            receipt,
+            &[
+                "source_deletions",
+                "displaced_deletions",
+                "imported_deletions",
+            ],
+        );
     }
     if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         && let Some(replacement) = receipt.result.get("replacement")
@@ -103,8 +114,8 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
     }
 }
 pub(crate) fn history_copy_owner(receipt: &OperationResult) -> DeletionOwner<'_> {
-    if receipt.kind==storage_contract::file_relocation::OBJECT_MOVE_KIND {
-        return object_members(receipt,&["retained_lifecycle"]);
+    if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+        return object_members(receipt, &["retained_lifecycle"]);
     }
     if !crate::business::history_copy::is_kind(&receipt.kind)
         && receipt.kind != crate::business::FILE_HISTORY_MOVE_KIND
@@ -229,4 +240,3 @@ impl DerivedOwners {
 
 // A typed operation key avoids stringify/reparse at every file materialization.
 pub(crate) type DeletionOperations = SharedRecords<(), OperationId>;
-

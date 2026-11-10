@@ -544,7 +544,10 @@ pub(in crate::business) fn staged_changes(
 ) -> Result<ScopeChanges> {
     let cancellation = HistoryWindowCancellation::new();
     let mut budget = Budget::new(&cancellation);
-    let children = direct.iter().map(|(id, path)| (id.as_str(), path.as_str())).collect();
+    let children = direct
+        .iter()
+        .map(|(id, path)| (id.as_str(), path.as_str()))
+        .collect();
     let summary = summarize_scope(state, view, git, branch, &children, &mut budget)?;
     Ok(ScopeChanges {
         directory_id: budget.copy(&git.directory_id)?,
