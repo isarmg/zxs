@@ -82,28 +82,18 @@ pub async fn apply_connection_limits(
         .lock_handle()
         .await
         .map_err(ConnectionLimitError::Connection)?;
-    let mut actual = [0; 4];
-    for (index, (category, value)) in [
+    for (category, value) in [
         (LimitCategory::Value, limits.max_value_bytes),
         (LimitCategory::Sql, limits.max_sql_bytes),
         (LimitCategory::Vm, limits.max_vm_operations),
         (LimitCategory::Parameters, limits.max_bind_parameters),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ] {
         native_limit(&mut handle, category, value as i32);
-        actual[index] = native_limit(&mut handle, category, -1);
-        if actual[index] != value as i32 {
+        if native_limit(&mut handle, category, -1) != value as i32 {
             return Err(ConnectionLimitError::NotApplied);
         }
     }
-    Ok(ConnectionLimits {
-        max_value_bytes: actual[0] as u32,
-        max_sql_bytes: actual[1] as u32,
-        max_vm_operations: actual[2] as u32,
-        max_bind_parameters: actual[3] as u32,
-    })
+    Ok(limits)
 }
 
 #[derive(Clone, Copy)]

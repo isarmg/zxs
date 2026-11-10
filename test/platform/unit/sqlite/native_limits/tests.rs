@@ -59,6 +59,7 @@ fn sql_and_parameter_limits_are_native_and_invalid_input_changes_nothing()
         let mut connection = SqliteConnection::connect("sqlite::memory:").await?;
         let limits = ConnectionLimits::new(1024 * 1024)
             .with_max_sql_bytes(1024)
+            .with_max_vm_operations(10_000)
             .with_max_bind_parameters(8);
         assert_eq!(
             apply_connection_limits(&mut connection, limits).await?,
@@ -70,7 +71,12 @@ fn sql_and_parameter_limits_are_native_and_invalid_input_changes_nothing()
         ));
         {
             let mut handle = connection.lock_handle().await?;
+            assert_eq!(
+                native_limit(&mut handle, LimitCategory::Value, -1),
+                1024 * 1024
+            );
             assert_eq!(native_limit(&mut handle, LimitCategory::Sql, -1), 1024);
+            assert_eq!(native_limit(&mut handle, LimitCategory::Vm, -1), 10_000);
             assert_eq!(native_limit(&mut handle, LimitCategory::Parameters, -1), 8);
         }
         // Test-owned fixed comment bytes, with no external SQL inputs.

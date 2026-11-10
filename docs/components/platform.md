@@ -20,7 +20,7 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 
 `sqlite::block_on_sqlite_connection` 支持同步核心执行直接 `SqliteConnection` 操作；不支持连接池、网络、Tokio 定时器或递归调用。同步 owner 可以跨调用持有直接连接；换文件或释放其保护锁前必须显式 `Connection::close().await`，不能在 future 中遗失连接所有权。`open_index_connection` 固定索引连接策略并启用 defensive；`create_if_missing=false` 不允许隐式新建数据库。 直接连接、连接池和快照连接的错误映射仅解包已识别的 `ConnectionLimitError`；其他 SQLx 错误原样保留，包括 I/O 的原始 errno 和非限额来源，不按 `ErrorKind` 重建。
 
-直接索引打开先取得连接，再执行读取 schema 的 WAL/FULL PRAGMA、defensive 及可选限额初始化；初始化失败显式等待关闭，关闭也失败时返回 `InitializationAndClose`，同时保留两项原因，不能仅凭原损坏错误移动数据库及 sidecar。只读候选入口 `open_index_read_connection` 不创建文件，使用 20 ms busy timeout 与固定原生限额；普通写连接仍使用 5 秒预算。这不是无阻塞或读取成功保证。
+读写两类直接连接共用同一初始化与失败关闭所有者，仅在入口选择创建策略、读写模式、busy timeout 和限额。直接索引打开先取得连接，再执行读取 schema 的 WAL/FULL PRAGMA、defensive 及可选限额初始化；初始化失败显式等待关闭，关闭也失败时返回 `InitializationAndClose`，同时保留两项原因，不能仅凭原损坏错误移动数据库及 sidecar。只读候选入口 `open_index_read_connection` 不创建文件，使用 20 ms busy timeout 与固定原生限额；普通写连接仍使用 5 秒预算。这不是无阻塞或读取成功保证。
 
 `disable_checkpoint_on_close` 是显式、连接局部的能力，不由普通打开入口自动启用；引擎长期索引 owner 在准入前调用它，防止关闭时隐式 checkpoint 或删除可能已换绑的 sidecar。FULL 提交和显式／自动 checkpoint 策略不变；关闭后 WAL/SHM 仍可能存在，不能把关闭理解为仅主文件即可搬移。
 

@@ -6,6 +6,99 @@ fn test_identity(schema_sha256: String) -> Result<SchemaIdentity, SchemaIdentity
 }
 
 #[tokio::test]
+async fn direct_writer_keeps_policy_limits_and_preopen_validation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("index.sqlite");
+    assert!(matches!(
+        open_index_connection(&path, true, Some(ConnectionLimits::new(0))).await,
+        Err(Error::ConnectionLimits(ConnectionLimitError::InvalidLimits))
+    ));
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+    assert!(open_index_connection(&path, false, None).await.is_err());
+    assert!(!path.exists());
+
+    let limits = ConnectionLimits::new(64 * 1024);
+    let mut writer = open_index_connection(&path, true, Some(limits)).await?;
+    let mode: String = sqlite_access::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&mut writer)
+        .await?;
+    let synchronous: i64 = sqlite_access::query_scalar("PRAGMA synchronous")
+        .fetch_one(&mut writer)
+        .await?;
+    let busy: i64 = sqlite_access::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&mut writer)
+        .await?;
+    let foreign_keys: i64 = sqlite_access::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&mut writer)
+        .await?;
+    assert_eq!(
+        (mode.as_str(), synchronous, busy, foreign_keys),
+        ("wal", 2, 5_000, 1)
+    );
+    sqlite_access::query("CREATE TABLE items(value INTEGER)")
+        .execute(&mut writer)
+        .await?;
+    sqlite_access::query("PRAGMA writable_schema=ON")
+        .execute(&mut writer)
+        .await?;
+    assert!(matches!(
+        sqlite_access::query("UPDATE sqlite_schema SET sql=NULL WHERE name='items'")
+            .execute(&mut writer).await,
+        Err(sqlite_access::Error::Database(ref error)) if error.code().as_deref() == Some("1")
+    ));
+    assert!(matches!(
+        sqlite_access::query_scalar::<_, Vec<u8>>("SELECT zeroblob(65537)")
+            .fetch_one(&mut writer).await,
+        Err(sqlite_access::Error::Database(ref error)) if error.code().as_deref() == Some("18")
+    ));
+    sqlite_access::query("INSERT INTO items VALUES(7)")
+        .execute(&mut writer)
+        .await?;
+    writer.close().await?;
+
+    let mut reopened = open_index_connection(&path, false, None).await?;
+    assert_eq!(
+        sqlite_access::query_scalar::<_, i64>("SELECT value FROM items")
+            .fetch_one(&mut reopened)
+            .await?,
+        7
+    );
+    // Candidate-reader bounds must not leak into an unrestricted writer.
+    assert_eq!(
+        sqlite_access::query_scalar::<_, i64>("SELECT length(zeroblob(65537))")
+            .fetch_one(&mut reopened)
+            .await?,
+        65537
+    );
+    reopened.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn both_direct_openers_preserve_invalid_database_bytes_and_native_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("invalid.sqlite");
+    let original = b"this is retained invalid SQLite source material".repeat(128);
+    std::fs::write(&path, &original)?;
+    for read_only in [false, true] {
+        let result = if read_only {
+            open_index_read_connection(&path).await
+        } else {
+            open_index_connection(&path, false, None).await
+        };
+        assert!(matches!(
+            result,
+            Err(Error::Sqlx(sqlite_access::Error::Database(ref error)))
+                if error.code().as_deref() == Some("26")
+        ));
+        assert_eq!(std::fs::read(&path)?, original);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn candidate_reader_is_read_only_bounded_and_never_creates_a_database()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;

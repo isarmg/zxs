@@ -90,9 +90,29 @@ pub async fn open_index_connection(
     if let Some(limits) = limits {
         limits.validate()?;
     }
-    let mut connection =
-        SqliteConnection::connect_with(&index_open_options(database_path, create_if_missing))
-            .await?;
+    connect_index(index_open_options(database_path, create_if_missing), limits).await
+}
+
+/// Best-effort candidate reads must not hold the engine mutex for the normal
+/// writer busy budget. Preserve defensive/WAL/FULL policy, never create a file.
+pub async fn open_index_read_connection(database_path: &Path) -> Result<SqliteConnection, Error> {
+    let options = index_open_options(database_path, false)
+        .read_only(true)
+        .busy_timeout(Duration::from_millis(20));
+    let limits = ConnectionLimits::new(64 * 1024)
+        .with_max_sql_bytes(16 * 1024)
+        .with_max_vm_operations(10_000)
+        .with_max_bind_parameters(16);
+    connect_index(options, Some(limits)).await
+}
+
+// One owner retains either direct connection through policy setup and explicit
+// closure on failure, before a caller can move the database or its sidecars.
+async fn connect_index(
+    options: SqliteConnectOptions,
+    limits: Option<ConnectionLimits>,
+) -> Result<SqliteConnection, Error> {
+    let mut connection = SqliteConnection::connect_with(&options).await?;
     let initialized = async {
         sqlite_access::query("PRAGMA journal_mode=WAL")
             .execute(&mut connection)
@@ -115,47 +135,6 @@ pub async fn open_index_connection(
         if let Err(close_error) = connection.close().await {
             // A caller must not interpret the original corruption code as
             // permission to move files while native closure remains uncertain.
-            return Err(Error::InitializationAndClose {
-                operation: error,
-                close: close_error,
-            });
-        }
-        return Err(connect_error(error));
-    }
-    Ok(connection)
-}
-
-/// Best-effort candidate reads must not hold the engine mutex for the normal
-/// writer busy budget. Preserve defensive/WAL/FULL policy, never create a file.
-pub async fn open_index_read_connection(database_path: &Path) -> Result<SqliteConnection, Error> {
-    let options = index_open_options(database_path, false)
-        .read_only(true)
-        .busy_timeout(Duration::from_millis(20));
-    let mut connection = SqliteConnection::connect_with(&options).await?;
-    let initialized = async {
-        sqlite_access::query("PRAGMA journal_mode=WAL")
-            .execute(&mut connection)
-            .await?;
-        sqlite_access::query("PRAGMA synchronous=FULL")
-            .execute(&mut connection)
-            .await?;
-        enable_defensive(&mut connection)
-            .await
-            .map_err(|error| sqlite_access::Error::Io(io::Error::other(error)))?;
-        apply_connection_limits(
-            &mut connection,
-            ConnectionLimits::new(64 * 1024)
-                .with_max_sql_bytes(16 * 1024)
-                .with_max_vm_operations(10_000)
-                .with_max_bind_parameters(16),
-        )
-        .await
-        .map_err(|error| sqlite_access::Error::Io(io::Error::other(error)))?;
-        Ok::<_, sqlite_access::Error>(())
-    }
-    .await;
-    if let Err(error) = initialized {
-        if let Err(close_error) = connection.close().await {
             return Err(Error::InitializationAndClose {
                 operation: error,
                 close: close_error,
