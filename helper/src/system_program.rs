@@ -79,6 +79,7 @@ pub(crate) enum Program {
     Smbpasswd,
     Systemctl,
     SystemdAnalyze,
+    SystemdSysusers,
     Smbd,
 }
 impl Program {
@@ -89,6 +90,7 @@ impl Program {
             Self::Smbpasswd => ("bin", "smbpasswd", "/usr/bin/smbpasswd"),
             Self::Systemctl => ("bin", "systemctl", "/usr/bin/systemctl"),
             Self::SystemdAnalyze => ("bin", "systemd-analyze", "/usr/bin/systemd-analyze"),
+            Self::SystemdSysusers => ("bin", "systemd-sysusers", "/usr/bin/systemd-sysusers"),
             Self::Smbd => ("sbin", "smbd", "/usr/sbin/smbd"),
         }
     }

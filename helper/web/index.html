@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/console.css">
   <script src="/console.js" defer></script>
   <script src="/first-install.js" defer></script>
+  <script src="/service-account.js" defer></script>
   <script src="/vfs-install.js" defer></script>
 </head>
 <body>
@@ -14,7 +15,7 @@
     <header><div><p class="eyebrow">ZXS · 独立辅助程序</p><h1>检查、首装与部署准备</h1></div><button id="shutdown" type="button" class="secondary">退出辅助工具</button></header>
     <section class="warning" aria-label="网络风险">
       <strong>无认证 · root 权限 · 明文 HTTP</strong>
-      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序和同版 VFS、创建安装根及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码、首次登记受支持的本地 Samba 账户或重置既有 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
+      <p>任何能访问此端口的人都可能读取所选磁盘数据、安装内置 ZXS 程序和同版 VFS、创建安装根、明确准备非登录 Unix 服务账户及服务私有目录、生成未激活配置、向固定 /etc 路径安装服务配置文件、在新空布局创建 ZXS 管理员、重置其密码、首次登记受支持的本地 Samba 账户或重置既有 Samba 密码、初始化明确选择的首批空盘目录或关闭此工具。仅在可信隔离网络与防火墙内临时使用，用完即退出。来源防护不等于认证或加密；工具不会替你修改网络设置。</p>
     </section>
     <p id="connection" role="status">连接辅助工具…</p>
     <section class="card" id="vfs-install">
@@ -34,7 +35,7 @@
     <section class="card" id="first-install">
       <h2>空目录首装：同一输入逐步完成并启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
-      <p class="muted">前提：已有独立非 root Unix 服务账户及主组。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。本向导不创建 Unix 账户、不挂载或格式化。选择 SMB 还须有独立 Unix 账户、支持的 Samba 与单独确认的 SMB 凭据。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
+      <p class="muted">先准备安装根和内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 还须有独立 Unix 账户、支持的 Samba 与单独确认的 SMB 凭据。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
       <form id="first-install-form">
         <div class="fields">
           <label>本机服务账户 <input id="first-install-user" required value="zxs" maxlength="32" autocomplete="off"></label>
@@ -55,6 +56,7 @@
       <label>恢复已导出的原请求 <input id="first-install-import" type="file" accept="application/json,.json"></label>
       <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
       <p id="first-install-progress" role="status"></p>
+      <button id="first-install-account-settings" type="button" class="secondary" hidden>准备同一服务账户</button>
       <button id="first-install-inspect" type="button">只读核对当前原步骤</button>
       <button id="first-install-refresh-preview" type="button" class="secondary" hidden>撤回本标签页尚未发送的当前预览</button>
       <p class="muted">预览后环境发生变化时，仅当前步骤从未在本标签页发送，才可明确撤回该预览并重新核对，完整输入和此前步骤仍保留。已发送、结果未知或历史完成的步骤不能这样重选；其他窗口与磁盘原材料仍由原生接口决定能否继续。</p>
@@ -80,6 +82,19 @@
       <label class="ack"><input id="first-install-ack" type="checkbox"> 已停止外部 ZXS/Samba、数据写者及其他主机配置／服务管理操作；只确认当前原步骤，此声明不是它们参与互斥的证明。</label>
       <button id="first-install-commit" type="button" hidden>确认执行当前原步骤</button>
       <p id="first-install-open" hidden>当前服务已通过正常管理就绪检查。<a id="first-install-web" target="_blank" rel="noreferrer noopener">打开 ZXS Web 管理</a>。尚未执行真实文件读写、SMB 密码登录或 VFS 网络验收。</p>
+    </section>
+    <section class="card" id="service-account">
+      <h2>准备本机服务账户</h2>
+      <p>先完成安装根准备。新账户通过本机固定 systemd-sysusers 创建独立非 root UID 和同名主组，home 为 /nonexistent、shell 为 /usr/sbin/nologin；不创建 home、不设置登录密码、不启动服务。已有账户只核对，不改 UID、GID、home、shell 或密码。独立 Samba Unix 账户不由此卡片创建。</p>
+      <div class="fields">
+        <label>服务账户 <input id="service-account-user" value="zxs" maxlength="32" autocomplete="off"></label>
+        <label>主组 <input id="service-account-group" value="zxs" maxlength="32" autocomplete="off"></label>
+      </div>
+      <button id="service-account-preview" type="button">只读核对账户计划</button>
+      <label class="ack"><input id="service-account-ack" type="checkbox"> 已停止外部账户管理员及其他安装操作；此声明不是它们参与互斥的证明。</label>
+      <button id="service-account-prepare" type="button" disabled>明确确认并准备原账户</button>
+      <p class="muted">发送前保存无密码原请求；刷新不自动执行。中断后先查询，再明确续作同一个原请求。已完成的 UID/GID 消失或改变时拒绝补造，不删除系统账户文件或回滚账户。完成后<a href="#first-install">返回首装向导</a>，只读核对第 3 步后继续。</p>
+      <pre id="service-account-report"></pre>
     </section>
     <section class="card">
       <h2>准备安装根与运行互斥</h2>

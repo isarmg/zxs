@@ -36,6 +36,13 @@
 - 全量 CI #997 的 foundation-language 在 `zxs serve` 的精确输出比对失败：当前 daemon 已有隐藏维护子命令，serve／init 仍以 exit 2 在参数解析阶段拒绝，只是诊断为 unrecognized subcommand；与 `/zxs` 首启门禁无关，不修改运行代码或放宽启动条件。
 - 同步两项 daemon 拒绝 golden 和过时的 helper --help 功能清单；比对仍严格核对退出码、stdout、stderr，失败时输出完整 expected／actual 差异。实际本地已链接二进制的 main.rs 与本次最新主线逐 blob 一致，18 项 zxs/helper 固定案例通过；web-build 无现成二进制未执行。21 项 Python 回归通过，包括颜色、回溯和任意输出漂移拒绝。未本地编译，完整 foundation-language 留给准确提交 CI。
 
+## 本轮全新系统服务账户入口
+
+- 本片对齐 `50d3d2fc`；仅本机服务身份准备及对应向导、验证和记录，不更改已有打包流程。
+- 复用本机固定 ELF 执行器与 systemd-sysusers，在明确原计划确认后创建缺失的非登录服务账户及同名主组，固定 home `/nonexistent`、shell `/usr/sbin/nologin`，不创建 home、不设置登录密码、不启动服务。已有账户只核对原 UID/GID；同名组已存在但用户缺失时拒绝借用。共享本地身份解析用 `Option` 区分真正缺失与损坏／I/O 错误，不复制账户文件解析或自己编写 passwd/group 发布器。
+- CLI／HTTP 与向导第 3 步接入独立账户卡片，八步原格式不变。原计划和完成 UID/GID 复用 `/zxs` 租约与私有 bundle；丢响应先读回，已完成身份消失或改变不补造，部分主组结果保留并要求检查，既有账户与密码不修改。独立 Samba Unix 账户和 OS 依赖安装仍不属于本入口。
+- 根 `test/platform/`／`test/helper/` 补边界测试；两组实际 JS 处理器与 Python static 接线通过，11 个 Rust 文件 rustfmt、JS 语法、模块路径与 CLI golden 对源码核对通过。按要求未本地编译、未执行原生账户命令，也未修改真实主机账户或磁盘；原生编译和 Debian 13 隔离 root/sysusers／systemd／SMB 首装仍待 CI。已有 release-native 打包已覆盖同源码 zxs/Web/VFS/法律材料嵌入，不另造下载或旁载路径。
+
 ## 本轮活动历史重复扫描收敛
 
 - M09 本片对齐 `01feeb1f`，三个修改文件均与原审阅基线逐 blob 一致。文件活动在同一不可变 Engine 借用中一次建立 file→首版本投影，每个涉及主分支的当前命名空间只索引一次；保留原版本顺序、首个别名、路径节点优先、删除后创建名称回退和准入错误，不把已证明存在的首版本替换为空默认值。

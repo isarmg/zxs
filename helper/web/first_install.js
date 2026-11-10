@@ -163,6 +163,8 @@
     element("commit").disabled = locked || record === null || (!inspected && !preparesDirectories);
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
+    element("account-settings").hidden = record === null || index() !== 2;
+    element("account-settings").disabled = locked;
     element("directories-save").disabled = locked || directoryOriginal === null;
     element("roots-correct").hidden = record === null || index() !== 6
       || record.steps[6] !== undefined || directoryOriginal !== null;
@@ -282,6 +284,17 @@
       show({original_input:record.input, next:"只读核对第一步"});
       render();
     } catch (failure) { error(failure.message); }
+  });
+  element("account-settings").addEventListener("click", () => {
+    if (busy || stopping || !csrf || blocked || !record || index() !== 2) return;
+    const deployment = record.input.deployment;
+    for (const [name, value] of [["user", deployment.service_user], ["group", deployment.service_group]]) {
+      const field = byId("service-account-" + name);
+      field.value = value;
+      field.dispatchEvent(new Event("input", {bubbles:true}));
+    }
+    byId("service-account").scrollIntoView({block:"start"});
+    error("已带入同一服务账户，未创建账户。请先只读核对并明确确认，完成后返回当前首装步骤。");
   });
   element("inspect").addEventListener("click", inspect);
   element("roots-correct").addEventListener("click", () => {

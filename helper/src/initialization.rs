@@ -1,4 +1,5 @@
 //! Staged offline first installation: layout, administrator, and initial storage.
+pub(crate) mod account;
 mod layout;
 pub(crate) mod runtime;
 use crate::{
@@ -13,6 +14,26 @@ use sha2::{Digest, Sha256};
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    /// Preview creation of a missing nonlogin Unix service identity or verification of an existing one.
+    AccountPreview {
+        #[arg(long)]
+        service_user: String,
+        #[arg(long)]
+        service_group: String,
+    },
+    /// Explicitly prepare only the original local Unix service account and primary group.
+    AccountPrepare {
+        #[arg(long)]
+        service_user: String,
+        #[arg(long)]
+        service_group: String,
+        #[arg(long)]
+        request_digest: String,
+        #[arg(long)]
+        confirm_local_service_account: bool,
+        #[arg(long)]
+        external_administration_stopped: bool,
+    },
     /// Preview first-install private runtime paths and a protected empty SMB export.
     RuntimePreview {
         #[arg(long)]
@@ -127,6 +148,35 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
+        Command::AccountPreview {
+            service_user,
+            service_group,
+        } => print(account::preview(account::Input {
+            service_user: Name::new(service_user)?,
+            service_group: Name::new(service_group)?,
+        })?),
+        Command::AccountPrepare {
+            service_user,
+            service_group,
+            request_digest,
+            confirm_local_service_account,
+            external_administration_stopped,
+        } => {
+            if !confirm_local_service_account {
+                return Err(
+                    "review the exact account plan and pass --confirm-local-service-account".into(),
+                );
+            }
+            print(account::prepare(account::Prepare {
+                input: account::Input {
+                    service_user: Name::new(service_user)?,
+                    service_group: Name::new(service_group)?,
+                },
+                request_digest,
+                confirmation: "prepare-local-service-account".into(),
+                external_administration_stopped,
+            })?)
+        }
         Command::RuntimePreview { service_user } => {
             print(runtime::preview(Input { service_user })?)
         }

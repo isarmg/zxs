@@ -6,7 +6,11 @@ use crate::fs_safety::{
 };
 use data_serialization::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{io::Read, os::unix::fs::MetadataExt, path::Path};
+use std::{
+    io::Read,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(try_from = "String")]
@@ -47,13 +51,28 @@ pub struct Snapshot {
 }
 pub struct LocalAccount {
     snapshot: Snapshot,
+    home: PathBuf,
+    shell: PathBuf,
 }
 const MAX_PASSWD_BYTES: usize = 4 * 1024 * 1024;
 impl LocalAccount {
     pub fn resolve(name: Name) -> Result<Self> {
+        Self::lookup(name)?
+            .ok_or_else(|| "selected service account is absent from local /etc/passwd".into())
+    }
+    /// Read a local identity; absence is distinct from malformed or unsafe sources.
+    pub fn lookup(name: Name) -> Result<Option<Self>> {
         let source = LocalSource::read("passwd")?;
-        let (uid, gid) = local_record(std::str::from_utf8(&source.bytes)?, &name)?;
-        Ok(Self {
+        let Some(record) = local_record(std::str::from_utf8(&source.bytes)?, &name)? else {
+            return Ok(None);
+        };
+        let AccountRecord {
+            uid,
+            gid,
+            home,
+            shell,
+        } = record;
+        Ok(Some(Self {
             snapshot: Snapshot {
                 name,
                 uid,
@@ -62,7 +81,15 @@ impl LocalAccount {
                 source_inode: source.identity.inode.to_string(),
                 source_sha256: crate::lower_hex(&Sha256::digest(&source.bytes)),
             },
-        })
+            home: home.into(),
+            shell: shell.into(),
+        }))
+    }
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+    pub fn shell(&self) -> &Path {
+        &self.shell
     }
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.clone()
@@ -96,9 +123,15 @@ pub struct LocalGroup {
 }
 impl LocalGroup {
     pub fn resolve(name: Name) -> Result<Self> {
+        Self::lookup(name)?.ok_or_else(|| "selected group is absent from local /etc/group".into())
+    }
+    /// Read a local group without treating malformed sources as absence.
+    pub fn lookup(name: Name) -> Result<Option<Self>> {
         let source = LocalSource::read("group")?;
-        let gid = local_group_record(std::str::from_utf8(&source.bytes)?, &name)?;
-        Ok(Self {
+        let Some(gid) = local_group_record(std::str::from_utf8(&source.bytes)?, &name)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
             snapshot: GroupSnapshot {
                 name,
                 gid,
@@ -106,7 +139,7 @@ impl LocalGroup {
                 source_inode: source.identity.inode.to_string(),
                 source_sha256: crate::lower_hex(&Sha256::digest(&source.bytes)),
             },
-        })
+        }))
     }
     pub fn snapshot(&self) -> GroupSnapshot {
         self.snapshot.clone()
@@ -162,7 +195,7 @@ impl LocalSource {
         Ok(Self { identity, bytes })
     }
 }
-fn local_group_record(text: &str, name: &Name) -> Result<u32> {
+fn local_group_record(text: &str, name: &Name) -> Result<Option<u32>> {
     let mut selected = None;
     let mut gids = Vec::new();
     for line in text.lines() {
@@ -181,15 +214,21 @@ fn local_group_record(text: &str, name: &Name) -> Result<u32> {
             return Err("selected local group is duplicated".into());
         }
     }
-    let gid = selected.ok_or(
-        "selected group is absent from local /etc/group; group creation is not implemented",
-    )?;
+    let Some(gid) = selected else {
+        return Ok(None);
+    };
     if gid == 0 || gids.iter().filter(|candidate| **candidate == gid).count() != 1 {
         return Err("selected group must have a unique non-root local GID".into());
     }
-    Ok(gid)
+    Ok(Some(gid))
 }
-fn local_record(text: &str, name: &Name) -> Result<(u32, u32)> {
+struct AccountRecord<'a> {
+    uid: u32,
+    gid: u32,
+    home: &'a str,
+    shell: &'a str,
+}
+fn local_record<'a>(text: &'a str, name: &Name) -> Result<Option<AccountRecord<'a>>> {
     let mut selected = None;
     let mut ids = Vec::new();
     for line in text.lines() {
@@ -210,11 +249,23 @@ fn local_record(text: &str, name: &Name) -> Result<(u32, u32)> {
             .parse()
             .map_err(|_| "local passwd source contains an invalid GID")?;
         ids.push((fields[0], uid));
-        if fields[0] == name.as_str() && selected.replace((uid, gid)).is_some() {
+        if fields[0] == name.as_str()
+            && selected
+                .replace(AccountRecord {
+                    uid,
+                    gid,
+                    home: fields[5],
+                    shell: fields[6],
+                })
+                .is_some()
+        {
             return Err("selected local account is duplicated".into());
         }
     }
-    let (uid,gid) = selected.ok_or("selected service account does not exist in local /etc/passwd; account creation is not implemented")?;
+    let Some(record) = selected else {
+        return Ok(None);
+    };
+    let AccountRecord { uid, gid, .. } = record;
     if uid == 0 || gid == 0 {
         return Err("private service data requires a non-root UID and primary GID".into());
     }
@@ -226,7 +277,7 @@ fn local_record(text: &str, name: &Name) -> Result<(u32, u32)> {
     {
         return Err("selected service UID is shared by another local account".into());
     }
-    Ok((uid, gid))
+    Ok(Some(record))
 }
 #[cfg(test)]
 #[path = "../../../test/platform/unit/local_account_tests.rs"]
