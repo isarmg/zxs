@@ -616,9 +616,9 @@ impl Engine {
         self.rebuild_index_state(&self.state, false)
     }
 
-    pub(in crate::engine) fn install_move_system_index(
+    pub(in crate::engine) fn install_move_system_index<O: super::move_execution::MoveOutcome>(
         &self,
-        published: &super::PublishedMove,
+        published: &super::PublishedMove<O>,
     ) -> Result<()> {
         self.rebuild_index_state(published.state(), true)
     }

@@ -347,6 +347,22 @@ impl Engine {
         names: crate::container_storage::PreparedNames,
         recovered: bool,
     ) -> Result<()> {
+        if let Some(publication) = &existing {
+            self.require_bound_publication(candidate, hash, publication)?;
+            if publication.recovery.is_some()
+                || next.operations.get(&candidate.operation_id) != Some(&publication.result)
+            {
+                return Err(Error::new(ErrorCode::PublicationInvalid,
+                    "move publication differs from the selected original outcome"));
+            }
+            // An existing receipt does not discharge the selected move's
+            // serving-scope closure. Install its exact names before resuming
+            // the original publication; never recapture today's namespace.
+            names.apply()?;
+            return self.complete_candidate_verified(
+                candidate, hash, next, existing, Completion::Recovery,
+            );
+        }
         self.complete_candidate_verified(
             candidate,
             hash,
@@ -365,13 +381,11 @@ impl Engine {
     ) -> Result<()> {
         self.complete_candidate_verified(c, hash, next, existing, Completion::Recovery)
     }
-    pub(super) fn complete_published_candidate(
-        &mut self,
+    fn require_bound_publication(
+        &self,
         c: &Candidate,
         hash: &str,
-        next: &State,
-        publication: Publication,
-        mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
+        publication: &Publication,
     ) -> Result<()> {
         self.verify_candidate_membership(c)?;
         if publication.candidate_hash != hash
@@ -385,6 +399,18 @@ impl Engine {
                 "stored publication does not bind this candidate",
             ));
         }
+        Ok(())
+    }
+
+    pub(super) fn complete_published_candidate(
+        &mut self,
+        c: &Candidate,
+        hash: &str,
+        next: &State,
+        publication: Publication,
+        mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
+    ) -> Result<()> {
+        self.require_bound_publication(c, hash, &publication)?;
         crate::container_storage::repair_historical_names(
             &self.config,
             &self.disk_resources,
