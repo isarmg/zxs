@@ -95,6 +95,21 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
         self.inner.operation_outcome(identity, operation_id)
     }
+    fn move_current_file_to_empty_disk(
+        &self,
+        identity: &Identity,
+        command: crate::MoveCurrentFileToEmptyDisk,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let result = self
+            .inner
+            .move_current_file_to_empty_disk(identity, command)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::other(
+                "injected lost empty-target move publication reply",
+            )));
+        }
+        Ok(result)
+    }
     fn require_native_workspace_commit_completion(
         &self,
         identity: &Identity,

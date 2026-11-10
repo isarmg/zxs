@@ -3,6 +3,17 @@
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 
+pub(super) const FORMAT: &str = "smb-file-history-move-empty-target";
+pub(super) const REPLACE_FORMAT: &str = "smb-file-history-move-empty-target-replace";
+
+fn intent_format(replace: bool) -> &'static str {
+    if replace {
+        REPLACE_FORMAT
+    } else {
+        FORMAT
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serialization(deny_unknown_fields)]
 struct Binding {
@@ -52,6 +63,7 @@ impl DefaultShare {
         source: SmbPathLocation,
         destination: &str,
         admission: NamespaceAdmission,
+        replace: bool,
     ) -> Result<Value, ApiError> {
         let Location::Path { slot, path } = self.locate(destination)? else {
             return Err(ApiError::unsupported());
@@ -97,7 +109,7 @@ impl DefaultShare {
         let file = storage_contract::history_window::HistoryFileId::parse(&entry.file_id)
             .map_err(ApiError::contract_input)?;
         let intent = Intent {
-            format: "smb-file-history-move-empty-target".into(),
+            format: intent_format(replace).into(),
             principal: self.identity.principal.clone(),
             operation_id: admission.operation_id(),
             publication_outcome: "unconfirmed".into(),
@@ -127,11 +139,15 @@ impl DefaultShare {
         &mut self,
         source: &str,
         target: &str,
+        replace: bool,
         admission: NamespaceAdmission,
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
         let intent: Intent =
             storage_contract::decode_strict(bytes).map_err(ApiError::contract_input)?;
+        if intent.format != intent_format(replace) {
+            return Err(changed());
+        }
         let Location::Path {
             slot: source_slot,
             path: source_path,
@@ -168,7 +184,7 @@ impl DefaultShare {
         admission: NamespaceAdmission,
         bytes: &[u8],
     ) -> Result<Value, ApiError> {
-        if intent.format != "smb-file-history-move-empty-target"
+        if !matches!(intent.format.as_str(), FORMAT | REPLACE_FORMAT)
             || intent.publication_outcome != "unconfirmed"
             || intent.operation_id != admission.operation_id()
             || intent.principal != self.identity.principal
@@ -230,6 +246,9 @@ impl DefaultShare {
             return Err(changed());
         }
         let operation = intent.operation_id;
+        // Allowing replacement does not require an existing destination. This
+        // intent captured absence, so even a replace request must use the
+        // non-replacing native move and refuse a subsequently occupied name.
         let result = self.shared.backend.move_current_file_to_empty_disk(
             &self.identity,
             crate::MoveCurrentFileToEmptyDisk {

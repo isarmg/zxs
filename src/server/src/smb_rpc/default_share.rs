@@ -475,10 +475,9 @@ impl DefaultShare {
                     let reply = match self.resolve(&path, SmbPathIntent::Lookup) {
                         Ok(target) => self.move_file(source, target, admission, replace)?,
                         Err(error)
-                            if error.code == storage_contract::ErrorCode::DirectoryNotFound
-                                && !replace =>
+                            if error.code == storage_contract::ErrorCode::DirectoryNotFound =>
                         {
-                            self.move_file_to_empty_disk(source, &path, admission)?
+                            self.move_file_to_empty_disk(source, &path, admission, replace)?
                         }
                         Err(error) => return Err(error),
                     };

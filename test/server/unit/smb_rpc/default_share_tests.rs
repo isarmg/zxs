@@ -2,6 +2,8 @@
 use super::*;
 use std::{os::unix::net::UnixStream, thread::JoinHandle};
 
+#[path = "empty_target_move_tests.rs"]
+mod empty_target_move_tests;
 #[path = "phase1_new_file_tests.rs"]
 mod phase1_new_file_tests;
 
@@ -552,7 +554,7 @@ fn default_disk_directory_rechecks_binding_before_returning_its_captured_page() 
 }
 
 #[test]
-fn default_namespace_changes_use_the_real_root_and_do_not_create_cross_disk_targets() {
+fn default_namespace_changes_reject_missing_cross_disk_parent_without_creating_root() {
     let (_temp, shared, _backend) = empty_fixture(true);
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     let namespace = |kind, path: &str, destination: Option<&str>| Request::Namespace {
@@ -568,7 +570,7 @@ fn default_namespace_changes_use_the_real_root_and_do_not_create_cross_disk_targ
     save(&mut stream, &created, &fd, b"x");
     let (reply, _) = binding_tests::exchange(
         &mut stream,
-        namespace(Kind::Rename, "p/folder/a.txt", Some("b/b.txt")),
+        namespace(Kind::Rename, "p/folder/a.txt", Some("b/missing/b.txt")),
     );
     assert!(
         matches!(
