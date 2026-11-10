@@ -58,6 +58,8 @@
 
 ## 本轮正常业务收敛
 
+- 2026-11-10：移动回执投影复用已实现待验证。`ProjectionTransition` 的前后不可变 State 分别持有按需构造、随投影释放的类型化移动生命周期索引；同次文件数据库投影对一份 `object.move` 回执只做一次有界解码与摘要准入，源删除、替换删除、已删对象导入及历史前缀按文件查找。缓存不进入长期 owner 索引，不跨快照/恢复复用，原单文件主体/操作身份、预算与存储发布屏障保留。根 `test/engine/unit/state_projection/move_receipts_tests.rs` 补充复用、跨快照隔离、主体/重复成员拒绝、严格字段与字节限覆盖。仅完成源码审查、语法解析与补丁可应用性检查；遵照最新要求未本地编译、未运行测试或 CI，不宣称运行通过。
+
 - SMB 目录与句柄读取后继对齐 `039ec6cd`：普通目录翻页在同次可变借用中直接使用已打开句柄的 ID、规范路径和冻结游标，去掉每页完整游标／路径 clone 及读后重新查表的可选更新；失败时仍保留原游标，成功后才推进，空尾页保持原 after，restart 仍重新捕获当前快照。AuthorizeRead 将当次已授权的借用句柄直接交给保存时间投影，删除第二次查找及不可能缺句柄分支；每次实时账户／绑定授权与版本时间读取保留，不缓存授权，不改协议或同步次数。根 `test/server/` 补不可用账户拒绝后的游标保全、恢复后原页／重复尾页及显式 restart 回归，原撤权测试适配借用结果。七个受影响 Rust 文件的 rustfmt 1.99 检查与 git diff --check 通过；沿实际 RPC→Session→Backend 调用链复核了借用、失败游标与逐次授权。遵照最新要求未做本地编译或运行测试，不代表公开 socket、Samba 或端到端验收通过。
 
 - M01／T02 搬运发布投影复用后继：publish_move 只消费业务层不可外部构造的 MovePlan；将普通准备已验证的 next_current_namespaces 与原 State／Current Arc 身份、不可变 outcome 一起交给私有 MoveProjection，finish_move 复核原身份及候选版本绑定后直接使用，不再完整重演。正常有 Current 的 object.move 从三次完整 compose 收敛为一次；无 Current 仍在准备前完整验证，恢复和原文件链重新建立证明，不复用跨重启材料或以摘要缓存授权。成员、FULL、FILE／DISK／SYSTEM、日志、seals、epoch 和完成屏障不变。本片对齐 `cf2bedb2`，四份业务源码；rustfmt 1.99 解析通过，尚未编译／测试／CI，仅源码合入，等待统一验证。

@@ -60,12 +60,17 @@ fn invalid() -> Error {
     )
 }
 
-fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
+fn direct(view: StateProjection<'_>, id: OperationId, file: &str) -> Result<LifecycleRow> {
+    let state = view.state();
     let receipt = &state.operations[&id];
-    let (mut action, key) = match receipt.kind.as_str() {
+    if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
+        let movement = view.object_move(id)?;
+        let (action, source) = movement.deletion(file)?;
+        return direct_row(state, id, file, action, source);
+    }
+    let (action, key) = match receipt.kind.as_str() {
         "file.delete"
         | crate::business::FILE_HISTORY_MOVE_KIND
-        | storage_contract::file_relocation::OBJECT_MOVE_KIND
         | super::batch::KIND
         | super::directory::DELETE => (DeletionAction::Delete, "deletion_node"),
         "file.delete.undo" | super::directory::UNDO => {
@@ -77,19 +82,22 @@ fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
         super::directory::node_for(state, receipt, file)?
     } else if receipt.kind == super::batch::KIND {
         super::batch::node_for(receipt, file)?
-    } else if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
-        let result=crate::business::object_move::read_result(receipt)?;
-        if let Some(node)=result.imported_deletions.into_iter().find(|node|node.file_id==file) {
-            action=DeletionAction::Import;node
-        } else {
-            result.source_deletions.into_iter().chain(result.displaced_deletions)
-                .find(|node|node.file_id==file).ok_or_else(invalid)?
-        }
     } else if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::retained_file_history_move_deletion(receipt, file)?
     } else {
         json_codec::from_value(receipt.result.get(key).ok_or_else(invalid)?.clone())?
     };
+    direct_row(state, id, file, action, &source)
+}
+
+fn direct_row(
+    state: &State,
+    id: OperationId,
+    file: &str,
+    action: DeletionAction,
+    source: &crate::FileDeletionNode,
+) -> Result<LifecycleRow> {
+    let receipt = &state.operations[&id];
     let author = state.operation_principals.get(&id).ok_or_else(invalid)?;
     if receipt.operation_id != id
         || source.file_id != file
@@ -105,7 +113,7 @@ fn direct(state: &State, id: OperationId, file: &str) -> Result<LifecycleRow> {
         action,
         sequence: receipt.sequence,
         author: author.clone(),
-        node: (&source).into(),
+        node: source.into(),
     })
 }
 
@@ -145,8 +153,9 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
             return Err(invalid());
         }
         if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
-            for event in crate::business::object_move::retained_for(receipt,file)?.events {
-                insert(event)?;
+            let movement = view.object_move(*id)?;
+            for event in &movement.retained(file)?.events {
+                insert(event.clone())?;
             }
         } else if receipt.kind == crate::business::history_copy::RETAINED_KIND
             || receipt.kind == crate::business::history_copy::DIRECTORY_EXPORT_KIND
@@ -159,7 +168,7 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
         }
     }
     for id in rows.deletion_operations.keys() {
-        insert(direct(state, *id, file)?)?;
+        insert(direct(view, *id, file)?)?;
     }
     Ok(events.into_values().collect())
 }

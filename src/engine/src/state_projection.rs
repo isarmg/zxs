@@ -7,6 +7,7 @@ use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
 mod files;
+mod move_receipts;
 pub(crate) mod lifecycles;
 pub(crate) use files::FileRows;
 
@@ -438,12 +439,15 @@ pub(crate) struct ProjectionTransition<'a> {
     previous: std::borrow::Cow<'a, DerivedOwners>,
     next: DerivedOwners,
     history_edits: Option<BTreeMap<String, HistoryEdits>>,
+    previous_moves: move_receipts::MoveReceipts<'a>,
+    next_moves: move_receipts::MoveReceipts<'a>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct StateProjection<'a> {
     state: &'a State,
     owners: &'a DerivedOwners,
+    moves: &'a move_receipts::MoveReceipts<'a>,
 }
 
 impl<'a> StateProjection<'a> {
@@ -452,6 +456,13 @@ impl<'a> StateProjection<'a> {
     }
     pub(crate) fn owners(self) -> &'a DerivedOwners {
         self.owners
+    }
+
+    pub(crate) fn object_move(
+        self,
+        id: storage_contract::OperationId,
+    ) -> Result<std::sync::Arc<move_receipts::MoveReceipt>> {
+        self.moves.get(id)
     }
 }
 
@@ -484,6 +495,8 @@ impl<'a> ProjectionTransition<'a> {
             previous,
             next,
             history_edits,
+            previous_moves: move_receipts::MoveReceipts::new(before),
+            next_moves: move_receipts::MoveReceipts::new(after),
         })
     }
 
@@ -491,6 +504,7 @@ impl<'a> ProjectionTransition<'a> {
         StateProjection {
             state: self.before,
             owners: &self.previous,
+            moves: &self.previous_moves,
         }
     }
 
@@ -498,6 +512,7 @@ impl<'a> ProjectionTransition<'a> {
         StateProjection {
             state: self.after,
             owners: &self.next,
+            moves: &self.next_moves,
         }
     }
 
@@ -960,3 +975,7 @@ impl DerivedOwners {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/state_projection/container_membership_tests.rs"]
 mod container_membership_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/state_projection/move_receipts_tests.rs"]
+mod move_receipts_tests;

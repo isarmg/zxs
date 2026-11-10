@@ -57,10 +57,6 @@ pub(crate) fn deletion_for(receipt:&OperationResult,file:&str)->Result<FileDelet
         .find(|node|node.file_id==file).ok_or_else(invalid)
 }
 
-pub(crate) fn retained_for(receipt:&OperationResult,file:&str)->Result<history_copy::retained::CopiedLifecycle> {
-    read_result(receipt)?.retained_lifecycle.into_iter().find(|row|row.file_id==file).ok_or_else(invalid)
-}
-
 /// The deletion gate and Current gate replay this same planner. No independent
 /// move-specific lifecycle plan, fake per-file receipt or relaxed write set.
 pub(crate) fn verify_publication(previous:&State,next:&State,current:Option<&crate::engine::CurrentNamespaces>)->Result<bool> {
