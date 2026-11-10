@@ -1,9 +1,16 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`ae475741`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`dea60cf2`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+
+## 本轮首盘浏览静态回归修复
+
+- 准确 main `dea60cf2` 复现 `test_primary_browse_probe.py` 仍查找已移除的 Administration 按钮导致 ValueError。测试改为当前四个管理入口中的 `AdminPage::Storage.open`，核实既有中英文标签、真实头部按钮及 storage section，不改生产导航。
+- 保留离线准备先于启动、ready 后登录、当前存储入口先于观察、真实 Files／All disks 浏览、原响应与错误透传、无在线激活和清理断言；新增目录消失后的重启顺序、主机指标仍可见与禁止静默重建断言。不跳过、放宽或删除原观察器覆盖。
+- 在精确父基线提取的源码上，定向 Python unittest 4/4 通过，其中 Node 透明观察器 12 cases 通过；严格差异检查通过。未本地编译、启动 ZXS 或运行真实浏览器，此结果不是 Chrome／WASM 验收。
 
 
 ## 本轮文件与整对象移动共享提交图投影
