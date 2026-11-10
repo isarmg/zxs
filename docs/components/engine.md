@@ -6,6 +6,8 @@ membership 的 Exit、登记续作、readmission、terminal/resume 与 retiremen
 
 Add root-extension 与 Exit stop-plan 共用私有 `activation::plan_store` 持有 SYSTEM、操作目录和选中 head，原生计划／head 的严格格式与领域验证继续归各流程负责。冷读、目录清单、writer 身份和完成记录只有一个存储实现；Exit 的发布前 PLAN／HEAD 同步保留为显式调用，Add 保持原只读核对，不改写入屏障。
 
+PortableAuthority 将冷读与构造时完整验证的谱系保留在私有共享不可变数据中，内部查询借用该谱系，克隆共享同一证明；Genesis、普通链与 Abort 证据信封的当前 JSON 表示不变。缓存只覆盖存储值派生，实际磁盘、来源 State、成员身份与发布验证仍在原使用边界进行。
+
 | 目录 / 模块 | 职责 |
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |

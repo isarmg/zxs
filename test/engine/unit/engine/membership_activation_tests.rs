@@ -1286,7 +1286,20 @@ fn membership_activation_successive_additions_keep_each_epoch_and_standalone_pro
         generation.intent.origin.predecessor(),
         Some(first_hash.as_str())
     );
-    assert_eq!(generation.portable.lineage().unwrap().len(), 2);
+    assert_eq!(generation.portable.lineage().len(), 2);
+    let copied = generation.portable.clone();
+    assert!(std::ptr::eq(
+        generation.portable.lineage(),
+        copied.lineage()
+    ));
+    let bytes = storage_contract::canonical_json(&generation.portable).unwrap();
+    let decoded: PortableAuthority = crate::decode_strict(&bytes).unwrap();
+    assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
+    assert_eq!(decoded.hash().unwrap(), generation.portable.hash().unwrap());
+    assert_eq!(decoded.lineage().len(), generation.portable.lineage().len());
+    let mut damaged = json_codec::to_value(&copied).unwrap();
+    damaged["predecessors"].as_object_mut().unwrap().clear();
+    assert!(json_codec::from_value::<PortableAuthority>(damaged).is_err());
     for (operation, result) in original_operations.iter() {
         assert_eq!(&fixture.engine.state.operations[operation], result);
     }
@@ -1923,6 +1936,13 @@ fn an_empty_add_certificate_cannot_decode_as_foreign_joint_authority() {
     // certificate in the Foreign schema cannot manufacture a missing recipe.
     let ordinary: PortableAuthority = json_codec::from_value(addition.clone()).unwrap();
     assert!(!ordinary.is_foreign());
+    assert_eq!(ordinary.lineage().len(), 1);
+    assert_eq!(json_codec::to_value(&ordinary).unwrap(), addition);
+    assert!(addition.get("head").is_none());
+    assert!(addition.get("predecessors").is_none());
+    let mut unexpected = addition.clone();
+    unexpected["lineage"] = json_codec::json!([]);
+    assert!(json_codec::from_value::<PortableAuthority>(unexpected).is_err());
     let foreign = json_codec::json!({
         "format":"foreign-membership-joint-state", "addition":addition,
     });

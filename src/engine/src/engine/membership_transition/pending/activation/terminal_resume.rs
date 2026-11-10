@@ -456,14 +456,11 @@ impl CompletedTerminalResume {
         })?;
         let latest = generation
             .portable
-            .lineage()?
-            .into_iter()
+            .lineage()
+            .iter()
             .rev()
             .find(|(_, intent)| matches!(intent.origin, Origin::TerminalResume { .. }));
-        if latest
-            .as_ref()
-            .is_none_or(|(hash, _)| hash != &self.generation_hash)
-        {
+        if latest.is_none_or(|(hash, _)| hash != &self.generation_hash) {
             return Err(Error::new(
                 ErrorCode::LogFork,
                 "protected terminal selector is not the latest resumption in the active authority",

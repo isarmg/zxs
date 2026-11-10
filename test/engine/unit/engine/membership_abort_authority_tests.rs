@@ -115,8 +115,14 @@ fn membership_abort_authority_same_core_distinct_envelopes_are_equivalent() {
     assert_eq!(value["format"], "membership-abort-generation");
     assert!(value.get("evidence").is_none());
     for authority in [&fixture.authority, &fixture.alternate] {
-        let decoded: PortableAuthority =
-            decode_strict(&canonical_json(authority).unwrap()).unwrap();
+        let bytes = canonical_json(authority).unwrap();
+        let decoded: PortableAuthority = decode_strict(&bytes).unwrap();
+        assert_eq!(canonical_json(&decoded).unwrap(), bytes);
+        let copied = authority.clone();
+        assert!(std::ptr::eq(
+            authority.evidence_entries(),
+            copied.evidence_entries()
+        ));
         assert_eq!(decoded.hash().unwrap(), authority.hash().unwrap());
         assert_eq!(
             canonical_json(&decoded.effective_config().unwrap()).unwrap(),

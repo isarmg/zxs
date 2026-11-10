@@ -4,6 +4,12 @@
 
 
 
+## 本轮 Authority 一次准入与共享谱系
+
+- PortableAuthority 的私有 Arc 持有原 head／predecessors／evidence 及一次准入得到的 lineage。反序列化、归档 load 和七类构造仍完整验证，内部查询改借用谱系，不再每次重新重放和返回整链副本；hash 复用准入时已计算的同一 head 摘要。普通新增节点仍验证完整新链，未声称追加复杂度已优化。
+- Genesis、普通 chain 与 Abort evidence-chain 的字段、严格 schema、当前规范字节不变；实际 DiskRoot／State／成员／发布验证不被缓存替代。冷链迭代避免同一前驱在相邻循环再次解析，最新 terminal resume 选择同步改借用倒序遍历。原错误拒绝条件保持，多重损坏输入的首错顺序可能变化。
+- 两个生产文件实际净删 6 行；现有根测试补共享地址、三种信封表示与冷读拒绝，原 Abort 缺失／多余／重绑证明用例保留。首装代理静态审阅七类 intent 的纯数据来源、私有不可变性、序列化与消费者未见确定阻断。固定格式和精确补丁检查通过；未本地编译或运行 Rust，性能未实测。缓存会长期保留派生 lineage，本片不代表全面净删或 20 万行业务上限完成。
+
 ## 本轮 Add／Exit 计划存储统一
 
 - 两份 SYSTEM 计划存储整链替换为一个私有 PlanStore：原生 Add／Exit 格式、head 字段和领域推导保留，目录、操作身份与选中 head 的所有权集中。删除旧 open／prepare／inventory／writer／completion 复制体，第一方 src 生产净删 96 行，不压缩行或删除功能。
