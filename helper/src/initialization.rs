@@ -15,17 +15,24 @@ use sha2::{Digest, Sha256};
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Inspect the exact Debian Samba package plan or retained installation.
-    PackagesPreview,
+    /// Inspect the selected Debian service package plan or retained installation.
+    PackagesPreview {
+        #[arg(long, value_enum, default_value = "samba")]
+        scope: packages::Scope,
+    },
     /// Refresh indexes from existing signed APT sources; no repository configuration changes.
     PackagesRefresh {
+        #[arg(long, value_enum, default_value = "samba")]
+        scope: packages::Scope,
         #[arg(long)]
         confirm_download_indexes: bool,
         #[arg(long)]
         external_administration_stopped: bool,
     },
-    /// Install only the reviewed package plan; existing Samba upgrades remain separate.
+    /// Install the reviewed systemd-only or Samba package plan.
     PackagesInstall {
+        #[arg(long, value_enum, default_value = "samba")]
+        scope: packages::Scope,
         #[arg(long)]
         request_digest: String,
         #[arg(long)]
@@ -35,6 +42,8 @@ pub(crate) enum Command {
     },
     /// Read back original packages and finish policy/unit cleanup without repeating APT.
     PackagesFinish {
+        #[arg(long, value_enum, default_value = "samba")]
+        scope: packages::Scope,
         #[arg(long)]
         request_digest: String,
         #[arg(long)]
@@ -176,8 +185,11 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
 }
 pub(crate) fn run(command: Command) -> Result<()> {
     match command {
-        Command::PackagesPreview => print(packages::preview()?),
+        Command::PackagesPreview { scope } => {
+            print(packages::preview(packages::Selection { scope })?)
+        }
         Command::PackagesRefresh {
+            scope,
             confirm_download_indexes,
             external_administration_stopped,
         } => {
@@ -188,11 +200,13 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 );
             }
             print(packages::refresh(packages::Refresh {
+                scope,
                 confirmation: "refresh-system-package-indexes".into(),
                 external_administration_stopped,
             })?)
         }
         Command::PackagesInstall {
+            scope,
             request_digest,
             confirm_system_package_installation,
             external_administration_stopped,
@@ -203,12 +217,14 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 );
             }
             print(packages::install(packages::Commit {
+                scope,
                 request_digest,
-                confirmation: "install-system-samba-packages".into(),
+                confirmation: "install-system-packages".into(),
                 external_administration_stopped,
             })?)
         }
         Command::PackagesFinish {
+            scope,
             request_digest,
             confirm_finish_original_packages,
             external_administration_stopped,
@@ -219,6 +235,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 );
             }
             print(packages::finish(packages::Commit {
+                scope,
                 request_digest,
                 confirmation: "finish-original-system-packages".into(),
                 external_administration_stopped,

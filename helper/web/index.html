@@ -36,7 +36,7 @@
     <section class="card" id="first-install">
       <h2>空目录首装：同一输入逐步完成并启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
-      <p class="muted">先准备安装根和内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 时，第 3–5 步可带入同一独立 Unix 账户到对应卡片创建；支持的 Samba 依赖可在<a href="#packages">系统包卡片</a>明确安装，SMB 凭据仍须单独确认。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
+      <p class="muted">先准备安装根；随后可按本次选择准备基础系统工具或 Samba 依赖，再安装内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 时，第 3–5 步可带入同一独立 Unix 账户到对应卡片创建；支持的 Samba 依赖可在<a href="#packages">系统包卡片</a>明确安装，SMB 凭据仍须单独确认。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
       <form id="first-install-form">
         <div class="fields">
           <label>本机服务账户 <input id="first-install-user" required value="zxs" maxlength="32" autocomplete="off"></label>
@@ -57,6 +57,7 @@
       <label>恢复已导出的原请求 <input id="first-install-import" type="file" accept="application/json,.json"></label>
       <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
       <p id="first-install-progress" role="status"></p>
+      <button id="first-install-package-settings" type="button" class="secondary" hidden>准备本次安装所需系统依赖</button>
       <button id="first-install-account-settings" type="button" class="secondary" hidden>准备同一服务账户</button>
       <button id="first-install-samba-account-settings" type="button" hidden>准备同一独立 Samba Unix 账户</button>
       <button id="first-install-inspect" type="button">只读核对当前原步骤</button>
@@ -87,8 +88,9 @@
     </section>
     <section class="card" id="packages">
       <h2>安装 Debian 13 Samba 依赖</h2>
-      <p>先准备 /zxs 安装根。此入口仅支持 Debian 13 amd64 的首次 Samba 安装：使用系统 APT 和现有签名软件源，固定仓库目标中的 samba 与 samba-common-bin 版本，并补齐 systemd 工具包，显示完整依赖方案后明确安装；不会更改源、覆盖已有 Samba 版本或替换现有配置。已有完全匹配的包只核对。</p>
+      <p>先准备 /zxs 安装根。此入口支持 Debian 13 amd64：基础工具仅请求 systemd，提供账户创建及服务管理工具；选择 Samba 时再请求中央目标固定版本的 samba、samba-common-bin 和 systemd。使用现有签名 APT 源，完整方案逐次确认；两类安装分别保留原请求。</p>
       <p class="muted">首次安装期间临时写入本次专有 policy-rc.d，阻止 Debian 包脚本启动服务；不覆盖管理员已有策略。完成后取消新 smbd/nmbd 默认单元自启、清理本次策略，再回原流程安装内嵌 VFS、登记凭据和明确激活。APT 中断可能留下部分包和策略，先核对原状态；收尾不重复 APT，尚未完成的 dpkg 状态须先检查处理。</p>
+      <label>所需系统依赖 <select id="packages-scope"><option value="systemd">基础 systemd 工具（HTTP-only）</option><option value="samba" selected>systemd 与固定版本 Samba</option></select></label>
       <label class="ack"><input id="packages-ack" type="checkbox"> 已停止外部 APT/dpkg、服务和账户管理员；理解包脚本会改变系统包及其依赖，当前操作最长 20 分钟。</label>
       <button id="packages-refresh" type="button">确认更新现有源索引</button>
       <button id="packages-preview" type="button">只读核对包状态和安装方案</button>

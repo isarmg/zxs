@@ -186,3 +186,16 @@ assert.equal(disabledSamba.element("first-install-samba-account-settings").hidde
 await disabledSamba.click("samba-account-settings");
 assert.equal(disabledSamba.calls.length, 0);
 console.log("first-install selects the independent Samba Unix account without sending or changing frozen input");
+
+for (const samba of [false, true]) {
+  const record = initial(); record.steps.length = 1;
+  record.input.deployment.smb = samba ? {account:"zxs-smb", peer_uid:0} : null;
+  const dependencies = harness(record);
+  assert.equal(dependencies.element("first-install-package-settings").hidden, false);
+  await dependencies.click("package-settings");
+  assert.equal(dependencies.element("packages-scope").value, samba ? "samba" : "systemd");
+  assert.equal(dependencies.element("packages").scrolled, true);
+  assert.deepEqual(dependencies.record(), record);
+  assert.equal(dependencies.calls.length, 0);
+}
+console.log("first-install selects only the dependencies requested by the frozen setup");

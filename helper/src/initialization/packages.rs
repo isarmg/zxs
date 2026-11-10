@@ -1,4 +1,4 @@
-//! Explicit Debian Samba dependency installation. APT owns package signatures,
+//! Explicit Debian service dependency installation. APT owns package signatures,
 //! dependency resolution, dpkg locking and maintainer-script execution.
 mod policy;
 use crate::{
@@ -17,29 +17,85 @@ use platform_io::{
 use sha2::{Digest, Sha256};
 use std::{io::Read, path::Path};
 
-const ORIGINAL: &str = ".zxs-helper-system-packages";
-const COMPLETE: &str = ".zxs-helper-system-packages-complete";
 const LIMIT: usize = 64 * 1024;
-const PACKAGES: [&str; 3] = ["samba", "samba-common-bin", "systemd"];
+const SAMBA_PACKAGES: [&str; 3] = ["samba", "samba-common-bin", "systemd"];
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, command_line::ValueEnum)]
+#[serialization(rename_all = "snake_case")]
+pub(crate) enum Scope {
+    Systemd,
+    Samba,
+}
+impl Scope {
+    fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::Systemd => &["systemd"],
+            Self::Samba => &SAMBA_PACKAGES,
+        }
+    }
+    fn records(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Systemd => (
+                ".zxs-helper-systemd-packages",
+                ".zxs-helper-systemd-packages-complete",
+            ),
+            Self::Samba => (
+                ".zxs-helper-system-packages",
+                ".zxs-helper-system-packages-complete",
+            ),
+        }
+    }
+    fn target(self) -> Result<Target> {
+        Ok(match self {
+            Self::Systemd => Target::Systemd,
+            Self::Samba => Target::Samba {
+                package_version: version()?,
+            },
+        })
+    }
+}
 #[derive(Deserialize)]
-struct Target {
+#[serialization(deny_unknown_fields)]
+pub(crate) struct Selection {
+    pub scope: Scope,
+}
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Target {
+    Systemd,
+    Samba { package_version: String },
+}
+impl Target {
+    fn scope(&self) -> Scope {
+        match self {
+            Self::Systemd => Scope::Systemd,
+            Self::Samba { .. } => Scope::Samba,
+        }
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+struct PackageState {
+    complete: bool,
+    new_samba: bool,
+}
+#[derive(Deserialize)]
+struct DebianTarget {
     package_version: String,
 }
 fn version() -> Result<String> {
-    let target: Target =
+    let target: DebianTarget =
         json_codec::from_str(include_str!("../../../.github/samba-debian-target.json"))?;
     Ok(target.package_version)
 }
 #[derive(Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "zxs-helper-debian-samba-packages")]
-    DebianSamba,
+    #[serialization(rename = "zxs-helper-debian-packages")]
+    DebianDependencies,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Plan {
     format: Format,
-    package_version: String,
+    target: Target,
     host_device: String,
     host_inode: String,
     apt: Snapshot,
@@ -54,6 +110,7 @@ struct Receipt {
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Commit {
+    pub scope: Scope,
     pub request_digest: String,
     pub confirmation: String,
     pub external_administration_stopped: bool,
@@ -61,6 +118,7 @@ pub(crate) struct Commit {
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Refresh {
+    pub scope: Scope,
     pub confirmation: String,
     pub external_administration_stopped: bool,
 }
@@ -68,20 +126,24 @@ pub(crate) struct Refresh {
 #[serialization(tag = "state", rename_all = "snake_case")]
 pub(crate) enum Observation {
     RequiredPackagesInstalled {
-        package_version: String,
+        scope: Scope,
+        target: Target,
     },
     Installable {
+        scope: Scope,
         request_digest: String,
-        plan: Plan,
+        plan: Box<Plan>,
     },
     OriginalPending {
+        scope: Scope,
         request_digest: String,
         packages_installed: bool,
         simulation: String,
     },
     Completed {
+        scope: Scope,
         request_digest: String,
-        package_version: String,
+        target: Target,
     },
 }
 fn host() -> Result<BundleDestination> {
@@ -108,46 +170,53 @@ fn debian_13(release: &str) -> bool {
     matches!(values("ID=").as_slice(), ["debian"] | ["\"debian\""])
         && matches!(values("VERSION_ID=").as_slice(), ["13"] | ["\"13\""])
 }
-fn installed(version: &str) -> Result<[bool; 3]> {
+fn installed(target: &Target) -> Result<PackageState> {
     let query = Executable::open(Program::DpkgQuery)?;
-    let (status, bytes) = query.capture_status(&[
+    let mut args = vec![
         "-W",
         "-f=${Package}\t${Status}\t${Version}\t${Architecture}\n",
-        PACKAGES[0],
-        PACKAGES[1],
-        PACKAGES[2],
-    ])?;
+    ];
+    args.extend_from_slice(target.scope().names());
+    let (status, bytes) = query.capture_status(&args)?;
     if !status.success() && status.code() != Some(1) {
-        return Err(
-            "dpkg-query could not inspect package state; no installation was started".into(),
-        );
+        return Err("dpkg-query could not inspect package state".into());
     }
-    package_rows(std::str::from_utf8(&bytes)?, version)
+    package_rows(std::str::from_utf8(&bytes)?, target)
 }
-fn package_rows(text: &str, version: &str) -> Result<[bool; 3]> {
-    let mut result = [false; 3];
+fn package_rows(text: &str, target: &Target) -> Result<PackageState> {
+    let names = target.scope().names();
+    let mut present = vec![false; names.len()];
     for line in text.lines() {
         let fields = line.split('\t').collect::<Vec<_>>();
         let [name, status, actual, architecture] = fields.as_slice() else {
             return Err("unexpected dpkg-query package record".into());
         };
-        let index = PACKAGES
+        let index = names
             .iter()
             .position(|package| package == name)
             .ok_or("unexpected package in dpkg-query result")?;
-        if result[index]
+        let wrong_version = match target {
+            Target::Samba { package_version } => index < 2 && *actual != package_version.as_str(),
+            Target::Systemd => false,
+        };
+        if present[index]
             || *status != "install ok installed"
-            || (index < 2 && *actual != version)
+            || wrong_version
             || actual.is_empty()
             || *architecture != "amd64"
         {
-            return Err("existing dependency package is partial or Samba differs from the required version; inspect/upgrade it outside this first-install operation".into());
+            return Err(
+                "existing dependency package is partial or differs from the selected target".into(),
+            );
         }
-        result[index] = true;
+        present[index] = true;
     }
-    Ok(result)
+    Ok(PackageState {
+        complete: present.iter().all(|value| *value),
+        new_samba: matches!(target, Target::Samba { .. }) && !present[0],
+    })
 }
-fn apt_args(version: &str, simulate: bool) -> Vec<String> {
+fn apt_args(target: &Target, simulate: bool) -> Vec<String> {
     let mut args = vec![
         "--assume-yes",
         "--no-remove",
@@ -171,7 +240,13 @@ fn apt_args(version: &str, simulate: bool) -> Vec<String> {
         args.push("--simulate".into());
     }
     args.push("install".into());
-    args.extend(PACKAGES[..2].iter().map(|name| format!("{name}={version}")));
+    if let Target::Samba { package_version } = target {
+        args.extend(
+            SAMBA_PACKAGES[..2]
+                .iter()
+                .map(|name| format!("{name}={package_version}")),
+        );
+    }
     args.push("systemd".into());
     args
 }
@@ -183,12 +258,13 @@ struct PreparedPlan {
     bytes: Vec<u8>,
     digest: String,
 }
-fn original(host: &BundleDestination) -> Result<Option<(Plan, String)>> {
-    let Some(bytes) = host.read_operation(ORIGINAL, "plan.json", LIMIT)? else {
+fn original(host: &BundleDestination, scope: Scope) -> Result<Option<(Plan, String)>> {
+    let Some(bytes) = host.read_operation(scope.records().0, "plan.json", LIMIT)? else {
         return Ok(None);
     };
     let plan: Plan = json_codec::from_slice(&bytes)?;
-    if plan.package_version != version()?
+    if plan.target != scope.target()?
+        || (plan.new_samba && scope != Scope::Samba)
         || plan.host_device != host.identity().device.to_string()
         || plan.host_inode != host.identity().inode.to_string()
     {
@@ -201,18 +277,21 @@ fn original(host: &BundleDestination) -> Result<Option<(Plan, String)>> {
     Ok(Some((plan, digest)))
 }
 fn observe(host: &BundleDestination, plan: Plan, digest: String) -> Result<Observation> {
-    let ready = installed(&plan.package_version)? == [true; 3];
-    if let Some(bytes) = host.read_operation(COMPLETE, "receipt.json", LIMIT)? {
+    let scope = plan.target.scope();
+    let ready = installed(&plan.target)?.complete;
+    if let Some(bytes) = host.read_operation(scope.records().1, "receipt.json", LIMIT)? {
         let receipt: Receipt = json_codec::from_slice(&bytes)?;
         if receipt.request_digest != digest || !ready {
             return Err("completed system packages no longer match their original receipt; nothing was reinstalled".into());
         }
         return Ok(Observation::Completed {
+            scope,
             request_digest: digest,
-            package_version: plan.package_version,
+            target: plan.target,
         });
     }
     Ok(Observation::OriginalPending {
+        scope,
         request_digest: digest,
         packages_installed: ready,
         simulation: plan.simulation,
@@ -220,7 +299,7 @@ fn observe(host: &BundleDestination, plan: Plan, digest: String) -> Result<Obser
 }
 fn fresh(
     host: &BundleDestination,
-    version: String,
+    target: Target,
     apt: &Executable,
     new_samba: bool,
 ) -> Result<PreparedPlan> {
@@ -228,12 +307,12 @@ fn fresh(
         require_unclaimed_units()?;
     }
     policy::Policy::open()?.absent_or_original(None)?;
-    let args = apt_args(&version, true);
+    let args = apt_args(&target, true);
     let simulation =
         String::from_utf8(apt.capture(&args.iter().map(String::as_str).collect::<Vec<_>>())?)?;
     let plan = Plan {
-        format: Format::DebianSamba,
-        package_version: version,
+        format: Format::DebianDependencies,
+        target,
         host_device: host.identity().device.to_string(),
         host_inode: host.identity().inode.to_string(),
         apt: apt.snapshot(),
@@ -265,33 +344,34 @@ fn require_unclaimed_units() -> Result<()> {
     }
     Ok(())
 }
-pub(crate) fn preview() -> Result<Observation> {
+pub(crate) fn preview(input: Selection) -> Result<Observation> {
+    let scope = input.scope;
     let host = host()?;
-    if let Some((plan, digest)) = original(&host)? {
+    if let Some((plan, digest)) = original(&host, scope)? {
         return observe(&host, plan, digest);
     }
-    let version = version()?;
-    let current = installed(&version)?;
-    if current == [true; 3] {
-        return Ok(Observation::RequiredPackagesInstalled {
-            package_version: version,
-        });
+    let target = scope.target()?;
+    let current = installed(&target)?;
+    if current.complete {
+        return Ok(Observation::RequiredPackagesInstalled { scope, target });
     }
     let apt = Executable::open(Program::AptGet)?;
-    let prepared = fresh(&host, version, &apt, !current[0])?;
+    let prepared = fresh(&host, target, &apt, current.new_samba)?;
     Ok(Observation::Installable {
+        scope,
         request_digest: prepared.digest,
-        plan: prepared.plan,
+        plan: Box::new(prepared.plan),
     })
 }
 pub(crate) fn refresh(input: Refresh) -> Result<&'static str> {
+    let scope = input.scope;
     if input.confirmation != "refresh-system-package-indexes"
         || !input.external_administration_stopped
     {
         return Err("confirm the download of indexes from configured signed APT sources and stop external package administrators".into());
     }
     let host = host()?;
-    if original(&host)?.is_some() {
+    if original(&host, scope)?.is_some() {
         return Err(
             "a package request is already retained; inspect it without changing indexes".into(),
         );
@@ -309,14 +389,15 @@ pub(crate) fn refresh(input: Refresh) -> Result<&'static str> {
     Ok("configured_apt_indexes_refreshed")
 }
 pub(crate) fn install(input: Commit) -> Result<Observation> {
-    confirm(&input, "install-system-samba-packages")?;
+    let scope = input.scope;
+    confirm(&input, "install-system-packages")?;
     let host = host()?;
-    if original(&host)?.is_some() {
+    if original(&host, scope)?.is_some() {
         return Err("this package request was already admitted; query it and explicitly finish, never automatically repeat APT".into());
     }
-    let version = version()?;
-    let current = installed(&version)?;
-    if current == [true; 3] {
+    let target = scope.target()?;
+    let current = installed(&target)?;
+    if current.complete {
         return Err("the required packages are already installed; recheck them without a new APT transaction".into());
     }
     let apt = Executable::open(Program::AptGet)?;
@@ -324,19 +405,19 @@ pub(crate) fn install(input: Commit) -> Result<Observation> {
         plan,
         bytes,
         digest,
-    } = fresh(&host, version, &apt, !current[0])?;
+    } = fresh(&host, target, &apt, current.new_samba)?;
     if input.request_digest != digest {
         return Err("APT resolution or host changed after preview; inspect a fresh plan before installation".into());
     }
     if !matches!(
-        host.publish(ORIGINAL, &[("plan.json", &bytes)])?,
+        host.publish(scope.records().0, &[("plan.json", &bytes)])?,
         BundlePublication::Created
     ) {
         return Err("original package staging already exists; APT was not repeated, inspect the retained request".into());
     }
     let policy = policy::Policy::open()?;
     policy.install(&policy::contents(&digest))?;
-    let args = apt_args(&plan.package_version, false);
+    let args = apt_args(&plan.target, false);
     apt.package_command(&args.iter().map(String::as_str).collect::<Vec<_>>())
         .map_err(|source| {
             Box::new(Pending { source }) as Box<dyn std::error::Error + Send + Sync>
@@ -364,14 +445,16 @@ fn confirm(input: &Commit, expected: &str) -> Result<()> {
     Ok(())
 }
 pub(crate) fn finish(input: Commit) -> Result<Observation> {
+    let scope = input.scope;
     confirm(&input, "finish-original-system-packages")?;
     let host = host()?;
-    let (plan, digest) = original(&host)?.ok_or("no retained package installation is readable")?;
+    let (plan, digest) =
+        original(&host, scope)?.ok_or("no retained package installation is readable")?;
     if input.request_digest != digest {
         return Err("finish request differs from original package installation".into());
     }
     if host
-        .read_operation(COMPLETE, "receipt.json", LIMIT)?
+        .read_operation(scope.records().1, "receipt.json", LIMIT)?
         .is_some()
     {
         return observe(&host, plan, digest);
@@ -379,7 +462,8 @@ pub(crate) fn finish(input: Commit) -> Result<Observation> {
     finish_original(&host, plan, digest)
 }
 fn finish_original(host: &BundleDestination, plan: Plan, digest: String) -> Result<Observation> {
-    if installed(&plan.package_version)? != [true; 3] {
+    let scope = plan.target.scope();
+    if !installed(&plan.target)?.complete {
         return Err("packages are incomplete; preserve the original request and service-start policy, resolve dpkg state before finishing; APT was not repeated".into());
     }
     let policy = policy::Policy::open()?;
@@ -396,7 +480,7 @@ fn finish_original(host: &BundleDestination, plan: Plan, digest: String) -> Resu
     }
     policy.remove_original(&policy::contents(&digest))?;
     host.publish(
-        COMPLETE,
+        scope.records().1,
         &[(
             "receipt.json",
             &json_codec::to_vec(&Receipt {
@@ -405,8 +489,9 @@ fn finish_original(host: &BundleDestination, plan: Plan, digest: String) -> Resu
         )],
     )?;
     Ok(Observation::Completed {
+        scope,
         request_digest: digest,
-        package_version: plan.package_version,
+        target: plan.target,
     })
 }
 

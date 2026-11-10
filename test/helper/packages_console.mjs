@@ -4,14 +4,15 @@ import {readFileSync} from "node:fs";
 import vm from "node:vm";
 const source = readFileSync("helper/web/packages.js", "utf8");
 const html = readFileSync("helper/web/index.html", "utf8");
-const key = "zxs-helper:system-packages", digest = "a".repeat(64);
-const planned = {state:"installable", request_digest:digest, plan:{simulation:"Inst samba (target Debian [amd64])\n"}};
+const key = "zxs-helper:system-packages:samba", digest = "a".repeat(64);
+const planned = {scope:"samba", state:"installable", request_digest:digest, plan:{simulation:"Inst samba (target Debian [amd64])\n"}};
 function harness(saved = null) {
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, {
     checked:false, disabled:false, textContent:"", handlers:new Map(),
     addEventListener(name, fn) { this.handlers.set(name, fn); },
   }]));
   const byId = id => { assert.ok(elements.has(id), id); return elements.get(id); };
+  byId("packages-scope").value = "samba";
   const storage = new Map(), calls = [], errors = [], confirmations = [], listeners = new Map();
   if (saved !== null) storage.set(key, saved);
   let answer = () => { throw new Error("unexpected request"); };
@@ -30,6 +31,7 @@ function harness(saved = null) {
   vm.runInContext(source, context);
   return {calls, errors, confirmations, storage, context,
     element:name => byId("packages-" + name), answer(fn) { answer = fn; },
+    changeScope(value) { byId("packages-scope").value = value; byId("packages-scope").handlers.get("input")(); },
     async click(name) { await byId("packages-" + name).handlers.get("click")(); },
   };
 }
@@ -61,29 +63,29 @@ assert.equal(flow.calls.length, 3); // Original request blocks any automatic/rep
 const restored = harness(flow.storage.get(key));
 assert.equal(restored.calls.length, 0);
 assert.equal(restored.element("refresh").disabled, true);
-restored.answer(() => ({state:"original_pending", request_digest:digest, packages_installed:false}));
+restored.answer(() => ({scope:"samba", state:"original_pending", request_digest:digest, packages_installed:false}));
 await restored.click("preview");
 assert.equal(restored.element("finish").disabled, true);
-restored.answer(() => ({state:"original_pending", request_digest:digest, packages_installed:true}));
+restored.answer(() => ({scope:"samba", state:"original_pending", request_digest:digest, packages_installed:true}));
 await restored.click("preview");
 assert.equal(restored.element("install").disabled, true);
 assert.equal(restored.element("finish").disabled, false);
 restored.element("ack").checked = true;
-restored.answer(() => ({state:"completed", request_digest:digest, package_version:"target"}));
+restored.answer(() => ({scope:"samba", state:"completed", request_digest:digest, package_version:"target"}));
 await restored.click("finish");
 assert.equal(restored.calls.at(-1).path, "/api/initialization/packages-finish");
 assert.equal(restored.calls.at(-1).request.confirmation, "finish-original-system-packages");
 assert.equal(restored.storage.get(key), digest);
 const discovered = harness();
-discovered.answer(() => ({state:"original_pending", request_digest:digest, packages_installed:true}));
+discovered.answer(() => ({scope:"samba", state:"original_pending", request_digest:digest, packages_installed:true}));
 await discovered.click("preview");
 assert.equal(discovered.element("refresh").disabled, true);
 assert.equal(discovered.element("install").disabled, true);
 for (const value of [
-  {state:"unexpected"},
-  {state:"installable", request_digest:digest, plan:{}},
-  {state:"original_pending", request_digest:digest, packages_installed:"true"},
-  {state:"completed", request_digest:"b".repeat(64)},
+  {scope:"samba", state:"unexpected"},
+  {scope:"samba", state:"installable", request_digest:digest, plan:{}},
+  {scope:"samba", state:"original_pending", request_digest:digest, packages_installed:"true"},
+  {scope:"samba", state:"completed", request_digest:"b".repeat(64)},
 ]) {
   const invalid = harness(digest); invalid.answer(() => value);
   await invalid.click("preview");
@@ -97,3 +99,30 @@ await changed.click("install");
 assert.equal(changed.calls.length, 1);
 assert.equal(changed.storage.get(key), "changed by another handler");
 console.log("system-package explicit index/install/original-finish handlers passed");
+
+const systemd = harness();
+systemd.changeScope("systemd");
+systemd.answer(() => ({scope:"systemd", state:"installable", request_digest:digest,
+  plan:{simulation:"Inst systemd (target Debian [amd64])\n"}}));
+await systemd.click("preview");
+assert.equal(systemd.calls[0].request.scope, "systemd");
+systemd.element("ack").checked = true;
+systemd.answer((path, request) => {
+  assert.equal(request.scope, "systemd");
+  assert.equal(systemd.storage.get("zxs-helper:system-packages:systemd"), digest);
+  return {scope:"systemd", state:"completed", request_digest:digest};
+});
+await systemd.click("install");
+assert.match(systemd.confirmations[0], /本次不请求 Samba 包/);
+assert.equal(systemd.storage.has(key), false);
+systemd.changeScope("samba");
+assert.equal(systemd.element("refresh").disabled, false);
+systemd.changeScope("systemd");
+assert.equal(systemd.element("install").disabled, true);
+assert.equal(systemd.element("refresh").disabled, true);
+const wrongScope = harness();
+wrongScope.answer(() => ({...planned, scope:"systemd"}));
+await wrongScope.click("preview");
+assert.equal(wrongScope.element("install").disabled, true);
+assert.match(wrongScope.errors.at(-1), /所选依赖/);
+console.log("systemd-only and Samba scopes retain independent original requests");

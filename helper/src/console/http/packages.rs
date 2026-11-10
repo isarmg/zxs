@@ -24,9 +24,10 @@ pub(super) async fn preview(
     request: Request,
 ) -> Result<Response, Failure> {
     let permit = admit_job(&state, &request)?;
+    let request = input::<packages::Selection>(request).await?;
     let value = tokio::task::spawn_blocking(move || {
         let _owner = permit;
-        packages::preview().map_err(failure)
+        packages::preview(request).map_err(failure)
     })
     .await
     .map_err(|source| {

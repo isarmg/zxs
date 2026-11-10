@@ -163,6 +163,8 @@
     element("commit").disabled = locked || record === null || (!inspected && !preparesDirectories);
     element("ack").disabled = locked;
     element("samba-settings").disabled = locked || record === null;
+    element("package-settings").hidden = record === null || index() < 1 || index() > 4;
+    element("package-settings").disabled = locked;
     element("account-settings").hidden = record === null || index() !== 2;
     element("account-settings").disabled = locked;
     element("samba-account-settings").hidden = record === null || record.input.deployment.smb === null
@@ -476,6 +478,13 @@
   element("directories-save").addEventListener("click", () => {
     if (busy || stopping || !directoryOriginal) return;
     save(new Blob([JSON.stringify(directoryOriginal)], {type:"application/json"}), "zxs-first-storage-directories-original.json");
+  });
+  element("package-settings").addEventListener("click", () => {
+    if (busy || stopping || blocked || !record) return;
+    byId("packages-scope").value = record.input.deployment.smb === null ? "systemd" : "samba";
+    byId("packages-scope").dispatchEvent(new Event("input", {bubbles:true}));
+    byId("packages").scrollIntoView({block:"start"});
+    error("已带入本次依赖选择。先核对并明确准备系统工具，再回到同一首装步骤。");
   });
   element("samba-settings").addEventListener("click", () => {
     if (busy || stopping || !record?.input.deployment.smb) return;
