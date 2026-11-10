@@ -50,7 +50,7 @@ pub use file_requests::{
     FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
     FileNodeTagsUpdateRequest,
 };
-pub use namespace::NamespaceTree;
+pub use namespace::{CurrentObject, NamespaceTree};
 pub(crate) use namespace::{
     apply_namespace, apply_workspace_namespace, deletion_record, ensure_parents, find_unordered,
     find_unordered_key, sorted, validate_entries, validate_workspace_dependencies,

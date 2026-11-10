@@ -101,12 +101,11 @@ impl EngineBackend {
             return Err(changed());
         }
         if !published {
-            let namespace = engine
-                .namespace_tree(&command.source_binding.branch_id)
-                .map_err(error)?;
-            let entry = namespace
-                .get_key(command.source_path.key())
+            let source = engine
+                .locate_object(&command.source_binding.branch_id, &command.source_path)
+                .map_err(error)?
                 .ok_or_else(changed)?;
+            let entry = source.entry();
             if entry.kind != storage_contract::NamespaceEntryKind::File
                 || entry.entry_id != command.expected_source_entry_id
                 || entry.file_id != command.expected_source_file_id.as_str()
@@ -148,3 +147,4 @@ impl EngineBackend {
         )
     }
 }
+

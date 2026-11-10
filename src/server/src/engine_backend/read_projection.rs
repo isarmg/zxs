@@ -118,8 +118,10 @@ pub(super) fn lookup_current(
     path: &name_policy::LookupPath,
 ) -> Result<Option<storage_contract::Entry>, ApiError> {
     branch_snapshot(engine.state(), branch, None)?;
-    let tree = engine.namespace_tree(branch).map_err(error)?;
-    Ok(tree.get_key(path.key()).cloned())
+    engine
+        .locate_object(branch, path)
+        .map(|object| object.map(|object| object.entry().clone()))
+        .map_err(error)
 }
 
 impl crate::backend_read::DirectoryRegistryBinding {
@@ -365,3 +367,4 @@ fn encoded_size(value: &impl data_serialization::Serialize) -> Result<usize, jso
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/read_projection/tests.rs"]
 mod tests;
+

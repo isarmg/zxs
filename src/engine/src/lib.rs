@@ -151,7 +151,7 @@ mod shared_file_topology;
 mod state_projection;
 mod wire;
 pub use business::{
-    DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection,
+    CurrentObject, DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection,
     DirectoryGitStatusRead, FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
     FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest, NamespaceTree,
     PreparedUpload, UploadPreparation, validate_branch_name,

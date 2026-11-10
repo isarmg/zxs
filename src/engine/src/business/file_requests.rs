@@ -66,21 +66,14 @@ pub(super) fn validate_location(
     let Some(location) = location else {
         return Ok(());
     };
-    name_policy::validate_path(&location.path)?;
-    let version = engine
-        .state()
-        .versions
-        .values()
-        .find(|version| version.file_id == file)
-        .ok_or_else(|| Error::new(storage_contract::ErrorCode::FileNotFound, "file not found"))?;
-    let repo = engine.repository_for_history(&version.history_tree_id)?;
-    let key = name_policy::path_key(&location.path);
-    if location.repository_id != repo.repository_id
-        || !engine
-            .namespace_tree(&repo.main_branch_id)?
-            .get_key(&key)
-            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
-    {
+    let path = name_policy::LookupPath::from(name_policy::PortablePath::parse(&location.path)?);
+    let object = match engine.state().repositories.get(&location.repository_id) {
+        Some(repository) => engine.locate_object(&repository.main_branch_id, &path)?,
+        None => None,
+    };
+    if !object.is_some_and(|object| {
+        object.entry().kind == NamespaceEntryKind::File && object.entry().file_id == file
+    }) {
         return Err(Error::new(
             storage_contract::ErrorCode::FileNotFound,
             "file is not present at this logical path",

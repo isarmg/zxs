@@ -2,6 +2,30 @@
 //! not implement this interface: appends and renames can temporarily break order.
 use super::*;
 
+/// One visible occurrence in a current branch. Identity and display location
+/// borrow the same published entry; no historical version scan selects a file.
+pub struct CurrentObject<'a> {
+    repository: &'a Repository,
+    entry: &'a Entry,
+    initialized_repository_id: Option<&'a str>,
+}
+
+impl<'a> CurrentObject<'a> {
+    pub fn repository(&self) -> &'a Repository {
+        self.repository
+    }
+
+    pub fn entry(&self) -> &'a Entry {
+        self.entry
+    }
+
+    /// Nearest initialized directory repository, including the entry itself
+    /// when it is a repository root. Ordinary directories inherit their owner.
+    pub fn initialized_repository_id(&self) -> Option<&'a str> {
+        self.initialized_repository_id
+    }
+}
+
 /// The immutable, lookup-key-sorted entries of one published commit.
 ///
 /// Obtain this view from [`Engine::namespace_tree`] or
@@ -83,6 +107,21 @@ impl<'a> NamespaceTree<'a> {
             .map(|index| &self.entries[index])
             .filter(|entry| self.visible(entry))
     }
+
+    fn initialized_repository_id(self, key: &str) -> Option<&'a str> {
+        let (directories, repository) = self.directories?;
+        closest_directory_repository(key, |key| {
+            if key.is_empty() {
+                return directories.contains_key(repository).then_some(repository);
+            }
+            self.get_key(key)
+                .filter(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && directories.contains_key(&entry.entry_id)
+                })
+                .map(|entry| entry.entry_id.as_str())
+        })
+    }
 }
 
 impl crate::NamespaceSnapshot {
@@ -96,6 +135,37 @@ impl crate::NamespaceSnapshot {
 }
 
 impl Engine {
+    /// Resolve a current branch occurrence. Absence remains a normal result for
+    /// create/open callers, and soft-deleted entries stay invisible.
+    pub fn locate_object(
+        &self,
+        branch_id: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<Option<CurrentObject<'_>>> {
+        let tree = self.namespace_tree(branch_id)?;
+        let Some(entry) = tree.get_key(path.key()) else {
+            return Ok(None);
+        };
+        Ok(Some(CurrentObject {
+            repository: self.repository_for_branch(branch_id)?,
+            entry,
+            initialized_repository_id: tree.initialized_repository_id(entry.lookup_key()),
+        }))
+    }
+
+    /// Resolve the current main namespace of an outer disk-root repository.
+    pub fn locate_current_object(
+        &self,
+        repository_id: &str,
+        path: &name_policy::LookupPath,
+    ) -> Result<CurrentObject<'_>> {
+        let repository = self.state().repositories.get(repository_id).ok_or_else(|| {
+            Error::new(ErrorCode::RepositoryNotFound, "repository missing")
+        })?;
+        self.locate_object(&repository.main_branch_id, path)?
+            .ok_or_else(|| Error::new(ErrorCode::EntryNotFound, "object is absent at this path"))
+    }
+
     pub(crate) fn workspace_namespace(&self, workspace: &Workspace) -> Result<NamespaceTree<'_>> {
         self.workspace_namespace_entries(workspace)
             .map(NamespaceTree::from_published_entries)

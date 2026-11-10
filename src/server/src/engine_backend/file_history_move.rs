@@ -77,11 +77,9 @@ fn move_current_file_target_locked(
         .operations
         .contains_key(&command.operation_id)
     {
-        let namespace = engine
-            .namespace_tree(&command.source_binding.branch_id)
-            .map_err(error)?;
-        let entry = namespace
-            .get_key(command.source_path.key())
+        let source = engine
+            .locate_object(&command.source_binding.branch_id, &command.source_path)
+            .map_err(error)?
             .ok_or_else(|| {
                 ApiError::new(
                     http::StatusCode::NOT_FOUND,
@@ -89,6 +87,7 @@ fn move_current_file_target_locked(
                     "move source is no longer visible",
                 )
             })?;
+        let entry = source.entry();
         if entry.kind != storage_contract::NamespaceEntryKind::File {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::IsDirectory,
@@ -121,3 +120,4 @@ fn move_current_file_target_locked(
     }
     .map_err(error)
 }
+

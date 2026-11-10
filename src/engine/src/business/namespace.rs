@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 mod draft;
 mod query;
 pub(crate) use draft::NamespaceDraft;
-pub use query::NamespaceTree;
+pub use query::{CurrentObject, NamespaceTree};
 
 /// Change only the display location of an existing entry. Stable entry/file/
 /// version identities and content metadata survive moves, case-only renames,
@@ -181,6 +181,23 @@ pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<(
 pub(crate) fn is_descendant(key: &str, ancestor: &str) -> bool {
     key.strip_prefix(ancestor)
         .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+/// Use the same nearest-owner rule for published lookups and mutable batches.
+/// Each caller retains its existing index; the empty key denotes its root.
+pub(crate) fn closest_directory_repository<'a>(
+    mut key: &str,
+    mut lookup: impl FnMut(&str) -> Option<&'a str>,
+) -> Option<&'a str> {
+    loop {
+        if let Some(repository) = lookup(key) {
+            return Some(repository);
+        }
+        if key.is_empty() {
+            return None;
+        }
+        key = key.rsplit_once('/').map_or("", |(parent, _)| parent);
+    }
 }
 
 pub(crate) fn deleted_path(entry: &Entry) -> DeletedPath {

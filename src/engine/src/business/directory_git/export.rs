@@ -209,14 +209,11 @@ impl Engine {
         destination: &name_policy::PortablePath,
     ) -> Result<Option<FileHistoryCopyRequest>> {
         let state = self.state();
-        let repo = state
-            .repositories
-            .get(repository)
-            .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository missing"))?;
+        let object = self.locate_current_object(repository, source_path)?;
+        let repo = object.repository();
         let view = self.admitted_current_namespaces()?;
         let entries = current_entries(state, view, repository)?;
-        let source = namespace::find_unordered_key(entries, source_path.key())
-            .ok_or_else(|| Error::new(ErrorCode::EntryNotFound, "rename source missing"))?;
+        let source = object.entry();
         if source.kind != NamespaceEntryKind::File
             || !committed_departure(state, repository, entries, source, destination)?
         {

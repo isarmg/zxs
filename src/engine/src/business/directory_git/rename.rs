@@ -70,14 +70,9 @@ pub(super) fn owners<'a>(
     result
 }
 
-pub(super) fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, mut key: &str) -> Option<&'a str> {
-    while let Some((parent, _)) = key.rsplit_once('/') {
-        if let Some(owner) = owners.get(parent) {
-            return Some(owner);
-        }
-        key = parent;
-    }
-    owners.get("").copied()
+pub(super) fn owner_at<'a>(owners: &BTreeMap<&str, &'a str>, key: &str) -> Option<&'a str> {
+    let parent = key.rsplit_once('/').map_or("", |(parent, _)| parent);
+    namespace::closest_directory_repository(parent, |key| owners.get(key).copied())
 }
 
 pub(super) fn contains_owned_file(tree: &DirectoryTree, files: &BTreeSet<&str>) -> bool {
