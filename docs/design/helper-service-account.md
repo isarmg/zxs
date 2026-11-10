@@ -9,7 +9,7 @@
 - 已有账户只准入本地唯一非 root UID 和准确主组 GID，不修改账户或密码。缺失账户必须使用同名主组；首次选择时主组也必须缺失，不能隐式借用已有组。
 - 复用固定 ELF 执行器打开 `/usr/bin/systemd-sysusers`，保留程序身份并以 fd 执行 `--inline` 的单条 `u` 指令，不经 shell、PATH 或运行时下载。新账户使用 `/nonexistent` 和 `/usr/sbin/nologin`，不创建 home、不设置登录密码、不启动或启用服务。
 
-本机 systemd-sysusers 负责系统账户文件锁与原生发布。该入口不安装 OS 依赖，也不创建独立 Samba Unix 账户；已有正式发布链负责把同源码 zxs、Web、VFS 和法律材料嵌入可安装 helper。
+本机 systemd-sysusers 负责系统账户文件锁与原生发布。独立 Samba Unix 账户复用同一 CLI／HTTP 原生入口，不另造账户创建器。控制台的两张账户卡片分别保存原输入和摘要，避免完成 ZXS 账户后冻结记录阻断第二个账户；首装第 3–5 步可带入原配置的 Samba 名称及同名组，准备后回到同一原步骤。部署入口仍核验两者为独立非 root 身份，Unix 用户准备不等于 Samba passdb 登记或密码认证。该入口不安装 OS 依赖；已有正式发布链负责把同源码 zxs、Web、VFS 和法律材料嵌入可安装 helper。
 
 ## 边界与中断
 

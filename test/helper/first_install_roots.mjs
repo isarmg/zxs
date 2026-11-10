@@ -18,6 +18,8 @@ function harness(record = initial(), original = null) {
     value:"", hidden:true, checked:false, disabled:false, elements:[], textContent:"", handlers:new Map(),
     addEventListener(type, handler) { this.handlers.set(type, handler); },
     querySelectorAll() { return []; },
+    dispatchEvent(event) { this.handlers.get(event.type)?.(event); },
+    scrollIntoView() { this.scrolled = true; },
   }]));
   const element = id => { assert.ok(elements.has(id), `missing HTML id: ${id}`); return elements.get(id); };
   element("first-install-form").elements = [element("first-install-roots"), element("first-install-user")];
@@ -28,6 +30,7 @@ function harness(record = initial(), original = null) {
   let answer = () => { throw new Error("unexpected transport call"); };
   const context = vm.createContext({
     byId:element, busy:false, stopping:false, csrf:"token", TextEncoder, structuredClone,
+    Event:class { constructor(type) { this.type = type; } },
     window:{addEventListener() {}, confirm(text) { confirmations.push(text); return true; }},
     document:{addEventListener(type, listener) { listeners.set(type, listener); }},
     sessionStorage:{getItem:name => storage.get(name) ?? null, setItem(name, value) { storage.set(name, value); }},
@@ -146,3 +149,40 @@ for (const [field, value] of [["busy", true], ["stopping", true], ["csrf", ""]])
   assert.equal(locked.confirmations.length, 0);
 }
 console.log("first-install directory correction handlers passed");
+
+// The original first-install input selects two separate Unix identities.
+for (const step of [2, 3, 4]) {
+  const accountRecord = initial();
+  accountRecord.steps.length = step;
+  accountRecord.input.deployment.smb = {account:"zxs-smb", peer_uid:0};
+  const account = harness(accountRecord);
+  assert.equal(account.element("first-install-samba-account-settings").hidden, false);
+  await account.click("samba-account-settings");
+  assert.equal(account.element("samba-unix-account-user").value, "zxs-smb");
+  assert.equal(account.element("samba-unix-account-group").value, "zxs-smb");
+  assert.equal(account.element("samba-unix-account").scrolled, true);
+  assert.equal(account.calls.length, 0);
+  assert.deepEqual(account.record(), accountRecord);
+}
+const collisionRecord = initial();
+collisionRecord.steps.length = 2;
+collisionRecord.input.deployment.smb = {account:"zxs", peer_uid:0};
+const collision = harness(collisionRecord);
+await collision.click("samba-account-settings");
+assert.match(collision.errors.at(-1), /必须独立/);
+assert.equal(collision.calls.length, 0);
+const lockedRecord = initial();
+lockedRecord.steps.length = 2;
+lockedRecord.input.deployment.smb = {account:"zxs-smb", peer_uid:0};
+const lockedAccount = harness(lockedRecord);
+lockedAccount.element("samba-unix-account-user").disabled = true;
+lockedAccount.element("samba-unix-account-user").value = "retained-other";
+await lockedAccount.click("samba-account-settings");
+assert.equal(lockedAccount.element("samba-unix-account-user").value, "retained-other");
+assert.match(lockedAccount.errors.at(-1), /另一原请求/);
+assert.deepEqual(lockedAccount.record(), lockedRecord);
+const disabledSamba = harness();
+assert.equal(disabledSamba.element("first-install-samba-account-settings").hidden, true);
+await disabledSamba.click("samba-account-settings");
+assert.equal(disabledSamba.calls.length, 0);
+console.log("first-install selects the independent Samba Unix account without sending or changing frozen input");

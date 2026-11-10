@@ -1,7 +1,6 @@
 "use strict";
-(() => {
-  const key = "zxs-helper:local-service-account";
-  const element = name => byId("service-account-" + name);
+function localAccountCard(prefix, key, label) {
+  const element = name => byId(prefix + "-" + name);
   let original = null, preview = null, blocked = false, epoch = 0;
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const show = value => { element("report").textContent = JSON.stringify(value, null, 2); };
@@ -10,7 +9,7 @@
       || !/^[0-9a-f]{64}$/.test(value.request_digest)
       || !value.input || Object.keys(value.input).sort().join(",") !== "service_group,service_user"
       || typeof value.input.service_user !== "string" || typeof value.input.service_group !== "string") {
-      throw new Error("服务账户原请求格式无效；未覆盖保存内容。");
+      throw new Error("本机账户原请求格式无效；未覆盖保存内容。");
     }
     return value;
   }
@@ -51,7 +50,7 @@
     if (busy || stopping || !csrf || blocked || !preview) return;
     if (!element("ack").checked) { error("先停止外部账户管理员及其他安装操作。"); return; }
     const request = checked({input:preview.plan.input, request_digest:preview.request_digest});
-    if (!window.confirm("确认准备本机服务账户 " + request.input.service_user
+    if (!window.confirm("确认准备" + label + " " + request.input.service_user
       + " 和主组 " + request.input.service_group + "？\n"
       + (preview.requires_creation ? "将通过 systemd-sysusers 创建非登录账户和同名组，不创建 home，不设置登录密码。"
         : "只核对原有 UID/GID，不修改现有账户。")
@@ -87,4 +86,6 @@
     }
   } catch (failure) { blocked = true; error(failure.message); }
   render();
-})();
+}
+localAccountCard("service-account", "zxs-helper:local-service-account", "ZXS 服务账户");
+localAccountCard("samba-unix-account", "zxs-helper:local-samba-unix-account", "独立 Samba Unix 账户");
