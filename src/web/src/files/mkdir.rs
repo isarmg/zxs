@@ -1,5 +1,3 @@
-//! Recover exact namespace and directory branch requests across sessions.
-//! The server retains authority; browser storage only retains the original input.
 use super::{FileOperation, SaveStatus, actions};
 use crate::{
     api,
@@ -320,7 +318,6 @@ fn send(state: RwSignal<State>, epoch: u64, record: Arc<Record>, submission: Sub
             Err(error) => match submission {
                 Submission::First => actions::record_failure(state, epoch, &id, error),
                 Submission::OriginalRetry => {
-                    // Rejection of a retry is not evidence about the first request.
                     actions::record_operation(state, FileOperation::unknown(&id));
                     fail_in(state, epoch, ErrorContext::Operation(id.clone()), error);
                 }
@@ -381,8 +378,6 @@ pub(crate) fn finish(state: RwSignal<State>, id: &str) {
     };
     let result = storage::remove(&record);
     if state.try_update(|s| complete_cleanup(&mut s.files.mkdir, &record, result)) == Some(true) {
-        // Removing one key cannot clear an unrelated scan or binding error.
-        // Reuse the bounded original-record read before admitting new writes.
         restore(state);
     }
 }
@@ -404,8 +399,6 @@ fn complete_cleanup(
         }
     }
 }
-/// Authentication hydrates before new writes. Reloading local hints and polling
-/// never repeat a mutation or trust a stored completion claim.
 pub(crate) fn restore(state: RwSignal<State>) {
     let Some(current) = state.with_untracked(owner) else {
         return;
@@ -433,8 +426,6 @@ pub(crate) fn restore(state: RwSignal<State>) {
                 .filter(|retained| retained.phase == Phase::Pending)
                 .map(|retained| retained.record.operation().to_string())
                 .collect::<Vec<_>>();
-            // A previous generic observation cannot authenticate newly loaded
-            // browser bytes. Poll again with this exact original request.
             s.files
                 .operations
                 .retain(|operation| !operations.iter().any(|id| id == operation.id()));

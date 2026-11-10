@@ -1,5 +1,3 @@
-//! Shared publication state for inline review panels. Unknown outcomes remain
-//! tied to their original operation, and definitive conflicts preserve drafts.
 use super::{
     actions,
     model::{FileOperation, Model, SaveStatus, publication_notice},
@@ -96,8 +94,6 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
         }
     }
 }
-/// Immutable data from the first send. Credentials are obtained by the API
-/// for each attempt; neither tokens nor CSRF material are retained here.
 struct FrozenRequest {
     id: String,
     method: &'static str,
@@ -317,7 +313,6 @@ fn complete_error(state: &mut State, kind: Kind, attempt: &Attempt, error: &api:
     }
     false
 }
-/// Return whether the still-current tag scope needs a fresh history window.
 fn complete(
     state: RwSignal<State>,
     kind: Kind,

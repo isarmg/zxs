@@ -1,5 +1,3 @@
-//! Browser records are recovery hints, never publication or cleanup authority.
-//! Each operation owns an immutable key, so independent tabs cannot overwrite a queue.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{ErrorCode, OperationId};
@@ -203,8 +201,6 @@ fn load(principal: &str) -> Result<Vec<Record>, api::Error> {
     Ok(records.into_values().collect())
 }
 
-/// Persist and read back before the first network mutation. A failed/uncertain
-/// storage write must not be retried under a newly generated operation ID.
 pub(super) fn save(attempt: &Attempt) -> Result<Record, api::Error> {
     if !load(&attempt.principal)?.is_empty() {
         return Err(failure(t(
@@ -250,7 +246,6 @@ fn retain_original(record: &Record) -> Result<Record, api::Error> {
                 "The retained operation has another exact request; neither record was replaced.",
             ));
         }
-        // Preserve the original label and original submission/recovery mode.
         return Ok(existing.clone());
     }
     if records.len() == MAX_RECORDS {
@@ -356,8 +351,6 @@ fn open(state: RwSignal<State>, operation: OperationId, epoch: u64) {
     });
 }
 
-/// Remove only this exact saved hint after the live UI has a definitive result.
-/// Cleanup observations are never written to or restored from browser storage.
 pub(super) fn remove(attempt: &Attempt) -> Result<(), api::Error> {
     let expected = Record::from_attempt(attempt);
     let storage = storage()?;

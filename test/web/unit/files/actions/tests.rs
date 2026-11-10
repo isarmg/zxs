@@ -49,8 +49,6 @@ fn immutable_directory_snapshots_never_authorize_default_publication() {
     });
     assert!(!default_write_allowed(&state));
     assert!(!write_allowed(&state));
-    // Even a stale writable listing must not turn a historical read into a
-    // publishable current-branch review.
     state.files.writable = true;
     assert!(!default_write_allowed(&state));
     assert!(!write_allowed(&state));

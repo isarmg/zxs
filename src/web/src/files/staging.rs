@@ -1,4 +1,3 @@
-//! Explicit independent directory repositories and reviewed child references.
 mod layout;
 use super::{actions, branch};
 use crate::{
@@ -70,8 +69,6 @@ impl Model {
         let scope = target
             .as_ref()
             .map(|target| (target.epoch, target.repository.clone(), target.path.clone()));
-        // A listing refresh temporarily has no target. Keep this folder's
-        // commit text while its namespace and staging state are read again.
         if scope.is_some() && self.draft_scope != scope {
             self.message.clear();
             self.submitted_message = None;
@@ -512,8 +509,6 @@ fn repository_destination(state: &State, model: &Model, directory: &str) -> Opti
                 .find(|child| child.directory_id == directory)
                 .map(|child| child.path.as_str())
         })?;
-    // Named repositories have a displayed root prefix; disk-root repositories
-    // do not. Preserve that prefix when leaving the current repository path.
     let prefix = if target.path.is_empty() {
         state.files.directory.as_str()
     } else if name_policy::path_key(&state.files.directory) == name_policy::path_key(&target.path) {

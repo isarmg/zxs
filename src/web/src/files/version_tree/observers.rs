@@ -1,4 +1,3 @@
-//! Identity-based resize registration; geometry remains a full-frame measurement.
 use std::cell::Cell;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, MutationRecord, Node, ResizeObserver};
@@ -69,8 +68,6 @@ impl Nodes {
                 let node = added
                     .item(index)
                     .expect("invariant: mutation node-list index exists");
-                // Only the actual connector identity is output. Mixed records
-                // still reconcile every real subtree and schedule measurement.
                 if node.is_same_node(Some(links)) {
                     continue;
                 }
@@ -86,8 +83,6 @@ impl Nodes {
                     continue;
                 }
                 dirty = true;
-                // Removal is by registered identity, even after a class change.
-                // Same-root moves retain their registration at delivery time.
                 self.visit(&node, "*", |element| {
                     if !self.root.contains(Some(&element)) && self.registered.delete(&element) {
                         self.resize.unobserve(&element);

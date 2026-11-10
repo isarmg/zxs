@@ -1,5 +1,3 @@
-//! Stable, finite message keys for the administration page only.
-//! Protocol identifiers and remote diagnostics are not translated.
 use super::request::QueryId;
 use std::borrow::Cow;
 use web_interface::i18n::t;

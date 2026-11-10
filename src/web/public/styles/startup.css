@@ -1,4 +1,3 @@
-/* A resource failure must be readable without the application fonts or WASM. */
 html[data-zxs-startup="failed"] body { visibility: visible !important; }
 html[data-zxs-startup="failed"] body > :not(#zxs-startup-error) { display: none !important; }
 #zxs-startup-error {

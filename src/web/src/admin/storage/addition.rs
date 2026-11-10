@@ -1,4 +1,3 @@
-//! Existing-pool addition keeps its permanent operation across request failures.
 use super::*;
 use std::collections::BTreeMap;
 use storage_contract::{OperationId, storage_addition::*};
@@ -223,8 +222,6 @@ fn resume(state: RwSignal<State>) {
     });
     match continuation {
         Some(continuation) => submit(state, Submit::Resume(continuation)),
-        // A lost initial response can precede persistence. Reuse the exact
-        // original commit body rather than inventing another operation ID.
         None => submit(state, Submit::Commit),
     }
 }
@@ -502,7 +499,6 @@ pub(super) fn load(state: RwSignal<State>) {
                 return None;
             }
             model.reading = true;
-            // Preview-only IDs do not yet have a persisted status.
             let operation = model.submitted.then_some(model.operation).flatten();
             let expected = model.submitted.then(|| model.preview.clone()).flatten();
             Some((s.session_epoch, model.generation, operation, expected))

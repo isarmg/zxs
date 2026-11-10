@@ -144,7 +144,6 @@ fn location(fields: &mut Object, file: bool, historical: bool) -> Result<Locatio
 fn content(fields: &mut Object, backup: bool) -> Result<(Option<String>, Ownership), DecodeError> {
     let version = fields.nullable_id("version_id")?;
     let own = fields.nullable_id("own_version_id")?;
-    // Some("") explicitly suppresses the visible version on pending branches.
     let source = fields.nullable_text("source_version_id")?;
     if source.as_ref().is_some_and(|source| source.len() > 256) {
         return Err(field_error(

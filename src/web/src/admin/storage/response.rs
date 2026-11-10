@@ -1,4 +1,3 @@
-//! Current management-only activation responses, shared with server regression tests.
 use data_serialization::Deserialize;
 use json_codec::Value;
 

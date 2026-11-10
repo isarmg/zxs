@@ -27,8 +27,6 @@ pub fn parse_u64(v: &Value) -> Option<u64> {
         _ => None,
     }
 }
-/// Display the server's UTC timestamp directly, without browser locale or
-/// timezone conversion. UTC wire values remain identical in both UI languages.
 pub fn timestamp(v: &str) -> String {
     if v == "—" || v.is_empty() {
         t("尚无记录", "No record yet")

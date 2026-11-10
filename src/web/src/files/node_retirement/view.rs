@@ -181,8 +181,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
-/// Mounted outside file navigation, so a terminal/unlisted file never strands
-/// its original operation. Controls carry the operation they were rendered for.
 pub(super) fn attempt_view(state: RwSignal<State>) -> impl IntoView {
     view! {
         <For each=move ||state.with(|s|s.files.node_retirement.attempt.as_ref().map(|a|(a.target.epoch,a.operation.clone())).into_iter().collect::<Vec<_>>()) key=|id|id.clone() children=move |(epoch,id)| {

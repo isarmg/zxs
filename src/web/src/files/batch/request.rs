@@ -1,4 +1,3 @@
-//! Pure scope validation and transaction payload construction.
 use super::*;
 
 #[derive(Debug, error_definition::Error)]
@@ -70,8 +69,6 @@ fn target_ref(branch: &ScopeBranch, path: String) -> Result<Value, Error> {
     let tree = branch.summary().head_tree_id();
     Ok(json!({"directory_branch_id":id,"expected_tree_id":tree,"path":path}))
 }
-/// Scope and identity are captured before submission. Never infer all possible
-/// source/target pairs or silently skip an entry absent in another branch.
 pub(super) fn request(draft: &Draft) -> Result<Value, Error> {
     if !draft.source_resolved || draft.loading {
         return Err(t(

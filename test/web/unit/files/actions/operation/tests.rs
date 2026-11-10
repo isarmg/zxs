@@ -6,7 +6,6 @@ fn published() -> Value {
         "../../fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
     value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "original".into();
     value
@@ -66,8 +65,6 @@ fn navigation_clears_the_local_review_but_preserves_original_operation_recovery(
             });
         }
         assert_eq!(state.with_untracked(poll_work), Some((0, vec![])));
-        // Navigation did not authorize another write or settle the receipt.
-        // Its original poll still settles normally, without resurrecting a panel.
         complete_poll(state, 0, "original", Ok(published()));
         state.with_untracked(|s| {
             assert!(!super::super::pending(s));
@@ -162,7 +159,6 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 assert_eq!(s.files.operations.len(), 1);
                 assert_eq!(s.files.operations[0], FileOperation::unknown("original"));
             });
-            // A later valid poll settles this ID and draft, without a new write.
             assert_eq!(
                 record_receipt(state, "original", published()),
                 SaveStatus::Published
@@ -190,7 +186,6 @@ fn receipt_observations_keep_terminal_and_unknown_statuses() {
     pending["protection_at_publish"] = "UNCONFIRMED".into();
     let mut degraded: Value =
         json_codec::from_str(include_str!("../../fixtures/degraded-save-operation.json")).unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
     degraded.as_object_mut().unwrap().remove("current_health");
     degraded["operation_id"] = "original".into();
     for (mut value, status) in [
@@ -231,8 +226,6 @@ fn metadata_polling_requires_an_active_session_before_scheduling_network_work() 
                 .operations
                 .push(FileOperation::unknown("pending-rename"));
             let state = RwSignal::new(initial);
-            // Native tests cannot schedule browser requests; returning here also
-            // proves that inactive sessions do not admit a metadata poll.
             poll(state);
             state.with_untracked(|s| {
                 assert!(s.files.polling_operations.is_empty());
@@ -252,8 +245,6 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
     };
     state.files.file_history =
         crate::files::history::tests::history(json!({"nodes":[{"note":"x".repeat(100_000)}]}));
-    // The typed monitor snapshot participates in the clone check even before
-    // its first valid response; malformed JSON cannot be installed in the model.
     state.files.operations = vec![
         FileOperation::unknown("pending"),
         FileOperation::unknown("in-flight"),

@@ -1,4 +1,3 @@
-//! Same-origin/account recovery input, never authority or an automatic retry.
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
@@ -18,7 +17,6 @@ enum Format {
 pub(super) struct Record {
     format: Format,
     pub(super) operation_id: OperationId,
-    /// Needed when the first start never reached the server before reload.
     pub(super) original_start: Option<wire::StartRequest>,
 }
 
@@ -216,8 +214,6 @@ fn apply_locked(key: &str, action: Action) -> Result<(), api::Error> {
     }
 }
 
-/// The same origin/account lock covers every writer and compare-and-remove.
-/// A missing lock facility is a hard admission failure, never an unlocked fallback.
 async fn exclusive(principal: &str, action: Action) -> Result<(), api::Error> {
     let window = web_sys::window().ok_or_else(failure)?;
     let navigator = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("navigator"))

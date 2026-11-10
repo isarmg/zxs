@@ -1,4 +1,3 @@
-//! Strict ingress for disk observation classifications; other live metrics remain JSON.
 use data_serialization::{Deserialize, Deserializer};
 use json_codec::Value;
 use std::collections::BTreeMap;
@@ -7,8 +6,6 @@ pub(super) use storage_contract::DiskObservationIssue;
 
 pub(super) type DiskIssues = BTreeMap<String, Option<DiskObservationIssue>>;
 
-// Deliberately project only this new boundary, not claim that the entire live
-// status page is typed. The issue object itself rejects unknown fields.
 #[derive(Deserialize)]
 struct Snapshot {
     disks: Vec<Disk>,

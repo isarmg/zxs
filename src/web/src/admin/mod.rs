@@ -1,4 +1,3 @@
-//! Storage administration for the sole authenticated account.
 mod backup_transaction;
 mod disks;
 mod messages;
@@ -121,8 +120,6 @@ impl Model {
             || self.storage.reload_blocked()
     }
 
-    /// A reviewed plan belongs to the inputs that produced or selected it.
-    /// Editing those inputs requires a new preview, not just a new checkmark.
     fn edit_field(&mut self, key: &str, value: String) {
         if self.reload_blocked()
             || self.fields.get(key).map(String::as_str).unwrap_or_default() == value
@@ -201,7 +198,6 @@ fn reject(m: &mut Model, contract: &Contract, error: &api::Error) {
     }
 }
 
-/// The reducer consumes the boundary proof, never reinterprets display JSON.
 fn accept(m: &mut Model, value: ValidatedAdminResponse) {
     use response::Action;
     let matches_write = |operation: &str| match &m.uncertain_operation {
@@ -216,18 +212,16 @@ fn accept(m: &mut Model, value: ValidatedAdminResponse) {
             m.acknowledged = false;
             None
         }
-        Action::Outcome { operation, status } => {
-            // A diagnostic lookup with no pending write must not discard a review.
-            (m.uncertain_operation
-                .as_ref()
-                .and_then(UncertainOperation::id)
-                == Some(operation.as_str())
-                && !matches!(
-                    status,
-                    storage_contract::client_protocol::OperationStatus::Unknown
-                ))
-            .then_some(true)
-        }
+        Action::Outcome { operation, status } => (m
+            .uncertain_operation
+            .as_ref()
+            .and_then(UncertainOperation::id)
+            == Some(operation.as_str())
+            && !matches!(
+                status,
+                storage_contract::client_protocol::OperationStatus::Unknown
+            ))
+        .then_some(true),
         Action::Mutation { operation } => matches_write(&operation).then_some(false),
         Action::PlanReceipt(receipt) => {
             matches_write(&receipt.operation_id.to_string()).then_some(true)

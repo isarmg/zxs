@@ -1,4 +1,3 @@
-//! Administration is split by responsibility, not by backend operation names.
 use super::{messages::Message, request::Kind};
 use web_interface::i18n::t;
 

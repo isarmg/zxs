@@ -1,4 +1,3 @@
-//! Decode the monitoring projection once; no storage or publication authority.
 use data_serialization::{Deserialize, Deserializer};
 
 #[derive(Clone, Debug, Deserialize)]

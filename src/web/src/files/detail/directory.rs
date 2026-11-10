@@ -1,4 +1,3 @@
-//! Actual directory branch and staging controls, owned by current-folder Details.
 use super::super::model::{
     directory_branch_name, directory_branch_value, selected_directory_branch,
 };

@@ -1,4 +1,3 @@
-//! Account creation confirms system authority without claiming a storage pool.
 use data_serialization::Deserialize;
 use json_codec::Value;
 

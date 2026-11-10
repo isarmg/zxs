@@ -189,10 +189,8 @@ fn retry_errors_and_malformed_success_never_reclassify_an_uncertain_original() {
             });
             if status == 401 {
                 assert!(!state.with_untracked(can_retry_tags));
-                // Actual poll admission after revocation is covered in operation tests.
                 return;
             }
-            // A late authoritative outcome can still settle the original ID.
             actions::record_receipt(state, "original-tags", outcome("original-tags"));
             assert!(!state.with_untracked(actions::pending));
             assert!(!state.with_untracked(has_tag_replay));

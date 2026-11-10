@@ -1,4 +1,3 @@
-//! Explicit exit confirmation. Navigation and failed replies never undo an exit.
 use super::*;
 use storage_contract::{
     OperationId,
@@ -29,8 +28,6 @@ impl Model {
                 .as_ref()
                 .is_some_and(|status| status.state != ExitState::Completed)
     }
-    /// Only the read that owns this slot can release it. A newer mutation may
-    /// supersede its result while the original read is still in flight.
     fn finish_read(&mut self, generation: u64) -> bool {
         if self.reading != Some(generation) {
             return false;

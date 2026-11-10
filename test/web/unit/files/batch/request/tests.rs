@@ -314,7 +314,6 @@ fn malformed_http_success_preserves_the_batch_draft_until_a_real_poll_receipt() 
             "../../fixtures/namespace-batch-operation.json"
         ))
         .unwrap();
-        // Project the captured diagnostic into the outcome-only wire contract.
         receipt.as_object_mut().unwrap().remove("current_health");
         receipt["operation_id"] = "original".into();
         assert_eq!(
@@ -586,8 +585,6 @@ fn stale_detail_rename_keeps_original_identity_and_tree_instead_of_retargeting_s
         body["items"][0]["target"],
         json!({"directory_branch_id":"m","expected_tree_id":"tree-m","path":"a/new.txt"})
     );
-    // If scope loading sees a replacement at the old path, fail closed rather
-    // than constructing a path-only rename for the replacement identity.
     update_scope(
         &mut draft.sources[0],
         json!({"entries": json!([file("replacement", "a/old.txt", "replacement-version")])}),
@@ -641,8 +638,6 @@ fn destination_lookup_replaces_cached_targets_using_authoritative_directory_iden
             ..Default::default()
         });
         state.update(|s| s.files.batch = Some(batch));
-        // The native task scope is not mounted, so the real action exposes its
-        // synchronous read-admission state without issuing a browser request.
         super::super::actions::load_target(state);
         state.with_untracked(|s| {
             let batch = s.files.batch.as_ref().unwrap();
@@ -687,7 +682,6 @@ fn registration_poll_reloads_its_branch_records_without_reposting() {
                 batch.selected_sources.clear();
                 batch.mappings.clear();
             }
-            // Use the exact synchronous registration admission used by the action.
             assert!(super::super::actions::begin_scope_registration(&mut batch, "scope-original".into(), destination).is_some());
             let state = RwSignal::new(State {
                 authenticated: true,
@@ -697,7 +691,6 @@ fn registration_poll_reloads_its_branch_records_without_reposting() {
             file_actions::record_operation(state, crate::files::FileOperation::unknown("scope-original"));
             assert!(state.with_untracked(file_actions::pending));
             let mut receipt: Value = json_codec::from_str(include_str!("../../fixtures/namespace-batch-operation.json")).unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
             receipt["operation_id"] = "scope-original".into();
             receipt["operation_kind"] = "directory.git.initialize".into();
@@ -777,7 +770,6 @@ fn scope_receipt() -> Value {
         "../../fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "scope-original".into();
     receipt["operation_kind"] = "directory.git.initialize".into();
@@ -803,7 +795,6 @@ fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() 
             let state = registration_review(destination);
             let original_names =
                 state.with_untracked(|s| s.files.batch.as_ref().unwrap().names.clone());
-            // A complete direct receipt uses the same hook as the later poll.
             assert_eq!(
                 file_actions::record_receipt(state, "scope-original", scope_receipt()),
                 crate::files::model::SaveStatus::Published
@@ -825,8 +816,6 @@ fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() 
                 assert!(!draft.error.is_empty());
                 assert!(!file_actions::pending(s));
             });
-            // These real action entries must return before secure-ID generation
-            // or a new POST, even though general write admission is healthy.
             super::super::actions::initialize_scope(state, destination);
             super::super::actions::submit(state);
             super::super::actions::load_target(state);
@@ -843,7 +832,6 @@ fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() 
             });
             reload_registered_scope(state);
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-            // A repeated receipt cannot release or duplicate the in-flight read.
             file_actions::record_receipt(state, "scope-original", scope_receipt());
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
             let mut registered = branch("registered", if destination { "b" } else { "a" }, vec![]);
@@ -897,15 +885,12 @@ fn registration_receipts_and_reads_belong_only_to_the_original_draft_and_session
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
             assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().targets.is_empty()));
         }
-        // Missing records after confirmed publication remain a read-retry, not
-        // permission to register again under a new operation ID.
         super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(json!({"repository_id":"repo","directory_branches":[]}))));
         assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().registration.is_some()));
         assert!(!state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
         state.update(|s| s.files.batch = None);
         super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(ready)));
         assert!(state.with_untracked(|s| s.files.batch.is_none()));
-        // Closing the review cannot hide expiry of its still-current session.
         super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Err(scope_read_error(401)));
         assert!(!state.with_untracked(State::session_active));
     });
@@ -954,8 +939,6 @@ fn a_replacement_source_without_own_scopes_stays_unregistered() {
             "new-version",
         ))]
         .into();
-        // The server's identity-aware listing has no scopes for the replacement
-        // directory even though a frozen old directory once used the same path.
         initial.files.directory_branches.clear();
         let mut captured = draft(Kind::Copy);
         captured.sources = source_branches(&initial.files);
@@ -1097,8 +1080,6 @@ fn batch_request_uses_the_shared_kind_without_changing_wire_tokens() {
             json_codec::from_value(body.clone()).unwrap();
         assert_eq!(typed.kind, expected);
         assert_eq!(typed.items.len(), body["items"].as_array().unwrap().len());
-        // The UI has always omitted delete targets; typed HTTP admission
-        // represents the same absence as None, serialized as null.
         assert!(typed.items.iter().all(|item| item.target.is_none()
             == (expected == storage_contract::DirectoryBatchKind::Delete)));
     }
@@ -1260,8 +1241,6 @@ fn queued_confirmation_cannot_consume_a_replacement_proposal_with_equal_text() {
     draft.names.insert(key.clone(), "e\u{301}".into());
     propose_first_name(&mut draft);
     let stale = draft.name_error.clone().unwrap();
-    // A new Apply after a review change creates a distinct proposal even if
-    // both visible spellings happen to equal the previous ones.
     propose_first_name(&mut draft);
     assert!(!actions::accept_name(&mut draft, &stale));
     assert_eq!(draft.names[&key], "e\u{301}");
@@ -1272,7 +1251,6 @@ fn queued_confirmation_cannot_consume_a_replacement_proposal_with_equal_text() {
 #[test]
 fn batch_nfc_review_requires_a_selected_source_even_when_inputs_are_editable() {
     let mut draft = draft(Kind::Rename);
-    // Match the browser fixture: a file at the repository root, not a disk path.
     let chosen = file("f", "browser-smoke.txt", "F1");
     draft.repository_path.clear();
     draft.entries = vec![listed(chosen.clone())];
@@ -1283,8 +1261,6 @@ fn batch_nfc_review_requires_a_selected_source_even_when_inputs_are_editable() {
     draft.names.insert(key.clone(), "e\u{301}".into());
     let selected = std::mem::take(&mut draft.selected_sources);
     let sources = std::mem::take(&mut draft.sources);
-    // A resolved but unregistered/unchecked scope leaves the text input enabled.
-    // Apply must reject that scope, not offer a candidate for an unbound write.
     assert!(draft.source_resolved && !draft.loading);
     assert!(matches!(request(&draft), Err(Error::Scope(_))));
     assert!(draft.name_error.is_none());
@@ -1426,7 +1402,6 @@ fn separation_switching_original_branch_clears_the_old_destination() {
             assert!(review.mappings[0].target.is_empty());
             assert!(request(review).is_err());
         });
-        // A repeated selection cannot append a second mapping or revive the old target.
         super::super::actions::toggle_source(state, "n".into(), true);
         assert_eq!(
             state.with_untracked(|s| s.files.batch.as_ref().unwrap().mappings.len()),

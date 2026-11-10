@@ -182,7 +182,6 @@ fn capacity_warning(value: Option<&WorkspaceCapacity>) -> String {
     }
 }
 
-// None represents an unavailable whole response, never a role-hidden scope.
 fn capacity_summary(scope: Option<&WorkspaceCapacityScope>) -> String {
     let Some(scope) = scope else {
         return t("不可用", "Unavailable");

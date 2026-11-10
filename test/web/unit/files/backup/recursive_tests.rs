@@ -78,7 +78,7 @@ fn recursive_wire_preserves_the_entire_capture_and_u64_strings_without_custom_pr
     assert_eq!(body["path"], "docs");
     assert_eq!(body["target_copies"], 3);
     assert!(body.get("backup_prefixes").is_none());
-    assert!(body.get("operation_id").is_none()); // The publication boundary allocates it once.
+    assert!(body.get("operation_id").is_none());
 }
 #[test]
 fn preview_uses_every_immediate_source_and_keeps_primaries_independent() {

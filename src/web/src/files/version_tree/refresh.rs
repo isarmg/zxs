@@ -1,5 +1,3 @@
-//! One outstanding measurement frame per mounted tree. Observer registration
-//! remains immediate so newly inserted nodes cannot miss resize notifications.
 use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{JsCast, closure::Closure};
 
@@ -49,9 +47,6 @@ impl FrameRefresh {
             return;
         }
         let weak = Rc::downgrade(self);
-        // JS owns this callback, as in dom_helpers' frame helper. Cancellation
-        // can therefore release it through host GC without leaving an invalid
-        // dropped Rust closure registered with the browser. It owns no signals.
         let callback = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
             if let Some(refresh) = weak.upgrade() {
                 refresh.run();
@@ -68,8 +63,6 @@ impl FrameRefresh {
                     &"Could not schedule version-tree measurement".into(),
                     &error,
                 );
-                // Scheduling failed at the host boundary. Do not substitute an
-                // immediate layout read; remain Idle for a later notification.
             }
         }
     }
@@ -90,8 +83,6 @@ impl FrameRefresh {
         if let Some(id) = pending
             && let Err(error) = self.window.cancel_animation_frame(id)
         {
-            // A late callback sees Closed (or a dead Weak) and cannot read a
-            // cleaned-up owner, even when the host rejects cancellation.
             web_sys::console::warn_2(&"Could not cancel version-tree measurement".into(), &error);
         }
     }

@@ -1,10 +1,8 @@
-//! Single-line metadata edits share the branch editor's commit/cancel behavior.
 use super::{actions, history::NodeKind, model::NamespaceAction};
 use crate::{icons::FileIcon, ui::State};
 use wasm_bindgen::JsCast;
 use web_interface::{html, i18n::t, prelude::*};
 
-// Branch labels and notes retain their metadata budget; namespace names use name-policy.
 pub(super) const MAX_TEXT_BYTES: usize = storage_contract::MAX_NOTE_BYTES;
 
 fn needs_first_folder(model: &super::model::Model) -> bool {
@@ -197,9 +195,6 @@ fn edit_value(value: &str, kind: InputKind) -> Edit {
     }
 }
 
-/// Shared lifetime and receipt handling for metadata and branch-name editors.
-/// A request owns its draft until that exact operation is terminal. Disabling
-/// the input can fire blur, which must never discard an in-flight draft.
 #[derive(Clone, Copy)]
 pub(super) struct Draft {
     state: RwSignal<State>,
@@ -357,7 +352,6 @@ impl Draft {
                 .expect("invariant: an active editor captured its context")
                 .epoch
         });
-        // The state may already be disposed when the document owner closes.
         let _ = self.state.try_update(|state| {
             if state.session_epoch == epoch {
                 state.files.history_editors -= 1;
@@ -468,7 +462,6 @@ impl Draft {
             });
             return;
         }
-        // Establish the blur guard before admission changes disabled state.
         self.operation.set(Some(String::new()));
         self.error.set(false);
         self.name_error.set(None);
@@ -489,7 +482,6 @@ impl Draft {
     }
 }
 
-/// Persisted metadata is only read when editing starts, never on a failed save.
 #[derive(Clone, Copy)]
 struct Editor {
     state: RwSignal<State>,
@@ -649,8 +641,6 @@ pub(super) fn control(
     }
 }
 
-/// Expanded node details keep the full note and an explicit edit action.
-/// Only that note text is replaced by an underline input, not the card title.
 pub(super) fn version_note(
     state: RwSignal<State>,
     target: Target,

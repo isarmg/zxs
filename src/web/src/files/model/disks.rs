@@ -1,4 +1,3 @@
-//! File-manager disk records, separate from topology and monitor observations.
 use data_serialization::{Deserialize, Deserializer, de::Error as _};
 use json_codec::Value;
 use std::num::NonZeroU32;
@@ -10,7 +9,6 @@ pub(crate) struct Disk {
     pub slot_id: String,
     pub level: NonZeroU32,
     pub online: bool,
-    /// Directory mode reported by the server, not current write authority.
     pub writable: bool,
     pub available_bytes: Option<u64>,
     pub observation_failure: Option<DiskObservationIssue>,

@@ -1,4 +1,3 @@
-//! Preview navigation retains its exact owner; it never publishes a selection.
 use crate::{
     files::{actions, detail, model::directory_branch_name},
     ui::State,

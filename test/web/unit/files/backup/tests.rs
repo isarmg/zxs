@@ -127,7 +127,6 @@ fn backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_re
         let body = request(&draft).unwrap();
         assert_eq!(body["backup_prefixes"], json!({"B01":"preserved-prefix"}));
         assert_eq!(body["expected_generation"], u64::MAX.to_string());
-        // An absent slot within a valid map means the legitimate empty prefix.
         draft
             .configuration
             .as_mut()
@@ -138,7 +137,6 @@ fn backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_re
             request(&draft).unwrap()["backup_prefixes"],
             json!({"B01":""})
         );
-        // Route changes may leave the original count above the current maximum.
         let configuration = draft.configuration.as_mut().unwrap();
         configuration.backup_routes = vec![vec!["P01".into()]];
         configuration.max_copies = 1;
@@ -191,7 +189,6 @@ fn closed_backup_read_still_revokes_its_expired_session() {
             session_epoch: 7,
             ..Default::default()
         });
-        // The user closed the panel before this request completed.
         assert!(state.with_untracked(|s| s.files.backup.is_none()));
         complete_configuration_load(state, 7, "closed-draft", Err(unauthorized()));
         state.with_untracked(|s| {
@@ -264,7 +261,6 @@ fn replaced_backup_panel_ignores_old_data_but_not_a_current_session_revocation()
             assert!(draft.configuration.is_none());
         });
         complete_configuration_load(state, 7, "old-draft", Err(unauthorized()));
-        // A concurrent rejection must not report the same expired session twice.
         complete_configuration_load(state, 7, "new-draft", Err(unauthorized()));
         state.with_untracked(|s| {
             assert!(!s.session_active());

@@ -92,8 +92,6 @@ fn branch_name(value: &str) -> Name {
     }
 }
 
-/// The editor owns only local focus and text. Metadata refreshes leave it mounted;
-/// navigating to a different disk, folder or file cancels the unfinished name.
 pub(super) fn control(
     state: RwSignal<State>,
     label: String,
@@ -106,14 +104,11 @@ pub(super) fn control(
     let error = draft.error;
     let label = StoredValue::new(label);
     let target = StoredValue::new(target);
-    // The name editor owns its reviewed source, even if metadata refreshes.
     let frozen = RwSignal::new(None);
 
     view! {
         <span class="zxs-inline-branch zxs-flow zxs-flow--inline">
             {move || if editing.get() {
-                // Each edit receives its own ref so focus also works when a
-                // cancelled editor is opened again.
                 let input = NodeRef::<html::Input>::new();
                 input.on_load(|input| { if let Err(error) = input.focus() { web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error); } });
                 view! {

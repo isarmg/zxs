@@ -1,4 +1,3 @@
-//! Source-only admission and stale-owner cases. No localStorage or HTTP execution.
 use super::*;
 
 fn operation() -> OperationId {
@@ -158,7 +157,6 @@ fn cancelled_edited_or_previous_session_controls_cannot_save_another_candidate()
         snapshot.session_epoch = 8;
         let state = RwSignal::new(snapshot);
         let model = RwSignal::new(model);
-        // Both return before storage or network: stale generation, then owner.
         accept(state, model, 4);
         accept(state, model, 5);
         assert!(model.with_untracked(|model| model.saved.is_none()));

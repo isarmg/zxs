@@ -1,5 +1,3 @@
-//! A session-local shortcut after this editor's original move is published.
-//! It grants no mutation authority and never repeats or polls a request.
 use super::{Review, actions};
 use crate::{files::SaveStatus, ui::State};
 use web_interface::{i18n::t, prelude::*};

@@ -1,6 +1,3 @@
-/* Six authentication rows retain shared row height and the original 48px G4
- * card corner. Healthy desktop forms prefer 3:2; error feedback explicitly
- * releases that ratio so the six tracks can size to their full content. */
 .authentication-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; justify-items: center; align-items: start; gap: 1rem; min-height: 100dvh; padding: 24px; box-sizing: border-box; color: var(--zxs-text-primary,#18181b); background: var(--zxs-bg-page,#fafafa); font-family: var(--zxs-font-ui,monospace); line-height: var(--zxs-line-height-body,1.5); }
 .authentication-language { justify-self: end; }
 .authentication-content { display: grid; align-self: center; justify-items: stretch; gap: 1rem; width: min(calc(var(--zxs-compact-row-height) * 9), 100%); min-width: 0; }
@@ -14,9 +11,6 @@
 .authentication-card .zxs-auth-label { display: flex; align-items: center; gap: 1ch; }
 .authentication-shell .authentication-card input.zxs-input { height: auto; min-height: var(--zxs-compact-row-height); padding: 0; border: 0; border-inline-start: 2px solid transparent; border-radius: 0; background: transparent; outline: 0; }
 .authentication-shell .authentication-card input.zxs-input:focus-visible { border-inline-start-color: var(--zxs-focus,Highlight); }
-/* The outer card is the only decorative box. Inputs stay unlined;
- * keyboard focus uses the shared leading-edge marker without changing geometry. The shell
- * scope outranks the appearance root plus .zxs-error, even when loaded earlier. */
 .authentication-shell .authentication-card :is(.zxs-auth-information, .zxs-auth-actions, .zxs-error, .zxs-button) { border: 0; background: transparent; box-shadow: none; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 .authentication-card .zxs-auth-information { display: grid; align-items: center; overflow-wrap: anywhere; }
 .authentication-card .zxs-error { margin: 0; padding: 0; font-size: inherit; }

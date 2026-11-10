@@ -179,9 +179,6 @@ fn status_reads_wait_until_storage_retry_settles() {
             s.management.storage = Storage::Unavailable;
             s.management.generation = 7;
         });
-        // The timer and the manual action share this admission boundary.
-        // An overlapping read could otherwise return pre-retry state and
-        // incorrectly clear retry_unknown after the POST fails ambiguously.
         load(state);
         state.with_untracked(|s| {
             assert!(!s.management.loading);
@@ -197,7 +194,6 @@ fn status_reads_wait_until_storage_retry_settles() {
         state.with_untracked(|s| {
             assert!(s.management.loading);
             assert_eq!(s.management.generation, 8);
-            // Admission alone cannot resolve an uncertain write.
             assert!(s.management.retry_unknown);
         });
     });
@@ -234,7 +230,6 @@ fn failed_disk_reads_retry_and_storage_recovery_refreshes_loaded_disks() {
         ..Default::default()
     };
     state.management.storage = Storage::Ready;
-    // A failed first request does not mark the listing loaded.
     assert!(needs_disk_refresh(&state, true));
     state.files.disks_loaded = true;
     for storage in [Storage::Ready, Storage::ReadOnly] {
@@ -297,7 +292,6 @@ fn an_already_ready_retry_response_retains_refresh_demand_for_the_following_stat
     };
     state.management.storage = Storage::Unavailable;
     state.files.disks_loaded = true;
-    // The retry POST may itself report Ready before the subsequent status GET.
     let was_readable = state.management.storage.readable();
     state.management.storage = Storage::Ready;
     invalidate_restored_disks(&mut state, was_readable);
@@ -342,7 +336,6 @@ fn global_status_changes_preserve_the_current_page_editors_and_unknown_operation
             assert!(!state.management.storage.writable());
             assert!(crate::files::pending(&state));
             assert_eq!(state.files.operations[0].id(), "original");
-            // Closing the editor does not make a later status poll take over navigation.
             state.files.history_editors = 0;
             accept_status(&mut state, status_fixture("ready", storage, true, false));
             assert_eq!(state.page, page);

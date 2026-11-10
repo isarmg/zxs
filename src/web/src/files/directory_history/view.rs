@@ -32,8 +32,6 @@ fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
     on_cleanup(move || {
         let _ = model.try_update(Model::cancel);
     });
-    // A listing refresh keeps the detail owner and old graph mounted. Wait for
-    // that read to finish, then replace this graph from the new metadata root.
     let listing = Memo::new(move |_| {
         state.with(|state| {
             (

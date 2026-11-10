@@ -1,4 +1,3 @@
-//! CSS grid owns node and connector tracks, including wrapped text and resizing.
 use super::{Source, Topology};
 use crate::{admin::storage, ui::State};
 use std::sync::Arc;

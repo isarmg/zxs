@@ -21,8 +21,6 @@ pub(crate) fn parse_disks(value: Value) -> Result<Vec<Disk>, crate::api::Error> 
     })
 }
 
-/// Owned destinations supplied by disk rows, directory rows or breadcrumbs.
-/// Directory navigation keeps the currently selected disk.
 pub(crate) enum Navigation {
     Root,
     Disk(String),
@@ -40,7 +38,6 @@ pub(crate) struct Model {
     pub slot: String,
     pub directory: String,
     pub writable: bool,
-    /// One bounded server page, shared by listing rows.
     pub entries: Arc<[Entry]>,
     pub cursor: Option<String>,
     pub next_cursor: Option<String>,
@@ -83,9 +80,7 @@ pub(crate) struct Model {
     pub operations: Vec<FileOperation>,
     pub polling_operations: Vec<String>,
     pub mutation_pending: bool,
-    /// Last explicitly submitted query, used by refresh and pagination.
     pub query: String,
-    /// Editable text; typing and clearing do not change the current listing.
     pub query_draft: String,
 }
 #[derive(Clone, Debug)]
@@ -127,8 +122,6 @@ impl DirectoryPreview {
     }
 }
 impl Model {
-    /// Reset location-owned state without discarding disk reads or operation
-    /// recovery. Session admission and starting the next read belong to actions.
     pub(crate) fn navigate(&mut self, destination: Navigation) {
         self.deletion.cancel_review();
         self.cancel_listing();
@@ -147,8 +140,6 @@ impl Model {
             Navigation::Root => {
                 self.slot.clear();
                 self.directory.clear();
-                // The disk view does not consume the directory query/readiness.
-                // Opening a disk establishes them for the next directory read.
             }
             Navigation::Disk(slot) => {
                 self.slot = slot;
@@ -177,14 +168,11 @@ impl Model {
         self.batch = None;
     }
 
-    /// A recovered store needs a fresh disk snapshot, even if an older read is
-    /// still in flight. Only this generation may mark the listing loaded again.
     pub(crate) fn invalidate_disks(&mut self) {
         self.disks_generation += 1;
         self.disks_loaded = false;
     }
 
-    /// Page-local selection is never carried to unloaded entries.
     pub(crate) fn cancel_listing(&mut self) {
         if let Some(cancellation) = self.listing_cancellation.take() {
             cancellation.abort();
@@ -247,8 +235,6 @@ impl Model {
             } else if content_changed {
                 self.cancel_history();
                 self.file_history.invalidate();
-                // Selections and action drafts retain their captured heads.
-                // A new root requires a complete explicit review before reuse.
             }
             self.selected = Some(entry);
         } else {
@@ -262,7 +248,6 @@ pub(crate) enum NamespaceAction {
 }
 pub(crate) use storage_contract::client_protocol::OperationStatus as SaveStatus;
 
-/// An operation observation, not a receipt or an authorization grant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FileOperation {
     id: String,
@@ -278,7 +263,6 @@ impl FileOperation {
                 status,
             }
         } else {
-            // A malformed or unrelated response cannot settle the original write.
             Self::unknown(id)
         }
     }
@@ -344,8 +328,6 @@ pub(crate) fn validate_name(name: &str) -> name_policy::Result<()> {
 pub(crate) fn file_kind(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File
 }
-/// A stable file ID can appear at several frozen logical paths. History and
-/// branch selection must carry the view path, independently of physical owner.
 pub(crate) fn entry_key(entry: &Entry) -> String {
     format!("{}\0{}", entry.entry_id(), entry.path())
 }

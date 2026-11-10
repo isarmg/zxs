@@ -1,5 +1,3 @@
-//! Typed retained commands derive both the HTTP request and server digest.
-//! No retry reads the current listing or mints another operation identity.
 use super::*;
 use storage_contract::directory_git::DirectoryBranchCreateSource;
 

@@ -1,4 +1,3 @@
-//! Bounded target-folder navigation only edits the existing move draft.
 use super::*;
 use crate::files::page::PAGE_SIZE;
 
@@ -89,8 +88,6 @@ fn choose(state: RwSignal<State>, editor: Editor, generation: u64) {
     });
     if let Some(destination) = destination {
         editor.destination.set(destination);
-        // Selection is not publication. Re-read the chosen parent through the
-        // same review path before the user can confirm the original move.
         review_destination(state, editor);
     }
 }

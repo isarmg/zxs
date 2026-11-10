@@ -1,4 +1,3 @@
-//! Original-request text boundary cases; no browser storage, clipboard or network.
 use super::*;
 
 const ORIGIN: &str = "https://zxs.example:8443";
@@ -152,8 +151,8 @@ fn edited_and_previous_session_controls_return_before_storage_or_browser_access(
         snapshot.session_epoch = 5;
         let state = RwSignal::new(snapshot);
         let model = RwSignal::new(model);
-        accept(state, model, 3); // old input generation
-        accept(state, model, 4); // old session
+        accept(state, model, 3);
+        accept(state, model, 4);
         assert!(export(state, 4, &record()).unwrap().is_none());
         assert!(model.with_untracked(|model| model.saved.is_none()));
         assert!(state.with_untracked(|s| s.files.node_retirement.attempt.is_none()));
@@ -170,7 +169,6 @@ fn recovery_text_uses_a_native_non_void_multiline_control() {
         assert!(!Textarea::SELF_CLOSING);
         assert!(Textarea::ESCAPE_CHILDREN);
     };
-    // Construct both supported controls without mounting a DOM on the host.
     let _export = view! { <textarea readonly rows="6" prop:value="original request"/> };
     let _import = view! {
         <textarea rows="6" maxlength=MAX_TRANSFER_BYTES autocomplete="off"

@@ -1,4 +1,3 @@
-//! Device-health display uses only the report attached to this directory card.
 use date_time::OffsetDateTime;
 use storage_contract::disk_details::{
     DiskDetailsRecord, DiskHealth, DiskHealthAssessment, DiskHealthUnavailable, DiskMapping,

@@ -1,4 +1,3 @@
-//! Inline operation review using shared rows, frames and selects.
 use super::actions::{initialize_scope, load_sources, load_target, submit, toggle_source, update};
 use super::*;
 use crate::icons::FileIcon;

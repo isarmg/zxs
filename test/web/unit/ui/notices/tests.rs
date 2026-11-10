@@ -1,6 +1,5 @@
 use super::*;
 
-// Shared read-only assertions stay in the test tree, not the product model.
 impl Notices {
     pub(crate) fn message(&self) -> Option<&str> {
         self.visible.as_ref().map(|notice| notice.message.as_str())

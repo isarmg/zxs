@@ -1,5 +1,3 @@
-//! Explicit multi-branch merge review. Inputs and their heads are frozen when
-//! opening the panel; the chosen result may be any node of this file.
 use super::{
     actions,
     history::{FileNode, NodeKind, reads::ReviewOwner},

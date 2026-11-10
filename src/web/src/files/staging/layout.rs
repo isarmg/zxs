@@ -1,4 +1,3 @@
-//! Explicit repository-wide repair, with no automatic execution or job polling.
 use super::{Model, Target, actions};
 use crate::{
     api,
@@ -45,8 +44,6 @@ fn begin(state: &mut State, model: &Model, phase: &mut Phase) -> Option<Target> 
     *phase = Phase::Running(target.clone());
     Some(target)
 }
-/// Files navigation preserves this exclusive pending gate. Session replacement
-/// replaces the entire Files model; an older epoch must never release its gate.
 fn release(state: &mut State, target: &Target) -> bool {
     if !state.session_active() || state.session_epoch != target.epoch {
         return false;
@@ -122,7 +119,6 @@ fn finish(
     if refresh_storage {
         crate::management::load(state);
     }
-    // Even an obsolete page's 401 revokes its current session, not a newer one.
     let accepted = accept_read_response(state, target.epoch, &result);
     let _ = phase.try_update(|phase| complete(phase, target, result, accepted && same_page));
 }

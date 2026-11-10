@@ -296,7 +296,6 @@ fn cancelled_superseded_history_completion_cannot_clear_current_loading_or_feedb
                 request_id: None,
             });
         });
-        // Return to the same range after rapid switching: generation still distinguishes reads.
         for generation in 1..21 {
             complete_history_load(
                 state,

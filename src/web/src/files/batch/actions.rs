@@ -1,4 +1,3 @@
-//! Captured scope reads and publication with session/generation fences.
 use super::*;
 use crate::files::model::FileOperation;
 pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
@@ -12,8 +11,6 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
         return;
     }
     if kind == Kind::Delete {
-        // Ordinary Delete owns the whole stable file, not a chosen subset of
-        // directory branches. Unsupported selections never fall back to batch.
         super::super::deletion::start(state, entry);
         return;
     }
@@ -108,8 +105,6 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
     open_draft(state, draft);
 }
 pub(super) fn open_draft(state: RwSignal<State>, mut draft: Draft) {
-    // Empty scopes in the identity-aware listing remain authoritative. A path
-    // query must never resurrect branches belonging to a replaced directory.
     draft.source_resolved = draft.sources.is_empty() && draft.kind != Kind::Separate;
     draft.loading = false;
     state.update(|s| {
@@ -339,8 +334,6 @@ fn current_target(state: RwSignal<State>, id: &str, generation: u64) -> bool {
             .is_some_and(|draft| draft.id == id && draft.generation == generation)
     })
 }
-/// Return true only when a current, authoritative scope read found no records.
-/// A path in an unscoped catalogue can belong to a different, moved directory.
 pub(super) fn complete_target_scopes(
     state: RwSignal<State>,
     epoch: u64,
@@ -459,8 +452,6 @@ pub(super) fn load_target(state: RwSignal<State>) {
         if !complete_target_scopes(state, epoch, &id, generation, result) {
             return;
         }
-        // No registered scope exists. Verify the live writable directory before
-        // offering registration, while leaving historical-only scopes readable.
         let cancellation = match start_scope_read(state, epoch, &id, generation) {
             Ok(Some(value)) => value,
             Ok(None) => return,
@@ -594,7 +585,6 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
         }
         match result {
             Ok(value) => {
-                // The same settlement hook resumes reads for direct and polled receipts.
                 file_actions::record_receipt(state, &operation_id, value);
             }
             Err(error) => {
@@ -615,8 +605,6 @@ pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
                 fail(state, error);
             }
         }
-        // Receipt settlement owns draft.loading: a confirmed receipt may already
-        // have started a follow-on read that this POST must not release.
         state.update(|s| s.files.mutation_pending = false);
     });
 }
@@ -776,8 +764,6 @@ pub(super) fn complete_registered_scope(
         }
     }
 }
-/// Confirmation changes only the displayed original; the complete request is
-/// rebuilt against the current branch identities and target paths below.
 pub(super) fn accept_name(draft: &mut Draft, expected: &NameFailure) -> bool {
     if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
         return false;

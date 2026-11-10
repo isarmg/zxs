@@ -1,5 +1,3 @@
-//! Object-bound history selection. Source identities stay frozen across pages;
-//! only the selected result is adopted into a new, explicitly named branch.
 use super::*;
 use std::collections::BTreeSet;
 
@@ -204,8 +202,6 @@ fn change_source(state: &mut State, instance: u64, id: &str) -> Result<bool, Str
     Ok(needs_read)
 }
 
-/// The proof was admitted against this draft's exact root. It may complete
-/// after the node page changes, so retain the immutable clicked facts directly.
 pub(super) fn insert_resolved_source(
     state: &mut State,
     instance: u64,

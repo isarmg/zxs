@@ -1,6 +1,3 @@
-//! The registered backup forest, admitted once at the disk-list boundary.
-//! Each configured source has at most one next-tier successor. Missing sources
-//! can remain after deregistration; they are shown without invented edges.
 use super::{DecodeError, invalid};
 use crate::api;
 use data_serialization::Deserialize;

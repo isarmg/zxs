@@ -1,5 +1,3 @@
-//! File history ancestry, including body and path nodes, laid out once per identity/edge change. Notes never
-//! participate in layout keys, so refreshing metadata preserves active editors.
 use super::{
     actions, branch,
     history::{FileNode, NodeKind, ParentEndpoint, ParentSet},
@@ -59,8 +57,6 @@ fn newer_first(a: &Version, b: &Version) -> std::cmp::Ordering {
     b.sequence.cmp(&a.sequence).then_with(|| a.id.cmp(&b.id))
 }
 
-/// This marker belongs to the selected branch projection, not the immutable
-/// parent version. Its tree node remains one real historical node.
 fn inherited_current(model: &Model, version: &str) -> bool {
     (model.file_history.current_inherited()
         && model.file_history.current_node_id() == Some(version))
@@ -71,8 +67,6 @@ fn inherited_current(model: &Model, version: &str) -> bool {
                 .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version)))
 }
 
-/// Iterative Kosaraju traversal: each adjacency is visited once in each
-/// direction, without using the browser call stack for long histories.
 fn components(children: &[Vec<usize>], parents: &[Vec<usize>]) -> Vec<usize> {
     let mut seen = vec![false; children.len()];
     let mut finished = Vec::with_capacity(children.len());
@@ -146,14 +140,11 @@ thread_local! {
     };
 }
 
-/// Only declared, visible parents produce edges. Cyclic edges are isolated
-/// rather than inventing chronology or making the traversal recurse forever.
 fn layout(versions: &[Version]) -> Layout {
     let mut nodes = versions.to_vec();
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
     let mut indexes = BTreeMap::new();
     for (index, version) in nodes.iter().enumerate() {
-        // Ingress rejects duplicate node identities; projection preserves them.
         assert!(
             indexes.insert(version.id.as_str(), index).is_none(),
             "invariant: admitted history nodes have unique identities"
@@ -166,8 +157,6 @@ fn layout(versions: &[Version]) -> Layout {
                 && parent != child
                 && children[parent].last() != Some(&child)
             {
-                // Node iteration is in identity order, preserving the original
-                // BTreeSet child order while deduplicating declared parents.
                 children[parent].push(child);
             }
         }
@@ -186,9 +175,6 @@ fn layout(versions: &[Version]) -> Layout {
         for &child in descendants {
             #[cfg(test)]
             LAYOUT_WORK.with(|work| work.borrow_mut().candidate_edges += 1);
-            // With parent -> child already declared, child reaches parent iff
-            // both are in the same SCC. Remove every cyclic edge, not merely
-            // DFS back edges. Redundant acyclic ancestry edges remain visible.
             if component[parent] != component[child] {
                 edges.push((nodes[parent].id.clone(), nodes[child].id.clone()));
                 accepted_children[parent].push(child);
@@ -196,10 +182,6 @@ fn layout(versions: &[Version]) -> Layout {
             }
         }
     }
-    // Walk from loaded-window tips towards loaded ancestors. This is a reverse
-    // topological layout, not a visual reversal of the old root-first layers:
-    // both short and long visible paths end on the first layer. Window bounds
-    // do not establish the tips or roots of the complete history.
     let mut remaining_children = accepted_children.iter().map(Vec::len).collect::<Vec<_>>();
     let mut by_priority = (0..nodes.len()).collect::<Vec<_>>();
     by_priority.sort_by(|&a, &b| newer_first(&nodes[a], &nodes[b]));
@@ -247,8 +229,6 @@ fn layout(versions: &[Version]) -> Layout {
         for (index, &node) in levels[depth - 1].iter().enumerate() {
             positions[node] = index;
         }
-        // Group ancestors by the positions of their newer children on the
-        // preceding display layer; all cross-layer source edges remain intact.
         for &node in &levels[depth] {
             let (mut sum, mut count, mut minimum) = (0u128, 0u128, usize::MAX);
             for &child in &accepted_children[node] {
@@ -320,8 +300,6 @@ struct LayerBounds {
     bottom: f64,
 }
 
-/// Bounds belong to one DOM measurement, not a cache across resizes or edits.
-/// Preserve the old per-edge extrema, but inspect each node only once.
 struct RoutingBounds {
     layers: BTreeMap<usize, LayerBounds>,
     left: f64,
@@ -375,9 +353,6 @@ thread_local! {
     };
 }
 
-/// Arrows retain their old-parent → new-child meaning while travelling up.
-/// The target gap follows the entire newer layer so a short target's connector
-/// cannot pass through a taller sibling before arriving at its bottom edge.
 fn gap_heights(parent: NodeBounds, child: NodeBounds, bounds: &RoutingBounds) -> (f64, f64) {
     let exit = bounds
         .layers
@@ -417,9 +392,6 @@ fn long_route(parent: NodeBounds, child: NodeBounds, bounds: &RoutingBounds) -> 
 
 const EDGE_CORNER_RADIUS: f64 = 4.;
 
-/// Draw only horizontal/vertical runs and circular quarter turns. Adjacent
-/// corners each consume at most half their shared run, so even short routes
-/// cannot double back or overlap their own rounded turns.
 fn rounded_route(points: &[(f64, f64)], radius: f64) -> Option<String> {
     if !radius.is_finite() || radius <= 0. || points.is_empty() {
         return None;
@@ -437,8 +409,6 @@ fn rounded_route(points: &[(f64, f64)], radius: f64) -> Option<String> {
                 return None;
             }
         }
-        // Remove straight-through waypoints; keep every real corner and reject
-        // reversals instead of inventing a circular U-turn through a node.
         while route.len() >= 2 {
             let a = route[route.len() - 2];
             let b = route[route.len() - 1];
@@ -599,9 +569,6 @@ fn observe(
                 if geometry.with_untracked(|old| old != &next) {
                     geometry.set(next);
                 }
-                // A wide tree initially reveals its newest tip rather than an empty
-                // left corner. This belongs to this mounted tree only: refreshes, note
-                // edits and later resizes never take the user's scroll position.
                 if !initially_centered.get()
                 && let (Some(scroll), Some(first_tip)) = (
                     update_root.parent_element(),
@@ -644,7 +611,6 @@ fn observe(
         let nodes = Rc::new(observers::Nodes::new(element.clone(), resize.clone()));
         let mutation_nodes = Rc::clone(&nodes);
         let mutation_refresh = Rc::clone(&refresh);
-        // A NodeRef captures our actual SVG, never an author's lookalike class.
         let links: web_sys::Element = links
             .get_untracked()
             .expect("invariant: mounted tree owns its connector SVG")
@@ -684,8 +650,6 @@ fn observe(
 }
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    // A replaced window owns a fresh graph and observer lifetime. Equal
-    // structural keys keep metadata refreshes on the existing controls.
     let key = Memo::new(move |_| state.with(|s| s.files.file_history.window_key()));
     view! {
         <For each=move ||[key.get()] key=|key|*key children=move |_|window(state)/>
@@ -725,8 +689,6 @@ fn window(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
-/// Reuse only the ancestry layout and measured connector geometry. Directory
-/// callers supply their own real tree identities and cards, never FileNodes.
 pub(super) fn ancestry_graph<N>(
     records: Memo<Vec<(String, u64, Vec<String>)>>,
     render: impl Fn(String) -> N + Copy + Send + Sync + 'static,

@@ -76,8 +76,6 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             s.notices
                 .record_operation(9, "unconfirmed", crate::files::SaveStatus::Unknown);
         });
-        // All three production actions execute their synchronous transition,
-        // but the existing inactive-session gates admit no browser request.
         for (navigate, value, slot, directory) in [
             (open_disk as fn(RwSignal<State>, String), "P01", "P01", ""),
             (go_directory, "资料/子目录", "P01", "资料/子目录"),
@@ -128,7 +126,6 @@ fn navigation_away_and_back_rejects_old_listing_work_without_hiding_session_expi
             Navigation::Disk("P01".into()),
         ] {
             state.update(|s| s.files.navigate(destination));
-            // Returning to the same path cannot admit a previous listing response.
             assert!(!current_listing(state, 3, "P01", "", old_generation));
         }
         let generation = state.with_untracked(|s| s.files.generation);
@@ -139,7 +136,6 @@ fn navigation_away_and_back_rejects_old_listing_work_without_hiding_session_expi
             &Err(disk_read_error(401))
         ));
         assert!(state.with_untracked(State::session_active));
-        // Production checks session authority before the obsolete listing fence.
         assert!(!accept_read_response::<()>(
             state,
             3,
@@ -180,8 +176,6 @@ fn directory_navigation_drops_the_previous_write_permission_before_loading() {
             s.files.writable = true;
             s.files.loaded = true;
         });
-        // No disk is selected, so this exercises the synchronous transition
-        // without starting a browser request on the native test runner.
         go_directory(state, "another".into());
         state.with_untracked(|s| {
             assert!(!s.files.writable);
@@ -299,13 +293,10 @@ fn history_response_session_authority_precedes_the_request_generation_fence() {
         assert!(!accept_read_response(state, 2, &unauthorized));
         assert!(state.with_untracked(State::session_active));
         assert!(state.with_untracked(|s| s.files.history_loading));
-        // Even an obsolete history generation cannot hide a current-session 401.
         assert!(!accept_read_response(state, 3, &unauthorized));
         assert!(!state.with_untracked(State::session_active));
         assert!(!current_session(state, 3));
         assert!(!state.with_untracked(super::super::write_allowed));
-        // A read 401 revokes authority while retaining private recovery state.
-        // That retained state cannot admit the obsolete completion or a write.
         state.update(|s| {
             complete_history_load(s, 3, 7, "file", Ok(history_response("late"))).unwrap();
         });
@@ -432,8 +423,6 @@ fn recovery_replaces_an_inflight_disk_read_after_either_old_success_or_failure()
         state.files.disks_loaded = true;
         let (epoch_a, generation_a) = begin_disk_load(&mut state).unwrap();
 
-        // H1 reports unavailable; H2 reports restored storage before A's old
-        // payload (already generated before the outage) finishes arriving.
         state.files.invalidate_disks();
         assert!(begin_disk_load(&mut state).is_none());
         assert!(!state.files.disks_loaded);
@@ -526,7 +515,6 @@ fn obsolete_disk_completions_cannot_write_or_release_another_session_or_reload()
             let current = disk_snapshot(true, 4096);
             state.files.disks = current.clone();
             state.files.disks_loaded = true;
-            // This may now belong to the new session's in-flight request.
             state.files.loading_disks = true;
             assert!(!complete_disk_load(&mut state, epoch_a, generation_a, old_result).unwrap());
             assert_eq!(state.files.disks, current);
@@ -558,7 +546,6 @@ fn a_current_session_unauthorized_disk_read_is_not_hidden_by_recovery() {
             if invalidate {
                 state.update(|s| s.files.invalidate_disks());
             }
-            // The production continuation routes Err to fail, never to a replacement read.
             let error = state
                 .try_update(|s| complete_disk_load(s, epoch, generation, Err(disk_read_error(401))))
                 .unwrap()
@@ -598,7 +585,6 @@ fn an_obsolete_disk_read_waits_for_readable_storage_before_reloading() {
             state.files.disks_loaded = true;
             let (epoch_a, generation_a) = begin_disk_load(&mut state).unwrap();
             state.files.invalidate_disks();
-            // Recovery was observed, but a newer health response is no longer readable.
             state.management.storage = storage;
             assert!(!complete_disk_load(&mut state, epoch_a, generation_a, old_result).unwrap());
             assert_eq!(state.files.disks, cached);
@@ -774,8 +760,6 @@ fn file_navigation_discards_success_and_late_feedback_but_preserves_receipts() {
     ];
     for action in actions {
         Owner::new().with(|| {
-            // Inactive-session admission avoids network work while exercising
-            // the exact navigation transitions used by the browser controls.
             let state = RwSignal::new(State::default());
             state.update(|s| {
                 s.files
@@ -812,8 +796,6 @@ fn choosing_a_directory_branch_only_changes_the_local_read_view() {
             ..Default::default()
         });
         state.update(|s| {
-            // No selected disk means the follow-on GET is not dispatched on the
-            // native runner; a mutation/ID generation here would invoke WASM.
             s.files.directory = "docs".into();
             s.files.writable = true;
             s.files.loaded = true;

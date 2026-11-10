@@ -1,5 +1,3 @@
-//! Resolve only an explicitly clicked historical node. Ordinary history pages
-//! never pay for an ancestry search, and a displayed branch is never guessed.
 use super::*;
 use crate::files::history::{DecodeError, reads::Resource};
 use crate::ui::{ErrorContext, accept_read_response, fail_in};

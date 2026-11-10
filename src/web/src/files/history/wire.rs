@@ -1,4 +1,3 @@
-//! Projection from an already admitted shared response; this module does not decode wire JSON.
 use super::{FileBranch, FileNode, NodeKind, Parent, ParentEndpoint, ParentSet};
 use std::collections::BTreeMap;
 use storage_contract::history_window::{

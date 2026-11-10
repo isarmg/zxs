@@ -1,5 +1,3 @@
-//! Validate the endpoint's actual success contract before releasing write fences.
-//! Domain-returning endpoints are not operation receipts.
 use json_codec::Value;
 use storage_contract::{OperationResult, Plan, Repository, client_protocol::OperationStatus};
 
@@ -48,7 +46,6 @@ fn require(valid: bool, context: &'static str) -> Result<(), ResponseError> {
     }
 }
 
-/// Captured at request construction; never inferred from a URL or JSON body.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Contract {
     Inspect,

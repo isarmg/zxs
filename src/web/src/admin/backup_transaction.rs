@@ -1,4 +1,3 @@
-//! One original task survives navigation; reads never advance native decisions.
 mod actions;
 mod recovery;
 mod view;
@@ -140,7 +139,6 @@ impl Model {
         }
         Ok(())
     }
-    /// Returns true only when the server observed no retained original input.
     fn accept_current(&mut self, current: wire::Current) -> Result<bool, api::Error> {
         match (current.request, current.transaction) {
             (Some(request), Some(snapshot)) if request == snapshot.request => {

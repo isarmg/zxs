@@ -1,4 +1,3 @@
-//! Exact HTTP contracts for daily administration. Never builds content transfers.
 use super::response::Contract;
 use json_codec::{Value, json};
 use std::collections::BTreeMap;

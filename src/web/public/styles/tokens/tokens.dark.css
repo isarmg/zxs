@@ -14,7 +14,6 @@
   --zxs-history-delete: #fca5a5;
 }
 
-/* Native documents follow the system preference unless the application has selected a theme. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-zxs-theme]) {
     --zxs-bg-page: #09090b;

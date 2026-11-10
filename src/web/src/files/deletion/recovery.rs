@@ -1,5 +1,3 @@
-//! Original soft-delete/undo requests survive refresh and credential replacement.
-//! Browser state is only a hint: the server reauthorizes every read and retry.
 use super::*;
 use crate::files::{FileOperation, SaveStatus};
 use json_codec::Value;
@@ -35,7 +33,6 @@ impl Record {
 #[derive(Clone)]
 struct Retained {
     record: Arc<Record>,
-    // Never persisted. A local completion flag cannot stand in for a live receipt.
     settled: Option<SaveStatus>,
 }
 impl Retained {
@@ -195,8 +192,6 @@ fn register_pending(state: RwSignal<State>) {
             if !s.files.deletion.recovery.owns(s) {
                 return Vec::new();
             }
-            // Generic old ledger observations cannot authenticate restored bytes.
-            // Re-query under each exact original request witness.
             let operations: Vec<_> = s
                 .files
                 .deletion
@@ -243,9 +238,6 @@ fn adopt_owner(state: &mut State, owner: &(u64, String)) {
         .retain(|id| !previous.contains(id));
     model.cancel_review();
     model.close();
-    // Replacing credentials in the same live app must not discard its exact
-    // witness if another tab removed or changed a local key. New credentials
-    // still require a fresh receipt, so no old completion flag is carried over.
     let records = if model
         .recovery
         .owner
@@ -278,9 +270,6 @@ pub(super) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> Optio
                 && r.record.matches_receipt(id, receipt)
         })
 }
-/// Called only after the ledger has admitted this exact receipt, or the first
-/// POST was definitively rejected. A restored flag from localStorage never gets
-/// here. Failed local cleanup keeps the saved witness and the write fence.
 pub(crate) fn finish(state: RwSignal<State>, id: &str) {
     let record = state.with_untracked(|s| {
         let queue = &s.files.deletion.recovery;
@@ -307,8 +296,6 @@ pub(crate) fn finish(state: RwSignal<State>, id: &str) {
                     .retain(|r| r.record.operation != record.operation)
             });
             if had_error {
-                // Do not erase a possibly unrelated scan failure just because
-                // this one key was removed. Re-establish the bounded scan.
                 restore(state);
             }
         }

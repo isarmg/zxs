@@ -1,4 +1,3 @@
-//! Explicit recursive file protection or a mixed file/directory snapshot.
 mod capture;
 mod view;
 use crate::{
@@ -68,8 +67,6 @@ impl Response {
             .collect()
     }
 }
-// Only the fields needed for this editor are projected from the configuration.
-// The capture, unlike this read projection, is decoded and resent in full.
 #[derive(Clone, Deserialize)]
 struct Configuration {
     scope: Scope,
@@ -135,8 +132,6 @@ fn read_response(value: Value, draft: &Draft) -> Result<Response, api::Error> {
             "recursive backup response belongs to another scope",
         ));
     }
-    // Check all available routes before using their names in the review. A
-    // reduced count can still be selected when the old count exceeds capacity.
     let prefixes = response
         .capture
         .prefixes(&response.configuration.backup_routes)
@@ -211,7 +206,6 @@ fn complete_load(
     id: &str,
     result: Result<Response, api::Error>,
 ) {
-    // A current-session 401 still revokes the session if the panel was closed.
     if !accept_read_response(state, epoch, &result)
         || !state.with_untracked(|s| {
             s.files

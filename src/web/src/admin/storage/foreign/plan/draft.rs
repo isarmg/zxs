@@ -22,7 +22,6 @@ pub(super) struct Draft {
     pub(super) empty_target: Option<CandidateSelection>,
     pub(super) primary: Option<PrimaryChoice>,
 }
-/// These are local design intents, not a replacement wire format or authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Intent {
     ReconstructExistingPrimary(ForeignPlanTarget),

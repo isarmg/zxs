@@ -1,4 +1,3 @@
-//! Informational hardware observations and CAS-protected, system-disk notes.
 mod health;
 mod tree;
 use crate::{
@@ -110,7 +109,6 @@ pub(super) struct Model {
     loaded: bool,
     generation: u64,
     next_owner: u64,
-    // An invalidated response may still occupy the server's single SMART reader.
     details_read: Option<u64>,
     error: Option<api::Error>,
 }
@@ -214,8 +212,6 @@ pub(crate) fn load(state: RwSignal<State>) {
         let Some(slots) = complete_list(state, epoch, generation, result) else {
             return;
         };
-        // The server bounds native device queries to one worker. Read cards in
-        // order rather than making every later directory race into Busy.
         for slot in slots {
             if !state
                 .try_with_untracked(|s| current_list(s, epoch, generation))
@@ -376,7 +372,6 @@ fn begin_save(state: &mut State, slot: &str) -> Option<(u64, u64, DiskNoteReques
     }
     draft.saving = true;
     draft.error = None;
-    // An earlier refresh must not overwrite the note after this save settles.
     model.next_owner += 1;
     card.generation = model.next_owner;
     card.loading = false;

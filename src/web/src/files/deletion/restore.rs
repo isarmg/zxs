@@ -1,5 +1,3 @@
-//! An explicit restore review reads the same complete D again before allowing
-//! a new undo request. Only the existing original-request path sends a write.
 use super::*;
 use web_interface::i18n::t;
 
@@ -99,8 +97,6 @@ fn confirm(state: RwSignal<State>, epoch: u64, generation: u64) {
         return;
     };
     state.update(|s| s.files.deletion.cancel_review());
-    // This preserves save-before-send, exact receipt matching and unknown-result
-    // recovery. The fresh GET is not a receipt or permission to bypass them.
     undo(state, &node.file_id, &node.node_id);
 }
 

@@ -1,4 +1,3 @@
-//! Read-only operational visibility, independent of storage Ready and write receipts.
 mod wire;
 use crate::{
     api,
@@ -58,7 +57,6 @@ fn complete(state: RwSignal<State>, epoch: u64, result: Result<Value, api::Error
                 }
             },
             Err(error) => {
-                // A failed refresh must never preserve a green old observation.
                 model.observation = None;
                 model.failure = Some(feedback(&error));
             }

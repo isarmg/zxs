@@ -83,7 +83,7 @@ fn closed_or_superseded_deletion_reads_cannot_repopulate_state() {
 fn restore_action_requires_active_session_exact_read_and_settled_global_operation() {
     Owner::new().with(|| {
         let state = RwSignal::new(State::default());
-        undo(state, &id("file", 1), &id("fdel", 1)); // Does not enter a browser UUID/network operation.
+        undo(state, &id("file", 1), &id("fdel", 1));
         state.update(|s| {
             s.authenticated = true;
             s.management.storage = crate::management::Storage::Ready;

@@ -1,5 +1,3 @@
-//! A network page is admitted against the exact request before entering UI state.
-//! The API reader already enforces the shared response-byte limit.
 use super::DecodeError;
 use json_codec::Value;
 use std::collections::BTreeSet;

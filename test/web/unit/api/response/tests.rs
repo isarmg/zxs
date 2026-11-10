@@ -19,7 +19,6 @@ fn real_cpu_response_decimals_and_full_width_byte_strings_are_accepted() {
     assert_eq!(value["cpu"]["usage_percent"], 8.899999618530273);
     assert_eq!(value["cpu"]["logical_count"].as_u64(), Some(8));
     assert_eq!(value["memory"]["total_bytes"], u64::MAX.to_string());
-    // This response-only exception must not weaken persisted/write JSON.
     assert!(storage_contract::strict_json(bytes).is_err());
 }
 

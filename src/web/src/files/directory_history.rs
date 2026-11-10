@@ -1,6 +1,3 @@
-//! Bounded directory composition history. Reads confer no write authority;
-//! separate branch commands require admitted, writable current-folder status.
-//! Displaying a graph never initializes a directory or creates a file version.
 use crate::{
     api,
     ui::{State, accept_read_response},
@@ -71,8 +68,6 @@ impl Target {
             repository: entry
                 .repository_id()
                 .or_else(|| {
-                    // The disk-root listing emits repository folders with the
-                    // repository identity itself, and no namespace location.
                     (!entry.backup() && state.files.directory.is_empty())
                         .then_some(entry.entry_id())
                 })?
@@ -84,8 +79,6 @@ impl Target {
             scope: Scope::Selected,
         })
     }
-    /// The caller has matched the decoded Git status to this exact listing.
-    /// Paths select the view; only that response supplies the stable directory ID.
     pub(super) fn current_directory(
         state: &State,
         status: &storage_contract::directory_git::DirectoryGitStatus,
@@ -331,9 +324,6 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>, target: StoredValue<Targ
             Err(error) => model.update(|model| model.failed(error)),
         }
         if let Some(request) = branch_request {
-            // A completed fetch aborts its controller when its body guard is
-            // dropped. The next page owns a fresh controller, while retaining
-            // the same logical refresh generation.
             let next = request
                 .map_err(|source| api::Error::from(DecodeError::Contract(source)))
                 .and_then(|request| {

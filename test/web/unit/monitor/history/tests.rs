@@ -18,8 +18,6 @@ fn fixture(samples: usize, disks: usize) -> Value {
     })
 }
 
-// Independent pre-change algorithm: each metric reparses every date and linearly
-// searches each sample's disks. Counts live only in this test oracle.
 fn old_points(
     value: &Value,
     metric: &Metric,

@@ -1,5 +1,3 @@
-//! Explicit, frozen branch scopes for file operations. Reviewing an operation
-//! never switches the current directory or the SMB default branch.
 use super::{
     actions as file_actions,
     model::{Model, entry_key, join_path},
@@ -64,8 +62,6 @@ impl Drop for ScopeRead {
         self.0.abort();
     }
 }
-/// Identity of one displayed failure, not just an equal spelling. Rebuilding
-/// a review must not let a queued click confirm its replacement proposal.
 #[derive(Clone)]
 struct NameFailure {
     entry: Option<String>,
@@ -168,9 +164,6 @@ pub(crate) use actions::{reload_registered_scope, start};
 use request::{destination_endpoint, destination_path, request};
 pub(crate) use view::view;
 
-/// Keep uncertain transactions tied to their original operation. A namespace
-/// receipt closes only its matching draft; a registration receipt requests one
-/// follow-on read without discarding the review or repeating the registration.
 pub(crate) fn settle_operation(
     model: &mut Model,
     id: &str,
@@ -180,8 +173,6 @@ pub(crate) fn settle_operation(
         && let Some(registration) = draft.registration.as_mut()
         && registration.operation_id == id
     {
-        // Publication is terminal. Older receipts cannot revoke its association
-        // or release the follow-on read (including a failed read awaiting retry).
         if registration.published {
             return false;
         }

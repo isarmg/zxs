@@ -1,5 +1,3 @@
-//! A bounded current-file selection becomes one native file.delete.batch.
-//! The existing deletion ledger owns sending, refresh and original-ID retries.
 use super::*;
 use crate::files::{model::entry_key, page::DirectoryBranch, page::Entry};
 use json_codec::{Value, json};

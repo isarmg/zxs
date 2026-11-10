@@ -1,4 +1,3 @@
-//! Bounded immutable local hints, never credentials or publication authority.
 use super::*;
 use data_serialization::{
     Deserialize, Deserializer, Serialize,
@@ -213,8 +212,6 @@ pub(super) fn load(principal: &str) -> Result<Vec<Retained>, api::Error> {
         let Some(bytes) = storage.get_item(&key).map_err(api::js_error)? else {
             continue;
         };
-        // The platform returns one value at a time. Bound it before JSON parsing
-        // and bound the entire queue before retaining another decoded frontier.
         if records.len() == MAX_RECORDS || bytes.len() > MAX_QUEUE_BYTES - size {
             return Err(limit(
                 "Deletion recovery exceeds 32 records or 4 MiB; nothing was removed.",

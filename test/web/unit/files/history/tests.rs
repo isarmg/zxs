@@ -1,4 +1,3 @@
-//! UI-only fixtures. Strict current wire admission is covered by window_tests.rs.
 use super::*;
 use crate::snapshot::Snapshot;
 use json_codec::json;
@@ -171,7 +170,6 @@ fn identity(max_entries: u64) -> HistoryPageIdentity {
     }
 }
 
-/// Construct local control state without a wire decoder or legacy response fallback.
 pub(crate) fn history(value: Value) -> Snapshot<FileHistory> {
     if value.is_null() {
         return Default::default();

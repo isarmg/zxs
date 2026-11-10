@@ -50,15 +50,12 @@ pub(crate) struct State {
     pub session_transition: SessionTransition,
     pub session_failure: Option<Feedback>,
     pub login_failure: Option<Feedback>,
-    // A lost response may follow a committed change and revoked sessions.
-    // Only a settled sign-out/new session clears this non-idempotent fence.
     pub password_change: PasswordChangeState,
     pub password_failure: Option<Feedback>,
     pub smb_account: crate::smb_account::Model,
     pub page: Page,
     pub login_in_flight: bool,
     pub errors: Vec<errors::ErrorNotice>,
-    // Stable dismissal identity, independent of retry request IDs and list order.
     pub(crate) next_error_id: u64,
     pub session_notice: String,
     pub(crate) notices: workspace_feedback::Notices,
@@ -86,7 +83,6 @@ impl State {
         self.password_change == PasswordChangeState::Unknown
     }
 
-    /// App-owned reloads must not destroy in-memory operation recovery fences.
     fn reload_blocked(&self) -> bool {
         self.login_in_flight
             || self.session_transition != SessionTransition::Idle
@@ -102,8 +98,6 @@ impl State {
         !self.session_active() || self.password_pending() || self.password_unknown()
     }
 
-    /// Business work belongs only to a settled, authenticated session. Logout
-    /// retains credentials for revocation retries, not for admitting new work.
     pub(crate) fn session_active(&self) -> bool {
         self.authenticated && self.session_transition == SessionTransition::Idle
     }
@@ -115,9 +109,6 @@ pub(crate) fn current_session(state: RwSignal<State>, epoch: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Check session ownership before a read's resource/draft ownership. Closing a
-/// panel or superseding a read cannot hide expiry of that same session. An old
-/// session's response, however, must never revoke a replacement login.
 pub(crate) fn accept_read_response<T>(
     state: RwSignal<State>,
     epoch: u64,
@@ -149,7 +140,6 @@ pub(crate) fn feedback(error: &api::Error) -> Feedback {
         request_id: error.request_id.clone(),
     }
 }
-/// Entropy failure prevents admission and is reported once at the UI boundary.
 pub(crate) fn operation_id(state: RwSignal<State>) -> Option<String> {
     match api::operation_id() {
         Ok(id) => Some(id),
@@ -299,8 +289,6 @@ fn header_refreshing(state: &State) -> bool {
 
 fn header_refresh_disabled(state: &State) -> bool {
     match state.page {
-        // A listing refresh may replace a pending selected-file history read.
-        // Busy presentation must not remove that cancellation path.
         Page::Files => state.files.loading || state.files.loading_disks,
         Page::Details => {
             header_refreshing(state)
@@ -360,8 +348,6 @@ fn session_view(state: &State) -> SessionView {
         phase: if state.restoring() {
             SessionPhase::Loading
         } else if state.logout_unconfirmed() || (state.logout_pending() && !state.authenticated) {
-            // Retrying revocation is still unconfirmed. Keep the recovery shell
-            // until the response settles, rather than exposing login or setup.
             SessionPhase::LogoutUnconfirmed
         } else if state.authenticated {
             SessionPhase::Authenticated
@@ -386,8 +372,6 @@ fn session_view(state: &State) -> SessionView {
             .and_then(|e| e.request_id.clone()),
     }
 }
-// Session transitions own an epoch before their first asynchronous step.
-// Disable duplicate submissions at the action boundary as well as in the view.
 fn begin_login(state: &mut State) -> Option<u64> {
     if state.login_in_flight
         || state.restoring()
@@ -468,7 +452,6 @@ fn logout(state: RwSignal<State>) {
     let Some(epoch) = state.try_update(begin_logout).flatten() else {
         return;
     };
-    // Finish the requested logout even if the UI is disposed while it is pending.
     js_sys::futures::spawn_local(async move {
         let result = api::request("POST", "/api/auth/logout", Some(json!({}))).await;
         if !state

@@ -1,4 +1,3 @@
-//! Node-scoped tag edits retain only explicitly selected identities and labels.
 use super::{
     actions,
     history::{FileNode, reads::ReviewOwner},

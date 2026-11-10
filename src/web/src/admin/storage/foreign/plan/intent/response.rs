@@ -14,7 +14,6 @@ pub(super) fn preview(
     {
         return Err(invalid(ResponseError::Identity));
     }
-    // Effect and execution are closed wire enums, never a loose success flag.
     Ok(preview)
 }
 

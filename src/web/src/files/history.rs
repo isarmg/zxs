@@ -1,4 +1,3 @@
-//! One admitted node window and independently replaceable auxiliary windows.
 use crate::api;
 use json_codec::Value;
 use std::sync::Arc;
@@ -86,7 +85,6 @@ pub(crate) struct FieldFragment {
     pub(crate) next: Option<String>,
 }
 
-/// Invalidating a basis preserves visible text and editors, but closes writes.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileHistory {
     identity: Option<HistoryPageIdentity>,
@@ -163,7 +161,6 @@ impl FileHistory {
         self.window_key
     }
     pub(crate) fn action_max_entries(&self) -> Option<usize> {
-        // The 1 MiB action envelope gives a much smaller count bound on WASM32.
         Some(
             self.identity
                 .as_ref()?

@@ -325,8 +325,6 @@ pub(super) fn restart(state: RwSignal<State>) {
             return;
         }
         state.update(|s| {
-            // No target selection, old source sequence or operation ID survives
-            // this explicit restart. The next load rechecks current and context.
             s.admin_console.backup = Model::default();
         });
         load(state);
@@ -519,8 +517,6 @@ fn finish(state: RwSignal<State>, epoch: u64, result: Result<wire::Snapshot, api
         model.busy = false;
         let accepted = result.and_then(|snapshot| model.accept(snapshot));
         if let Err(error) = accepted {
-            // A failed or malformed read cannot turn the last snapshot into
-            // fresh authorization to restart after an unknown cancellation.
             model.unknown = true;
             model.error = Some(error);
         }

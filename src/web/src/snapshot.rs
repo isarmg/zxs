@@ -1,5 +1,3 @@
-//! Cheap immutable-data projections. Equality is allocation identity, so a
-//! reactive memo does not traverse a JSON tree on unrelated State updates.
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,

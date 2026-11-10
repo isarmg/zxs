@@ -44,8 +44,6 @@ fn first_creation_guidance_retires_only_after_the_refreshed_repository_context()
     assert!(!model.directory_branches_supported);
     assert!(model.directory_branches.is_empty());
 
-    // An existing but empty repository still offers explicit initialization,
-    // rather than asking for a needless extra folder.
     model.total_entries = 0;
     assert!(!needs_first_folder(&model));
 }
@@ -435,7 +433,7 @@ fn an_editor_keeps_text_until_its_own_success_and_locks_unknown_outcomes() {
         let draft = unobserved_draft(state);
         draft.start("user's exact draft".into());
         draft.submit(|| Some("first".into()));
-        draft.cancel_idle(); // A disabled input's blur is not cancellation.
+        draft.cancel_idle();
         assert_eq!(draft.value.get_untracked(), "user's exact draft");
         assert!(draft.editing.get_untracked());
         draft.settle("unrelated", super::super::model::SaveStatus::Published);
@@ -587,7 +585,7 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
             use_context::<SharedContext>().unwrap().0,
         )
     });
-    Executor::poll_local(); // Run the real initial effects before user input.
+    Executor::poll_local();
     for (draft, id, text) in [
         (first, "first", "first pending text"),
         (second, "second", "second pending text"),
@@ -619,7 +617,6 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     assert!(!first.editing.get_untracked());
     assert!(!second.editing.get_untracked());
 
-    // Queue notifications, then unmount before the effects consume them.
     state.update(|s| s.session_epoch += 1);
     page.cleanup();
     assert!(old_context.try_get_untracked().is_none());
@@ -748,8 +745,6 @@ fn confirmation_is_exact_and_does_not_survive_a_changed_input() {
     });
 }
 
-// Deliberately uses only the pre-fix API, so this regression can run on the
-// audited baseline rather than failing to compile because of new error types.
 #[test]
 fn nonempty_namespace_input_must_never_be_silently_trimmed() {
     for original in [" 草稿 ", "\u{a0}draft", "draft\u{2003}"] {
@@ -767,7 +762,6 @@ fn normalization_candidates_do_not_bypass_name_or_branch_byte_budgets() {
         (237, InputKind::NamespaceName),
         (125, InputKind::BranchName),
     ] {
-        // U+0344 expands to U+0308 U+0301 without composing with a digit.
         let original = format!("{}\u{344}", "1".repeat(prefix));
         let Edit::NameError(error) = edit_value(&original, kind) else {
             panic!("expected policy NFC suggestion");
@@ -837,7 +831,6 @@ fn health_fault_and_recovery_keep_the_registered_unknown_note_until_its_own_reje
         actions::record_operation(state, FileOperation::rejected("unrelated"));
         Executor::poll_local();
         assert!(draft.pending());
-        // The current metadata outcome shape, not a bare status marker.
         assert_eq!(actions::record_receipt(state, "original", json_codec::json!({
             "operation_id":"original", "operation_kind":"file.metadata",
             "request_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

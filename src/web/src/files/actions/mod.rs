@@ -1,5 +1,3 @@
-//! File-manager actions. Views call this facade; private modules separate reads,
-//! mutations and publication recovery without owning UI state.
 mod browse;
 mod history;
 mod mutation;
@@ -47,8 +45,6 @@ pub(crate) fn history_navigation_ready(state: &State) -> bool {
         && state.files.history_editors == 0
         && !pending(state)
 }
-/// Shared by write actions and their controls. Check before generating IDs,
-/// creating drafts, or scheduling any browser/network work.
 pub(crate) fn write_allowed(state: &State) -> bool {
     state.files.directory_preview.is_none()
         && state.files.file_preview.is_none()

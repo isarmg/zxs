@@ -1,5 +1,3 @@
-//! An ordinary directory is copied into a separately reviewed new primary.
-//! Registration is not import completion; uncertainty retains the exact review.
 use super::*;
 use storage_contract::{
     CommitState, OperationId,
@@ -170,7 +168,6 @@ struct StopEvidence {
     _timestamp: u64,
     #[serialization(rename = "membership_epoch", with = "storage_contract::u64_string")]
     _membership_epoch: u64,
-    // A stop publishes no file versions. Keep the native envelope strict.
     #[serialization(rename = "version_protection")]
     _version_protection: [(); 0],
     import_operation_id: OperationId,
@@ -519,7 +516,6 @@ fn submit(state: RwSignal<State>, action: Submit) {
     });
 }
 fn accept(model: &mut Model, status: OrdinaryDiskConversionStatus) -> bool {
-    // A concurrent read cannot regress a proven terminal receipt.
     if model.status.as_ref().is_some_and(|old| {
         old.preview.operation_id == status.preview.operation_id && terminal(old.phase)
     }) {

@@ -1,4 +1,3 @@
-//! Complete directory D boundaries shared by discovery, receipts and recovery.
 use crate::api;
 use data_serialization::{Deserialize, Deserializer};
 use json_codec::{Value, json};
@@ -163,8 +162,6 @@ fn identity(operation: OperationId, prefix: &str, owner: &str) -> storage_contra
     .map(|hash| format!("{prefix}_{}", &hash[..32]))
 }
 
-/// Only this directory operation's newly created D nodes may be returned or
-/// removed. Pre-existing D references are retained, never synthesized here.
 pub(super) fn files_match(node: &DirectoryDeletionNode, value: &Value) -> bool {
     let Some(nodes) = value.as_array() else {
         return false;

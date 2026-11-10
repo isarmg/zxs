@@ -5,21 +5,13 @@
 .zxs-button:disabled { opacity: .6; cursor: not-allowed; }
 .zxs-danger,.zxs-error { color: var(--zxs-text-danger,#b91c1c); }
 .zxs-input { width: 100%; box-sizing: border-box; }
-/* A field group owns one surface; every row shares responsive label/input tracks. */
 .zxs-form-grid { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; max-width: 100%; gap: 0; border: 0; background: var(--zxs-bg-panel,#fff); --zxs-contour-extent: var(--zxs-contour-control,22px); --zxs-contour-mode: clip; --zxs-contour-foreground: 1; }
 .zxs-form-field { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr); align-items: center; column-gap: .75rem; min-width: 0; width: 100%; margin: 0; padding-inline: var(--zxs-list-content-inset,.75rem); }
-/* The field owns its one horizontal inset; a labeled row must not add another. */
 .zxs-app-shell .zxs-form-field > .zxs-row { padding-inline: 0; }
 .zxs-form-field > span { min-width: 0; overflow-wrap: anywhere; }
-/* Reserve one transparent leading edge so focus never changes text or row geometry.
- * The visible edge identifies the field without a rectangle or an underline.
- * Native text fields share one paint policy, including editors outside form groups.
- * Buttons used by Select and non-input tag chips keep their own surface rules. */
 :root :is(input,textarea).zxs-input { min-width: 0; max-width: 100%; border: 0; border-inline-start: 2px solid transparent; background: transparent; outline: 0; --zxs-contour-extent: 0px; --zxs-contour-mode: none; --zxs-contour-foreground: 0; }
 :root :is(input,textarea).zxs-input:focus-visible { border-inline-start-color: var(--zxs-focus,Highlight); }
 @media (forced-colors: active) {
-  /* Search owns its focus on the outer label. Native text controls keep the
-   * same single-edge marker when the system substitutes author colors. */
   :root :is(input,textarea).zxs-input:focus-visible:not(.zxs-file-search > input) { border-inline-start-color: Highlight; }
 }
 :root :is(input,textarea).zxs-input:disabled { opacity: .6; cursor: not-allowed; }

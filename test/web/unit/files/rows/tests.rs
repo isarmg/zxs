@@ -7,9 +7,6 @@ thread_local! {
     static DROPPED_CONTEXTS: Cell<usize> = const { Cell::new(0) };
     static DROPPED_ROWS: Cell<usize> = const { Cell::new(0) };
 }
-// Observe real projection outputs, including any discarded by memo equality.
-// Each call creates one shared context, including empty pages, and one row per
-// entry. Explicit owner cleanup makes their destruction counts complete.
 impl Drop for RowContext {
     fn drop(&mut self) {
         DROPPED_CONTEXTS.set(DROPPED_CONTEXTS.get() + 1);
@@ -41,8 +38,6 @@ fn entry(id: &str, path: &str, name: &str, kind: &str) -> Entry {
     )
 }
 
-// Synthetic response metadata only: these tests neither import real files nor
-// measure DOM rendering, browser memory, or full-directory capacity.
 #[test]
 fn unrelated_updates_and_query_changes_do_not_reproject_a_server_page() {
     for size in [1, 100, 200] {
@@ -137,10 +132,8 @@ fn replacing_pages_drops_old_keys_and_projects_only_the_new_response() {
             }
         }
         assert_eq!(seen.len(), 1_000);
-        // The retained keys also own their original page contexts.
         drop(seen);
         drop(old);
-        // Four pages are released; the memo still owns the fifth 200-row page.
         assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (4, 800));
         state.update(|s| s.files.entries = Default::default());
         assert!(rows.with_untracked(Vec::is_empty));
@@ -162,8 +155,6 @@ fn retained_key_refreshes_payload_and_pending_handlers_resolve_current_data() {
             update(&mut refreshed, json!({"version_id":"new","size":"42"}));
             s.files.entries = vec![refreshed].into();
         });
-        // Even before recomputing the row signal, queued handlers cannot use
-        // the old version. Current server metadata is authoritative.
         assert_eq!(
             state.with_untracked(|s| old
                 .current_entry(s)

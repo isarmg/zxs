@@ -1,5 +1,3 @@
-/* Layer order: shared geometry, component behavior, appearance, authentication,
- * domain layouts. Pages compose roles instead of overriding their dimensions. */
 @import "./geometry.css";
 @import "./base.css";
 @import "./content-blocks.css";
