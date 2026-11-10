@@ -5,7 +5,7 @@
 use super::*;
 use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
-    self, Namespace, PreparedFiles,
+    self, FileReference, Namespace, PreparedFiles,
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 use published_scopes::projection::Scopes;
@@ -64,11 +64,6 @@ enum LocalScope<'a> {
     OriginalDisk {
         identity: &'a DiskRegistrationIdentity,
     },
-}
-#[derive(Serialize)]
-struct FileReference {
-    bytes: usize,
-    digest: String,
 }
 #[derive(Serialize)]
 struct LocalManifest<'a> {
@@ -168,15 +163,7 @@ impl Plan {
                 scope,
                 files: files
                     .iter()
-                    .map(|(name, bytes)| {
-                        (
-                            *name,
-                            FileReference {
-                                bytes: bytes.len(),
-                                digest: blake3::hash(bytes).to_hex().to_string(),
-                            },
-                        )
-                    })
+                    .map(|(name, bytes)| (*name, FileReference::from_bytes(bytes)))
                     .collect(),
             },
             MAX_DESCRIPTOR,

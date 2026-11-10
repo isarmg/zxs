@@ -1,6 +1,7 @@
 //! Exact bounded inventories for ordinary target-only native recovery files.
 //! Saved descriptors never supply filesystem paths or a writer capability.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::materials::FileReference;
 use std::{collections::BTreeSet, ffi::OsStr, path::Path};
 
 const SELECTED: &str = "backup-target-generation-selected.json";
@@ -182,12 +183,6 @@ impl LocalSelection {
     }
 }
 
-#[derive(Serialize)]
-struct FileReference {
-    bytes: usize,
-    digest: String,
-}
-
 pub(in super::super) struct Inventory {
     files: BTreeMap<PathBuf, FileReference>,
     directories: BTreeSet<PathBuf>,
@@ -238,13 +233,7 @@ impl Inventory {
                 directories.insert(directory.to_owned());
             }
             if expected
-                .insert(
-                    path,
-                    FileReference {
-                        bytes: value.len(),
-                        digest: blake3::hash(value).to_hex().to_string(),
-                    },
-                )
+                .insert(path, FileReference::from_bytes(value))
                 .is_some()
                 || expected.len() > MAX_FILES
                 || bytes > 512 * 1024 * 1024
@@ -353,9 +342,9 @@ impl Inventory {
         for (path, expected) in &self.files {
             if !preparation_path_exists(root, &root.path().join(path))? {
                 missing = missing
-                    .checked_add(expected.bytes as u64)
+                    .checked_add(expected.bytes() as u64)
                     .ok_or_else(limit)?;
-                largest = largest.max(expected.bytes as u64);
+                largest = largest.max(expected.bytes() as u64);
                 count += 1;
             }
         }
@@ -395,10 +384,8 @@ impl Inventory {
             if matches!(presence, Presence::Existing) && !preparation_path_exists(root, &path)? {
                 continue;
             }
-            let actual = root.read_bytes(&path, expected.bytes)?;
-            if actual.len() != expected.bytes
-                || blake3::hash(&actual).to_hex().as_str() != expected.digest
-            {
+            let actual = root.read_bytes(&path, expected.bytes())?;
+            if !expected.matches(&actual) {
                 return Err(Error::new(
                     ErrorCode::ObjectCollision,
                     "Backup native control files differ from their exact original recipe",

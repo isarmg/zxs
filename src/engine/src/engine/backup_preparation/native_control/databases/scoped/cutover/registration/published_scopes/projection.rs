@@ -186,7 +186,7 @@ impl Scopes {
     pub(super) fn prepared(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::PublishedScopes,
-            self.manifest.clone(),
+            self.manifest.as_slice(),
             self.files
                 .iter()
                 .map(|(path, bytes)| (path.clone(), bytes.as_slice())),

@@ -3,7 +3,7 @@
 use super::*;
 use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
-    self, Namespace, PreparedFiles,
+    self, FileReference, Namespace, PreparedFiles,
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupRegistryDecisionHash};
 use crate::journal::prepare_snapshot;
@@ -33,11 +33,6 @@ pub struct BackupGenerationPreparationReport {
 }
 
 #[derive(Serialize)]
-struct Descriptor {
-    bytes: usize,
-    digest: String,
-}
-#[derive(Serialize)]
 struct Manifest<'a> {
     format: &'static str,
     decision_hash: &'a str,
@@ -53,7 +48,7 @@ struct Manifest<'a> {
     // future serving locators is a separate missing native activation step.
     whole_units: &'a EntityPlacement,
     targets: &'a [BackupPreparedTopologyNode],
-    objects: BTreeMap<&'a PathBuf, Descriptor>,
+    objects: BTreeMap<&'a PathBuf, FileReference>,
 }
 #[derive(Serialize)]
 struct Completion<'a> {
@@ -131,15 +126,7 @@ impl Inputs {
                 targets: &routes_report.targets,
                 objects: files
                     .iter()
-                    .map(|(path, bytes)| {
-                        (
-                            path,
-                            Descriptor {
-                                bytes: bytes.len(),
-                                digest: blake3::hash(bytes).to_hex().to_string(),
-                            },
-                        )
-                    })
+                    .map(|(path, bytes)| (path, FileReference::from_bytes(bytes)))
                     .collect(),
             },
             1024 * 1024,
@@ -186,7 +173,7 @@ impl Inputs {
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::BackupGeneration,
-            self.manifest.clone(),
+            self.manifest.as_slice(),
             self.files
                 .iter()
                 .map(|(path, bytes)| (path.clone(), bytes.as_slice())),

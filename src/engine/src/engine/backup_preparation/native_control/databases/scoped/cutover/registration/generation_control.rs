@@ -3,7 +3,7 @@
 use super::*;
 use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
-    self, Namespace, PreparedFiles,
+    self, FileReference, Namespace, PreparedFiles,
 };
 use crate::engine::membership_transition::{
     AdmittedBackupDecision, BackupFrozenControl, BackupRegistryDecisionHash,
@@ -38,18 +38,13 @@ pub struct BackupGenerationControlReport {
     pub original_journal_bytes_per_target: u64,
 }
 #[derive(Serialize)]
-struct FileRef {
-    bytes: usize,
-    digest: String,
-}
-#[derive(Serialize)]
 struct Manifest<'a> {
     format: &'static str,
     decision_hash: &'a str,
     source_fence_hash: &'a str,
     generation_inputs_hash: &'a str,
     native_control_root: &'a str,
-    files: BTreeMap<PathBuf, FileRef>,
+    files: BTreeMap<PathBuf, FileReference>,
 }
 #[derive(Serialize)]
 struct Complete<'a> {
@@ -100,10 +95,7 @@ impl Plan {
                     .map(|(path, bytes)| {
                         (
                             PathBuf::from("archive").join(path),
-                            FileRef {
-                                bytes: bytes.len(),
-                                digest: blake3::hash(bytes).to_hex().to_string(),
-                            },
+                            FileReference::from_bytes(bytes),
                         )
                     })
                     .collect(),
@@ -131,7 +123,7 @@ impl Plan {
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::GenerationControl,
-            self.manifest.clone(),
+            self.manifest.as_slice(),
             self.archive
                 .files()
                 .map(|(path, bytes)| (PathBuf::from("archive").join(path), bytes)),

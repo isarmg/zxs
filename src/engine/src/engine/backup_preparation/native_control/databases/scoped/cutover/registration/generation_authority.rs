@@ -144,7 +144,7 @@ impl Plan {
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::GenerationAuthority,
-            self.manifest.clone(),
+            self.manifest.as_slice(),
             [(self.object_path.clone(), self.authority.bytes())],
         )
     }

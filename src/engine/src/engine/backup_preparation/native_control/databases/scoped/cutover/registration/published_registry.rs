@@ -4,7 +4,7 @@
 use super::*;
 use crate::disk::encode_metadata;
 use crate::engine::backup_preparation::native_control::databases::materials::{
-    self, Namespace, PreparedFiles,
+    self, FileReference, Namespace, PreparedFiles,
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
@@ -30,11 +30,6 @@ pub struct BackupPublishedRegistryReport {
     pub directory_scopes: usize,
 }
 
-#[derive(Serialize)]
-struct FileReference {
-    bytes: usize,
-    digest: String,
-}
 #[derive(Serialize)]
 struct Manifest<'a> {
     format: &'static str,
@@ -132,15 +127,7 @@ impl Plan {
                 targets: prepared.targets.len(),
                 files: files
                     .iter()
-                    .map(|(path, value)| {
-                        (
-                            path,
-                            FileReference {
-                                bytes: value.len(),
-                                digest: blake3::hash(value).to_hex().to_string(),
-                            },
-                        )
-                    })
+                    .map(|(path, value)| (path, FileReference::from_bytes(value)))
                     .collect(),
             },
             MAX_MANIFEST,
@@ -182,7 +169,7 @@ impl Plan {
     fn files(&self) -> Result<PreparedFiles<'_>> {
         PreparedFiles::new(
             Namespace::PublishedRegistry,
-            self.manifest.clone(),
+            self.manifest.as_slice(),
             self.files
                 .iter()
                 .map(|(path, bytes)| (path.clone(), bytes.as_slice())),

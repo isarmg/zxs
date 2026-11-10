@@ -4,7 +4,12 @@ use super::*;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use data_serialization::Serialize;
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 /// A borrowed root record recipe. Reading it does not admit its related data
 /// or establish that any other participant completed the publication stage.
@@ -75,64 +80,90 @@ impl Namespace {
     }
 }
 
+#[derive(Serialize)]
+pub(super) struct FileReference {
+    bytes: usize,
+    digest: String,
+}
+impl FileReference {
+    pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            bytes: bytes.len(),
+            digest: blake3::hash(bytes).to_hex().to_string(),
+        }
+    }
+    pub(super) fn bytes(&self) -> usize {
+        self.bytes
+    }
+    pub(super) fn matches(&self, bytes: &[u8]) -> bool {
+        bytes.len() == self.bytes && blake3::hash(bytes).to_hex().as_str() == self.digest
+    }
+}
+
+enum Entry<'a> {
+    Directory,
+    File(Cow<'a, [u8]>),
+}
+
 pub(super) struct PreparedFiles<'a> {
     namespace: Namespace,
-    files: BTreeMap<PathBuf, &'a [u8]>,
-    manifest: Vec<u8>,
+    entries: BTreeMap<PathBuf, Entry<'a>>,
 }
 impl<'a> PreparedFiles<'a> {
     pub(super) fn new(
         namespace: Namespace,
-        manifest: Vec<u8>,
+        manifest: impl Into<Cow<'a, [u8]>>,
         files: impl IntoIterator<Item = (PathBuf, &'a [u8])>,
     ) -> Result<Self> {
-        let mut exact = BTreeMap::new();
+        let mut entries = BTreeMap::from([(PathBuf::from(MANIFEST), Entry::File(manifest.into()))]);
         for (path, bytes) in files {
             if path.as_os_str().is_empty()
                 || path
                     .components()
                     .any(|part| !matches!(part, std::path::Component::Normal(_)))
-                || path == std::path::Path::new(MANIFEST)
-                || exact.insert(path, bytes).is_some()
+                || entries
+                    .insert(path.clone(), Entry::File(Cow::Borrowed(bytes)))
+                    .is_some()
             {
                 return Err(invalid(
                     "prepared database file names overlap or escape their scope",
                 ));
             }
+            for parent in path
+                .ancestors()
+                .skip(1)
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                match entries.entry(parent.to_owned()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(Entry::Directory);
+                    }
+                    std::collections::btree_map::Entry::Occupied(entry) => {
+                        if matches!(entry.get(), Entry::File(_)) {
+                            return Err(invalid("prepared database and directory names overlap"));
+                        }
+                    }
+                }
+            }
         }
-        Ok(Self {
-            namespace,
-            files: exact,
-            manifest,
-        })
+        Ok(Self { namespace, entries })
     }
     fn manifest(&self) -> &[u8] {
-        &self.manifest
+        let Entry::File(bytes) = &self.entries[Path::new(MANIFEST)] else {
+            unreachable!("invariant: preparation manifest is an immutable file");
+        };
+        bytes
+    }
+    fn data_files(&self) -> impl Iterator<Item = (&Path, &[u8])> {
+        self.entries.iter().filter_map(|(path, entry)| match entry {
+            Entry::Directory => None,
+            Entry::File(bytes) => {
+                (path != Path::new(MANIFEST)).then_some((path.as_path(), bytes.as_ref()))
+            }
+        })
     }
 }
 const MANIFEST: &str = "manifest.json";
-
-fn entries(prepared: &PreparedFiles<'_>) -> Result<BTreeMap<PathBuf, bool>> {
-    // false = directory, true = immutable file. Generated paths have typed,
-    // admitted IDs only. Deserialized descriptors never drive filesystem I/O.
-    let mut expected = BTreeMap::from([(PathBuf::from(MANIFEST), true)]);
-    for path in prepared.files.keys() {
-        let path = path.clone();
-        if expected.insert(path.clone(), true).is_some() {
-            return Err(invalid("prepared database plan repeats a physical name"));
-        }
-        for parent in path
-            .ancestors()
-            .skip(1)
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            if expected.insert(parent.to_owned(), false) == Some(true) {
-                return Err(invalid("prepared database and directory names overlap"));
-            }
-        }
-    }
-    Ok(expected)
-}
 
 fn inventory(
     root: &DiskRoot,
@@ -151,7 +182,7 @@ fn inventory(
         };
     }
     let held = root.private_child(&path)?;
-    let expected = entries(prepared)?;
+    let expected = &prepared.entries;
     let mut seen = BTreeSet::new();
     let mut retained_staging = 0usize;
     let mut pending = vec![PathBuf::new()];
@@ -185,7 +216,7 @@ fn inventory(
                 continue;
             }
             let child = relative.join(name.as_path());
-            let file = *expected.get(&child).ok_or_else(|| {
+            let entry = expected.get(&child).ok_or_else(|| {
                 Error::new(
                     ErrorCode::ObjectCollision,
                     "unknown prepared database material is preserved, not adopted or removed",
@@ -194,11 +225,14 @@ fn inventory(
             if !seen.insert(child.clone()) {
                 return Err(invalid("repeated prepared database directory entry"));
             }
-            if file {
-                held.open_regular(&held.path().join(&child))?;
-            } else {
-                held.private_child(&held.path().join(&child))?;
-                pending.push(child);
+            match entry {
+                Entry::File(_) => {
+                    held.open_regular(&held.path().join(&child))?;
+                }
+                Entry::Directory => {
+                    held.private_child(&held.path().join(&child))?;
+                    pending.push(child);
+                }
             }
         }
     }
@@ -219,12 +253,9 @@ pub(super) fn required_capacity(
     let base = root.path().join(prepared.namespace.name());
     let manifest = prepared.manifest();
     let mut missing = 0u64;
-    for (relative, bytes) in std::iter::once((PathBuf::from(MANIFEST), manifest)).chain(
-        prepared
-            .files
-            .iter()
-            .map(|(path, bytes)| (path.clone(), *bytes)),
-    ) {
+    for (relative, bytes) in
+        std::iter::once((Path::new(MANIFEST), manifest)).chain(prepared.data_files())
+    {
         preparation_checkpoint(stop)?;
         let path = base.join(relative);
         if preparation_path_exists(root, &path)? {
@@ -242,7 +273,7 @@ pub(super) fn required_capacity(
     }
     // Directory blocks, atomic file temporaries and completion intents have a
     // separate reservation. Peers never subsidize one another's free space.
-    let overhead = (entries(prepared)?.len() as u64)
+    let overhead = (prepared.entries.len() as u64)
         .checked_mul(8192)
         .ok_or_else(capacity_overflow)?;
     let needed = missing
@@ -280,7 +311,7 @@ pub(super) fn install(
     require_capacity(root, prepared, stop)?;
     let base = root.path().join(prepared.namespace.name());
     install_preparation_bytes(root, &base.join(MANIFEST), prepared.manifest())?;
-    for (path, bytes) in &prepared.files {
+    for (path, bytes) in prepared.data_files() {
         preparation_checkpoint(stop)?;
         install_preparation_bytes(root, &base.join(path), bytes)?;
     }
@@ -300,9 +331,9 @@ pub(super) fn verify(
             "database manifest does not equal the admitted complete State projection",
         ));
     }
-    for (path, bytes) in &prepared.files {
+    for (path, bytes) in prepared.data_files() {
         preparation_checkpoint(stop)?;
-        if root.read_bytes(&base.join(path), bytes.len())? != *bytes {
+        if root.read_bytes(&base.join(path), bytes.len())? != bytes {
             return Err(invalid(
                 "database bytes differ from their admitted source projection",
             ));
