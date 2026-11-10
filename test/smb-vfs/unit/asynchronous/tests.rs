@@ -265,21 +265,25 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
         assert_eq!(Arc::strong_count(stored), 1);
         let event = event_context();
         assert!(!event.is_null());
-        for writable in [false, true] {
-            vfs::context(&mut handle)
+        // Descriptor storage is independent of client write permission: a
+        // read-only create also owns a workspace until its empty file is saved.
+        for (writable, workspace) in [(false, None), (true, Some("work")), (false, Some("work"))] {
+            let opened = vfs::context(&mut handle)
                 .unwrap()
                 .files
                 .get_mut(&0)
-                .unwrap()
-                .writable = writable;
+                .unwrap();
+            opened.writable = writable;
+            Arc::get_mut(&mut opened.info).unwrap().workspace_id = workspace.map(str::to_owned);
+            let private_work = workspace.is_some();
             let mut metadata = sdk::SMB_STRUCT_STAT::default();
             assert_eq!(
                 vfs::fstat(&mut handle, std::ptr::null_mut(), &mut metadata),
                 0
             );
-            assert_eq!(metadata.st_ex_size, if writable { 10 } else { 4 });
+            assert_eq!(metadata.st_ex_size, if private_work { 10 } else { 4 });
             for offset in [0, 2, 4, 5] {
-                let expected: &[u8] = if writable {
+                let expected: &[u8] = if private_work {
                     &b"goodSECRET"[offset..]
                 } else {
                     &b"good"[offset.min(4)..]
@@ -320,7 +324,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
             }
             let mut stat: sdk::SMB_STRUCT_STAT = Default::default();
             assert_eq!(vfs::fstat(&mut handle, std::ptr::null_mut(), &mut stat), 0);
-            assert_eq!(stat.st_ex_size, if writable { 10 } else { 4 });
+            assert_eq!(stat.st_ex_size, if private_work { 10 } else { 4 });
         }
         sdk::_talloc_free(event.cast(), c"zxs read bound".as_ptr());
         vfs::free_context(&mut handle.data);
