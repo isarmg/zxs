@@ -1,6 +1,6 @@
 //! Resolve the displayed target parent once through the existing listing API.
 use super::*;
-use crate::files::page::{DirectoryKey, Page};
+use crate::files::page::{DirectoryKey, Page, PageParts};
 
 pub(super) fn input_error(source: storage_contract::Error) -> api::Error {
     let mut error = api::error(storage_contract::ErrorCode::InvalidRequest, source.to_string());
@@ -15,27 +15,12 @@ pub(super) async fn review(
     cancellation: api::ReadCancellation,
 ) -> Result<Review, api::Error> {
     let (parent, name) = destination.as_str().rsplit_once('/').unwrap_or(("", destination.as_str()));
-    let parent_path = if parent.is_empty() {
-        None
-    } else {
-        Some(name_policy::PortablePath::parse(parent).map_err(|source| input_error(source.into()))?)
-    };
-    let key = DirectoryKey::destination("", parent_path.as_ref());
-    let endpoint = format!("/api/file-manager/disks/{}/entries?path={}&limit=1",
-        api::segment(&slot), api::segment(parent));
-    let page = Page::parse(
-        api::cancellable_get(&endpoint, cancellation).await?,
-        &slot, &key, 1, None,
-    )?.into_parts();
-    if !page.writable || page.preview {
+    let page = folder_page(&slot, parent, 1, None, cancellation).await?;
+    if !page.writable {
         return Err(api::error(storage_contract::ErrorCode::InvalidRequest,
             t("目标父目录必须是可写的当前工作目录。", "The destination parent must be a writable current folder.")));
     }
     let context = page.context;
-    if context.is_none() && !parent.is_empty() {
-        return Err(api::error(storage_contract::ErrorCode::InvalidRequest,
-            t("目标父目录没有仓库位置，请重新读取。", "The destination parent has no repository location. Read it again.")));
-    }
     let target_path = name_policy::PortablePath::parse(&super::super::model::join_path(
         context.as_ref().map_or("", |context| context.repository_path()), name,
     )).map_err(|source| input_error(source.into()))?;
@@ -58,4 +43,33 @@ pub(super) async fn review(
         target_entry_id: None,
     };
     Ok(Review { basis, destination: destination.as_str().to_owned(), request })
+}
+
+pub(super) async fn folder_page(
+    slot: &str,
+    parent: &str,
+    limit: usize,
+    cursor: Option<&str>,
+    cancellation: api::ReadCancellation,
+) -> Result<PageParts, api::Error> {
+    let parent_path = if parent.is_empty() {
+        None
+    } else {
+        Some(name_policy::PortablePath::parse(parent).map_err(|source| input_error(source.into()))?)
+    };
+    let key = DirectoryKey::destination("", parent_path.as_ref());
+    let mut endpoint = format!("/api/file-manager/disks/{}/entries?path={}&limit={limit}",
+        api::segment(slot), api::segment(parent));
+    if let Some(cursor) = cursor {
+        endpoint.push_str(&format!("&cursor={}", api::segment(cursor)));
+    }
+    let page = Page::parse(
+        api::cancellable_get(&endpoint, cancellation).await?,
+        slot, &key, limit, None,
+    )?.into_parts();
+    if page.preview || (page.context.is_none() && !parent.is_empty()) {
+        return Err(api::error(storage_contract::ErrorCode::InvalidRequest,
+            t("目标必须是当前目录，并具有明确的仓库位置。", "The destination must be a current folder with a repository location.")));
+    }
+    Ok(page)
 }
