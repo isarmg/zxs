@@ -66,7 +66,9 @@ impl DefaultShare {
         let format: Value =
             storage_contract::decode_strict(&bytes).map_err(ApiError::contract_input)?;
         if format.get("format").and_then(Value::as_str) == Some(object::FORMAT) {
-            return self.resume_object_move(source, target, replace, admission, &bytes).map(Some);
+            return self
+                .resume_object_move(source, target, replace, admission, &bytes)
+                .map(Some);
         }
         if matches!(
             format.get("format").and_then(Value::as_str),
@@ -171,7 +173,8 @@ impl DefaultShare {
             expected_source_file_id: file,
             operation_id: operation,
         };
-        let receipt = MoveReceipt::current(&request, &target_slot_id, original.replacement.as_ref())?;
+        let receipt =
+            MoveReceipt::current(&request, &target_slot_id, original.replacement.as_ref())?;
         let result = self.submit_move(request, original.replacement)?;
         let reply = receipt.published_reply(result, &self.identity.principal)?;
         admission.finish_published();

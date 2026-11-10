@@ -471,12 +471,8 @@ impl DefaultShare {
                 return Ok((Reply::Json(reply), None));
             }
             let key = self.session_key(source.repository)?;
-            let input = super::namespace::NamespaceInput::parse(
-                kind,
-                source.relative_path,
-                None,
-                replace,
-            )?;
+            let input =
+                super::namespace::NamespaceInput::parse(kind, source.relative_path, None, replace)?;
             let result = self
                 .sessions
                 .get_mut(&key)

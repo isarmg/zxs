@@ -97,7 +97,9 @@ impl Record {
             ),
             Namespace::ObjectMove { movement } => format!(
                 "{} → {}/{}",
-                self.path(), movement.target_slot_id, movement.target_path.as_str(),
+                self.path(),
+                movement.target_slot_id,
+                movement.target_path.as_str(),
             ),
             Namespace::UninitializedRoot | Namespace::Repository { .. } => self.path().to_owned(),
         };
@@ -105,7 +107,10 @@ impl Record {
     }
     pub(super) fn can_lookup(&self) -> bool {
         self.digest.is_some()
-            || matches!(&self.stored.namespace, Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. })
+            || matches!(
+                &self.stored.namespace,
+                Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. }
+            )
     }
     fn key(&self) -> String {
         format!("{}{}", prefix(self.principal()), self.operation())
@@ -114,7 +119,10 @@ impl Record {
         if let Namespace::ObjectMove { movement } = &self.stored.namespace {
             return (
                 "POST",
-                format!("/api/file-manager/disks/{}/object-move", api::segment(&self.stored.slot)),
+                format!(
+                    "/api/file-manager/disks/{}/object-move",
+                    api::segment(&self.stored.slot)
+                ),
                 json!({"operation_id":self.operation(),"movement":movement}),
             );
         }
@@ -180,7 +188,9 @@ impl Record {
                 && receipt["result"]["path"].as_str() == Some(relocation.source.as_str());
         }
         let path = match &self.stored.namespace {
-            Namespace::DirectoryBranch { .. } | Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. } => {
+            Namespace::DirectoryBranch { .. }
+            | Namespace::FileRelocation { .. }
+            | Namespace::ObjectMove { .. } => {
                 unreachable!("invariant: relocation handled above")
             }
             Namespace::UninitializedRoot => self.path(),
@@ -336,7 +346,9 @@ impl Record {
                 if source != display_path
                     && display_path.split_once('/').map(|(_, tail)| tail) != Some(source)
                 {
-                    return Err(failure("The original object paths do not share one namespace."));
+                    return Err(failure(
+                        "The original object paths do not share one namespace.",
+                    ));
                 }
                 None
             }

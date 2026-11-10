@@ -34,7 +34,10 @@ impl Destination {
         {
             return None;
         }
-        state.files.operations.iter()
+        state
+            .files
+            .operations
+            .iter()
             .find(|operation| operation.id() == self.operation)
             .map(|operation| operation.status())
             .filter(|status| matches!(status, SaveStatus::Published | SaveStatus::Degraded))
@@ -44,7 +47,11 @@ impl Destination {
         self.status(state).is_some()
             && !actions::pending(state)
             && !state.files.loading
-            && state.files.disks.iter().any(|disk| disk.slot_id == self.slot && disk.online)
+            && state
+                .files
+                .disks
+                .iter()
+                .any(|disk| disk.slot_id == self.slot && disk.online)
     }
 }
 
