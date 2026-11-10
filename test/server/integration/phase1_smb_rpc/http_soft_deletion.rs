@@ -182,12 +182,13 @@ fn soft_delete_adapter_checks_current_auth_and_preserves_cross_interface_receipt
                 operation_id: operation,
             },
         )
-        .unwrap();
+        .unwrap()
+        .expect("native file deletion");
     assert_eq!(
         backend
             .soft_delete_file(&identity, command(&repo, &a, operation))
             .unwrap(),
-        first.unwrap()
+        first
     );
     let file = HistoryFileId::parse(&a.file_id).unwrap();
     let node = backend

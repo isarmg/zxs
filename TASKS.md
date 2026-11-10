@@ -20,6 +20,7 @@
 
 ## 本轮命名共享真实 Unlink 修复
 
+- 2026-11-10：提交 `8a253039` 的自动 CI #1027 中，Debian 13 精确 SDK/VFS、独立运行镜像、真实 Samba 默认与命名共享读写／改名／删除及撤权验收全部通过（job `129860457336`）。一期 core 仍因 `http_soft_deletion.rs` 在第二处重放断言比较 Option 与收据而编译失败；本片将原生删除的必有收据在绑定处取出，保留两次重放相等断言。此修正仅测试及任务记录，格式与补丁检查通过，未本地编译，完整 CI 尚未通过。
 - CI #1018（`540a84d1`）已执行真实 Samba 默认与命名共享上传、下载、改名及撤权检查；最后命名共享 `kept.txt` 的删除在 close/unlink 返回 `NT_STATUS_NOT_SUPPORTED`。根因是命名初始化 owner 仍走结构删除，而可撤销文件 D 入口和历史包被 `file_manager_root` 限制挡住；保留原系统 Samba 最终权威状态断言。
 - 文件 D 以同仓完整独立分支 frontier 准入，不再以仓库显示类型筛选；selected owner 写权限、当前 entry/file 身份、branch binding、完整 frontier 预算、永久收据、冷恢复和准确撤销保持。SMB 在引擎锁内区分初始化 owner 与 legacy namespace，只有明确未发布的 legacy 返回 `None` 进入原 workspace 删除，错误继续保留恢复记录。
 - 新增命名根／嵌套目录的真实 RPC 删除、正文保留与撤销测试，以及引擎删后冷开、原请求重放、撤销后冷开测试；更新适配器返回类型与原 scope 用例。rustfmt 与补丁检查通过；遵照用户要求未本地编译或执行 Rust 测试，实际通过情况待准确提交的 CI，尚不宣称完整系统 Samba 验收成功。
