@@ -744,6 +744,11 @@ impl Engine {
             self.restore_namespace_workspace_baselines()?;
             return Ok(());
         }
+        if self.move_is_retained() {
+            // A completion-only selection holds the same ordinary repair fence.
+            self.restore_namespace_workspace_baselines()?;
+            return Ok(());
+        }
         if mode == RecoveryMode::CompletePending && !self.blocked {
             self.repair_journal_tails()?;
         } else if self.journals.values().any(JournalWriter::needs_recovery) {
