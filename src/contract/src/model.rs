@@ -1110,11 +1110,19 @@ pub struct State {
 impl State {
     /// Establish exact per-field provenance for one unpublished transaction.
     pub fn begin_tracking(&mut self) {
-        let Self {
-            sequence: _,
-            business_generation: _,
-            topology_generation: _,
-            control_auth: _,
+        macro_rules! track {
+            ($($field:ident),+ $(,)?) => {
+                let Self {
+                    sequence: _,
+                    business_generation: _,
+                    topology_generation: _,
+                    control_auth: _,
+                    $($field),+
+                } = self;
+                $($field.begin_tracking();)+
+            };
+        }
+        track!(
             events,
             repositories,
             histories,
@@ -1153,45 +1161,7 @@ impl State {
             placement_rules,
             protection_policies,
             operation_principals,
-        } = self;
-        events.begin_tracking();
-        repositories.begin_tracking();
-        histories.begin_tracking();
-        branches.begin_tracking();
-        file_selections.begin_tracking();
-        directory_branches.begin_tracking();
-        directory_git_repositories.begin_tracking();
-        directory_trees.begin_tracking();
-        file_write_origins.begin_tracking();
-        file_contexts.begin_tracking();
-        file_path_nodes.begin_tracking();
-        file_metadata_nodes.begin_tracking();
-        file_deletions.begin_tracking();
-        file_branch_merges.begin_tracking();
-        file_branch_aliases.begin_tracking();
-        file_node_parents.begin_tracking();
-        file_path_notes.begin_tracking();
-        directory_tree_selections.begin_tracking();
-        file_locations.begin_tracking();
-        file_backup_paths.begin_tracking();
-        file_backup_policies.begin_tracking();
-        directory_selections.begin_tracking();
-        directory_selection_generations.begin_tracking();
-        file_selection_generations.begin_tracking();
-        file_notes.begin_tracking();
-        version_notes.begin_tracking();
-        file_names.begin_tracking();
-        commits.begin_tracking();
-        versions.begin_tracking();
-        placements.begin_tracking();
-        merge_links.begin_tracking();
-        history_boundaries.begin_tracking();
-        content_states.begin_tracking();
-        operations.begin_tracking();
-        plans.begin_tracking();
-        placement_rules.begin_tracking();
-        protection_policies.begin_tracking();
-        operation_principals.begin_tracking();
+        );
     }
 }
 

@@ -364,3 +364,81 @@ fn operation_receipt_bytes_and_owned_results_survive_discarded_candidates() {
     assert_eq!(crate::canonical_json(&before).unwrap(), BYTES);
     assert_eq!(before[&id], plain[&id]);
 }
+
+#[test]
+fn state_tracking_starts_each_field_without_changing_stored_values() {
+    let mut candidate = crate::State {
+        sequence: 7,
+        business_generation: 11,
+        topology_generation: 13,
+        control_auth: Some(json_codec::json!({"scope": "private"})),
+        ..Default::default()
+    };
+    let bytes = crate::canonical_json(&candidate).unwrap();
+    macro_rules! verify_fields {
+        ($($field:ident),+ $(,)?) => {
+            // Clear previous provenance as an unknown mutation would, without
+            // changing payloads. State must establish every new field owner.
+            $(candidate.$field.all_changed();)+
+            let before = candidate.clone();
+            candidate.begin_tracking();
+            $(
+                assert!(Arc::ptr_eq(&candidate.$field.value, &before.$field.value));
+                assert!(Arc::ptr_eq(
+                    candidate.$field.base.as_ref().unwrap(),
+                    &before.$field.identity,
+                ));
+                assert!(candidate.$field.changes.is_empty());
+                assert_eq!(candidate.$field.changed_key_bytes, 0);
+            )+
+            assert_eq!(crate::canonical_json(&candidate).unwrap(), bytes);
+            candidate.events.push(crate::Event {
+                sequence: 8,
+                operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
+                kind: "test.tracking".into(),
+                object_id: "event".into(),
+            });
+            assert_eq!(candidate.events.changes_since(&before.events),
+                crate::SequenceChanges::Append { start: 0 });
+        };
+    }
+    verify_fields!(
+        repositories,
+        histories,
+        branches,
+        file_selections,
+        directory_branches,
+        directory_git_repositories,
+        directory_trees,
+        file_write_origins,
+        file_contexts,
+        file_path_nodes,
+        file_metadata_nodes,
+        file_deletions,
+        file_branch_merges,
+        file_branch_aliases,
+        file_node_parents,
+        file_path_notes,
+        directory_tree_selections,
+        file_locations,
+        file_backup_paths,
+        file_backup_policies,
+        directory_selections,
+        directory_selection_generations,
+        file_selection_generations,
+        file_notes,
+        version_notes,
+        file_names,
+        commits,
+        versions,
+        placements,
+        merge_links,
+        history_boundaries,
+        content_states,
+        operations,
+        plans,
+        placement_rules,
+        protection_policies,
+        operation_principals,
+    );
+}
