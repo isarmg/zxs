@@ -54,6 +54,11 @@
 - 基于 `c9003675` 修正 workspace 特性门禁：helper 生产控制台要求 http1/json/tokio、拒绝 Query/Form，server 与 helper dev 仍要求 Query；保留 mount、生产 fault-injection 禁止项。7 项 Python 回归及 14 个真实 consumer/production-dev Cargo 元数据图检查通过，不进行本地编译。
 - 删除一期 core 实际报告的 object_move/projection.rs 未使用 Value 导入，保持 warning 拒绝门禁。此提交不包含批量格式修改，quality 的 rustfmt 失败仍未修复；其余 CI 失败分别继续读取日志处理。GitHub 自动 CI 的实际结果另行核实，不把脚本或元数据检查计为 Rust 测试通过。
 
+## 本轮 foundation async 清单修复
+
+- 对齐 `2820cbd3`，仅将 libsqlite3-sys 0.39.1 的登记默认 feature 从 min_sqlite_version_3_34_1 更新为当前源码定义的 min_sqlite_version_3_45_3，测试名单不变。新增静态回归，要求所有 root unit suite 的登记 feature 都属于当前本地 manifest 或其可选依赖。
+- [全量 #997](https://github.com/isarmg/zxs/actions/runs/42806334653/artifacts/13761026456) 的已校验 SHA-256 证据包确认唯一 error_new 测试被实际列出并通过；当前全部 unit 图元数据仅有上述一处差异，期间 Cargo／foundation 来源未改。18 项 Python 回归通过。没有本地编译或重新执行 Rust 测试，不以更新清单代替本提交的自动 CI 验证。
+
 ## 本轮 main push 自动全量 CI
 
 - 用户最新明确要求“跑自动ci”。基于 `2ec85f7e` 启用 main 分支 push 自动执行既有完整 CI，保留人工入口；PR、schedule、标签与 Release 发布仍暂停。全 13 套、WASM、Chrome、SDK、一期 core、预算、依赖和不复用策略保持。

@@ -21,6 +21,20 @@ PROOF_BOUND = ("tokio", "synchronization", "system-entropy", "libc", "memchr", "
 
 
 class FoundationBehaviourGateTests(unittest.TestCase):
+    def test_unit_inventory_features_are_declared_by_current_sources(self):
+        inventory = json.loads((ROOT / "test/ci/fixtures/foundation-behaviour-tests.json").read_text())
+        for name in GATE.UNIT_SUITES:
+            manifest = tomllib.loads((GATE.foundation_path(ROOT, name) / "Cargo.toml").read_text())
+            declared = set(manifest.get("features", {}))
+            scopes = [manifest, *manifest.get("target", {}).values()]
+            for scope in scopes:
+                for kind in ("dependencies", "build-dependencies", "dev-dependencies"):
+                    declared.update(key for key, value in scope.get(kind, {}).items()
+                                    if isinstance(value, dict) and value.get("optional"))
+            recorded = set(inventory["suites"]["unit:" + name]["features"])
+            with self.subTest(package=name):
+                self.assertLessEqual(recorded, declared)
+
     def test_gate_runs_once_in_the_async_shard(self):
         script = (ROOT / ".github/scripts/check-foundation.sh").read_text()
         async_case = script.split("  foundation-async)\n", 1)[1].split(";;", 1)[0]

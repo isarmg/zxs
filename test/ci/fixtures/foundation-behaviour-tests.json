@@ -4049,7 +4049,7 @@
         "bundled_bindings",
         "cc",
         "default",
-        "min_sqlite_version_3_34_1",
+        "min_sqlite_version_3_45_3",
         "pkg-config"
       ],
       "subject": "libsqlite3-sys",
