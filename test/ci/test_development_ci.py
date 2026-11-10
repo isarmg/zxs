@@ -115,7 +115,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
                 self.assertEqual(actual['mode'], 'full-ci')
                 self.assertEqual(actual['reused'], [])
                 self.assertNotIn('evidence', actual)
-                self.assertEqual(output.read_text(), 'suites=' + json.dumps(EXPECTED, separators=(',', ':')) + '\n')
+                self.assertEqual(output.read_text(), 'suites=' + json.dumps(EXPECTED, separators=(',', ':')) + '\n'
+                                 + 'matrix=' + json.dumps(POLICY.execution_matrix(), separators=(',', ':')) + '\n')
                 self.assertIn('selected, not yet passed; Release paused', summary.read_text())
                 POLICY.check_receipt(actual)
 
@@ -144,9 +145,13 @@ class DevelopmentCiPolicy(unittest.TestCase):
     def test_all_ci_jobs_run_with_original_full_budgets(self):
         ci = jobs((ROOT / '.github/workflows/ci.yml').read_text())
         self.assertEqual(set(ci), {'static', 'tests', 'web-production', 'browser-smoke',
-                                   'smb-sdk', 'phase-one-core'})
+                                   'smb-sdk', 'phase-one-core', 'workspace-coverage'})
         for name, body in ci.items():
-            self.assertNotRegex(body, r'(?m)^    (if|continue-on-error):')
+            if name == 'workspace-coverage':
+                self.assertIn("    if: always() && needs.static.result == 'success'\n", body)
+                self.assertNotIn('continue-on-error:', body)
+            else:
+                self.assertNotRegex(body, r'(?m)^    (if|continue-on-error):')
         self.assertIn('    timeout-minutes: 10\n', ci['static'])
         self.assertIn("    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || "
                       "matrix.suite == 'foundation-crypto' && 60 || 30 }}\n", ci['tests'])
@@ -155,7 +160,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
         self.assertIn('    timeout-minutes: 60\n', ci['phase-one-core'])
         self.assertNotRegex(ci['static'], r'(?m)^    needs:')
         self.assertEqual(re.findall(r'^    needs: (.+)$', ci['tests'], flags=re.MULTILINE), ['static'])
-        self.assertIn('suite: ${{ fromJSON(needs.static.outputs.suites) }}', ci['tests'])
+        self.assertIn('include: ${{ fromJSON(needs.static.outputs.matrix) }}', ci['tests'])
         self.assertIn('fail-fast: false', ci['tests'])
         self.assertNotIn('max-parallel:', ci['tests'])
         self.assertIn('    needs: [static, web-production, smb-sdk]\n', ci['browser-smoke'])
@@ -203,7 +208,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"', '        run: true'),
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"',
              '        run: bash .github/scripts/check.sh "${{ matrix.suite }}" || true'),
-            ('suite: ${{ fromJSON(needs.static.outputs.suites) }}', 'suite: [workspace]'),
+            ('include: ${{ fromJSON(needs.static.outputs.matrix) }}', 'suite: [workspace]'),
             ('development-ci.py select', 'select-ci-suites.py'),
         ):
             with self.subTest(old=old, new=new):

@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       suites: ${{ steps.suites.outputs.suites }}
+      matrix: ${{ steps.suites.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,7 +39,7 @@ jobs:
         run: python3 .github/scripts/development-ci.py select
 
   tests:
-    name: Tests (${{ matrix.suite }})
+    name: Tests (${{ matrix.suite }}, ${{ matrix.shard }})
     needs: static
     runs-on: ubuntu-24.04
     # Cold crypto runs include ten packaged/local-generated ring cases, including
@@ -51,9 +52,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.static.outputs.suites) }}
+        include: ${{ fromJSON(needs.static.outputs.matrix) }}
     env:
       ZXS_REQUIRE_BROWSER: '1'
+      ZXS_WORKSPACE_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,6 +98,14 @@ jobs:
           key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
       - name: Run locked test suite
         run: bash .github/scripts/check.sh "${{ matrix.suite }}"
+      - name: Retain workspace shard inventory and execution evidence
+        if: always() && matrix.suite == 'workspace'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: workspace-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: target/workspace-shards/${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain PKI Valgrind positive and negative evidence
         if: always() && matrix.suite == 'foundation-crypto'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -365,3 +375,21 @@ jobs:
             target/phase-one-core/summary.json
           if-no-files-found: error
           retention-days: 7
+
+  workspace-coverage:
+    name: Complete workspace shard coverage
+    needs: [static, tests]
+    if: always() && needs.static.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch every workspace receipt from this commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: workspace-shard-*-${{ github.sha }}
+          path: target/workspace-shards/collected
+      - name: Prove complete non-overlapping workspace execution
+        run: python3 .github/scripts/check-workspace-shards.py verify target/workspace-shards/collected

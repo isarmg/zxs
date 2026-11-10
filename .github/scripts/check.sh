@@ -43,6 +43,10 @@ case "${1:-}" in
     bash .github/scripts/security.sh
     ;;
   workspace)
+    if [[ -n "${ZXS_WORKSPACE_SHARD:-}" ]]; then
+      python3 .github/scripts/check-workspace-shards.py "$ZXS_WORKSPACE_SHARD"
+      exit
+    fi
     # Root default-members are the native product components. Web, tools, and
     # the Samba SDK module have dedicated suites in this same workspace.
     python3 .github/scripts/check-native-consumer-features.py

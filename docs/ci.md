@@ -1,8 +1,8 @@
 # 持续集成
 
-2026-11-10 用户最新要求“现在跑全量ci”，[人工全量 CI 与暂停边界](ci/development-short-ci.md) 已恢复全部 13 套矩阵、真实 Chrome、SDK、生产 WASM 与一期 core；只有人工 `workflow_dispatch` 入口，push、PR、schedule、标签及 Release 长流程继续暂停。本次恢复配置不等于实际检查通过，运行证据须绑定准确提交。
+2026-11-10 用户最新要求“现在跑全量ci”，[人工全量 CI 与暂停边界](ci/development-short-ci.md) 已恢复全部 13 套矩阵、真实 Chrome、SDK、生产 WASM 与一期 core；main push 自动运行并保留人工 `workflow_dispatch`，PR、schedule、标签及 Release 长流程继续暂停。本次恢复配置不等于实际检查通过，运行证据须绑定准确提交。
 
-[GitHub Actions 工作流](../.github/workflows/ci.yml) 每次人工运行固定选择全部 13 套，不按源码变化、缓存或历史成功跳过。并发组按 workflow／SHA／run ID 区分，不取消或替换其他检查。恢复提交后只 dispatch 一次并记录实际 head SHA、run URL 和各 job 结论；已在跑的短 CI 不算全量结果。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
+[GitHub Actions 工作流](../.github/workflows/ci.yml) 每次 main push 和人工运行固定选择全部 13 套，不按源码变化、缓存或历史成功跳过。并发组按 workflow／SHA／run ID 区分，不取消或替换其他检查。自动 push 已创建 run 后不再重复 dispatch；记录实际 head SHA、run URL 和各 job 结论；已在跑的短 CI 不算全量结果。使用 `rust-toolchain.toml` 指定工具链与唯一根 Cargo.lock，不部署或发布。产品用户入口仅为 Web 与 SMB；没有桌面或移动 App 构建任务。
 
 所有自有 Rust 组件和基础实现由一个根 workspace 管理，命令按包和编译目标选择。统一入口为 [check.sh](../.github/scripts/check.sh)：
 
@@ -74,3 +74,13 @@ SMB SDK 编译不等于 Samba 模块已加载或跨客户端往返通过；Chrom
 
 工作流仅授予所需权限，checkout 不保留凭据，官方 Actions 固定完整提交 SHA。所有调用 Rust 的 job 在 checkout 后通过 [环境初始化脚本](../.github/scripts/initialize-cargo-home.sh) 从运行时 `RUNNER_TEMP` 创建全新空 Cargo home，再写入 `GITHUB_ENV` 供后续步骤使用；不在顶层或 job env 引用尚不可用的 `runner.temp`。不缓存 registry/git 源码或测试成功结果。新增组件必须加入根工作区、复用根锁文件、登记中央来源清单并增加对应检查；不得增加子工作区或活动子锁文件。
 
+
+## Workspace 完整分片
+
+原 `workspace` 顺序入口保留；CI 将同一工作量展开为八个 native 测试分片、一个生产特性／类型与 rustdoc 组、三个原 I/O 门禁组和一个显式 ignored 组。每个作业仍使用原 120 分钟上限，其余 suite、核心验收、SDK 与发行前置不变。不取消旧运行，不新增本地构建或以缩减覆盖换取完成。
+
+每个 native 分片使用根默认成员、唯一锁与相同特性图运行 Cargo `test --no-run` JSON，以实际产物和元数据交叉核对目标，再读取每个 libtest 的完整／ignored 名单。稳定目标身份加精确测试名构成唯一键，按审阅的历史耗时下界做确定性最长优先分配；未测名称也必须分配，权重只影响放置，不能过滤或缓存成功。所有测试按原默认 ignored 语义运行；原三项显式 ignored 验收在独立组执行。
+
+每片保存完整名单、分配、退出码、最终测试计数和命令耗时，即使失败仍上传；单个目标失败继续其他已分配目标，整个分片最终失败。完整性作业要求同 SHA、同锁、相同完整名单、所有13片均有成功回执，证明八片并集完整且互不重叠，并逐字核对 doc／11个 I/O／三个显式 ignored 入口。缺片、超时、零执行伪成功或重复都不能通过。Rustdoc 由 Cargo 单独执行，不冒充 libtest 名单。
+
+历史 #1035 的未分片 workspace 在120分钟预算处停止，单个 engine 仍未结束；其 over-60-second 通知显示一个成功用例至少61分钟。分片不能承诺消除单例自身成本，慢恢复用例仍须单独核对复杂度。八片会各自构建同一准确图，增加 runner 构建总量以降低等待整组测试的墙钟时间；运行结果和新的耗时须以本次 CI 回执复验。

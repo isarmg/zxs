@@ -130,6 +130,34 @@ HEADER = '# Development short CI: long checks are paused, not passed. See docs/c
 FULL_HEADER = '# Full CI: main pushes and manual runs; pull requests, schedules and Release remain paused.\n'
 
 
+WORKSPACE_SHARDS = tuple(f'tests-{i}' for i in range(8)) + (
+    'checks-docs', 'io-0', 'io-1', 'io-2', 'ignored')
+WORKSPACE_COVERAGE_JOB = "\n  workspace-coverage:\n    name: Complete workspace shard coverage\n    needs: [static, tests]\n    if: always() && needs.static.result == 'success'\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Fetch every workspace receipt from this commit\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          pattern: workspace-shard-*-${{ github.sha }}\n          path: target/workspace-shards/collected\n      - name: Prove complete non-overlapping workspace execution\n        run: python3 .github/scripts/check-workspace-shards.py verify target/workspace-shards/collected\n"
+WORKSPACE_UPLOAD = "      - name: Retain workspace shard inventory and execution evidence\n        if: always() && matrix.suite == 'workspace'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: workspace-shard-${{ matrix.shard }}-${{ github.sha }}\n          path: target/workspace-shards/${{ matrix.shard }}/\n          if-no-files-found: error\n          retention-days: 7\n"
+
+
+def execution_matrix():
+    return [dict(suite=suite, shard=shard)
+            for suite in FULL_SUITES
+            for shard in (WORKSPACE_SHARDS if suite == 'workspace' else ('single',))]
+
+
+def workspace_projection(source):
+    source = source.replace('      suites: ${{ steps.suites.outputs.suites }}\n',
+                            '      suites: ${{ steps.suites.outputs.suites }}\n'
+                            '      matrix: ${{ steps.suites.outputs.matrix }}\n', 1)
+    source = source.replace('    name: Tests (${{ matrix.suite }})',
+                            '    name: Tests (${{ matrix.suite }}, ${{ matrix.shard }})', 1)
+    source = source.replace('        suite: ${{ fromJSON(needs.static.outputs.suites) }}',
+                            '        include: ${{ fromJSON(needs.static.outputs.matrix) }}', 1)
+    source = source.replace("      ZXS_REQUIRE_BROWSER: '1'\n",
+                            "      ZXS_REQUIRE_BROWSER: '1'\n"
+                            '      ZXS_WORKSPACE_SHARD: ${{ matrix.shard }}\n', 1)
+    source = source.replace('      - name: Retain PKI Valgrind positive and negative evidence\n',
+                            WORKSPACE_UPLOAD + '      - name: Retain PKI Valgrind positive and negative evidence\n', 1)
+    return source + WORKSPACE_COVERAGE_JOB
+
+
 def development_workflow(name, original):
     """The complete original jobs remain; only these reviewed edits are allowed."""
     source = (HEADER if name == 'release.yml' else FULL_HEADER) + original
@@ -161,7 +189,7 @@ def development_workflow(name, original):
                                     '    if: ${{ false && (' + PUBLISH_CONDITION + ') }}\n')
         else:
             source = source.replace(f'  {job}:\n', f'  {job}:\n' + PAUSE, 1)
-    return source
+    return workspace_projection(source) if name == 'ci.yml' else source
 
 
 def check_workflows(root):
@@ -190,6 +218,8 @@ def receipt():
         'automatic_triggers': True,
         'push_branches': ['main'],
         'suites': list(FULL_SUITES),
+        'matrix': execution_matrix(),
+        'workspace_shards': list(WORKSPACE_SHARDS),
         'paused_suites': [],
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
         'reused': [],
@@ -216,6 +246,7 @@ def emit(value, *, output=None, summary=None):
     if output is not None:
         with open(output, 'a') as stream:
             stream.write('suites=' + json.dumps(value['suites'], separators=(',', ':')) + '\n')
+            stream.write('matrix=' + json.dumps(value['matrix'], separators=(',', ':')) + '\n')
     if summary is not None:
         with open(summary, 'a') as stream:
             stream.write('### Full CI: selected, not yet passed; Release paused\n\n```json\n'
