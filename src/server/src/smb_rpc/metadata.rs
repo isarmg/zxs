@@ -11,7 +11,7 @@ impl Session {
         crate::backend_read::version_mtime(&snapshot.version)
     }
 
-    pub(super) fn stat(&self, path: &str) -> Result<Value, ApiError> {
+    pub(super) fn stat(&self, path: &str) -> Result<StatResult, ApiError> {
         let path = if path.is_empty() || path == "." {
             SmbRelativePath::Root
         } else {
@@ -19,9 +19,7 @@ impl Session {
                 name_policy::LookupPath::parse(path).map_err(|source| contract(source.into()))?,
             )
         };
-        self.stat_typed(&path).map(|result| {
-            json_codec::to_value(result).expect("invariant: stat metadata serializes")
-        })
+        self.stat_typed(&path)
     }
 
     pub(super) fn stat_typed(&self, path: &SmbRelativePath) -> Result<StatResult, ApiError> {
@@ -66,7 +64,7 @@ impl Session {
 
     /// last_head advances only through the existing publication confirmation.
     /// A dirty successor keeps that saved time; a new unpublished file has none.
-    pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<Value, ApiError> {
+    pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
             Handle::Read(_, version) => self.version_mtime(version)?,
             Handle::Directory(_) => FileMtime::NotFile {},
@@ -91,7 +89,6 @@ impl Session {
                 }
             }
         };
-        Ok(json_codec::to_value(AuthorizedMetadata { mtime })
-            .expect("invariant: handle metadata serializes"))
+        Ok(AuthorizedMetadata { mtime })
     }
 }

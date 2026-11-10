@@ -118,7 +118,6 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
     let (opened, _) = session
         .open("original".into(), false, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     session
         .namespace(
             smb_protocol::protocol::NamespaceOperation::Rename,
@@ -178,7 +177,6 @@ fn directory_read_failure_keeps_captured_page_and_restart_position() {
     let (opened, _descriptor) = active
         .open(String::new(), false, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let captured = cursor_state(&active, opened.handle);
     assert!(captured.1.is_none());
     active
@@ -209,22 +207,19 @@ fn directory_read_failure_keeps_captured_page_and_restart_position() {
         .lock()
         .unwrap()
         .replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
-    let first: DirectoryPage =
-        json_codec::from_value(active.read_directory(opened.handle, false).unwrap()).unwrap();
+    let first: DirectoryPage = active.read_directory(opened.handle, false).unwrap();
     assert_eq!(first.entries.len(), 1);
     assert_eq!(first.entries[0].entry.path, "report.txt");
     let exhausted = cursor_state(&active, opened.handle);
     assert_eq!(exhausted.0, captured.0);
     assert_eq!(exhausted.1.as_deref(), Some("report.txt"));
     for _ in 0..2 {
-        let page: DirectoryPage =
-            json_codec::from_value(active.read_directory(opened.handle, false).unwrap()).unwrap();
+        let page: DirectoryPage = active.read_directory(opened.handle, false).unwrap();
         assert!(page.entries.is_empty());
         assert!(!page.more);
         assert_eq!(cursor_state(&active, opened.handle), exhausted);
     }
-    let restarted: DirectoryPage =
-        json_codec::from_value(active.read_directory(opened.handle, true).unwrap()).unwrap();
+    let restarted: DirectoryPage = active.read_directory(opened.handle, true).unwrap();
     assert_eq!(
         restarted
             .entries

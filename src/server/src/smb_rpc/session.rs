@@ -117,10 +117,12 @@ impl Session {
             } => {
                 return self
                     .open(path, writable, create, truncate, exclusive, write_through)
-                    .map(|(value, descriptor)| (Reply::Json(value), descriptor));
+                    .map(|(value, descriptor)| (Reply::Open(value), descriptor));
             }
             Request::AuthorizeRead { handle } => {
-                self.handle_metadata(self.authorize_read(handle)?)?
+                return self
+                    .handle_metadata(self.authorize_read(handle)?)
+                    .map(|metadata| (Reply::Metadata(metadata), None));
             }
             Request::Read {
                 handle,
@@ -139,8 +141,14 @@ impl Session {
             Request::Close { handle } => self.close(handle, false)?,
             Request::Detach { handle } => self.detach(handle)?,
             Request::Abort { handle } => self.close(handle, true)?,
-            Request::Stat { path } => self.stat(&path)?,
-            Request::ReadDirectory { handle, restart } => self.read_directory(handle, restart)?,
+            Request::Stat { path } => {
+                return self.stat(&path).map(|stat| (Reply::Stat(stat), None));
+            }
+            Request::ReadDirectory { handle, restart } => {
+                return self
+                    .read_directory(handle, restart)
+                    .map(|page| (Reply::Directory(page), None));
+            }
             Request::Namespace {
                 kind,
                 path,

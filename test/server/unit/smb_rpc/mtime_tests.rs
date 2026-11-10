@@ -23,7 +23,7 @@ fn directory(active: &mut Session) -> OpenResult {
     let (value, _) = active
         .open(String::new(), false, false, false, false, false)
         .unwrap();
-    json_codec::from_value(value).unwrap()
+    value
 }
 
 fn page(active: &mut Session, handle: u64, restart: bool) -> DirectoryPage {
@@ -100,7 +100,7 @@ fn mtime_new_work_is_unpublished_until_flush_and_truncate_keeps_the_saved_baseli
     let (value, file) = active
         .open("fresh.txt".into(), true, true, false, true, false)
         .unwrap();
-    let fresh: OpenResult = json_codec::from_value(value).unwrap();
+    let fresh: OpenResult = value;
     assert_eq!(fresh.mtime, FileMtime::Unpublished {});
     assert_eq!(
         handle_time(&mut active, fresh.handle),
@@ -125,7 +125,7 @@ fn mtime_new_work_is_unpublished_until_flush_and_truncate_keeps_the_saved_baseli
     let (value, _fd) = active
         .open("report.txt".into(), true, false, true, false, false)
         .unwrap();
-    let truncated: OpenResult = json_codec::from_value(value).unwrap();
+    let truncated: OpenResult = value;
     assert_eq!(truncated.size, 0);
     assert_eq!(truncated.mtime, original);
     assert_eq!(handle_time(&mut active, truncated.handle), original);
@@ -209,7 +209,7 @@ fn mtime_write_through_dirty_uses_the_confirmed_publication_even_if_later_projec
     let (value, descriptor) = active
         .open("report.txt".into(), true, false, false, false, true)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(value).unwrap();
+    let opened: OpenResult = value;
     let file = File::from(descriptor.unwrap());
     file.write_all_at(b"new", 0).unwrap();
     active.dirty(opened.handle).unwrap();
@@ -343,4 +343,61 @@ fn mtime_parsing_rejects_noncanonical_or_out_of_range_saved_timestamps() {
         assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
     }
     active.close(opened.handle, true).unwrap();
+}
+
+#[test]
+fn metadata_dispatch_keeps_typed_payloads_until_wire_serialization() {
+    let (_temp, shared, _, branch) = fixture();
+    let mut active = session(shared, &branch);
+    let (reply, descriptor) = active
+        .dispatch(Request::Open {
+            path: "report.txt".into(),
+            writable: false,
+            create: false,
+            truncate: false,
+            exclusive: false,
+            write_through: false,
+        })
+        .unwrap();
+    assert!(descriptor.is_some());
+    let Reply::Open(opened) = reply else {
+        panic!("open lost its typed payload")
+    };
+    let handle = opened.handle;
+    let replies = [
+        active
+            .dispatch(Request::Stat {
+                path: "report.txt".into(),
+            })
+            .unwrap()
+            .0,
+        active
+            .dispatch(Request::AuthorizeRead { handle })
+            .unwrap()
+            .0,
+    ];
+    assert!(matches!(&replies[0], Reply::Stat(_)));
+    assert!(matches!(&replies[1], Reply::Metadata(_)));
+    for reply in replies {
+        let expected = json_codec::to_value(&reply).unwrap();
+        let bytes = json_codec::to_vec(&ResponsePayload::Ok { result: reply }).unwrap();
+        let Response::Ok { result } = storage_contract::decode_strict(&bytes).unwrap() else {
+            panic!("success envelope changed")
+        };
+        assert_eq!(result, expected);
+    }
+    active.close(handle, false).unwrap();
+    let root = directory(&mut active);
+    let (page, _) = active
+        .dispatch(Request::ReadDirectory {
+            handle: root.handle,
+            restart: false,
+        })
+        .unwrap();
+    let Reply::Directory(page) = page else {
+        panic!("directory lost its typed payload")
+    };
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].entry.path.as_str(), "report.txt");
+    active.close(root.handle, false).unwrap();
 }

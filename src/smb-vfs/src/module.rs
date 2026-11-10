@@ -11,14 +11,9 @@
 //! Null checks defend optional arguments, not dangling pointers or a mismatched ABI.
 //! Workers receive owned descriptors/data, never these host pointers.
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
-use data_serialization::Deserialize;
-use json_codec::Value;
 use smb_protocol::{
     client::{Client, Mutation, WriteSequence},
-    protocol::{
-        AuthorizedMetadata, DirectoryPage, FileMtime, NamespaceOperation, OpenResult,
-        Request as RawRequest, StatResult,
-    },
+    protocol::{FileMtime, NamespaceOperation, OpenResult, Request as RawRequest, StatResult},
 };
 
 type Request = RawRequest<storage_contract::OperationId>;
@@ -335,9 +330,7 @@ unsafe extern "C" fn pread(
                     .read(opened.info.handle, offset as u64, output)
                     .map(|read| read as isize);
             }
-            context.client.call(Request::AuthorizeRead {
-                handle: opened.info.handle,
-            })?;
+            context.client.authorize_read(opened.info.handle)?;
             // SAFETY: The host guarantees data is writable for count bytes for this synchronous
             // call; the descriptor remains owned and the I/O lock is held.
             let result = unsafe { libc::pread(opened.fd.as_raw_fd(), data, count, offset) };
@@ -372,9 +365,7 @@ unsafe extern "C" fn lseek(
             let context = unsafe { context(handle) }?;
             let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            context.client.call(Request::AuthorizeRead {
-                handle: opened.info.handle,
-            })?;
+            context.client.authorize_read(opened.info.handle)?;
             if opened.info.workspace_id.is_none() {
                 // SMB2/3 tracks file position independently of VFS lseek.
                 // The non-content FD proves neither position nor allocation;
@@ -564,9 +555,7 @@ unsafe extern "C" fn pread_send(
             move |(opened, mut bytes)| {
                 let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
                 let result = if opened.info.workspace_id.is_some() {
-                    opened.client.call(Request::AuthorizeRead {
-                        handle: opened.info.handle,
-                    })?;
+                    opened.client.authorize_read(opened.info.handle)?;
                     let result = libc::pread(
                         opened.fd.as_raw_fd(),
                         bytes.as_mut_ptr().cast(),
@@ -726,8 +715,7 @@ unsafe extern "C" fn fsync_recv(
 
 /// # Safety
 /// A non-null stat points to live, aligned, exclusively writable SDK stat storage.
-unsafe fn fill_stat(node: &Value, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::Result<()> {
-    let node = StatResult::deserialize(node).map_err(std::io::Error::other)?;
+unsafe fn fill_stat(node: &StatResult, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::Result<()> {
     let size = i64::try_from(node.size)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     // SAFETY: The caller provides the same exclusive SDK output required by
@@ -794,10 +782,10 @@ unsafe extern "C" fn stat(
         // SAFETY: The host supplies live filename/directory objects and their string fields for
         // this callback; optional nulls are rejected or handled by the helper.
         let path = unsafe { name(handle, file) }?;
-        let node = context.client.call(Request::Stat { path: path.clone() })?;
+        let node = context.client.stat(path.clone())?;
         // The host does folded lookup through get_real_filename_at. Its POSIX
         // stat probe must distinguish spelling for case-only rename.
-        if node.get("path").and_then(Value::as_str) != Some(path.as_str()) {
+        if node.path != path {
             return Err(std::io::Error::from_raw_os_error(libc::ENOENT));
         }
         // SAFETY: The host supplies exclusive writable stat storage; the filename (if used) was
@@ -830,11 +818,7 @@ unsafe fn authorized_fstat(
     let context = unsafe { context(handle) }?;
     let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
     let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-    let metadata = context.client.call(Request::AuthorizeRead {
-        handle: opened.info.handle,
-    })?;
-    let metadata: AuthorizedMetadata =
-        json_codec::from_value(metadata).map_err(std::io::Error::other)?;
+    let metadata = context.client.authorize_read(opened.info.handle)?;
     // SAFETY: libc::stat is a C POD output structure whose integer and pointer fields admit
     // zero initialization.
     let mut physical: libc::stat = unsafe { std::mem::zeroed() };
@@ -878,8 +862,8 @@ unsafe extern "C" fn fstatat(
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
         let context = unsafe { context(handle) }?;
-        let node = context.client.call(Request::Stat { path: path.clone() })?;
-        if node.get("path").and_then(Value::as_str) != Some(path.as_str()) {
+        let node = context.client.stat(path.clone())?;
+        if node.path != path {
             return Err(std::io::Error::from_raw_os_error(libc::ENOENT));
         }
         // SAFETY: The host supplies exclusive writable stat storage; the filename (if used) was
@@ -925,10 +909,7 @@ unsafe extern "C" fn real_filename(
         };
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
-        let entry = unsafe { context(handle) }?
-            .client
-            .call(Request::Stat { path })?;
-        let entry: StatResult = json_codec::from_value(entry).map_err(std::io::Error::other)?;
+        let entry = unsafe { context(handle) }?.client.stat(path)?;
         let name = std::ffi::CString::new(entry.name)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         // SAFETY: mem_ctx is a live host talloc context or null; name is a live CString copied by
@@ -1076,14 +1057,7 @@ unsafe extern "C" fn fdopendir(
 }
 impl Directory {
     fn load_page(&mut self) -> std::io::Result<()> {
-        let value = self.client.call(Request::ReadDirectory {
-            handle: self.handle,
-            restart: self.restart,
-        })?;
-        let page: DirectoryPage = json_codec::from_value(value).map_err(std::io::Error::other)?;
-        if page.more && page.entries.is_empty() {
-            return Err(bad());
-        }
+        let page = self.client.read_directory(self.handle, self.restart)?;
         let mut entries = Vec::new();
         for node in page.entries {
             let node = node.entry;

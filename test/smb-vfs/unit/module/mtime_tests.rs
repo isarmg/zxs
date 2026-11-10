@@ -1,5 +1,7 @@
 use super::*;
-use smb_protocol::protocol::{FrameStream, PROTOCOL, REQUIRED_CAPABILITIES, Response, SavedMtime};
+use smb_protocol::protocol::{
+    AuthorizedMetadata, FrameStream, PROTOCOL, REQUIRED_CAPABILITIES, Response, SavedMtime,
+};
 use std::{
     fs::File,
     os::unix::{fs::FileExt, net::UnixListener},

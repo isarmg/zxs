@@ -80,12 +80,6 @@ fn directory_only() -> ApiError {
         "the default share root and disk directories are not file contents",
     )
 }
-fn json_reply(value: impl data_serialization::Serialize) -> (Reply, Option<OwnedFd>) {
-    (
-        Reply::Json(json_codec::to_value(value).expect("invariant: SMB metadata serializes")),
-        None,
-    )
-}
 
 impl DefaultShare {
     pub(super) fn new(
@@ -346,10 +340,7 @@ impl DefaultShare {
         };
         opened.handle = id;
         self.handles.insert(id, route);
-        Ok((
-            Reply::Json(json_codec::to_value(opened).expect("invariant: open metadata serializes")),
-            descriptor,
-        ))
+        Ok((Reply::Open(opened), descriptor))
     }
 
     fn stat(&mut self, path: &str) -> Result<(Reply, Option<OwnedFd>), ApiError> {
@@ -388,17 +379,20 @@ impl DefaultShare {
                         .expect("invariant: prefix contains a slot")
                         .into();
                 }
-                return Ok(json_reply(result));
+                return Ok((Reply::Stat(result), None));
             }
         };
-        Ok(json_reply(StatResult {
-            entry_id,
-            kind: storage_contract::NamespaceEntryKind::Directory,
-            path: canonical_path,
-            name,
-            size: 0,
-            mtime: FileMtime::NotFile {},
-        }))
+        Ok((
+            Reply::Stat(StatResult {
+                entry_id,
+                kind: storage_contract::NamespaceEntryKind::Directory,
+                path: canonical_path,
+                name,
+                size: 0,
+                mtime: FileMtime::NotFile {},
+            }),
+            None,
+        ))
     }
 
     fn namespace(

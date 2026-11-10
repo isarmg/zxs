@@ -224,7 +224,7 @@ impl DefaultShare {
             Request::Close { .. } | Request::Abort { .. } | Request::Detach { .. }
         ) {
             self.handles.remove(&id);
-            return Ok(json_reply(json!({"closed":true})));
+            return Ok((Reply::Json(json!({"closed":true})), None));
         }
         let topology = self.shared.backend.topology_snapshot(&self.identity)?;
         let RoutedHandle::Directory(directory) = self
@@ -256,18 +256,21 @@ impl DefaultShare {
         match request {
             Request::Flush { .. } => {
                 directory._file.sync_all().map_err(ApiError::io)?;
-                Ok(json_reply(json!({"saved":true,"changed":false})))
+                Ok((Reply::Json(json!({"saved":true,"changed":false})), None))
             }
-            Request::AuthorizeRead { .. } => Ok(json_reply(AuthorizedMetadata {
-                mtime: FileMtime::NotFile {},
-            })),
+            Request::AuthorizeRead { .. } => Ok((
+                Reply::Metadata(AuthorizedMetadata {
+                    mtime: FileMtime::NotFile {},
+                }),
+                None,
+            )),
             Request::ReadDirectory { restart, .. } => {
                 let scope = directory.scope.clone();
                 let page = match scope {
                     VirtualScope::Root { .. } => self.read_root_page(id, restart, topology)?,
                     VirtualScope::Disk { slot, .. } => self.read_disk_page(id, &slot, restart)?,
                 };
-                Ok(json_reply(page))
+                Ok((Reply::Directory(page), None))
             }
             _ => Err(directory_only()),
         }

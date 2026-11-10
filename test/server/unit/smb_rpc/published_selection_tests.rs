@@ -11,7 +11,6 @@ fn first_save(
     let (opened, descriptor) = client
         .open(path.into(), true, create, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let file = File::from(descriptor.unwrap());
     // A genuinely unpublished new path has no captured file context yet.
     client

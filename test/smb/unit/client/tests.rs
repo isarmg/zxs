@@ -2,6 +2,7 @@ use super::*;
 use storage_contract::ErrorCode;
 
 mod admission;
+mod metadata;
 mod read;
 mod write_sequence;
 

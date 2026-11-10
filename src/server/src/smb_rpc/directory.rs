@@ -3,7 +3,11 @@ use super::*;
 use smb_protocol::protocol::DirectoryPage;
 
 impl Session {
-    pub(super) fn read_directory(&mut self, handle: u64, restart: bool) -> Result<Value, ApiError> {
+    pub(super) fn read_directory(
+        &mut self,
+        handle: u64,
+        restart: bool,
+    ) -> Result<DirectoryPage, ApiError> {
         let directory = match self.handles.get_mut(&handle) {
             Some(Handle::Directory(directory)) => directory,
             Some(_) => {
@@ -46,6 +50,6 @@ impl Session {
             .map(|node| node.entry.lookup_key().to_owned())
             .or_else(|| cursor.and_then(|cursor| cursor.after.clone()));
         directory.cursor = Some(DirectoryCursor { snapshot, after });
-        Ok(json_codec::to_value(page).expect("invariant: directory page serializes"))
+        Ok(page)
     }
 }

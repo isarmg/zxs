@@ -160,7 +160,7 @@ fn read_admission_preserves_error_priority_and_releases_descriptors_and_all_clon
     ] {
         for with_fd in [false, true] {
             if !with_fd && (payload == br#"{"status":"ok","result":{"bytes":[1]}}"# || payload.ends_with(br#""operation_id":"op_read"}"#)) { continue; }
-            let expected = super::super::read_response::tests::signature(old_read_error(payload,with_fd));
+            let expected = super::super::response::tests::signature(old_read_error(payload,with_fd));
             let (one,two)=UnixStream::pair().unwrap();
             let (descriptor,mut peer)=UnixStream::pair().unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -174,7 +174,7 @@ fn read_admission_preserves_error_priority_and_releases_descriptors_and_all_clon
             let client=Client(Arc::new(Mutex::new(Some(FrameStream::new(one).unwrap()))));
             let clones=[client.clone(),client.clone()];
             let error=client.read(7,0,&mut [0]).unwrap_err();
-            assert_eq!(super::super::read_response::tests::signature(error),expected,"payload={payload:?}; fd={with_fd}");
+            assert_eq!(super::super::response::tests::signature(error),expected,"payload={payload:?}; fd={with_fd}");
             for caller in [&client,&clones[0],&clones[1]] {
                 assert_eq!(caller.read(7,0,&mut [0]).unwrap_err().kind(),io::ErrorKind::NotConnected);
                 assert_eq!(caller.call(Request::Stat{path:"next".into()}).unwrap_err().kind(),io::ErrorKind::NotConnected);

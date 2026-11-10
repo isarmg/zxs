@@ -52,7 +52,7 @@ impl Vfs {
         let (result, descriptor) = session
             .open(path.into(), true, create, false, create, write_through)
             .unwrap();
-        let opened: OpenResult = json_codec::from_value(result).unwrap();
+        let opened: OpenResult = result;
         Self {
             handle: opened.handle,
             file: File::from(descriptor.unwrap()),

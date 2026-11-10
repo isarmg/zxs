@@ -223,7 +223,11 @@ fn send_success(
             .get("operation_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        Reply::Read(_) => None,
+        Reply::Open(_)
+        | Reply::Stat(_)
+        | Reply::Metadata(_)
+        | Reply::Directory(_)
+        | Reply::Read(_) => None,
     }
     .or(requested_operation);
     let response = ResponsePayload::Ok { result };

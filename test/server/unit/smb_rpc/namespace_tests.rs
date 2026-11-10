@@ -1285,7 +1285,6 @@ fn named_initialized_unlink_retains_history_and_can_be_restored() {
             let (opened, fd) = client
                 .open(path.into(), true, true, false, false, false)
                 .unwrap();
-            let opened: OpenResult = json_codec::from_value(opened).unwrap();
             File::from(fd.unwrap()).write_all_at(b"old", 0).unwrap();
             client.dirty(opened.handle).unwrap();
             client.close(opened.handle, false).unwrap();
@@ -1453,7 +1452,6 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
     let (opened, file) = session
         .open("report.txt".into(), true, false, false, false, true)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let file = File::from(file.unwrap());
     file.write_all_at(b"one", 0).unwrap();
     session
@@ -2406,7 +2404,6 @@ fn malformed_raw_operation_ids_keep_handles_and_reject_before_side_effects() {
     let (opened, descriptor) = session
         .open("report.txt".into(), false, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let _file = File::from(descriptor.unwrap());
     let spool = || {
         fs::read_dir(&shared.spool)

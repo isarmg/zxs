@@ -157,7 +157,14 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
                     .unwrap(),
             }
         };
-        let node = json_codec::json!({"kind": kind, "entry_id": "entry", "size": size.to_string(), "path":"entry", "name":"entry", "mtime":mtime});
+        let node = StatResult {
+            kind,
+            entry_id: "entry".into(),
+            size: size as u64,
+            path: "entry".into(),
+            name: "entry".into(),
+            mtime,
+        };
         // SAFETY: Both outputs are live, exclusive local SDK stat structures.
         unsafe {
             fill_stat_fields(kind, "entry", size, mtime, &mut direct).unwrap();
@@ -207,10 +214,17 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
             )
             .is_err()
         );
-        let too_large = json_codec::json!({"kind": "file", "entry_id": "entry", "size": u64::MAX.to_string(), "path":"entry", "name":"entry", "mtime":{"state":"unpublished"}});
+        let too_large = StatResult {
+            kind: NamespaceEntryKind::File,
+            entry_id: "entry".into(),
+            size: u64::MAX,
+            path: "entry".into(),
+            name: "entry".into(),
+            mtime: FileMtime::Unpublished {},
+        };
         assert!(fill_stat(&too_large, &mut output).is_err());
         let unknown = json_codec::json!({"kind":"future_kind", "entry_id":"entry", "size":"0"});
-        assert!(fill_stat(&unknown, &mut output).is_err());
+        assert!(json_codec::from_value::<StatResult>(unknown).is_err());
     }
 }
 

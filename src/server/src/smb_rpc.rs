@@ -7,7 +7,8 @@ use crate::{
 use data_serialization::Serialize;
 use json_codec::{Value, json};
 use smb_protocol::protocol::{
-    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response, ResponsePayload,
+    AuthorizedMetadata, DirectoryPage, FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES,
+    Request, Response, ResponsePayload, StatResult,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -53,6 +54,10 @@ mod tests;
 #[derive(Debug)]
 enum Reply {
     Json(Value),
+    Open(OpenResult),
+    Stat(StatResult),
+    Metadata(AuthorizedMetadata),
+    Directory(DirectoryPage),
     Read(bytes::Bytes),
 }
 
@@ -63,6 +68,10 @@ impl Serialize for Reply {
     ) -> Result<S::Ok, S::Error> {
         match self {
             Self::Json(value) => value.serialize(serializer),
+            Self::Open(value) => value.serialize(serializer),
+            Self::Stat(value) => value.serialize(serializer),
+            Self::Metadata(value) => value.serialize(serializer),
+            Self::Directory(value) => value.serialize(serializer),
             Self::Read(bytes) => smb_protocol::protocol::ReadResult {
                 bytes: bytes.as_ref(),
             }

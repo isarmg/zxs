@@ -651,7 +651,6 @@ fn no_change_flush_revocation(revocation: FlushRevocation) {
     let (directory, directory_fd) = active
         .open("".into(), false, false, false, false, false)
         .unwrap();
-    let directory: OpenResult = json_codec::from_value(directory).unwrap();
     // Test a clean unpublished writer as well as the published clean writer
     // needed for an administrative binding change (active work blocks rebind).
     assert_eq!(

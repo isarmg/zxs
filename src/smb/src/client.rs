@@ -1,9 +1,9 @@
 use crate::protocol::{
-    FrameStream, MAX_READ_BYTES, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, ReadMode, ReadResult,
-    Request as RawRequest, Response,
+    AuthorizedMetadata, DirectoryPage, FrameStream, MAX_READ_BYTES, OpenResult, PROTOCOL,
+    REQUIRED_CAPABILITIES, ReadMode, ReadResult, Request as RawRequest, Response, StatResult,
 };
 
-mod read_response;
+mod response;
 
 type Request = RawRequest<storage_contract::OperationId>;
 use json_codec::Value;
@@ -20,12 +20,6 @@ use storage_contract::ErrorCode;
 
 #[derive(Clone)]
 pub struct Client(Arc<Mutex<Option<FrameStream>>>);
-
-enum AdmittedResult {
-    Value(Value),
-    Open(OpenResult, OwnedFd),
-    Read(ReadResult),
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteErrorCode {
@@ -497,14 +491,36 @@ impl Client {
                 "descriptor and byte reads require their typed client method",
             ));
         }
-        match self.exchange(request)? {
-            AdmittedResult::Value(value) => Ok(value),
-            AdmittedResult::Open(..) | AdmittedResult::Read(..) => {
-                unreachable!("invariant: ordinary requests admit untyped values")
-            }
-        }
+        self.exchange(request, |value: Value, _| Ok(value))
     }
-    fn exchange(&self, request: Request) -> io::Result<AdmittedResult> {
+    /// Read path metadata without an intermediate JSON value tree.
+    pub fn stat(&self, path: String) -> io::Result<StatResult> {
+        self.exchange(Request::Stat { path }, |result: StatResult, _| Ok(result))
+    }
+    /// Reauthorize the handle and obtain its current saved-version metadata.
+    pub fn authorize_read(&self, handle: u64) -> io::Result<AuthorizedMetadata> {
+        self.exchange(
+            Request::AuthorizeRead { handle },
+            |result: AuthorizedMetadata, _| Ok(result),
+        )
+    }
+    /// Admit one handle-owned directory page before releasing the connection.
+    pub fn read_directory(&self, handle: u64, restart: bool) -> io::Result<DirectoryPage> {
+        self.exchange(
+            Request::ReadDirectory { handle, restart },
+            |page: DirectoryPage, _| {
+                if page.more && page.entries.is_empty() {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                Ok(page)
+            },
+        )
+    }
+    fn exchange<R: data_serialization::de::DeserializeOwned, T>(
+        &self,
+        request: Request,
+        admit: impl FnOnce(R, Option<OwnedFd>) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut connection = self.0.lock().expect("RPC connection lock poisoned");
         let stream = connection.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "RPC connection is closed")
@@ -513,14 +529,8 @@ impl Client {
             .send(&request, None)
             .and_then(|()| stream.receive_payload(ReadMode::Deadline))
             .and_then(|(payload, fd)| {
-                let (response, read_result) = if matches!(request, Request::Read { .. }) {
-                    read_response::decode(&payload).map_err(io::Error::other)?
-                } else {
-                    (
-                        storage_contract::decode_strict(&payload).map_err(io::Error::other)?,
-                        None,
-                    )
-                };
+                let (response, raw_result) =
+                    response::decode(&payload).map_err(io::Error::other)?;
                 // Descriptor ownership is part of the response contract, not
                 // an optional convenience for individual VFS callers. Reject
                 // malformed replies while still holding the shared lock so no
@@ -537,30 +547,13 @@ impl Client {
                 // result preserves a complete remote business error without
                 // disconnecting this otherwise valid session.
                 Ok(match response {
-                    Response::Ok { result } => Ok(if expects_fd {
-                        // Decode once while locked. Invalid metadata must close
-                        // the session before any clone can use the remote handle.
-                        let result: OpenResult = json_codec::from_value(result)
+                    Response::Ok { result } => {
+                        // Typed payload admission is part of the locked exchange.
+                        // A malformed result closes all clones before another request.
+                        let result = response::decode_result(result, raw_result)
                             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                        AdmittedResult::Open(
-                            result,
-                            fd.expect("invariant: successful open response has a descriptor"),
-                        )
-                    } else if let Request::Read { length, .. } = request {
-                        let result = read_response::decode_result(result, read_result)
-                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                        if result.bytes.len() > length as usize
-                            || result.bytes.len() > MAX_READ_BYTES
-                        {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "RPC read exceeds requested extent",
-                            ));
-                        }
-                        AdmittedResult::Read(result)
-                    } else {
-                        AdmittedResult::Value(result)
-                    }),
+                        Ok(admit(result, fd)?)
+                    }
                     Response::Error {
                         code,
                         message,
@@ -614,12 +607,12 @@ impl Client {
                 "expected open request",
             ));
         }
-        match self.exchange(request)? {
-            AdmittedResult::Open(result, descriptor) => Ok((result, descriptor)),
-            AdmittedResult::Value(_) | AdmittedResult::Read(_) => {
-                unreachable!("invariant: successful open requests admit typed metadata and an FD")
-            }
-        }
+        self.exchange(request, |result: OpenResult, descriptor| {
+            Ok((
+                result,
+                descriptor.expect("invariant: successful open response has a descriptor"),
+            ))
+        })
     }
 
     /// Fill a host-owned read buffer using bounded verified replies. A short
@@ -631,14 +624,22 @@ impl Client {
         let mut copied = 0;
         loop {
             let length = (output.len() - copied).min(MAX_READ_BYTES) as u32;
-            let AdmittedResult::Read(result) = self.exchange(Request::Read {
-                handle,
-                offset,
-                length,
-            })?
-            else {
-                unreachable!("invariant: successful reads admit typed bounded bytes")
-            };
+            let result = self.exchange(
+                Request::Read {
+                    handle,
+                    offset,
+                    length,
+                },
+                |result: ReadResult, _| {
+                    if result.bytes.len() > length as usize || result.bytes.len() > MAX_READ_BYTES {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "RPC read exceeds requested extent",
+                        ));
+                    }
+                    Ok(result)
+                },
+            )?;
             let count = result.bytes.len();
             output[copied..copied + count].copy_from_slice(&result.bytes);
             copied += count;

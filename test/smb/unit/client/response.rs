@@ -1,4 +1,5 @@
 use super::*;
+use crate::protocol::ReadResult;
 use std::{error::Error as _, io};
 
 #[derive(Debug, PartialEq)]
@@ -9,7 +10,7 @@ enum Outcome {
 
 fn finish(response: Response, raw: Option<&RawValue>) -> io::Result<Outcome> {
     match response {
-        Response::Ok { result } => decode_result(result, raw)
+        Response::Ok { result } => decode_result::<ReadResult>(result, raw)
             .map(|result| Outcome::Bytes(result.bytes))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
         Response::Error {

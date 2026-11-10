@@ -38,7 +38,7 @@ impl Session {
         truncate: bool,
         exclusive: bool,
         write_through: bool,
-    ) -> Result<(Value, Option<OwnedFd>), ApiError> {
+    ) -> Result<(OpenResult, Option<OwnedFd>), ApiError> {
         let options = OpenOptions::parse(writable, create, truncate, exclusive, write_through)?;
         let path = if path.is_empty() {
             SmbRelativePath::Root
@@ -47,12 +47,7 @@ impl Session {
                 name_policy::LookupPath::parse(&path).map_err(|source| contract(source.into()))?,
             )
         };
-        self.open_typed(path, options).map(|(result, descriptor)| {
-            (
-                json_codec::to_value(result).expect("invariant: open metadata serializes"),
-                descriptor,
-            )
-        })
+        self.open_typed(path, options)
     }
     pub(super) fn open_typed(
         &mut self,

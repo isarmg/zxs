@@ -52,7 +52,7 @@ Foundation 源码或真实部署。
 与实际严格解码 oracle 无差异。FD 布尔组合只验证 codec 阶段优先级，不证明资源生命周期；
 真实 socket 回归另行执行。
 
-[Read 差分测试](../../test/smb/unit/client/read_response.rs)覆盖 448 个 payload：
+[Read 差分测试](../../test/smb/unit/client/response.rs)覆盖 448 个 payload：
 顶层形状、状态与字段顺序、缺省／未知字段、重复解码键、错误重复值、UTF-8／surrogate、
 数字边界、尾随数据、深度和全部 u8 值；比较实际 I/O kind、具体来源类型、contract code、
 JSON 行列／分类和完整错误链。多错误信封会检测 `preserve_order` 下的首错漂移。
@@ -81,3 +81,11 @@ SMB 四组合 CI 入口及 45 项 CI 脚本调用回归也实际通过。
 本记录不将单元、socket、静态检查或纯 codec 测量视为真实 SMB 客户端吞吐、发行构建、
 全仓最终提交 CI 或设备验收。`storage-contract` 原有三个隔离／手动测试仍为 ignored，
 不将其计为通过。
+
+## 2026-11-10：现有元数据载荷贯穿到 VFS
+
+客户端将同一借用 result 准入用于 Open、Stat、AuthorizeRead 和 DirectoryPage，删除单独的 Read／Open 结果分派模型。服务端保留原 DTO 至 transport 的 ResponsePayload 序列化，VFS 接收已准入 DTO 后仅转换宿主 ABI；不再把元数据先转 Value 再逐项读取／反序列化。字段和值的协议保持，对象字段输出顺序可变化，不用于持久摘要。普通操作回执仍为原 Value，没有更改操作身份或发布流程。
+
+坏 DTO 和无进展目录页在同一连接锁内拒绝并关闭共享会话，避免其他 clone 继续消费错误响应；目录页保留原 EINVAL，原生 errno 与完整远端业务错误不改。StrictJson 全帧与重复键、信封、FD 配对、DTO 和 Read extent 的先后保持；既有拒绝诊断的 Value 慢路继续保留。服务端每次发包的帧预算、一次锁／一次 RPC 与目录游标更新时机不变。
+
+根测试新增三种元数据的业务拒绝后复用、坏 DTO／多余 FD 后所有 clone 失效、无进展目录页及四种 DTO 的差分错误链；保留原 448 个 Read 样本。这里只做静态和固定格式检查，未本地编译或执行本轮 Rust／Samba。上文历史测量与通过数量不属于本次实现验证，新的准确提交 CI 待执行。

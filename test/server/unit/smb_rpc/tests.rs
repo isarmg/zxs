@@ -1070,17 +1070,17 @@ fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
     let (result, fd) = session
         .open("report.txt".into(), writable, false, false, false, false)
         .unwrap();
-    (
-        json_codec::from_value(result).unwrap(),
-        File::from(fd.unwrap()),
-    )
+    (result, File::from(fd.unwrap()))
 }
 
 fn json_reply(reply: Reply) -> Value {
-    let Reply::Json(value) = reply else {
-        panic!("expected an ordinary JSON reply");
-    };
-    value
+    // Test the externally visible representation, independent of dispatch's
+    // internal typed variants. Production serializes the DTO only at transport.
+    assert!(
+        !matches!(reply, Reply::Read(_)),
+        "expected a metadata or operation reply"
+    );
+    json_codec::to_value(reply).unwrap()
 }
 
 fn read_session(session: &mut Session, handle: u64, offset: u64, length: u32) -> Vec<u8> {
@@ -1302,7 +1302,6 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         let (opened, fd) = client
             .open(path.into(), true, true, false, false, false)
             .unwrap();
-        let opened: OpenResult = json_codec::from_value(opened).unwrap();
         File::from(fd.unwrap()).write_all_at(bytes, 0).unwrap();
         client.dirty(opened.handle).unwrap();
         client.close(opened.handle, false).unwrap();
@@ -1356,7 +1355,6 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let (opened, fd) = client
         .open("a/report.txt".into(), false, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let _reader = File::from(fd.unwrap());
     let (reply, _) = client
         .dispatch(Request::Namespace {
@@ -1401,7 +1399,6 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let (opened, fd) = client
         .open("b/report.txt".into(), true, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     File::from(fd.unwrap()).write_all_at(b"edited", 0).unwrap();
     client.dirty(opened.handle).unwrap();
     client.close(opened.handle, false).unwrap();
@@ -1425,13 +1422,11 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
     let (opened, file) = original
         .open("future/new.txt".into(), true, true, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let file = File::from(file.unwrap());
     let mut creator = session(shared.clone(), &branch);
     let (other, other_fd) = creator
         .open("future/other.txt".into(), true, true, false, false, false)
         .unwrap();
-    let other: OpenResult = json_codec::from_value(other).unwrap();
     File::from(other_fd.unwrap())
         .write_all_at(b"other", 0)
         .unwrap();
@@ -1476,7 +1471,6 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     let (opened, file) = creator
         .open("nested/other.txt".into(), true, true, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     File::from(file.unwrap()).write_all_at(b"other", 0).unwrap();
     creator.dirty(opened.handle).unwrap();
     creator.close(opened.handle, false).unwrap();
@@ -1731,7 +1725,6 @@ fn explicit_truncation_materializes_an_empty_pending_branch() {
     let (opened, descriptor) = session
         .open("report.txt".into(), true, false, true, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     drop(descriptor);
     session.close(opened.handle, false).unwrap();
     let history = shared
@@ -1847,7 +1840,7 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
     let (result, fd) = two
         .open("other.txt".into(), true, true, false, false, false)
         .unwrap();
-    let second: OpenResult = json_codec::from_value(result).unwrap();
+    let second: OpenResult = result;
     let second_file = File::from(fd.unwrap());
     first_file.write_all_at(b"one", 0).unwrap();
     one.dirty(first.handle).unwrap();
@@ -2005,7 +1998,6 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     let (opened, fd) = one
         .open("dir/file.txt".into(), true, true, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let file = File::from(fd.unwrap());
     assert_eq!(
         two.dispatch(Request::Namespace {
@@ -2087,7 +2079,6 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
             false,
         )
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(opened).unwrap();
     let file = File::from(fd.unwrap());
     file.write_all_at(b"content", 0).unwrap();
     session.dirty(opened.handle).unwrap();
@@ -2096,7 +2087,6 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
         let (opened, _) = session
             .open(path.into(), false, false, false, false, false)
             .unwrap();
-        let opened: OpenResult = json_codec::from_value(opened).unwrap();
         let (listed, _) = session
             .dispatch(Request::ReadDirectory {
                 handle: opened.handle,
@@ -2113,7 +2103,6 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
     let (file, _) = session
         .open("REPORT.TXT".into(), false, false, false, false, false)
         .unwrap();
-    let file: OpenResult = json_codec::from_value(file).unwrap();
     assert_eq!(
         session
             .dispatch(Request::ReadDirectory {
@@ -2955,7 +2944,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let (result, fd) = session
         .open("e\u{301}.txt".into(), true, false, false, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let opened: OpenResult = result;
     let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };
@@ -3004,7 +2993,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let (result, fd) = session
         .open("e\u{301}.txt".into(), true, true, true, false, false)
         .unwrap();
-    let opened: OpenResult = json_codec::from_value(result).unwrap();
+    let opened: OpenResult = result;
     let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };

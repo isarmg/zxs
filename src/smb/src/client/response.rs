@@ -1,4 +1,4 @@
-use crate::protocol::{ReadResult, Response};
+use crate::protocol::Response;
 use data_serialization::{
     Deserialize, Deserializer,
     de::{MapAccess, Visitor},
@@ -42,7 +42,7 @@ impl<'de> Deserialize<'de> for Envelope<'de> {
     }
 }
 
-/// Retain the ordinary Response admission while borrowing its large result.
+/// Retain strict envelope admission while borrowing the result for typed decoding.
 pub(super) fn decode(payload: &[u8]) -> storage_contract::Result<(Response, Option<&RawValue>)> {
     let validated = storage_contract::StrictJson::parse(payload)?;
     if payload
@@ -57,10 +57,10 @@ pub(super) fn decode(payload: &[u8]) -> storage_contract::Result<(Response, Opti
     Ok((json_codec::from_value(Value::Object(fields))?, result))
 }
 
-pub(super) fn decode_result(
+pub(super) fn decode_result<R: data_serialization::de::DeserializeOwned>(
     value: Value,
     raw: Option<&RawValue>,
-) -> json_codec::Result<ReadResult> {
+) -> json_codec::Result<R> {
     let Some(raw) = raw else {
         return json_codec::from_value(value);
     };
@@ -68,7 +68,7 @@ pub(super) fn decode_result(
         Ok(result) => Ok(result),
         Err(_) => {
             // Keep the original Value diagnostic and source for rejected DTOs,
-            // including the active Map order. Only successful Read bytes avoid
+            // including the active Map order. Successful typed payloads avoid
             // the per-element Value tree.
             let value = json_codec::from_str(raw.get())
                 .expect("invariant: strict JSON result remains valid");
@@ -78,5 +78,5 @@ pub(super) fn decode_result(
 }
 
 #[cfg(test)]
-#[path = "../../../../test/smb/unit/client/read_response.rs"]
+#[path = "../../../../test/smb/unit/client/response.rs"]
 pub(crate) mod tests;

@@ -1,9 +1,15 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`6c22402b`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`07fd7b41`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 SMB 元数据端到端类型化
+
+- Open／Stat／AuthorizeRead／DirectoryPage 保留既有 DTO，从 server 业务结果贯穿 transport；客户端复用 Read 的严格借用信封一次准入后直接交 VFS，删除中间 Value 树与重复反解、AdmittedResult 二次分派及默认共享序列化包装。十二个生产路径（含模块重命名）合计净删 11 行；收益是删除实际数据转换链，不以行数宣称全面完成。
+- 原 wire 字段和值、授权、目录游标、FD 配对、帧预算与一次连接锁／RPC 保留；元数据对象字段输出顺序可以变化，不涉及持久摘要。坏 DTO 和无进展目录页在锁内关闭全部连接 clone，目录页继续返回原 EINVAL；完整远端业务错误仍保持连接可用，Read 的 448 样本诊断差分和未知结果规则保留。
+- 根测试增加真实 socket 的 typed metadata 成功／业务错误复用、坏 DTO／多余 FD／无进展页拒绝与断连、四种 DTO 差分错误来源及 server typed dispatch；原 VFS mtime／读取／目录与生成测试迁移。固定 Rust 格式与精确补丁检查通过；未本地编译或执行 Rust／Samba，准确提交的运行结果待 CI。
 
 ## 本轮 SQLite 冷镜像与目录记录统一
 
