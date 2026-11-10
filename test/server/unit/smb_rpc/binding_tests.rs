@@ -695,7 +695,9 @@ fn no_change_flush_revocation(revocation: FlushRevocation) {
         }
     };
     for handle in handles {
-        let authorization = active.authorize_read(handle).unwrap_err();
+        let Err(authorization) = active.authorize_read(handle) else {
+            panic!("revoked handle was authorized");
+        };
         backend.take_authorizations();
         backend.take_version_authorizations();
         let error = active.flush(handle).unwrap_err();

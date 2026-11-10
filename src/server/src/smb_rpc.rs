@@ -95,7 +95,6 @@ struct DirectoryHandle {
     cursor: Option<DirectoryCursor>,
 }
 
-#[derive(Clone)]
 struct DirectoryCursor {
     snapshot: crate::DirectoryReadSnapshot,
     after: Option<String>,

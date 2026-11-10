@@ -372,11 +372,10 @@ impl Session {
         };
         Ok((result, Some(fd)))
     }
-    pub(super) fn authorize_read(&self, handle: u64) -> Result<(), ApiError> {
-        self.handles
-            .get(&handle)
-            .ok_or_else(missing_handle)?
-            .authorize_read(&self.shared, &self.identity, &self.branch)
+    pub(super) fn authorize_read(&self, handle: u64) -> Result<&Handle, ApiError> {
+        let opened = self.handles.get(&handle).ok_or_else(missing_handle)?;
+        opened.authorize_read(&self.shared, &self.identity, &self.branch)?;
+        Ok(opened)
     }
 
     pub(super) fn read(

@@ -191,8 +191,7 @@ impl Session {
                     .map(|(value, descriptor)| (Reply::Json(value), descriptor));
             }
             Request::AuthorizeRead { handle } => {
-                self.authorize_read(handle)?;
-                self.handle_metadata(handle)?
+                self.handle_metadata(self.authorize_read(handle)?)?
             }
             Request::Read {
                 handle,

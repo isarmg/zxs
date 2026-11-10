@@ -162,3 +162,77 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
         storage_contract::ErrorCode::SmbRebindRequired
     );
 }
+
+fn cursor_state(session: &Session, handle: u64) -> (String, Option<String>) {
+    let Handle::Directory(directory) = &session.handles[&handle] else {
+        panic!("expected an open directory");
+    };
+    let cursor = directory.cursor.as_ref().unwrap();
+    (cursor.snapshot.commit_id.clone(), cursor.after.clone())
+}
+
+#[test]
+fn directory_read_failure_keeps_captured_page_and_restart_position() {
+    let (temp, shared, _backend, branch) = fixture();
+    let mut active = session(shared.clone(), &branch);
+    let (opened, _descriptor) = active
+        .open(String::new(), false, false, false, false, false)
+        .unwrap();
+    let opened: OpenResult = json_codec::from_value(opened).unwrap();
+    let captured = cursor_state(&active, opened.handle);
+    assert!(captured.1.is_none());
+    active
+        .namespace(
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
+            "later".into(),
+            None,
+            false,
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+
+    temp.auth
+        .lock()
+        .unwrap()
+        .replace_authority(AuthStore::unavailable());
+    for restart in [false, true] {
+        assert_eq!(
+            active
+                .read_directory(opened.handle, restart)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::RecoveryRequired
+        );
+        assert_eq!(cursor_state(&active, opened.handle), captured);
+    }
+    temp.auth
+        .lock()
+        .unwrap()
+        .replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
+    let first: DirectoryPage =
+        json_codec::from_value(active.read_directory(opened.handle, false).unwrap()).unwrap();
+    assert_eq!(first.entries.len(), 1);
+    assert_eq!(first.entries[0].entry.path, "report.txt");
+    let exhausted = cursor_state(&active, opened.handle);
+    assert_eq!(exhausted.0, captured.0);
+    assert_eq!(exhausted.1.as_deref(), Some("report.txt"));
+    for _ in 0..2 {
+        let page: DirectoryPage =
+            json_codec::from_value(active.read_directory(opened.handle, false).unwrap()).unwrap();
+        assert!(page.entries.is_empty());
+        assert!(!page.more);
+        assert_eq!(cursor_state(&active, opened.handle), exhausted);
+    }
+    let restarted: DirectoryPage =
+        json_codec::from_value(active.read_directory(opened.handle, true).unwrap()).unwrap();
+    assert_eq!(
+        restarted
+            .entries
+            .iter()
+            .map(|entry| entry.entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["later", "report.txt"]
+    );
+    assert_ne!(cursor_state(&active, opened.handle).0, captured.0);
+    active.close(opened.handle, false).unwrap();
+}

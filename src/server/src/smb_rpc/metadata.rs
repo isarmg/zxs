@@ -58,11 +58,11 @@ impl Session {
 
     /// last_head advances only through the existing publication confirmation.
     /// A dirty successor keeps that saved time; a new unpublished file has none.
-    pub(super) fn handle_metadata(&self, handle: u64) -> Result<Value, ApiError> {
-        let mtime = match self.handles.get(&handle) {
-            Some(Handle::Read(_, version)) => self.version_mtime(version)?,
-            Some(Handle::Directory(_)) => FileMtime::NotFile {},
-            Some(Handle::Write(writer)) => {
+    pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<Value, ApiError> {
+        let mtime = match opened {
+            Handle::Read(_, version) => self.version_mtime(version)?,
+            Handle::Directory(_) => FileMtime::NotFile {},
+            Handle::Write(writer) => {
                 let entry = self.shared.backend.lookup_at(
                     &self.identity,
                     &self.branch,
@@ -82,7 +82,6 @@ impl Session {
                     }
                 }
             }
-            None => unreachable!("invariant: handle metadata follows successful authorization"),
         };
         Ok(json_codec::to_value(AuthorizedMetadata { mtime })
             .expect("invariant: handle metadata serializes"))
