@@ -50,10 +50,15 @@ impl<'a> NamespaceTree<'a> {
 
     fn visible(self, entry: &Entry) -> bool {
         (entry.kind != NamespaceEntryKind::File
-            || self.deletions.is_none_or(|deletions| !deletions.contains_key(&entry.file_id)))
+            || self
+                .deletions
+                .is_none_or(|deletions| !deletions.contains_key(&entry.file_id)))
             && self.directories.is_none_or(|(directories, repository)| {
                 crate::file_deletion::directory::visibility::visible(
-                    directories, repository, self.entries, entry,
+                    directories,
+                    repository,
+                    self.entries,
+                    entry,
                 )
             })
     }
@@ -104,7 +109,8 @@ impl Engine {
             deletions: Some(&self.state().file_deletions),
             directories: Some((
                 &self.state().directory_git_repositories,
-                &self.state().histories[&self.state().branches[branch_id].history_tree_id].repository_id,
+                &self.state().histories[&self.state().branches[branch_id].history_tree_id]
+                    .repository_id,
             )),
         })
     }

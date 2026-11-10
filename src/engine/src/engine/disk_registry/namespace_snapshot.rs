@@ -58,7 +58,8 @@ impl DirectoryNamespaceView {
 #[derive(Clone)]
 pub struct NamespaceSnapshot {
     repository: String,
-    directory_repositories: storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
+    directory_repositories:
+        storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
     file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
@@ -71,7 +72,8 @@ impl NamespaceSnapshot {
     }
     pub(crate) fn directory_repositories(
         &self,
-    ) -> &storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository> {
+    ) -> &storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>
+    {
         &self.directory_repositories
     }
     pub(crate) fn file_deletions(&self) -> &storage_contract::TrackedMap<crate::FileDeletionNode> {
@@ -120,7 +122,8 @@ enum NamespaceWitnessEntries {
 /// invalidate a detached scan. This is never user authorization.
 #[derive(Clone)]
 pub struct NamespaceSnapshotWitness {
-    directory_repositories: storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
+    directory_repositories:
+        storage_contract::TrackedMap<storage_contract::directory_git::DirectoryGitRepository>,
     file_deletions: storage_contract::TrackedMap<crate::FileDeletionNode>,
     branch: String,
     head: String,
@@ -183,7 +186,9 @@ impl Engine {
             ),
         };
         Ok(NamespaceSnapshot {
-            repository: self.state.histories[&branch.history_tree_id].repository_id.clone(),
+            repository: self.state.histories[&branch.history_tree_id]
+                .repository_id
+                .clone(),
             directory_repositories: self.state.directory_git_repositories.clone(),
             file_deletions: self.state.file_deletions.clone(),
             branch: branch_id.into(),
@@ -202,8 +207,11 @@ impl Engine {
         };
         if branch.state == BranchState::Migrated
             || branch.head_commit_id != witness.head
-            || !self.state.directory_git_repositories
-                .changes_since(&witness.directory_repositories).is_empty()
+            || !self
+                .state
+                .directory_git_repositories
+                .changes_since(&witness.directory_repositories)
+                .is_empty()
             || !self
                 .state
                 .file_deletions

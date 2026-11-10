@@ -1006,7 +1006,14 @@ fn reviewed_branch_source_is_exact_and_durable_replay_does_not_read_a_new_source
     let path = name_policy::LookupPath::parse("child").unwrap();
     let source = branch_source(&engine, &repo, "child");
     let name = storage_contract::BranchName::parse("reviewed branch").unwrap();
-    for field in ["directory", "branch", "working", "head", "index", "namespace"] {
+    for field in [
+        "directory",
+        "branch",
+        "working",
+        "head",
+        "index",
+        "namespace",
+    ] {
         let mut changed = source.clone();
         match field {
             "directory" => changed.directory_id = new_id("entry").unwrap(),

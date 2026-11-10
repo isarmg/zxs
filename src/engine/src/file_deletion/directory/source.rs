@@ -15,12 +15,17 @@ pub(super) struct Captured<'a> {
 }
 
 pub(super) fn within(path: &str, root: &str) -> bool {
-    path == root || path.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 pub(super) fn at<'a>(entries: &'a [Entry], key: &str) -> Option<&'a Entry> {
-    entries.binary_search_by(|entry| entry.lookup_key().cmp(key))
-        .ok().map(|index| &entries[index])
+    entries
+        .binary_search_by(|entry| entry.lookup_key().cmp(key))
+        .ok()
+        .map(|index| &entries[index])
 }
 
 pub(super) fn subtree<'a>(entries: &'a [Entry], key: &str) -> Vec<&'a Entry> {
@@ -30,8 +35,11 @@ pub(super) fn subtree<'a>(entries: &'a [Entry], key: &str) -> Vec<&'a Entry> {
     }
     let prefix = format!("{key}/");
     let start = entries.partition_point(|entry| entry.lookup_key() < prefix.as_str());
-    selected.extend(entries[start..].iter()
-        .take_while(|entry| entry.lookup_key().starts_with(&prefix)));
+    selected.extend(
+        entries[start..]
+            .iter()
+            .take_while(|entry| entry.lookup_key().starts_with(&prefix)),
+    );
     selected
 }
 
@@ -45,23 +53,33 @@ fn selected<'a>(
     repository: &str,
     branch: &str,
 ) -> Result<&'a DirectoryBranch> {
-    let branch = state.directory_branches.get(branch)
+    let branch = state
+        .directory_branches
+        .get(branch)
         .filter(|branch| branch.repository_id == repository)
         .ok_or_else(|| conflict("directory deletion owner differs"))?;
-    let git = state.directory_git_repositories.get(&branch.directory_id)
+    let git = state
+        .directory_git_repositories
+        .get(&branch.directory_id)
         .ok_or_else(|| conflict("initialize the owning directory repository first"))?;
     if git.repository_id != repository
         || git.current_branch_id != branch.directory_branch_id
         || state.directory_selections.get(&branch.directory_id) != Some(&branch.directory_branch_id)
     {
-        return Err(conflict("directory deletion requires the selected working owner"));
+        return Err(conflict(
+            "directory deletion requires the selected working owner",
+        ));
     }
     if let Some(view) = current {
         view.require_directory_branch_write(state, &branch.directory_branch_id)?;
-    } else if state.directory_tree_selections.get(&branch.directory_id)
+    } else if state
+        .directory_tree_selections
+        .get(&branch.directory_id)
         .is_some_and(|tree| tree != &branch.head_tree_id)
     {
-        return Err(conflict("return to the current working composition before deleting or restoring"));
+        return Err(conflict(
+            "return to the current working composition before deleting or restoring",
+        ));
     }
     Ok(branch)
 }
@@ -71,7 +89,9 @@ pub(super) fn namespace<'a>(
     current: Option<&'a crate::engine::CurrentNamespaces>,
     repository: &str,
 ) -> Result<(&'a Repository, &'a crate::Commit, &'a [Entry])> {
-    let repo = state.repositories.get(repository)
+    let repo = state
+        .repositories
+        .get(repository)
         .ok_or_else(|| Error::new(ErrorCode::RepositoryNotFound, "repository missing"))?;
     let branch = &state.branches[&repo.main_branch_id];
     if !repo.file_manager_root || branch.state != BranchState::Active {
@@ -108,37 +128,56 @@ pub(super) fn capture<'a>(
     }
     let source = &input.request.items[0].source;
     let path = name_policy::PortablePath::parse(&source.path)?;
-    let branch = selected(state, current, &input.repository_id, &source.directory_branch_id)?;
+    let branch = selected(
+        state,
+        current,
+        &input.repository_id,
+        &source.directory_branch_id,
+    )?;
     if branch.head_tree_id != source.expected_tree_id {
-        return Err(conflict("directory working baseline changed; no deletion was published"));
+        return Err(conflict(
+            "directory working baseline changed; no deletion was published",
+        ));
     }
-    let admitted = current.map(|view| view.batch_scope(state, &branch.directory_branch_id))
+    let admitted = current
+        .map(|view| view.batch_scope(state, &branch.directory_branch_id))
         .transpose()?;
     let scope = admitted.as_ref().map_or(branch, |scope| scope.branch());
     crate::business::directory_git::require_owned_path(state, scope, path.as_str())?;
     if !scope.path.is_empty()
-        && !path.key().strip_prefix(&name_policy::path_key(&scope.path))
+        && !path
+            .key()
+            .strip_prefix(&name_policy::path_key(&scope.path))
             .is_some_and(|rest| rest.starts_with('/'))
     {
-        return Err(Error::new(ErrorCode::DirectoryBranchScope, "directory is outside its owner"));
+        return Err(Error::new(
+            ErrorCode::DirectoryBranchScope,
+            "directory is outside its owner",
+        ));
     }
     let entry = at(&scope.entries, path.key())
-        .filter(|entry| entry.entry_id == source.entry_id
-            && entry.kind == NamespaceEntryKind::Directory)
+        .filter(|entry| {
+            entry.entry_id == source.entry_id && entry.kind == NamespaceEntryKind::Directory
+        })
         .ok_or_else(|| conflict("directory identity differs from the selected composition"))?;
     let (_, head, namespace) = namespace(state, current, &input.repository_id)?;
     let original = subtree(&head.entries, path.key());
     let projected = subtree(namespace, path.key());
-    if original != projected || projected != subtree(&scope.entries, path.key())
+    if original != projected
+        || projected != subtree(&scope.entries, path.key())
         || at(namespace, path.key()) != Some(entry)
         || original.len() > maximum
     {
-        return Err(conflict("directory deletion requires its complete current subtree"));
+        return Err(conflict(
+            "directory deletion requires its complete current subtree",
+        ));
     }
     let owner = &state.directory_git_repositories[&branch.directory_id];
-    if owner.deletions.values().any(|node| {
-        within(path.key(), node.path.key()) || within(node.path.key(), path.key())
-    }) {
+    if owner
+        .deletions
+        .values()
+        .any(|node| within(path.key(), node.path.key()) || within(node.path.key(), path.key()))
+    {
         return Err(frozen());
     }
     let mut files = BTreeMap::new();
@@ -151,7 +190,9 @@ pub(super) fn capture<'a>(
                 ));
             }
         } else {
-            files.entry(row.file_id.clone()).or_insert_with(|| row.path.clone());
+            files
+                .entry(row.file_id.clone())
+                .or_insert_with(|| row.path.clone());
         }
     }
     if files.len() > super::super::batch::MAX_FILES {
@@ -174,9 +215,12 @@ pub(super) fn capture<'a>(
         namespace_head: head.commit_id.clone(),
         namespace,
         branch: branch.directory_branch_id.clone(),
-        tree: admitted.as_ref().map_or(branch.head_tree_id.as_str(), |scope| {
-            scope.selected_tree_id()
-        }).to_owned(),
+        tree: admitted
+            .as_ref()
+            .map_or(branch.head_tree_id.as_str(), |scope| {
+                scope.selected_tree_id()
+            })
+            .to_owned(),
         files,
     })
 }
@@ -188,7 +232,10 @@ pub(super) fn inherits(state: &State, branch: &str, ancestor: &str) -> bool {
         if id == ancestor {
             return true;
         }
-        cursor = state.directory_branches.get(id).and_then(|branch| branch.parent_branch_id.as_deref());
+        cursor = state
+            .directory_branches
+            .get(id)
+            .and_then(|branch| branch.parent_branch_id.as_deref());
     }
     false
 }
@@ -203,26 +250,48 @@ pub(crate) fn retained_entries(
     let owner_path = if node.owner_directory_id == node.repository_id {
         ""
     } else {
-        namespace.entries.iter().find(|entry| {
-            entry.entry_id == node.owner_directory_id
-                && entry.kind == NamespaceEntryKind::Directory
-        }).ok_or_else(invalid)?.path()
+        namespace
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.entry_id == node.owner_directory_id
+                    && entry.kind == NamespaceEntryKind::Directory
+            })
+            .ok_or_else(invalid)?
+            .path()
     };
-    let source = tree.entries.iter().find(|entry| {
-        entry.entry_id == node.directory_id && entry.kind == NamespaceEntryKind::Directory
-    }).ok_or_else(invalid)?;
-    let depth = if tree.path.is_empty() { 0 } else { tree.path.split('/').count() };
-    let destination = if owner_path.is_empty() { None }
-        else { Some(name_policy::PortablePath::parse(owner_path)?) };
-    let rows = subtree(&tree.entries, source.lookup_key()).into_iter().map(|entry| {
-        let location = match &destination {
-            Some(destination) => entry.location().rebase(depth, destination)?,
-            None => entry.location().strip_components(depth).ok_or_else(invalid)?,
-        };
-        let mut entry = entry.clone();
-        entry.relocate(location);
-        Ok(entry)
-    }).collect::<Result<Vec<_>>>()?;
+    let source = tree
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.entry_id == node.directory_id && entry.kind == NamespaceEntryKind::Directory
+        })
+        .ok_or_else(invalid)?;
+    let depth = if tree.path.is_empty() {
+        0
+    } else {
+        tree.path.split('/').count()
+    };
+    let destination = if owner_path.is_empty() {
+        None
+    } else {
+        Some(name_policy::PortablePath::parse(owner_path)?)
+    };
+    let rows = subtree(&tree.entries, source.lookup_key())
+        .into_iter()
+        .map(|entry| {
+            let location = match &destination {
+                Some(destination) => entry.location().rebase(depth, destination)?,
+                None => entry
+                    .location()
+                    .strip_components(depth)
+                    .ok_or_else(invalid)?,
+            };
+            let mut entry = entry.clone();
+            entry.relocate(location);
+            Ok(entry)
+        })
+        .collect::<Result<Vec<_>>>()?;
     if rows.first().is_none_or(|entry| entry.path != node.path) {
         return Err(invalid());
     }
@@ -233,11 +302,23 @@ pub(super) fn retained<'a>(
     state: &'a State,
     node: &DirectoryDeletionNode,
 ) -> Result<(&'a crate::Commit, &'a Entry)> {
-    let namespace = state.commits.get(&node.namespace_head).ok_or_else(invalid)?;
+    let namespace = state
+        .commits
+        .get(&node.namespace_head)
+        .ok_or_else(invalid)?;
     let entry = at(&namespace.entries, node.path.key()).ok_or_else(invalid)?;
-    let repository = state.repositories.get(&node.repository_id).ok_or_else(invalid)?;
-    let tree = state.directory_trees.get(&node.source_tree_id).ok_or_else(invalid)?;
-    let branch = state.directory_branches.get(&node.directory_branch_id).ok_or_else(invalid)?;
+    let repository = state
+        .repositories
+        .get(&node.repository_id)
+        .ok_or_else(invalid)?;
+    let tree = state
+        .directory_trees
+        .get(&node.source_tree_id)
+        .ok_or_else(invalid)?;
+    let branch = state
+        .directory_branches
+        .get(&node.directory_branch_id)
+        .ok_or_else(invalid)?;
     if repository.history_tree_id != node.history_tree_id
         || namespace.history_tree_id != node.history_tree_id
         || entry.entry_id != node.directory_id
@@ -249,13 +330,17 @@ pub(super) fn retained<'a>(
         || namespace.sequence >= node.sequence
         || tree.sequence >= node.sequence
         || subtree(&namespace.entries, node.path.key())
-            != retained_entries(node, namespace, tree)?.iter().collect::<Vec<_>>()
+            != retained_entries(node, namespace, tree)?
+                .iter()
+                .collect::<Vec<_>>()
     {
         return Err(invalid());
     }
-    let files = subtree(&namespace.entries, node.path.key()).into_iter()
+    let files = subtree(&namespace.entries, node.path.key())
+        .into_iter()
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        .map(|entry| entry.file_id.as_str()).collect::<BTreeSet<_>>();
+        .map(|entry| entry.file_id.as_str())
+        .collect::<BTreeSet<_>>();
     if files.into_iter().ne(node.files.keys().map(String::as_str)) {
         return Err(invalid());
     }
@@ -268,7 +353,12 @@ pub(super) fn require_restore(
     node: &DirectoryDeletionNode,
 ) -> Result<()> {
     let (original, _) = retained(state, node)?;
-    let branch = selected(state, current, &node.repository_id, &node.directory_branch_id)?;
+    let branch = selected(
+        state,
+        current,
+        &node.repository_id,
+        &node.directory_branch_id,
+    )?;
     if branch.directory_id != node.owner_directory_id {
         return Err(invalid());
     }
@@ -277,18 +367,25 @@ pub(super) fn require_restore(
     if subtree(entries, node.path.key()) != expected
         || subtree(&retained.entries, node.path.key()) != expected
     {
-        return Err(conflict("deleted directory ownership or retained contents changed"));
+        return Err(conflict(
+            "deleted directory ownership or retained contents changed",
+        ));
     }
-    let admitted = current.map(|view| view.batch_scope(state, &branch.directory_branch_id))
+    let admitted = current
+        .map(|view| view.batch_scope(state, &branch.directory_branch_id))
         .transpose()?;
     let scope = admitted.as_ref().map_or(branch, |scope| scope.branch());
     if subtree(&scope.entries, node.path.key()) != expected {
-        return Err(conflict("selected directory composition differs from the deletion"));
+        return Err(conflict(
+            "selected directory composition differs from the deletion",
+        ));
     }
     let mut key = node.path.key();
     while let Some((parent, _)) = key.rsplit_once('/') {
         if at(entries, parent) != at(&original.entries, parent) {
-            return Err(conflict("deleted directory's original parent identity changed"));
+            return Err(conflict(
+                "deleted directory's original parent identity changed",
+            ));
         }
         key = parent;
     }
@@ -308,21 +405,36 @@ pub(super) fn prepare(
 ) -> Result<Option<DirectoryNamespaceBatch>> {
     let (_, _, entries) = namespace(state, current, repository)?;
     let entry = at(entries, path.key()).ok_or_else(|| {
-        Error::new(ErrorCode::DirectoryNotFound, "directory is no longer present")
+        Error::new(
+            ErrorCode::DirectoryNotFound,
+            "directory is no longer present",
+        )
     })?;
     if entry.entry_id != expected_entry {
-        return Err(Error::new(ErrorCode::WorkspaceChanged, "directory identity changed"));
+        return Err(Error::new(
+            ErrorCode::WorkspaceChanged,
+            "directory identity changed",
+        ));
     }
     if entry.kind != NamespaceEntryKind::Directory {
-        return Err(Error::new(ErrorCode::NotDirectory, "rmdir requires a directory"));
+        return Err(Error::new(
+            ErrorCode::NotDirectory,
+            "rmdir requires a directory",
+        ));
     }
-    if state.directory_git_repositories.contains_key(&entry.entry_id) {
+    if state
+        .directory_git_repositories
+        .contains_key(&entry.entry_id)
+    {
         return Err(Error::new(
             ErrorCode::UnsupportedOperation,
             "an initialized repository cannot be deleted as an ordinary directory",
         ));
     }
-    let mut parent = entry.lookup_key().rsplit_once('/').map(|(parent, _)| parent);
+    let mut parent = entry
+        .lookup_key()
+        .rsplit_once('/')
+        .map(|(parent, _)| parent);
     let owner = loop {
         let Some(key) = parent else {
             break state.directory_git_repositories.get(repository);
@@ -340,7 +452,10 @@ pub(super) fn prepare(
     if owner.repository_id != repository {
         return Err(invalid());
     }
-    let branch = state.directory_branches.get(&owner.current_branch_id).ok_or_else(invalid)?;
+    let branch = state
+        .directory_branches
+        .get(&owner.current_branch_id)
+        .ok_or_else(invalid)?;
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Delete,
         items: vec![crate::DirectoryNamespaceItem {
@@ -353,8 +468,14 @@ pub(super) fn prepare(
             target: None,
         }],
     };
-    capture(state, current, &DeleteInput {
-        repository_id: repository.into(), request: request.clone(),
-    }, maximum)?;
+    capture(
+        state,
+        current,
+        &DeleteInput {
+            repository_id: repository.into(),
+            request: request.clone(),
+        },
+        maximum,
+    )?;
     Ok(Some(request))
 }

@@ -92,7 +92,11 @@ pub(crate) fn blocks_writes(state: &State) -> bool {
     model.owns(state) && (!model.records.is_empty() || model.error.is_some())
 }
 pub(crate) fn default_completion_applies(state: &State, id: &str) -> bool {
-    state.files.mkdir.records.iter()
+    state
+        .files
+        .mkdir
+        .records
+        .iter()
         .find(|retained| retained.record.operation().to_string() == id)
         .is_none_or(|retained| retained.record.checkout_applies(state))
 }
@@ -145,7 +149,9 @@ pub(super) fn start_directory_branch(
     name: String,
 ) -> Option<String> {
     if !state.with_untracked(|s| {
-        actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s)
+        actions::write_allowed(s)
+            && s.files.loaded
+            && s.files.mkdir.ready(s)
             && s.files.directory_branches_supported
             && s.files.repository_id == source.repository_id
             && s.files.namespace_head == source.namespace_head
@@ -155,9 +161,8 @@ pub(super) fn start_directory_branch(
     let operation = crate::ui::file_operation_id(state)?
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
-    let record = state.with_untracked(|s| {
-        Record::capture_directory_branch(s, operation, source, name)
-    });
+    let record =
+        state.with_untracked(|s| Record::capture_directory_branch(s, operation, source, name));
     match record {
         Ok(record) => retain(state, Arc::new(record)),
         Err(error) => {
@@ -169,7 +174,9 @@ pub(super) fn start_directory_branch(
 
 pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
     if !state.with_untracked(|s| {
-        actions::default_write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s)
+        actions::default_write_allowed(s)
+            && s.files.loaded
+            && s.files.mkdir.ready(s)
             && s.files.directory_branches_supported
             && s.files.directory_preview.as_ref().is_some_and(|preview| {
                 preview.at_directory(&s.files.directory)
@@ -181,10 +188,14 @@ pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
     let Some(id) = crate::ui::file_operation_id(state) else {
         return;
     };
-    let operation = id.parse().expect("invariant: UI generated a canonical operation ID");
+    let operation = id
+        .parse()
+        .expect("invariant: UI generated a canonical operation ID");
     let record = state.with_untracked(|s| Record::capture_directory_checkout(s, operation));
     match record {
-        Ok(record) => { retain(state, Arc::new(record)); }
+        Ok(record) => {
+            retain(state, Arc::new(record));
+        }
         Err(error) => fail(state, error),
     }
 }
@@ -435,7 +446,12 @@ fn adopt_owner(state: &mut State, current: &(u64, String)) {
         .iter()
         .map(|retained| retained.record.operation().to_string())
         .collect();
-    if state.files.default_operation.as_ref().is_some_and(|id| old_ids.contains(id)) {
+    if state
+        .files
+        .default_operation
+        .as_ref()
+        .is_some_and(|id| old_ids.contains(id))
+    {
         state.files.default_operation = None;
     }
     if model

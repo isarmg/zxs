@@ -551,7 +551,8 @@ impl Backend for LostCommitReply {
         identity: &crate::auth::Identity,
         request: crate::PrepareCurrentDirectoryDeletion,
     ) -> Result<Option<crate::CurrentDirectoryDeletion>, crate::ApiError> {
-        self.inner.prepare_current_directory_deletion(identity, request)
+        self.inner
+            .prepare_current_directory_deletion(identity, request)
     }
     fn delete_current_directory(
         &self,

@@ -682,8 +682,14 @@ fn directory_mtime_uses_the_page_version_even_when_another_version_has_the_same_
     for (entry, seconds) in [(old, 946_684_800), (new, 978_307_200)] {
         let version = entry.version_id.clone();
         let page = DirectoryPageProjection::page(
-            &state, state.repositories.keys().next().unwrap(), "frozen", &[entry], "", None,
-        ).unwrap();
+            &state,
+            state.repositories.keys().next().unwrap(),
+            "frozen",
+            &[entry],
+            "",
+            None,
+        )
+        .unwrap();
         assert_eq!(page.entries[0].entry.version_id, version);
         assert_eq!(
             page.entries[0].mtime,

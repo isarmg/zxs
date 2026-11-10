@@ -275,4 +275,3 @@ pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
     }
     Ok(())
 }
-

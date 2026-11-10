@@ -3,8 +3,8 @@
 //! D. Raw namespace rows, user commits, index and retained bodies stay intact.
 use super::*;
 use crate::{
-    DirectoryBatchKind, DirectoryNamespaceBatch, FileDeletionNode, NamespaceEntryKind,
-    OperationId, OperationResult,
+    DirectoryBatchKind, DirectoryNamespaceBatch, FileDeletionNode, NamespaceEntryKind, OperationId,
+    OperationResult,
 };
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
@@ -66,7 +66,7 @@ pub(crate) struct Admitted {
 
 fn identity(operation: OperationId, prefix: &str, owner: &str) -> Result<String> {
     let hash = crate::object_hash(
-        "directory-deletion-identity-v1",
+        "directory-deletion-identity",
         &json!({"operation_id": operation, "prefix": prefix, "owner": owner}),
     )?;
     Ok(format!("{prefix}_{}", &hash[..32]))
@@ -83,10 +83,14 @@ pub(crate) fn requested(
         return Ok(false);
     }
     for item in &request.items {
-        let Some(branch) = state.directory_branches.get(&item.source.directory_branch_id) else {
+        let Some(branch) = state
+            .directory_branches
+            .get(&item.source.directory_branch_id)
+        else {
             continue;
         };
-        let admitted = current.map(|view| view.batch_scope(state, &branch.directory_branch_id))
+        let admitted = current
+            .map(|view| view.batch_scope(state, &branch.directory_branch_id))
             .transpose()?;
         let scope = admitted.as_ref().map_or(branch, |scope| scope.branch());
         if scope.entries.iter().any(|entry| {
@@ -122,7 +126,12 @@ fn apply_create(
     input: &DeleteInput,
     request: Creation<'_>,
 ) -> Result<Value> {
-    let Creation { principal, operation, timestamp, maximum } = request;
+    let Creation {
+        principal,
+        operation,
+        timestamp,
+        maximum,
+    } = request;
     let captured = source::capture(previous, current, input, maximum)?;
     let repository = &previous.repositories[&input.repository_id];
     let repository_id = HistoryRepositoryId::parse(&input.repository_id)?;
@@ -131,24 +140,36 @@ fn apply_create(
     let mut frontier = (0, 0);
     for (file, path) in &captured.files {
         if let Some(deletion) = previous.file_deletions.get(file) {
-            members.insert(file.clone(), DirectoryDeletionMember {
-                deletion_node_id: deletion.node_id.clone(),
-                created_by_directory: false,
-            });
+            members.insert(
+                file.clone(),
+                DirectoryDeletionMember {
+                    deletion_node_id: deletion.node_id.clone(),
+                    created_by_directory: false,
+                },
+            );
             continue;
         }
         let file_id = HistoryFileId::parse(file)?;
         let lookup = name_policy::LookupPath::from(path);
         preflight::require_scope_writable(
-            previous, current, repository, captured.namespace, file,
+            previous,
+            current,
+            repository,
+            captured.namespace,
+            file,
             &HistoryWindowCancellation::default(),
         )?;
         let capture = preflight::capture(
-            previous, repository, captured.namespace,
+            previous,
+            repository,
+            captured.namespace,
             FileDeletionTarget {
-                repository_id: &repository_id, file_id: &file_id, path: &lookup,
+                repository_id: &repository_id,
+                file_id: &file_id,
+                path: &lookup,
             },
-            maximum, &HistoryWindowCancellation::default(),
+            maximum,
+            &HistoryWindowCancellation::default(),
         )?;
         frontier.0 += capture.branches().len();
         frontier.1 += capture.parent_node_ids().len();
@@ -159,19 +180,24 @@ fn apply_create(
             history_tree_id: repository.history_tree_id.clone(),
             file_id: file.clone(),
             path: path.clone(),
-            branch_heads: capture.branches().iter().map(|head| {
-                (head.branch().branch_id.clone(), head.node_id().to_owned())
-            }).collect(),
+            branch_heads: capture
+                .branches()
+                .iter()
+                .map(|head| (head.branch().branch_id.clone(), head.node_id().to_owned()))
+                .collect(),
             parent_node_ids: capture.parent_node_ids().to_vec(),
             operation_id: operation,
             author: principal.into(),
             sequence: next.sequence,
             created_at: timestamp,
         };
-        members.insert(file.clone(), DirectoryDeletionMember {
-            deletion_node_id: node.node_id.clone(),
-            created_by_directory: true,
-        });
+        members.insert(
+            file.clone(),
+            DirectoryDeletionMember {
+                deletion_node_id: node.node_id.clone(),
+                created_by_directory: true,
+            },
+        );
         nodes.push(node);
     }
     let node = DirectoryDeletionNode {
@@ -194,9 +220,11 @@ fn apply_create(
         "input": input, "directory_deletion": node, "deletion_nodes": nodes
     });
     receipt_budget(&result, super::batch::MAX_RESULT_BYTES - 1024)?;
-    next.directory_git_repositories.get_mut(&node.owner_directory_id)
+    next.directory_git_repositories
+        .get_mut(&node.owner_directory_id)
         .expect("invariant: capture admitted the initialized owner")
-        .deletions.insert(node.directory_id.clone(), node);
+        .deletions
+        .insert(node.directory_id.clone(), node);
     for node in nodes {
         next.file_deletions.insert(node.file_id.clone(), node);
     }
@@ -209,16 +237,22 @@ fn apply_undo(
     current: Option<&crate::engine::CurrentNamespaces>,
     input: &UndoInput,
 ) -> Result<Value> {
-    let node = previous.directory_git_repositories
+    let node = previous
+        .directory_git_repositories
         .get(&input.owner_directory_id)
         .filter(|git| git.repository_id == input.repository_id)
         .and_then(|git| git.deletions.get(&input.directory_id))
         .filter(|node| node.node_id == input.deletion_node_id)
-        .ok_or_else(|| Error::new(
-            ErrorCode::FileNodeNotFound,
-            "current directory deletion differs or is absent",
-        ))?;
-    let original = previous.operations.get(&node.operation_id).ok_or_else(invalid)?;
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::FileNodeNotFound,
+                "current directory deletion differs or is absent",
+            )
+        })?;
+    let original = previous
+        .operations
+        .get(&node.operation_id)
+        .ok_or_else(invalid)?;
     let admitted = proof::admit(previous, original)?;
     if admitted.undo || admitted.node != *node {
         return Err(invalid());
@@ -248,9 +282,13 @@ fn apply_undo(
             return Err(invalid());
         }
     }
-    let removed = next.directory_git_repositories.get_mut(&node.owner_directory_id)
+    let removed = next
+        .directory_git_repositories
+        .get_mut(&node.owner_directory_id)
         .expect("invariant: the exact deletion owner was admitted")
-        .deletions.remove(&node.directory_id).ok_or_else(invalid)?;
+        .deletions
+        .remove(&node.directory_id)
+        .ok_or_else(invalid)?;
     let result = json!({
         "restored_directory_id": node.directory_id,
         "removed_directory_deletion": removed,
@@ -263,7 +301,9 @@ fn apply_undo(
 /// A member cannot partially escape a still-active directory restoration unit.
 pub(super) fn require_individual_undo(state: &State, file: &str) -> Result<()> {
     if state.directory_git_repositories.values().any(|git| {
-        git.deletions.values().any(|node| node.files.contains_key(file))
+        git.deletions
+            .values()
+            .any(|node| node.files.contains_key(file))
     }) {
         Err(frozen())
     } else {
@@ -281,8 +321,12 @@ impl Engine {
         expected_entry: &str,
     ) -> Result<Option<DirectoryNamespaceBatch>> {
         source::prepare(
-            self.state(), self.admitted_current_namespaces()?, repository,
-            path, expected_entry, self.config().max_entries,
+            self.state(),
+            self.admitted_current_namespaces()?,
+            repository,
+            path,
+            expected_entry,
+            self.config().max_entries,
         )
     }
 
@@ -293,16 +337,30 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        let input = DeleteInput { repository_id: repository.into(), request: request.clone() };
-        self.mutate(DELETE, principal, operation, json!(&input), |engine, next, _| {
-            apply_create(
-                engine.state(), next, engine.admitted_current_namespaces()?,
-                &input, Creation {
-                    principal, operation, timestamp: crate::business::now()?,
-                    maximum: engine.config().max_entries,
-                },
-            )
-        })
+        let input = DeleteInput {
+            repository_id: repository.into(),
+            request: request.clone(),
+        };
+        self.mutate(
+            DELETE,
+            principal,
+            operation,
+            json!(&input),
+            |engine, next, _| {
+                apply_create(
+                    engine.state(),
+                    next,
+                    engine.admitted_current_namespaces()?,
+                    &input,
+                    Creation {
+                        principal,
+                        operation,
+                        timestamp: crate::business::now()?,
+                        maximum: engine.config().max_entries,
+                    },
+                )
+            },
+        )
     }
 
     pub fn undo_directory_deletion(
@@ -323,9 +381,20 @@ impl Engine {
             directory_id: request.directory_id.clone(),
             deletion_node_id: request.deletion_node_id.clone(),
         };
-        self.mutate(UNDO, principal, request.operation_id, json!(&input), |engine, next, _| {
-            apply_undo(engine.state(), next, engine.admitted_current_namespaces()?, &input)
-        })
+        self.mutate(
+            UNDO,
+            principal,
+            request.operation_id,
+            json!(&input),
+            |engine, next, _| {
+                apply_undo(
+                    engine.state(),
+                    next,
+                    engine.admitted_current_namespaces()?,
+                    &input,
+                )
+            },
+        )
     }
 
     pub fn directory_deletion(
@@ -334,7 +403,9 @@ impl Engine {
         owner: &str,
         directory: &str,
     ) -> Option<&DirectoryDeletionNode> {
-        self.state().directory_git_repositories.get(owner)
+        self.state()
+            .directory_git_repositories
+            .get(owner)
             .filter(|git| git.repository_id == repository)
             .and_then(|git| git.deletions.get(directory))
     }

@@ -675,12 +675,9 @@ fn disk_exit_directory_fork_replay_rejects_cross_scope_identity_and_context_impo
         let mut next = published.clone();
         let receipt = next.operations.get_mut(&result.operation_id).unwrap();
         receipt.result["input"]["source"][field] = json_codec::json!(value);
-        receipt.request_digest = Engine::native_request_digest(
-            &receipt.kind,
-            "admin",
-            &receipt.result["input"],
-        )
-        .unwrap();
+        receipt.request_digest =
+            Engine::native_request_digest(&receipt.kind, "admin", &receipt.result["input"])
+                .unwrap();
         assert!(view.advance(&previous, &next).is_err(), "{field}");
     }
 }

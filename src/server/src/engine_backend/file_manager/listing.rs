@@ -281,8 +281,10 @@ impl PrimaryListing {
             for (index, entry) in entries.iter().enumerate() {
                 let visible = match &directory.preview {
                     None => directory.namespace.tree().visible_entry(index).is_some(),
-                    Some(_) => entry.kind != storage_contract::NamespaceEntryKind::File
-                        || !state.file_deletions.contains_key(&entry.file_id),
+                    Some(_) => {
+                        entry.kind != storage_contract::NamespaceEntryKind::File
+                            || !state.file_deletions.contains_key(&entry.file_id)
+                    }
                 };
                 if !visible {
                     continue;

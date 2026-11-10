@@ -399,15 +399,18 @@ fn branch_review_freezes_all_seven_source_fields_and_does_not_reject_dirty_child
     state.files.slot = "P01".into();
     state.files.directory = "named/folder".into();
     let review = branch_review(&state, &model).unwrap();
-    assert_eq!(review.source, DirectoryBranchCreateSource {
-        repository_id: id("repo", 1),
-        directory_id: id("entry", 1),
-        directory_branch_id: id("dbr", 1),
-        working_tree_id: id("dtree", 1),
-        head_tree_id: id("dtree", 7),
-        index_generation: 9_007_199_254_740_993,
-        namespace_head: id("commit", 1),
-    });
+    assert_eq!(
+        review.source,
+        DirectoryBranchCreateSource {
+            repository_id: id("repo", 1),
+            directory_id: id("entry", 1),
+            directory_branch_id: id("dbr", 1),
+            working_tree_id: id("dtree", 1),
+            head_tree_id: id("dtree", 7),
+            index_generation: 9_007_199_254_740_993,
+            namespace_head: id("commit", 1),
+        }
+    );
     assert_eq!(review.slot, "P01");
     assert_eq!(review.display_path, "named/folder");
     for change in 0..8 {

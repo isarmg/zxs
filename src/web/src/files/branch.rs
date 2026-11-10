@@ -27,10 +27,13 @@ impl Target {
             Self::CurrentDirectory(current) => {
                 let frozen = frozen?;
                 if current.get_untracked().as_ref() != Some(&frozen) {
-                    crate::ui::set_notice(state, t(
-                        "目录来源已改变；请取消命名，刷新并重新核对来源。",
-                        "The folder source changed. Cancel the name, refresh and review its source again.",
-                    ));
+                    crate::ui::set_notice(
+                        state,
+                        t(
+                            "目录来源已改变；请取消命名，刷新并重新核对来源。",
+                            "The folder source changed. Cancel the name, refresh and review its source again.",
+                        ),
+                    );
                     return None;
                 }
                 frozen.submit(state, name)

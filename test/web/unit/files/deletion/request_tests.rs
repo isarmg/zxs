@@ -253,4 +253,3 @@ fn stale_undo_button_and_unknown_attempt_do_not_generate_new_browser_requests() 
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
 }
-

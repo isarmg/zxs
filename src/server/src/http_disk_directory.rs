@@ -10,9 +10,9 @@ use http_routing::{
 use json_codec::{Map, Value};
 
 fn parse(mut body: Map<String, Value>) -> Result<MutateDiskDirectory, ApiError> {
-    if let Some(key) = body.keys().find(|key| {
-        !["slot_id", "path", "name", "operation_id", "source"].contains(&key.as_str())
-    })
+    if let Some(key) = body
+        .keys()
+        .find(|key| !["slot_id", "path", "name", "operation_id", "source"].contains(&key.as_str()))
     {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }

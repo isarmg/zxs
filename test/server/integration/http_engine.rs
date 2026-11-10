@@ -1804,8 +1804,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         .unwrap()["version_id"]
         .clone();
     let source = manager_directory_branch_source(&app, &token, "folder").await;
-    let body =
-        json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap(),"source":source});
+    let body = json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap(),"source":source});
     let created = success(
         &app,
         &token,

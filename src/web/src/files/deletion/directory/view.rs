@@ -172,7 +172,11 @@ pub(in crate::files::deletion) fn view(state: RwSignal<State>) -> impl IntoView 
 }
 fn node_view(state: RwSignal<State>, node: Arc<DirectoryDeletionNode>) -> impl IntoView {
     let expected = StoredValue::new(Arc::clone(&node));
-    let created = node.files.values().filter(|member| member.created_by_directory).count();
+    let created = node
+        .files
+        .values()
+        .filter(|member| member.created_by_directory)
+        .count();
     let members = node.files.iter().map(|(file, member)| {
         view!{<li><code>{file.clone()}</code>" → "<code>{member.deletion_node_id.clone()}</code>" · "{
             if member.created_by_directory {

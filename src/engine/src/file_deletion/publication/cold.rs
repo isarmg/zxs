@@ -53,7 +53,8 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     }
     let mut active = BTreeMap::new();
     let mut created = BTreeSet::new();
-    let mut directories = BTreeMap::<String, storage_contract::directory_git::DirectoryDeletionNode>::new();
+    let mut directories =
+        BTreeMap::<String, storage_contract::directory_git::DirectoryDeletionNode>::new();
     let mut created_directories = BTreeSet::new();
     for (_, receipt) in receipts.values() {
         if crate::file_deletion::directory::is_kind(&receipt.kind) {
@@ -63,15 +64,20 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
                     return Err(invalid());
                 }
                 for (file, member) in &group.node.files {
-                    if active.get(file).map(|node: &FileDeletionNode| &node.node_id)
+                    if active
+                        .get(file)
+                        .map(|node: &FileDeletionNode| &node.node_id)
                         != Some(&member.deletion_node_id)
                     {
                         return Err(invalid());
                     }
                 }
                 for node in group.files {
-                    if directories.values().any(|directory| directory.files.contains_key(&node.file_id))
-                        || active.remove(&node.file_id).as_ref() != Some(&node) {
+                    if directories
+                        .values()
+                        .any(|directory| directory.files.contains_key(&node.file_id))
+                        || active.remove(&node.file_id).as_ref() != Some(&node)
+                    {
                         return Err(invalid());
                     }
                 }
@@ -89,7 +95,9 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
                     }
                 }
                 for (file, member) in &group.node.files {
-                    if active.get(file).map(|node: &FileDeletionNode| &node.node_id)
+                    if active
+                        .get(file)
+                        .map(|node: &FileDeletionNode| &node.node_id)
                         != Some(&member.deletion_node_id)
                     {
                         return Err(invalid());
@@ -122,7 +130,9 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
         let undo = receipt.kind == "file.delete.undo";
         let node = admit_receipt(state, receipt, undo)?;
         if undo {
-            if directories.values().any(|directory| directory.files.contains_key(&node.file_id))
+            if directories
+                .values()
+                .any(|directory| directory.files.contains_key(&node.file_id))
                 || active.remove(&node.file_id).as_ref() != Some(&node)
             {
                 return Err(invalid());
@@ -136,7 +146,8 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
     let mut retained = BTreeMap::new();
     for git in state.directory_git_repositories.values() {
         for (id, node) in &git.deletions {
-            if id != &node.directory_id || node.owner_directory_id != git.directory_id
+            if id != &node.directory_id
+                || node.owner_directory_id != git.directory_id
                 || node.repository_id != git.repository_id
                 || retained.insert(id, node).is_some()
             {
@@ -144,8 +155,7 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
             }
         }
     }
-    if directories.iter().ne(retained.into_iter())
-        || active.iter().ne(state.file_deletions.iter())
+    if directories.iter().ne(retained.into_iter()) || active.iter().ne(state.file_deletions.iter())
     {
         return Err(invalid());
     }

@@ -1,14 +1,17 @@
 //! Bounded discovery and exact original-node cancellation of one directory D.
 use crate::{
-    ApiError, AppState, auth::Identity,
+    ApiError, AppState,
+    auth::Identity,
     http_boundary::{ApiPath, ApiQuery},
 };
 use http_routing::{
-    Extension, Json, extract::{Request, State}, response::Response,
+    Extension, Json,
+    extract::{Request, State},
+    response::Response,
 };
 use std::collections::BTreeMap;
-use storage_contract::directory_git::UndoDirectoryDeletionBody;
 use storage_contract::client_protocol::MAX_FILE_DELETION_RESPONSE_BYTES;
+use storage_contract::directory_git::UndoDirectoryDeletionBody;
 
 fn owner_ids(repository: &str, owner: &str) -> Result<(), ApiError> {
     storage_contract::validate_id(repository, "repo").map_err(ApiError::contract_input)?;
@@ -36,7 +39,8 @@ pub(crate) async fn list(
             &backend.directory_deletions(&identity, &repository, &owner, request)?,
             MAX_FILE_DELETION_RESPONSE_BYTES,
         )
-    }).await
+    })
+    .await
 }
 
 pub(crate) async fn read(
@@ -46,7 +50,9 @@ pub(crate) async fn read(
     ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Response, ApiError> {
     if !query.is_empty() {
-        return Err(ApiError::invalid("directory deletion read has no query fields"));
+        return Err(ApiError::invalid(
+            "directory deletion read has no query fields",
+        ));
     }
     ids(&repository, &owner, &directory)?;
     crate::bounded_history_http::read(state, move |backend, _| {
@@ -54,7 +60,8 @@ pub(crate) async fn read(
             &backend.current_directory_deletion(&identity, &repository, &owner, &directory)?,
             MAX_FILE_DELETION_RESPONSE_BYTES,
         )
-    }).await
+    })
+    .await
 }
 
 pub(crate) async fn undo(
@@ -65,7 +72,9 @@ pub(crate) async fn undo(
     request: Request,
 ) -> Result<Json<json_codec::Value>, ApiError> {
     if !query.is_empty() {
-        return Err(ApiError::invalid("directory deletion undo has no query fields"));
+        return Err(ApiError::invalid(
+            "directory deletion undo has no query fields",
+        ));
     }
     let bytes = crate::http_boundary::read_body(request, 16 * 1024).await?;
     let body: UndoDirectoryDeletionBody =
@@ -75,5 +84,6 @@ pub(crate) async fn undo(
         .map_err(ApiError::contract_input)?;
     crate::http_file_deletion::mutate(state, move |backend| {
         backend.restore_deleted_directory(&identity, &repository, &body)
-    }).await
+    })
+    .await
 }

@@ -32,13 +32,21 @@ impl ReadDirectoryDeletions {
         let after = query.remove("after");
         let snapshot = query.remove("snapshot");
         if !query.is_empty() || after.is_some() != snapshot.is_some() {
-            return Err(crate::ApiError::invalid("after and snapshot must be supplied together"));
+            return Err(crate::ApiError::invalid(
+                "after and snapshot must be supplied together",
+            ));
         }
-        if snapshot.as_ref().is_some_and(|snapshot| snapshot.is_empty() || snapshot.len() > 256) {
-            return Err(crate::ApiError::invalid("invalid directory deletion snapshot"));
+        if snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_empty() || snapshot.len() > 256)
+        {
+            return Err(crate::ApiError::invalid(
+                "invalid directory deletion snapshot",
+            ));
         }
         if let Some(after) = &after {
-            storage_contract::validate_id(after, "entry").map_err(crate::ApiError::contract_input)?;
+            storage_contract::validate_id(after, "entry")
+                .map_err(crate::ApiError::contract_input)?;
         }
         Ok(Self { after, snapshot })
     }

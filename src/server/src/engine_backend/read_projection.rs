@@ -213,7 +213,9 @@ impl DirectorySnapshot {
                     || entry.entry_id != entry_id
                     || !storage_contract::directory_git::current_entry_visible(
                         &engine.state().directory_git_repositories,
-                        &repository.repository_id, entries, entry,
+                        &repository.repository_id,
+                        entries,
+                        entry,
                     )
             }) {
                 return Err(ApiError::conflict(
@@ -296,7 +298,10 @@ impl DirectoryPageProjection {
                 || (entry.kind == storage_contract::NamespaceEntryKind::File
                     && state.file_deletions.contains_key(&entry.file_id))
                 || !storage_contract::directory_git::current_entry_visible(
-                    &state.directory_git_repositories, repository, entries, entry,
+                    &state.directory_git_repositories,
+                    repository,
+                    entries,
+                    entry,
                 )
             {
                 continue;

@@ -1244,16 +1244,24 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         if request.kind == DirectoryBatchKind::Delete {
-            match self.state().operations.get(&operation).map(|receipt| receipt.kind.as_str()) {
+            match self
+                .state()
+                .operations
+                .get(&operation)
+                .map(|receipt| receipt.kind.as_str())
+            {
                 Some(crate::file_deletion::directory::DELETE) => {
                     return self.soft_delete_directory(repository, request, principal, operation);
                 }
                 Some(crate::file_deletion::batch::KIND) => {
-                    return self.soft_delete_directory_files(repository, request, principal, operation);
+                    return self
+                        .soft_delete_directory_files(repository, request, principal, operation);
                 }
                 None => {
                     return if crate::file_deletion::directory::requested(
-                        self.state(), self.admitted_current_namespaces()?, request,
+                        self.state(),
+                        self.admitted_current_namespaces()?,
+                        request,
                     )? {
                         self.soft_delete_directory(repository, request, principal, operation)
                     } else {

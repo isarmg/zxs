@@ -316,31 +316,49 @@ impl Session {
         operation_id: OperationId,
         record: &Path,
     ) -> Result<Option<Value>, ApiError> {
-        let entry = self.find(path)?.ok_or_else(|| ApiError::new(
-            http::StatusCode::NOT_FOUND, storage_contract::ErrorCode::DirectoryNotFound,
-            "rmdir target missing",
-        ))?;
+        let entry = self.find(path)?.ok_or_else(|| {
+            ApiError::new(
+                http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::DirectoryNotFound,
+                "rmdir target missing",
+            )
+        })?;
         if entry.kind != storage_contract::NamespaceEntryKind::Directory {
             return Err(ApiError::conflict(
-                storage_contract::ErrorCode::NotDirectory, "rmdir requires a directory",
+                storage_contract::ErrorCode::NotDirectory,
+                "rmdir requires a directory",
             ));
         }
         let captured = self.shared.backend.prepare_current_directory_deletion(
             &self.identity,
             crate::PrepareCurrentDirectoryDeletion {
-                branch_id: self.branch.clone(), path: path.clone(),
+                branch_id: self.branch.clone(),
+                path: path.clone(),
                 expected_entry_id: entry.entry_id,
             },
         )?;
-        let Some(captured) = captured else { return Ok(None) };
-        write_namespace_record(record, &json!({
-            "format": "smb-directory-soft-deletion", "principal": self.identity.principal,
-            "branch_id": self.branch, "operation_id": operation_id,
-            "publication_outcome": "unconfirmed", "delete_request": captured,
-        }))?;
-        let result = self.shared.backend.delete_current_directory(
-            &self.identity, crate::DeleteCurrentDirectory { captured, operation_id },
-        ).and_then(|result| crate::operation_wire::operation_wire(result.into()));
+        let Some(captured) = captured else {
+            return Ok(None);
+        };
+        write_namespace_record(
+            record,
+            &json!({
+                "format": "smb-directory-soft-deletion", "principal": self.identity.principal,
+                "branch_id": self.branch, "operation_id": operation_id,
+                "publication_outcome": "unconfirmed", "delete_request": captured,
+            }),
+        )?;
+        let result = self
+            .shared
+            .backend
+            .delete_current_directory(
+                &self.identity,
+                crate::DeleteCurrentDirectory {
+                    captured,
+                    operation_id,
+                },
+            )
+            .and_then(|result| crate::operation_wire::operation_wire(result.into()));
         if result.is_ok() {
             cleanup_namespace_record(record);
         }
@@ -370,7 +388,8 @@ impl Session {
         // Disk-root files and ordinary directories inside initialized owners
         // use their native reversible lifecycle. Named legacy shares retain
         // their policy; no failed lifecycle request falls back to hard delete.
-        let soft_delete = if matches!(kind, NamespaceOperation::Unlink | NamespaceOperation::Rmdir) {
+        let soft_delete = if matches!(kind, NamespaceOperation::Unlink | NamespaceOperation::Rmdir)
+        {
             match &self.identity.smb_binding {
                 Some(binding) => {
                     self.shared

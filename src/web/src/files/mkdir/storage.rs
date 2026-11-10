@@ -23,7 +23,9 @@ enum Format {
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Namespace {
-    DirectoryBranch { request: DirectoryRequest },
+    DirectoryBranch {
+        request: DirectoryRequest,
+    },
     UninitializedRoot,
     FileRelocation {
         relocation: storage_contract::file_relocation::FileRelocation,
@@ -59,7 +61,10 @@ impl Record {
         &self.stored.principal
     }
     fn path(&self) -> &str {
-        self.stored.path.as_ref().map_or("", name_policy::PortablePath::as_str)
+        self.stored
+            .path
+            .as_ref()
+            .map_or("", name_policy::PortablePath::as_str)
     }
     pub(super) fn is_directory_checkout(&self) -> bool {
         matches!(&self.stored.namespace, Namespace::DirectoryBranch { request } if request.is_checkout())
@@ -83,9 +88,7 @@ impl Record {
                 relocation.destination.as_str(),
                 relocation.repository_id.as_str(),
             ),
-            Namespace::UninitializedRoot | Namespace::Repository { .. } => {
-                self.path().to_owned()
-            }
+            Namespace::UninitializedRoot | Namespace::Repository { .. } => self.path().to_owned(),
         };
         format!("{}/{} · {}", self.stored.slot, path, self.operation())
     }
@@ -146,7 +149,9 @@ impl Record {
                 && receipt["result"]["path"].as_str() == Some(relocation.source.as_str());
         }
         let path = match &self.stored.namespace {
-            Namespace::DirectoryBranch { .. } | Namespace::FileRelocation { .. } => unreachable!("invariant: relocation handled above"),
+            Namespace::DirectoryBranch { .. } | Namespace::FileRelocation { .. } => {
+                unreachable!("invariant: relocation handled above")
+            }
             Namespace::UninitializedRoot => self.path(),
             Namespace::Repository { path, .. } => path.as_str(),
         };
@@ -238,8 +243,10 @@ impl Record {
             principal: state.principal.clone(),
             operation,
             slot: state.files.slot.clone(),
-            path: Some(name_policy::PortablePath::parse(entry.path())
-                .map_err(|source| decode_error(source.into()))?),
+            path: Some(
+                name_policy::PortablePath::parse(entry.path())
+                    .map_err(|source| decode_error(source.into()))?,
+            ),
             namespace: Namespace::FileRelocation { relocation },
         };
         let bytes = storage_contract::canonical_json(&stored).map_err(decode_error)?;
@@ -281,16 +288,22 @@ impl Record {
         name_policy::validate_slot(&stored.slot).map_err(|source| decode_error(source.into()))?;
         if !matches!(
             (&stored.format, &stored.namespace),
-            (Format::OriginalRequest, Namespace::UninitializedRoot | Namespace::Repository { .. })
-                | (Format::FileRelocation, Namespace::FileRelocation { .. })
+            (
+                Format::OriginalRequest,
+                Namespace::UninitializedRoot | Namespace::Repository { .. }
+            ) | (Format::FileRelocation, Namespace::FileRelocation { .. })
                 | (Format::DirectoryBranch, Namespace::DirectoryBranch { .. })
         ) {
             return Err(failure("The retained request format and action disagree."));
         }
-        if stored.path.is_none() && !matches!(&stored.namespace, Namespace::DirectoryBranch { .. }) {
+        if stored.path.is_none() && !matches!(&stored.namespace, Namespace::DirectoryBranch { .. })
+        {
             return Err(failure("The retained namespace request must have a path."));
         }
-        let display_path = stored.path.as_ref().map_or("", name_policy::PortablePath::as_str);
+        let display_path = stored
+            .path
+            .as_ref()
+            .map_or("", name_policy::PortablePath::as_str);
         let digest = match &stored.namespace {
             Namespace::DirectoryBranch { request } => {
                 request.validate(display_path)?;
@@ -316,8 +329,7 @@ impl Record {
                 // A named repository removes exactly one displayed component;
                 // a disk-root repository keeps the complete displayed path.
                 if path.as_str() != display_path
-                    && display_path.split_once('/').map(|(_, tail)| tail)
-                        != Some(path.as_str())
+                    && display_path.split_once('/').map(|(_, tail)| tail) != Some(path.as_str())
                 {
                     return Err(failure(
                         "The original folder paths do not share one namespace.",

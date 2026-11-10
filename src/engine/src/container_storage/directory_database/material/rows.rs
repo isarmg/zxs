@@ -103,9 +103,11 @@ pub(in crate::container_storage::directory_database) fn validate_rows(
     for (id, node) in &git.deletions {
         crate::file_deletion::directory::admit_node_shape(node)?;
         sequence(node.sequence, through)?;
-        let source = trees.get(&node.source_tree_id)
+        let source = trees
+            .get(&node.source_tree_id)
             .ok_or_else(|| invalid("directory deletion local source tree is missing"))?;
-        if id != &node.directory_id || node.repository_id != repository
+        if id != &node.directory_id
+            || node.repository_id != repository
             || node.owner_directory_id != directory
             || !git.branches.contains_key(&node.directory_branch_id)
             || !source.entries.iter().any(|entry| {
@@ -114,7 +116,9 @@ pub(in crate::container_storage::directory_database) fn validate_rows(
                     && entry.path == node.path
             })
         {
-            return Err(invalid("directory deletion local identity or location differs"));
+            return Err(invalid(
+                "directory deletion local identity or location differs",
+            ));
         }
     }
     parents_closed(

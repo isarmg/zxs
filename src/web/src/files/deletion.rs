@@ -12,14 +12,14 @@ use crate::{
     api,
     ui::{State, accept_read_response, current_session, fail},
 };
-pub(crate) use recovery::{
-    blocks_writes, finish as finish_recovery, restore as restore_recovery, view as recovery_view,
-};
-pub(crate) use request::{available, in_flight, receipt_matches, settle, start};
 pub(crate) use directory::{
     available as directory_available, entry_available as directory_entry_available,
     start as start_directory,
 };
+pub(crate) use recovery::{
+    blocks_writes, finish as finish_recovery, restore as restore_recovery, view as recovery_view,
+};
+pub(crate) use request::{available, in_flight, receipt_matches, settle, start};
 use std::sync::Arc;
 pub(crate) use view::view;
 use web_interface::{prelude::*, tasks::spawn_local};

@@ -157,7 +157,7 @@ pub(in crate::files::deletion) fn validate_node(
 
 fn identity(operation: OperationId, prefix: &str, owner: &str) -> storage_contract::Result<String> {
     storage_contract::object_hash(
-        "directory-deletion-identity-v1",
+        "directory-deletion-identity",
         &json!({"operation_id":operation,"prefix":prefix,"owner":owner}),
     )
     .map(|hash| format!("{prefix}_{}", &hash[..32]))

@@ -32,12 +32,22 @@ pub(crate) fn shape(node: &DirectoryDeletionNode) -> Result<()> {
 fn immutable_frontier(state: &State, node: &FileDeletionNode) -> Result<()> {
     super::super::publication::admit_node_shape(node)?;
     for head in node.branch_heads.values() {
-        let owner = state.versions.get(head)
+        let owner = state
+            .versions
+            .get(head)
             .map(|row| (&row.file_id, &row.history_tree_id))
-            .or_else(|| state.file_path_nodes.get(head)
-                .map(|row| (&row.file_id, &row.history_tree_id)))
-            .or_else(|| state.file_metadata_nodes.get(head)
-                .map(|row| (&row.file_id, &row.history_tree_id)));
+            .or_else(|| {
+                state
+                    .file_path_nodes
+                    .get(head)
+                    .map(|row| (&row.file_id, &row.history_tree_id))
+            })
+            .or_else(|| {
+                state
+                    .file_metadata_nodes
+                    .get(head)
+                    .map(|row| (&row.file_id, &row.history_tree_id))
+            });
         if owner != Some((&node.file_id, &node.history_tree_id)) {
             return Err(invalid());
         }
@@ -51,12 +61,26 @@ pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted
         return Err(invalid());
     }
     let node: DirectoryDeletionNode = json_codec::from_value(
-        receipt.result.get(if undo { "removed_directory_deletion" } else { "directory_deletion" })
-            .ok_or_else(invalid)?.clone(),
+        receipt
+            .result
+            .get(if undo {
+                "removed_directory_deletion"
+            } else {
+                "directory_deletion"
+            })
+            .ok_or_else(invalid)?
+            .clone(),
     )?;
     let files: Vec<FileDeletionNode> = json_codec::from_value(
-        receipt.result.get(if undo { "removed_deletion_nodes" } else { "deletion_nodes" })
-            .ok_or_else(invalid)?.clone(),
+        receipt
+            .result
+            .get(if undo {
+                "removed_deletion_nodes"
+            } else {
+                "deletion_nodes"
+            })
+            .ok_or_else(invalid)?
+            .clone(),
     )?;
     shape(&node)?;
     receipt_budget(&receipt.result, super::super::batch::MAX_RESULT_BYTES)?;
@@ -69,23 +93,24 @@ pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted
             deletion_node_id: node.node_id.clone(),
         };
         super::super::publication::admit_envelope(state, receipt, &json!(input), 6)?;
-        let original = state.operations.get(&node.operation_id)
+        let original = state
+            .operations
+            .get(&node.operation_id)
             .filter(|original| original.kind == DELETE)
             .ok_or_else(invalid)?;
         let original = admit(state, original)?;
-        if original.node != node || original.files != files
+        if original.node != node
+            || original.files != files
             || receipt.sequence <= node.sequence
             || receipt.result["restored_directory_id"].as_str() != Some(node.directory_id.as_str())
         {
             return Err(invalid());
         }
     } else {
-        let input: DeleteInput = json_codec::from_value(
-            receipt.result.get("input").ok_or_else(invalid)?.clone(),
-        )?;
-        let principal = super::super::publication::admit_envelope(
-            state, receipt, &json!(&input), 6,
-        )?;
+        let input: DeleteInput =
+            json_codec::from_value(receipt.result.get("input").ok_or_else(invalid)?.clone())?;
+        let principal =
+            super::super::publication::admit_envelope(state, receipt, &json!(&input), 6)?;
         if input.repository_id != node.repository_id
             || input.request.kind != DirectoryBatchKind::Delete
             || input.request.items.len() != 1
@@ -97,19 +122,28 @@ pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted
             return Err(invalid());
         }
         let requested = &input.request.items[0].source;
-        let expected_tree = state.directory_trees.get(&requested.expected_tree_id)
+        let expected_tree = state
+            .directory_trees
+            .get(&requested.expected_tree_id)
             .ok_or_else(invalid)?;
         let path = name_policy::PortablePath::parse(&requested.path)?;
         if requested.entry_id != node.directory_id
             || requested.directory_branch_id != node.directory_branch_id
             || path.key() != node.path.key()
-            || !source::inherits(state, &node.directory_branch_id, &expected_tree.directory_branch_id)
+            || !source::inherits(
+                state,
+                &node.directory_branch_id,
+                &expected_tree.directory_branch_id,
+            )
             || expected_tree.sequence >= node.sequence
         {
             return Err(invalid());
         }
         let originals = &state.commits[&node.namespace_head].entries;
-        let owned = node.files.iter().filter(|(_, member)| member.created_by_directory)
+        let owned = node
+            .files
+            .iter()
+            .filter(|(_, member)| member.created_by_directory)
             .map(|(file, _)| file);
         if owned.ne(files.iter().map(|node| &node.file_id)) {
             return Err(invalid());
@@ -117,8 +151,11 @@ pub(crate) fn admit(state: &State, receipt: &OperationResult) -> Result<Admitted
         let mut frontier = (0, 0);
         for file in &files {
             immutable_frontier(state, file)?;
-            let occurrence = source::subtree(originals, node.path.key()).into_iter()
-                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file.file_id)
+            let occurrence = source::subtree(originals, node.path.key())
+                .into_iter()
+                .find(|entry| {
+                    entry.kind == NamespaceEntryKind::File && entry.file_id == file.file_id
+                })
                 .ok_or_else(invalid)?;
             if file.node_id != identity(node.operation_id, "fdel", &file.file_id)?
                 || node.files[&file.file_id].deletion_node_id != file.node_id
@@ -145,7 +182,10 @@ pub(crate) fn node_for(
     receipt: &OperationResult,
     file: &str,
 ) -> Result<FileDeletionNode> {
-    admit(state, receipt)?.files.into_iter().find(|node| node.file_id == file)
+    admit(state, receipt)?
+        .files
+        .into_iter()
+        .find(|node| node.file_id == file)
         .ok_or_else(invalid)
 }
 
@@ -155,18 +195,37 @@ fn changed_keys<T>(
 ) -> Vec<String> {
     match after.changes_since(before) {
         MapChanges::Keys(keys) => keys.iter().cloned().collect(),
-        MapChanges::All => before.keys().chain(after.keys()).cloned()
-            .collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
+        MapChanges::All => before
+            .keys()
+            .chain(after.keys())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect(),
     }
 }
 
 fn markers_changed(previous: &State, next: &State) -> bool {
-    changed_keys(&previous.directory_git_repositories, &next.directory_git_repositories)
-        .iter().any(|id| {
-            let before = previous.directory_git_repositories.get(id).map(|git| &git.deletions);
-            let after = next.directory_git_repositories.get(id).map(|git| &git.deletions);
-            before.into_iter().chain(after).any(|nodes| !nodes.is_empty()) && before != after
-        })
+    changed_keys(
+        &previous.directory_git_repositories,
+        &next.directory_git_repositories,
+    )
+    .iter()
+    .any(|id| {
+        let before = previous
+            .directory_git_repositories
+            .get(id)
+            .map(|git| &git.deletions);
+        let after = next
+            .directory_git_repositories
+            .get(id)
+            .map(|git| &git.deletions);
+        before
+            .into_iter()
+            .chain(after)
+            .any(|nodes| !nodes.is_empty())
+            && before != after
+    })
 }
 
 fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a OperationResult>> {
@@ -175,7 +234,10 @@ fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Opera
         let before = previous.operations.get(id);
         let after = next.operations.get(id);
         if before == after
-            || !before.into_iter().chain(after).any(|receipt| is_kind(&receipt.kind))
+            || !before
+                .into_iter()
+                .chain(after)
+                .any(|receipt| is_kind(&receipt.kind))
         {
             return Ok(());
         }
@@ -188,7 +250,10 @@ fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Opera
     match next.operations.changes_since(&previous.operations) {
         MapChanges::Keys(keys) => keys.iter().try_for_each(&mut inspect)?,
         MapChanges::All => {
-            for id in previous.operations.keys().chain(next.operations.keys())
+            for id in previous
+                .operations
+                .keys()
+                .chain(next.operations.keys())
                 .collect::<std::collections::BTreeSet<_>>()
             {
                 inspect(id)?;
@@ -196,13 +261,22 @@ fn new_receipt<'a>(previous: &State, next: &'a State) -> Result<Option<&'a Opera
         }
     }
     let unchanged = |id: &OperationId| {
-        previous.operations.get(id).is_none_or(|receipt| !is_kind(&receipt.kind))
+        previous
+            .operations
+            .get(id)
+            .is_none_or(|receipt| !is_kind(&receipt.kind))
             || previous.operation_principals.get(id) == next.operation_principals.get(id)
     };
-    let valid = match next.operation_principals.changes_since(&previous.operation_principals) {
+    let valid = match next
+        .operation_principals
+        .changes_since(&previous.operation_principals)
+    {
         MapChanges::Keys(keys) => keys.iter().all(unchanged),
-        MapChanges::All => previous.operation_principals.keys()
-            .chain(next.operation_principals.keys()).all(unchanged),
+        MapChanges::All => previous
+            .operation_principals
+            .keys()
+            .chain(next.operation_principals.keys())
+            .all(unchanged),
     };
     if !valid {
         return Err(invalid());
@@ -216,32 +290,52 @@ pub(crate) fn verify_publication(
     current: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<bool> {
     let Some(receipt) = new_receipt(previous, next)? else {
-        return if markers_changed(previous, next) { Err(invalid()) } else { Ok(false) };
+        return if markers_changed(previous, next) {
+            Err(invalid())
+        } else {
+            Ok(false)
+        };
     };
     let admitted = admit(next, receipt)?;
     if receipt.sequence != next.sequence || next.sequence <= previous.sequence {
         return Err(invalid());
     }
-    let principal = next.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
+    let principal = next
+        .operation_principals
+        .get(&receipt.operation_id)
+        .ok_or_else(invalid)?;
     let mut expected = previous.clone();
     expected.begin_tracking();
     crate::container_storage::capture_names(&mut expected);
     expected.sequence = next.sequence;
-    expected.business_generation = previous.business_generation.checked_add(1).ok_or_else(invalid)?;
+    expected.business_generation = previous
+        .business_generation
+        .checked_add(1)
+        .ok_or_else(invalid)?;
     let mut result = if admitted.undo {
-        apply_undo(previous, &mut expected, current, &UndoInput {
-            repository_id: admitted.node.repository_id.clone(),
-            owner_directory_id: admitted.node.owner_directory_id.clone(),
-            directory_id: admitted.node.directory_id.clone(),
-            deletion_node_id: admitted.node.node_id.clone(),
-        })?
+        apply_undo(
+            previous,
+            &mut expected,
+            current,
+            &UndoInput {
+                repository_id: admitted.node.repository_id.clone(),
+                owner_directory_id: admitted.node.owner_directory_id.clone(),
+                directory_id: admitted.node.directory_id.clone(),
+                deletion_node_id: admitted.node.node_id.clone(),
+            },
+        )?
     } else {
         let input = json_codec::from_value(receipt.result["input"].clone())?;
         apply_create(
-            previous, &mut expected, current, &input,
+            previous,
+            &mut expected,
+            current,
+            &input,
             Creation {
-                principal, operation: receipt.operation_id,
-                timestamp: admitted.node.created_at, maximum: usize::MAX,
+                principal,
+                operation: receipt.operation_id,
+                timestamp: admitted.node.created_at,
+                maximum: usize::MAX,
             },
         )?
     };
@@ -252,11 +346,17 @@ pub(crate) fn verify_publication(
         return Err(invalid());
     }
     crate::container_storage::capture_changed_names(previous, &mut expected);
-    expected.operations.insert(receipt.operation_id, receipt.clone());
-    expected.operation_principals.insert(receipt.operation_id, principal.clone());
+    expected
+        .operations
+        .insert(receipt.operation_id, receipt.clone());
+    expected
+        .operation_principals
+        .insert(receipt.operation_id, principal.clone());
     expected.events.push(Event {
-        sequence: next.sequence, operation_id: receipt.operation_id,
-        kind: receipt.kind.clone(), object_id: receipt.operation_id.to_string(),
+        sequence: next.sequence,
+        operation_id: receipt.operation_id,
+        kind: receipt.kind.clone(),
+        object_id: receipt.operation_id.to_string(),
     });
     if expected != *next {
         return Err(invalid());

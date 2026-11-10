@@ -19,11 +19,14 @@ pub fn current_entry_visible(
     if entry.kind == NamespaceEntryKind::Directory {
         directories.push(entry.entry_id.as_str());
         if let Some(git) = repositories.get(&entry.entry_id) {
-            return directories.iter().all(|id| !git.deletions.contains_key(*id));
+            return directories
+                .iter()
+                .all(|id| !git.deletions.contains_key(*id));
         }
     }
     while let Some((parent, _)) = key.rsplit_once('/') {
-        let index = entries.binary_search_by(|entry| entry.lookup_key().cmp(parent))
+        let index = entries
+            .binary_search_by(|entry| entry.lookup_key().cmp(parent))
             .expect("invariant: an admitted namespace has all directory parents");
         let directory = &entries[index];
         directories.push(directory.entry_id.as_str());
@@ -31,11 +34,15 @@ pub fn current_entry_visible(
             // Creation refuses initialized children, and the freeze guard bars
             // initializing one inside a deleted ordinary subtree. The nearest
             // initialized owner therefore owns every possible marker here.
-            return directories.iter().all(|id| !git.deletions.contains_key(*id));
+            return directories
+                .iter()
+                .all(|id| !git.deletions.contains_key(*id));
         }
         key = parent;
     }
     repositories.get(repository).is_none_or(|git| {
-        directories.iter().all(|id| !git.deletions.contains_key(*id))
+        directories
+            .iter()
+            .all(|id| !git.deletions.contains_key(*id))
     })
 }

@@ -55,26 +55,50 @@ fn directory_details(record: &Record) -> impl IntoView + use<> {
         request::Intent::DeleteDirectory(request) => Some((
             format!(
                 "{} · {} · {} · {} · {}",
-                request.slot(), request.repository(), request.owner(), request.branch(), request.tree(),
+                request.slot(),
+                request.repository(),
+                request.owner(),
+                request.branch(),
+                request.tree(),
             ),
-            vec![format!("{} · {}", request.path().as_str(), request.directory())],
+            vec![format!(
+                "{} · {}",
+                request.path().as_str(),
+                request.directory()
+            )],
         )),
         request::Intent::UndoDirectory(node) => Some((
             format!(
                 "{} · {} · {} · {} · {} · {}",
-                node.repository_id, node.owner_directory_id, node.directory_branch_id,
-                node.source_tree_id, node.namespace_head, node.operation_id,
+                node.repository_id,
+                node.owner_directory_id,
+                node.directory_branch_id,
+                node.source_tree_id,
+                node.namespace_head,
+                node.operation_id,
             ),
-            node.files.iter().map(|(file, member)| format!(
-                "{} · {} · {}", file, member.deletion_node_id,
-                if member.created_by_directory {
-                    t("随目录恢复", "Restored with the folder")
-                } else {
-                    t("此前已删除，继续保留删除状态", "Previously deleted, remains deleted")
-                },
-            )).collect(),
+            node.files
+                .iter()
+                .map(|(file, member)| {
+                    format!(
+                        "{} · {} · {}",
+                        file,
+                        member.deletion_node_id,
+                        if member.created_by_directory {
+                            t("随目录恢复", "Restored with the folder")
+                        } else {
+                            t(
+                                "此前已删除，继续保留删除状态",
+                                "Previously deleted, remains deleted",
+                            )
+                        },
+                    )
+                })
+                .collect(),
         )),
-        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) => None,
+        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) => {
+            None
+        }
     };
     details.map(|(scope, entries)| view! {
         <details class="zxs-stack">
@@ -153,4 +177,3 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         </Show>
     }
 }
-

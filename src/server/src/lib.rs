@@ -1769,14 +1769,16 @@ impl Backend for AuthorizedBackend {
         identity: &Identity,
         command: crate::PrepareCurrentDirectoryDeletion,
     ) -> Result<Option<crate::CurrentDirectoryDeletion>, ApiError> {
-        self.backend.prepare_current_directory_deletion(&self.current(identity)?, command)
+        self.backend
+            .prepare_current_directory_deletion(&self.current(identity)?, command)
     }
     fn delete_current_directory(
         &self,
         identity: &Identity,
         command: crate::DeleteCurrentDirectory,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.backend.delete_current_directory(&self.current(identity)?, command)
+        self.backend
+            .delete_current_directory(&self.current(identity)?, command)
     }
     fn directory_deletions(
         &self,
@@ -1785,7 +1787,8 @@ impl Backend for AuthorizedBackend {
         owner: &str,
         request: crate::ReadDirectoryDeletions,
     ) -> Result<storage_contract::directory_git::DirectoryDeletionsPage, ApiError> {
-        self.backend.directory_deletions(&self.current(identity)?, repository, owner, request)
+        self.backend
+            .directory_deletions(&self.current(identity)?, repository, owner, request)
     }
     fn current_directory_deletion(
         &self,
@@ -1795,7 +1798,10 @@ impl Backend for AuthorizedBackend {
         directory: &str,
     ) -> Result<Option<storage_contract::directory_git::DirectoryDeletionNode>, ApiError> {
         self.backend.current_directory_deletion(
-            &self.current(identity)?, repository, owner, directory,
+            &self.current(identity)?,
+            repository,
+            owner,
+            directory,
         )
     }
     fn restore_deleted_directory(
@@ -1804,7 +1810,8 @@ impl Backend for AuthorizedBackend {
         repository: &str,
         request: &storage_contract::directory_git::UndoDirectoryDeletionBody,
     ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.backend.restore_deleted_directory(&self.current(identity)?, repository, request)
+        self.backend
+            .restore_deleted_directory(&self.current(identity)?, repository, request)
     }
     fn current_file_deletion(
         &self,

@@ -33,8 +33,12 @@ fn state() -> State {
 }
 fn create() -> Record {
     Record::capture_directory_branch(
-        &state(), id("op", 1).parse().unwrap(), source(), "draft".into(),
-    ).unwrap()
+        &state(),
+        id("op", 1).parse().unwrap(),
+        source(),
+        "draft".into(),
+    )
+    .unwrap()
 }
 fn checkout() -> Record {
     let stored = Stored {
@@ -60,27 +64,42 @@ fn receipt(record: &Record) -> Value {
         panic!("directory request");
     };
     let (kind, input, result) = match request {
-        DirectoryRequest::Create { source, repository_path, name } => {
+        DirectoryRequest::Create {
+            source,
+            repository_path,
+            name,
+        } => {
             let input = json!({
                 "repository_id":source.repository_id, "path":repository_path,
                 "name":name, "source":source,
             });
-            ("directory.git.branch-create", input, json!({
-                "directory_branch_id":id("dbr",10), "head_tree_id":source.working_tree_id,
-                "path":repository_path, "name":name, "selected":false, "materialized":false,
-            }))
+            (
+                "directory.git.branch-create",
+                input,
+                json!({
+                    "directory_branch_id":id("dbr",10), "head_tree_id":source.working_tree_id,
+                    "path":repository_path, "name":name, "selected":false, "materialized":false,
+                }),
+            )
         }
         DirectoryRequest::Checkout {
-            repository_id, directory_branch_id, expected_tree_id, expected_head,
+            repository_id,
+            directory_branch_id,
+            expected_tree_id,
+            expected_head,
         } => {
             let input = json!({
                 "repository_id":repository_id, "directory_branch_id":directory_branch_id,
                 "expected_tree_id":expected_tree_id, "expected_head":expected_head,
             });
-            ("directory.git.checkout", input, json!({
-                "directory_branch_id":directory_branch_id, "commit_id":id("commit",10),
-                "selected":true, "no_change":false,
-            }))
+            (
+                "directory.git.checkout",
+                input,
+                json!({
+                    "directory_branch_id":directory_branch_id, "commit_id":id("commit",10),
+                    "selected":true, "no_change":false,
+                }),
+            )
         }
     };
     let mut result = result;
@@ -105,10 +124,14 @@ fn create_round_trip_retains_exact_post_url_body_operation_and_all_source_fields
     assert_eq!(body["operation_id"], id("op", 1));
     assert_eq!(body["path"], "named/folder");
     assert_eq!(body["name"], "draft");
-    let expected = storage_contract::object_hash("request", &json!({
-        "kind":"directory.git.branch-create", "principal":"alice",
-        "body":{"repository_id":id("repo",1),"path":"folder","name":"draft","source":source()},
-    })).unwrap();
+    let expected = storage_contract::object_hash(
+        "request",
+        &json!({
+            "kind":"directory.git.branch-create", "principal":"alice",
+            "body":{"repository_id":id("repo",1),"path":"folder","name":"draft","source":source()},
+        }),
+    )
+    .unwrap();
     assert_eq!(restored.digest.as_deref(), Some(expected.as_str()));
 }
 
@@ -119,17 +142,27 @@ fn checkout_round_trip_keeps_put_and_the_original_branch_basis() {
     assert_eq!(record.request(), restored.request());
     let (method, url, body) = restored.request();
     assert_eq!(method, "PUT");
-    assert_eq!(url, format!("/api/repositories/{}/default-branch", id("repo", 1)));
-    assert_eq!(body, json!({
-        "operation_id":id("op",2), "directory_branch_id":id("dbr",9),
-        "expected_tree_id":id("dtree",8), "expected_head":id("commit",6),
-    }));
+    assert_eq!(
+        url,
+        format!("/api/repositories/{}/default-branch", id("repo", 1))
+    );
+    assert_eq!(
+        body,
+        json!({
+            "operation_id":id("op",2), "directory_branch_id":id("dbr",9),
+            "expected_tree_id":id("dtree",8), "expected_head":id("commit",6),
+        })
+    );
     assert!(!url.contains("directory-select"));
-    let expected = storage_contract::object_hash("request", &json!({
-        "kind":"directory.git.checkout", "principal":"alice",
-        "body":{"repository_id":id("repo",1),"directory_branch_id":id("dbr",9),
-            "expected_tree_id":id("dtree",8),"expected_head":id("commit",6)},
-    })).unwrap();
+    let expected = storage_contract::object_hash(
+        "request",
+        &json!({
+            "kind":"directory.git.checkout", "principal":"alice",
+            "body":{"repository_id":id("repo",1),"directory_branch_id":id("dbr",9),
+                "expected_tree_id":id("dtree",8),"expected_head":id("commit",6)},
+        }),
+    )
+    .unwrap();
     assert_eq!(restored.digest.as_deref(), Some(expected.as_str()));
 }
 
@@ -142,17 +175,27 @@ fn root_and_named_root_are_explicit_and_never_guess_a_directory_identity() {
         let mut source = source();
         source.directory_id = source.repository_id.clone();
         let record = Record::capture_directory_branch(
-            &state, id("op", 1).parse().unwrap(), source, "root-draft".into(),
-        ).unwrap();
+            &state,
+            id("op", 1).parse().unwrap(),
+            source,
+            "root-draft".into(),
+        )
+        .unwrap();
         let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
         assert_eq!(restored.request(), record.request());
         assert_eq!(restored.request().2["path"], display);
     }
     let mut state = state();
     state.files.repository_path = "elsewhere".into();
-    assert!(Record::capture_directory_branch(
-        &state, id("op", 1).parse().unwrap(), source(), "draft".into(),
-    ).is_err());
+    assert!(
+        Record::capture_directory_branch(
+            &state,
+            id("op", 1).parse().unwrap(),
+            source(),
+            "draft".into(),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -160,18 +203,31 @@ fn malformed_source_and_recovery_records_are_rejected_without_changing_bytes() {
     let record = create();
     let original = record.bytes.clone();
     for field in [
-        "repository_id", "directory_id", "directory_branch_id",
-        "working_tree_id", "head_tree_id", "index_generation", "namespace_head",
+        "repository_id",
+        "directory_id",
+        "directory_branch_id",
+        "working_tree_id",
+        "head_tree_id",
+        "index_generation",
+        "namespace_head",
     ] {
         let mut value: Value = json_codec::from_str(&original).unwrap();
-        value["namespace"]["request"]["source"].as_object_mut().unwrap().remove(field);
+        value["namespace"]["request"]["source"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
         let bytes = json_codec::to_string(&value).unwrap();
-        assert!(Record::decode(&record.key(), "alice", &bytes).is_err(), "{field}");
+        assert!(
+            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            "{field}"
+        );
     }
     for change in 0..6 {
         let mut value: Value = json_codec::from_str(&original).unwrap();
         match change {
-            0 => { value.as_object_mut().unwrap().remove("path"); }
+            0 => {
+                value.as_object_mut().unwrap().remove("path");
+            }
             1 => value["operation"] = id("op", 99).into(),
             2 => value["namespace"]["request"]["source"]["index_generation"] = "0".into(),
             3 => value["namespace"]["request"]["source"]["index_generation"] = 2.into(),
@@ -180,7 +236,10 @@ fn malformed_source_and_recovery_records_are_rejected_without_changing_bytes() {
             _ => unreachable!(),
         }
         let bytes = json_codec::to_string(&value).unwrap();
-        assert!(Record::decode(&record.key(), "alice", &bytes).is_err(), "{change}");
+        assert!(
+            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            "{change}"
+        );
     }
     assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
     assert_eq!(record.bytes, original);
@@ -201,13 +260,19 @@ fn receipt_needs_original_digest_kind_input_and_result_for_both_commands() {
                 3 => wrong["result"]["directory_branch_id"] = "invalid".into(),
                 _ => unreachable!(),
             }
-            assert!(!record.matches_receipt(&wrong, ReceiptOrigin::Lookup), "{change}");
+            assert!(
+                !record.matches_receipt(&wrong, ReceiptOrigin::Lookup),
+                "{change}"
+            );
         }
     }
     let record = checkout();
     let mut no_change = receipt(&record);
     no_change["result"]["no_change"] = true.into();
-    no_change["result"].as_object_mut().unwrap().remove("selected");
+    no_change["result"]
+        .as_object_mut()
+        .unwrap()
+        .remove("selected");
     assert!(record.matches_receipt(&no_change, ReceiptOrigin::Lookup));
 }
 
@@ -220,7 +285,8 @@ fn navigation_retry_uses_the_retained_request_and_is_fenced_by_owner_and_phase()
         let mut state = state();
         state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
         state.files.mkdir.records.push(Retained {
-            record: Arc::clone(&record), phase: Phase::Pending,
+            record: Arc::clone(&record),
+            phase: Phase::Pending,
         });
         state.files.directory = "elsewhere".into();
         state.files.repository_id = id("repo", 99);
@@ -249,9 +315,14 @@ fn unknown_results_keep_material_and_account_changes_do_not_adopt_it() {
     let mut state = state();
     state.files.mkdir.owner = Some((7, "alice".into()));
     state.files.mkdir.records.push(Retained {
-        record: Arc::clone(&record), phase: Phase::Pending,
+        record: Arc::clone(&record),
+        phase: Phase::Pending,
     });
-    settle(&mut state.files.mkdir, &operation.to_string(), SaveStatus::Unknown);
+    settle(
+        &mut state.files.mkdir,
+        &operation.to_string(),
+        SaveStatus::Unknown,
+    );
     assert!(matches!(state.files.mkdir.records[0].phase, Phase::Pending));
     assert_eq!(state.files.mkdir.records[0].record.bytes, record.bytes);
     state.session_epoch = 8;
@@ -271,10 +342,14 @@ fn existing_folder_creation_keeps_its_original_post_shape() {
     let record = Record::capture(&state, id("op", 3).parse().unwrap(), "new").unwrap();
     let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
     assert_eq!(record.request(), restored.request());
-    assert_eq!(restored.request(), (
-        "POST", "/api/file-manager/disks/P01/namespace".into(),
-        json!({"kind":"mkdir","path":"named/folder/new","operation_id":id("op",3)}),
-    ));
+    assert_eq!(
+        restored.request(),
+        (
+            "POST",
+            "/api/file-manager/disks/P01/namespace".into(),
+            json!({"kind":"mkdir","path":"named/folder/new","operation_id":id("op",3)}),
+        )
+    );
 }
 
 #[test]
@@ -282,9 +357,15 @@ fn duplicate_keys_and_conflicting_same_operation_records_remain_blocked() {
     let original = Arc::new(create());
     let duplicate = format!("{{\"principal\":\"alice\",{}", &original.bytes[1..]);
     assert!(Record::decode(&original.key(), "alice", &duplicate).is_err());
-    let changed = Arc::new(Record::capture_directory_branch(
-        &state(), original.operation(), source(), "different-name".into(),
-    ).unwrap());
+    let changed = Arc::new(
+        Record::capture_directory_branch(
+            &state(),
+            original.operation(),
+            source(),
+            "different-name".into(),
+        )
+        .unwrap(),
+    );
     let mut model = Model::default();
     model.merge(vec![Arc::clone(&original)]).unwrap();
     assert!(model.merge(vec![changed]).is_err());
@@ -306,7 +387,8 @@ fn original_checkout_completion_only_clears_its_own_displayed_preview() {
         path: "named/folder".into(),
     });
     state.files.mkdir.records.push(Retained {
-        record, phase: Phase::Pending,
+        record,
+        phase: Phase::Pending,
     });
     assert!(default_completion_applies(&state, &operation));
     state.files.directory = "another-folder".into();
