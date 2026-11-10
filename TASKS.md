@@ -1,9 +1,14 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`89fc4d9c`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`94c810d6`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 
 
+
+## 本轮 SQLite 异步捕获 CI 修复
+
+- 修复 CI #1089 的 sqlite_connection::materialize E0597：一次性异步闭包显式 move，持有 page_limit、写入操作和预算闭包，避免借用局部 PRAGMA 字符串超出可满足的生命周期。SQL、固定页额、事务提交、镜像预算、连接关闭及错误语义不变。
+- 仅一行生产修复；固定 Rust 1.99 rustfmt --check 与独立静态审阅通过。按要求未本地编译或执行 Rust，真实编译与回归结果待本提交 CI，不能把静态核对称为编译通过。
 
 ## 本轮 Backup 后台所有权统一
 

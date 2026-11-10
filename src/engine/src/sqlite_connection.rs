@@ -50,7 +50,7 @@ pub(crate) fn materialize(
         SqliteConnectOptions::new()
             .in_memory(true)
             .journal_mode(SqliteJournalMode::Memory),
-        async |connection| {
+        async move |connection| {
             connection.execute("PRAGMA page_size=4096").await?;
             connection.execute(page_limit.as_str()).await?;
             let mut tx = connection.begin().await?;
