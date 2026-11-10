@@ -205,7 +205,9 @@ pub(super) fn verify_live_selection(
 ) -> Result<bool> {
     let (selection, bytes) = selected(system, admitted)?;
     if bytes != expected {
-        return Err(invalid("Backup live retry changed its selected common switch"));
+        return Err(invalid(
+            "Backup live retry changed its selected common switch",
+        ));
     }
     require_initial_targets(system, admitted, &selection, stop)?;
     let actual = original_objects::verify_recovered(
@@ -216,7 +218,9 @@ pub(super) fn verify_live_selection(
         stop,
     )?;
     if actual != expected_objects {
-        return Err(invalid("Backup live retry changed its completed original objects"));
+        return Err(invalid(
+            "Backup live retry changed its completed original objects",
+        ));
     }
     let mut completed = preparation_path_exists(system, &system.path().join(COMPLETE))?;
     for (_, root) in admitted.held_roots() {

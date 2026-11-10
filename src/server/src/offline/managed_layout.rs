@@ -201,7 +201,9 @@ impl Layout {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let stopped_names = all_names(&stopped_paths)?;
         if !stopped_names.is_subset(&missing) {
-            return Err("stopped registration is outside the exact current addition root set".into());
+            return Err(
+                "stopped registration is outside the exact current addition root set".into(),
+            );
         }
         missing.retain(|name| !stopped_names.contains(name));
         for name in self.disks.entries()? {
@@ -223,7 +225,10 @@ impl Layout {
             owner(&file, self.account.owner())?;
         }
         if !missing.is_empty() {
-            return Err("all enabled and selected new roots must exist; missing roots were not recreated".into());
+            return Err(
+                "all enabled and selected new roots must exist; missing roots were not recreated"
+                    .into(),
+            );
         }
         self.recheck()
     }

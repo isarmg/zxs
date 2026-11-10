@@ -422,9 +422,10 @@ impl Engine {
         operation: OperationId,
         principal: &str,
     ) -> Result<OperationResult> {
-        let pending = self.backup_serving_switch.take().ok_or_else(|| {
-            invalid("Backup final switch has no retained original continuation")
-        })?;
+        let pending = self
+            .backup_serving_switch
+            .take()
+            .ok_or_else(|| invalid("Backup final switch has no retained original continuation"))?;
         // All fallible handoff work is performed while the original Engine
         // stays fenced. Failure puts back the SAME proof, roots and owners.
         let prepared = (|| {

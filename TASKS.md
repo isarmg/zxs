@@ -1,6 +1,6 @@
 # ZXS 当前任务清单
 
-状态核对时间：2026-11-10。当前源码父基线：`9d14b157`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
+状态核对时间：2026-11-10。当前源码父基线：`d4ee7b1b`；上次已验证产品基线：[main `2189adf`](https://github.com/isarmg/zxs/commit/2189adf5c9a725af8af090c94199d017845318be)。本文件是持续维护的任务入口，不是全功能验收或发行声明。
 
 ## 维护与交付规则
 
@@ -20,7 +20,9 @@
 - `71a0beae` 已合入原 P1 候选 `dd84673b`，保留新 move 事务；修复在写唯一 `transaction.json` 前复用真实源序列/范围、完整拓扑及全部目标目录准入。管理员显式 Cancel 仅对源尚未停写、尚未决定的原任务生效：先持久化取消 intent，再停止并 join 原 worker，无覆盖归档整个 SYSTEM 原任务；全部目标字节原地保留，不自动清空或复用。中断后只允许同 op 续取消，源已停写/已决定保持原任务恢复，绝不借取消清 native fence。未到 SYSTEM 的原 Start 可按完整原输入写取消 tombstone，迟到 Start 不得复活该 op。
 - Web 只在服务确认准确 Cancelled 后，用户另行选择重新开始，才在同源/账号 Web Lock 内清理相同 op 的本机记录并重新读取来源序列和空目标。未知结果保留原输入与取消围栏，只有 typed CancellationRejected 才回到同任务恢复。Web Locks 缺失拒绝本机写/清理，没有无锁退路。仅业务源码与必要 TASKS，已随 `71a0beae` 发布；该取消组合尚未通过实际验收，未操作真实盘。崩溃/跨标签页与真实浏览器尚未验；取消不删除目标副本、不支持停写后换新任务，原 selector 部分交换仍需有序重启后同 op 冷恢复。
 
-- 当前本地后继恢复 `a8890879` 原最终 live-switch 候选并对齐准确 `82e8d6f1`，保留后续已合入修复和任务记录：原 native/Current/根/目标 writer 在首个 selector 交换前作为同操作续作持有；失败后显式 Resume／Activate 不重开新任务、不重复 Publication、不释放再抢 writer。bootstrap 已完成而内存交接未完成时，只核原 locator 与完整选定实体后续作；完成后缺 selector／换 inode 仍拒绝补造。另补原 seal 交换后的 stage 目录同步尾，已看见新 seal 也须持久保存原旧名才能完成。此前“部分 selector 必须重启”仅适用于未含本修复的旧代码；进程丢失仍按原计划冷恢复。原 InterruptedServing、helper 和三项回归均显式限定 fault-injection 特性，避免普通目标引用特性 API；既有集成文件新增三项测试仅为源码（四个在线边界、三个冷恢复边界及丢失 selector），未运行、编译、格式化、测试或 CI；没有实际磁盘操作，不宣称主备份整体已验收。下一步由协调者串行合入并核对准确 head 短 CI，真实同步故障／断电和端到端服务另行验收。
+- `9d14b157` 已合入 `a8890879` 原最终 live-switch 候选，对齐准确 `82e8d6f1`，保留后续已合入修复和任务记录：原 native/Current/根/目标 writer 在首个 selector 交换前作为同操作续作持有；失败后显式 Resume／Activate 不重开新任务、不重复 Publication、不释放再抢 writer。bootstrap 已完成而内存交接未完成时，只核原 locator 与完整选定实体后续作；完成后缺 selector／换 inode 仍拒绝补造。另补原 seal 交换后的 stage 目录同步尾，已看见新 seal 也须持久保存原旧名才能完成。此前“部分 selector 必须重启”仅适用于未含本修复的旧代码；进程丢失仍按原计划冷恢复。原 InterruptedServing、helper 和三项回归均显式限定 fault-injection 特性，避免普通目标引用特性 API；既有集成文件新增三项测试仅为源码（四个在线边界、三个冷恢复边界及丢失 selector），未本地运行、编译、格式化或测试；没有实际磁盘操作，不宣称主备份整体已验收。后继格式修复与准确 head 短 CI 见下条，真实同步故障／断电和端到端服务另行验收。
+
+- 准确自动 push [CI #991](https://github.com/isarmg/zxs/actions/runs/42743651501) 的 static 已通过；[quality job `129592197737`](https://github.com/isarmg/zxs/actions/runs/42743651501/job/129592197737) 在 rustfmt 门失败，给出备份 `recovery.rs`、`serving_activation.rs`、`backup_preparation.rs` 和既有集成测试共 12 个格式差异块。后续 `d4ee7b1b` 的 [CI #992 quality](https://github.com/isarmg/zxs/actions/runs/42743903456/job/129592685610) 保留同样 12 块，另有 H02 两文件四块。本后继统一严格按官方日志整理六个 Rust 文件全部 16 块，保留业务判断、writer 持有／恢复证明、故障注入特性门和原测试断言，不改变 lint 或工作流。原 blob 与准确父提交一致，全部差异块可反向还原；这不是本地格式器／编译／测试通过。Clippy、原生／WASM 后续检查、准确后继短 CI 和真实恢复验收仍待完成。
 
 ## 已合入的产品切片
 
@@ -42,10 +44,10 @@
 
 ### H02 已有池在历史根停止后添加新空盘
 
-- **业务源码候选，未合入或验证**：原候选基于 `e8eec397fd47e0029786e091b384eb2389ea1b89`，本次对齐准确父 `9d14b157f02879dc593c45efbf059ccd94bdfee9`，四份业务源码原 blob 均未变化，保留其间已合入切片，收口辅助工具遇任一历史停止／注销根便整体拒绝 Add 的缺口。原 preview／original／commit 直接复用当前认证登记投影，完整历史配置保留；只有已停止的准确历史名称可以缺席，清点不打开或探测它们。活动根和原批次新根仍须全部存在且 UID／GID／0700 精确，未知项、重复根、旧路径复用和缺失活动根继续拒绝，不清盘、不改权限、不初始化旧盘。
+- **业务源码已于 `d4ee7b1b` 合入，后继格式修复待验证**：原候选基于 `e8eec397fd47e0029786e091b384eb2389ea1b89`，本次对齐准确父 `9d14b157f02879dc593c45efbf059ccd94bdfee9`，四份业务源码原 blob 均未变化，保留其间已合入切片，收口辅助工具遇任一历史停止／注销根便整体拒绝 Add 的缺口。原 preview／original／commit 直接复用当前认证登记投影，完整历史配置保留；只有已停止的准确历史名称可以缺席，清点不打开或探测它们。活动根和原批次新根仍须全部存在且 UID／GID／0700 精确，未知项、重复根、旧路径复用和缺失活动根继续拒绝，不清盘、不改权限、不初始化旧盘。
 - 新目录观察不先进行无围栏 browse。复用原 mountinfo 停止路径／别名映射与受限父目录解析，在打开当前／新根之前排除停止路径及挂载别名；新根仍由同一空性、持有身份和完整 target Config 准入。原计划先与当前真实原／目标签名根集合匹配，再清点；原请求续作的核心 re-open 同样从当下登记计算停止范围并核原设备、inode、挂载与发现根，不回落旧的仅 inode 续开。共同 fence／归档／joint／activation、原永久回执和 Cancel 选择保持，不增加状态机或发布阶段。
 - 清点按当前历史根数 N 加本批 K（K ≤ 32）处理；路径集合 O((N+K) log(N+K))，停止／挂载映射按既有有界 mountinfo 扫描。新增读回保持目录和挂载身份核验，不新增数据复制、fsync 或网络请求；不据此声称性能改善。最后元数据成员移除后的 terminal resume、旧停止盘重新接纳和 Foreign 仍属独立入口。
-- 仅四份业务源码及本清单；未运行本地程序、格式器、编译、测试或 CI，未操作真实系统／磁盘，仅准备远端 tree 供串行提交，未创建 commit／ref 或更新 main。尚缺停用根缺席／不可读／符号链接、停止根的挂载别名、未知目录、失联活动根、预览后换挂载及原 Add 冷恢复的统一验证，不将源码接线视为磁盘添加或完整首装已验收。
+- 仅四份业务源码及本清单；未运行本地程序、格式器、编译或测试，未操作真实系统／磁盘。准确自动 push [CI #992](https://github.com/isarmg/zxs/actions/runs/42743903456) 的 static 已通过，quality 止于 rustfmt 门；本后继只按官方日志调整 `offline/disk_addition/worker.rs` 与 `offline/managed_layout.rs` 四个换行差异块，与备份格式片合并提交，不改业务判断。编译、后继短 CI 和真实盘恢复尚未验证。尚缺停用根缺席／不可读／符号链接、停止根的挂载别名、未知目录、失联活动根、预览后换挂载及原 Add 冷恢复的统一验证，不将源码接线视为磁盘添加或完整首装已验收。
 
 ### M01／M09 目录分支来源与 Web 原请求恢复
 

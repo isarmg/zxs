@@ -418,10 +418,7 @@ fn interrupted_serving(point: &str) -> InterruptedServing {
     engine.inject_fault_once(point);
     assert_eq!(
         engine
-            .complete_backup_registry_placement_decision(
-                request.preparation.operation_id,
-                "admin",
-            )
+            .complete_backup_registry_placement_decision(request.preparation.operation_id, "admin",)
             .unwrap_err()
             .code(),
         ErrorCode::InjectedFailure,
@@ -460,7 +457,11 @@ fn live_final_handoff_retries_keep_the_original_operation_and_writers() {
             old,
         } = interrupted_serving(point);
         let operation = request.preparation.operation_id;
-        assert!(engine.resume_backup_transaction(operation, "other").is_err());
+        assert!(
+            engine
+                .resume_backup_transaction(operation, "other")
+                .is_err()
+        );
         assert!(engine.resume_backup_transaction(op(), "admin").is_err());
         assert!(engine.is_read_only());
         assert_eq!(
@@ -484,12 +485,20 @@ fn live_final_handoff_retries_keep_the_original_operation_and_writers() {
         assert_eq!(engine.state().operations, receipts);
         assert!(!engine.is_read_only());
         assert_eq!(body(&engine, &old.version_id), b"original retained body");
-        let after = save(&mut engine, &repository, "after", b"ordinary write after retry");
+        let after = save(
+            &mut engine,
+            &repository,
+            "after",
+            b"ordinary write after retry",
+        );
         drop(engine);
         let engine = Engine::open(&temp.path().join("system")).unwrap();
         assert_eq!(engine.operation(operation).unwrap(), result);
         assert_eq!(body(&engine, &old.version_id), b"original retained body");
-        assert_eq!(body(&engine, &after.version_id), b"ordinary write after retry");
+        assert_eq!(
+            body(&engine, &after.version_id),
+            b"ordinary write after retry"
+        );
     }
 }
 
@@ -513,10 +522,7 @@ fn completed_bootstrap_failure_resumes_cold_without_another_publication() {
         assert!(root.join("backup-root-extension/complete.json").is_file());
         drop(engine);
         let mut engine = Engine::resume_backup_transaction_at_with_workspace_limits(
-            &root,
-            operation,
-            "admin",
-            None,
+            &root, operation, "admin", None,
         )
         .unwrap();
         let result = engine.operation(operation).unwrap();
@@ -530,7 +536,12 @@ fn completed_bootstrap_failure_resumes_cold_without_another_publication() {
         assert_eq!(engine.state().sequence, sequence);
         assert!(!engine.is_read_only());
         assert_eq!(body(&engine, &old.version_id), b"original retained body");
-        save(&mut engine, &repository, "after-cold", b"cold retry serves writes");
+        save(
+            &mut engine,
+            &repository,
+            "after-cold",
+            b"cold retry serves writes",
+        );
     }
 }
 
@@ -549,7 +560,11 @@ fn live_completed_bootstrap_never_recreates_a_missing_target_selector() {
     let retained = selector.with_file_name("retained-selector.json");
     fs::rename(&selector, &retained).unwrap();
     let bytes = fs::read(&retained).unwrap();
-    assert!(engine.resume_backup_transaction(operation, "admin").is_err());
+    assert!(
+        engine
+            .resume_backup_transaction(operation, "admin")
+            .is_err()
+    );
     assert!(engine.is_read_only());
     assert!(engine.membership_fence_status().is_some());
     assert!(!selector.exists());

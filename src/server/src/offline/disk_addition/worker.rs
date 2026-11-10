@@ -81,7 +81,9 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
         Action::Status { plan } => {
             original(&target, &plan)?;
             current_roots_match(&plan, &root_paths(&view)?)?;
-            target.layout().inventory_addition(&plan.roots(), &stopped)?;
+            target
+                .layout()
+                .inventory_addition(&plan.roots(), &stopped)?;
             let status = match control.status(plan.addition.request.operation_id) {
                 Ok(status) => {
                     if status.preview != plan.addition {
@@ -108,7 +110,9 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
         Action::Commit { plan } => {
             original(&target, &plan)?;
             current_roots_match(&plan, &root_paths(&view)?)?;
-            target.layout().inventory_addition(&plan.roots(), &stopped)?;
+            target
+                .layout()
+                .inventory_addition(&plan.roots(), &stopped)?;
             let status = control.commit(AdditionCommit {
                 preview: plan.addition,
             })?;
