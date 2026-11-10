@@ -533,6 +533,31 @@ pub(crate) struct ScopeChanges {
     pub(crate) needs_restage: bool,
 }
 
+/// Commit already resolved the current directory and its direct children.
+/// Reuse that scope; do not rebuild an ownership index for the entire namespace.
+pub(in crate::business) fn staged_changes(
+    state: &State,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    git: &DirectoryGitRepository,
+    branch: &str,
+    direct: &BTreeMap<String, String>,
+) -> Result<ScopeChanges> {
+    let cancellation = HistoryWindowCancellation::new();
+    let mut budget = Budget::new(&cancellation);
+    let children = direct.iter().map(|(id, path)| (id.as_str(), path.as_str())).collect();
+    let summary = summarize_scope(state, view, git, branch, &children, &mut budget)?;
+    Ok(ScopeChanges {
+        directory_id: budget.copy(&git.directory_id)?,
+        initialized: true,
+        added: summary.added,
+        modified: summary.modified,
+        deleted: summary.deleted,
+        staged: summary.staged,
+        unstaged: summary.unstaged,
+        needs_restage: summary.needs_restage,
+    })
+}
+
 /// Mutations and history headers inspect only this repository, never recurse
 /// through independent children whose dirtiness cannot block its own commit.
 pub(crate) fn current_changes(

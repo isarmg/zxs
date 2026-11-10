@@ -229,7 +229,9 @@ pub(crate) fn apply_commit(
             "directory working tree or index changed; review before committing",
         ));
     }
-    let status = directory_git::status_for(state, view, &input.repository_id, &working.path)?;
+    let status = directory_git::staged_changes(
+        state, view, git, &input.directory_branch_id, &direct,
+    )?;
     if status.needs_restage {
         return Err(directory_git::conflict(
             "independent child ownership changed; stage this repository again before committing",

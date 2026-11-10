@@ -85,32 +85,31 @@ pub(super) fn boundaries(
     entries: &[Entry],
 ) -> BTreeMap<String, String> {
     let key = name_policy::path_key(path);
-    let mut candidates = state
-        .directory_git_repositories
-        .values()
-        .filter(|git| git.repository_id == repository && git.directory_id != directory)
-        .filter_map(|git| {
-            path_for(entries, repository, &git.directory_id)
-                .map(|path| (git.directory_id.clone(), path.to_owned()))
-        })
-        .filter(|(_, path)| {
-            descendant(&name_policy::path_key(path), &key) && name_policy::path_key(path) != key
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|(_, path)| path.split('/').count());
-    let mut direct: BTreeMap<String, String> = BTreeMap::new();
-    for (id, path) in candidates {
-        if !direct.values().any(|parent| {
-            namespace::is_descendant(
-                &name_policy::path_key(&path),
-                &name_policy::path_key(parent),
-            )
-        }) {
-            direct.insert(id, path);
+    let mut direct = BTreeMap::new();
+    let mut selected = BTreeSet::new();
+    // Canonical current entries put each ancestor before its descendants.
+    // Keep selected ancestors so similarly prefixed siblings do not hide them.
+    for entry in entries {
+        if entry.kind != NamespaceEntryKind::Directory
+            || entry.entry_id == directory
+            || !state.directory_git_repositories.get(&entry.entry_id)
+                .is_some_and(|git| git.repository_id == repository)
+            || !descendant(entry.lookup_key(), &key)
+            || entry.lookup_key() == key
+        {
+            continue;
         }
+        if namespace::closest_directory_repository(entry.lookup_key(), |key| {
+            selected.get(key).copied()
+        }).is_some() {
+            continue;
+        }
+        direct.insert(entry.entry_id.clone(), entry.path().to_owned());
+        selected.insert(entry.lookup_key());
     }
     direct
 }
+
 pub(super) fn working_tree<'a>(
     state: &'a State,
     git: &DirectoryGitRepository,
@@ -322,6 +321,7 @@ pub(crate) fn status_for(
     )
 }
 pub(crate) use status::{BranchStatuses, current_changes};
+pub(super) use status::staged_changes;
 
 impl Engine {
     pub(super) fn directory_git_checkout(
@@ -393,28 +393,35 @@ impl Engine {
             &HistoryWindowCancellation::new(),
         )
     }
+    fn mutate_git_command(
+        &mut self,
+        command: GitCommand<'_>,
+        principal: &str,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        let input = command.body();
+        self.mutate(command.kind(), principal, operation, input.clone(), |engine, state, _| {
+            let mut ids = Ids { operation, ordinal: 0 };
+            command
+                .apply(state, engine.admitted_current_namespaces()?, &mut ids)
+                .map(|outcome| outcome.receipt(&input))
+        })
+    }
+
     pub fn initialize_directory_git(
         &mut self,
         repository: &str,
         body: &DirectoryGitInitializeBody,
         principal: &str,
     ) -> Result<OperationResult> {
-        let input = json!({"repository_id":repository,"path":body.path,"expected_namespace_head":body.expected_namespace_head});
-        self.mutate(
-            "directory.git.initialize",
+        self.mutate_git_command(
+            GitCommand::Initialize {
+                repository,
+                path: &body.path,
+                expected_namespace_head: &body.expected_namespace_head,
+            },
             principal,
             body.operation_id,
-            input.clone(),
-            |engine, state, _| {
-                apply_command(
-                    state,
-                    engine.admitted_current_namespaces()?,
-                    "directory.git.initialize",
-                    &input,
-                    principal,
-                    body.operation_id,
-                )
-            },
         )
     }
     pub fn stage_directory_git_child(
@@ -423,22 +430,19 @@ impl Engine {
         body: &DirectoryGitStageChildBody,
         principal: &str,
     ) -> Result<OperationResult> {
-        let input = json!({"repository_id":repository,"directory_id":body.directory_id,"directory_branch_id":body.directory_branch_id,"expected_index_generation":body.expected_index_generation.to_string(),"child_directory_id":body.child_directory_id,"expected_child_head_tree_id":body.expected_child_head_tree_id});
-        self.mutate(
-            "directory.git.stage-child",
+        self.mutate_git_command(
+            GitCommand::Stage {
+                repository,
+                directory: &body.directory_id,
+                branch: &body.directory_branch_id,
+                expected_generation: body.expected_index_generation,
+                selection: IndexSelection::Child {
+                    directory: &body.child_directory_id,
+                    expected_head: &body.expected_child_head_tree_id,
+                },
+            },
             principal,
             body.operation_id,
-            input.clone(),
-            |engine, state, _| {
-                apply_command(
-                    state,
-                    engine.admitted_current_namespaces()?,
-                    "directory.git.stage-child",
-                    &input,
-                    principal,
-                    body.operation_id,
-                )
-            },
         )
     }
     pub fn stage_directory_git_owned(
@@ -447,22 +451,16 @@ impl Engine {
         body: &DirectoryGitStageOwnedBody,
         principal: &str,
     ) -> Result<OperationResult> {
-        let input = json!({"repository_id":repository,"directory_id":body.directory_id,"directory_branch_id":body.directory_branch_id,"expected_tree_id":body.expected_tree_id,"expected_index_generation":body.expected_index_generation.to_string()});
-        self.mutate(
-            "directory.git.stage-owned",
+        self.mutate_git_command(
+            GitCommand::Stage {
+                repository,
+                directory: &body.directory_id,
+                branch: &body.directory_branch_id,
+                expected_generation: body.expected_index_generation,
+                selection: IndexSelection::Owned { expected_tree: &body.expected_tree_id },
+            },
             principal,
             body.operation_id,
-            input.clone(),
-            |engine, state, _| {
-                apply_command(
-                    state,
-                    engine.admitted_current_namespaces()?,
-                    "directory.git.stage-owned",
-                    &input,
-                    principal,
-                    body.operation_id,
-                )
-            },
         )
     }
 }
@@ -475,6 +473,190 @@ fn text<'a>(input: &'a Value, key: &str) -> Result<&'a str> {
         )
     })
 }
+#[derive(Clone, Copy)]
+enum IndexSelection<'a> {
+    Owned { expected_tree: &'a str },
+    Child { directory: &'a str, expected_head: &'a str },
+}
+
+#[derive(Clone, Copy)]
+enum GitCommand<'a> {
+    Initialize {
+        repository: &'a str,
+        path: &'a str,
+        expected_namespace_head: &'a str,
+    },
+    Stage {
+        repository: &'a str,
+        directory: &'a str,
+        branch: &'a str,
+        expected_generation: u64,
+        selection: IndexSelection<'a>,
+    },
+}
+
+enum GitOutcome {
+    Initialized { directory: String, branch: String },
+    Staged { directory: String, branch: String, generation: u64 },
+}
+impl GitOutcome {
+    fn receipt(self, input: &Value) -> Value {
+        match self {
+            Self::Initialized { directory, branch } => {
+                json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"initialized":true})
+            }
+            Self::Staged { directory, branch, generation } => {
+                json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"index_generation":generation.to_string()})
+            }
+        }
+    }
+}
+impl GitCommand<'_> {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Initialize { .. } => "directory.git.initialize",
+            Self::Stage { selection: IndexSelection::Owned { .. }, .. } => "directory.git.stage-owned",
+            Self::Stage { selection: IndexSelection::Child { .. }, .. } => "directory.git.stage-child",
+        }
+    }
+    fn body(self) -> Value {
+        match self {
+            Self::Initialize { repository, path, expected_namespace_head } => {
+                json!({"repository_id":repository,"path":path,"expected_namespace_head":expected_namespace_head})
+            }
+            Self::Stage { repository, directory, branch, expected_generation, selection } => match selection {
+                IndexSelection::Owned { expected_tree } => {
+                    json!({"repository_id":repository,"directory_id":directory,"directory_branch_id":branch,"expected_tree_id":expected_tree,"expected_index_generation":expected_generation.to_string()})
+                }
+                IndexSelection::Child { directory: child, expected_head } => {
+                    json!({"repository_id":repository,"directory_id":directory,"directory_branch_id":branch,"expected_index_generation":expected_generation.to_string(),"child_directory_id":child,"expected_child_head_tree_id":expected_head})
+                }
+            },
+        }
+    }
+    fn apply(
+        self,
+        state: &mut State,
+        view: Option<&crate::engine::CurrentNamespaces>,
+        ids: &mut Ids,
+    ) -> Result<GitOutcome> {
+        match self {
+            Self::Initialize { repository, path, expected_namespace_head } => {
+                let entries = current_entries(state, view, repository)?.to_vec();
+                let (directory, path) = locate(&entries, repository, path)?;
+                let repo = &state.repositories[repository];
+                if state.branches[&repo.main_branch_id].head_commit_id != expected_namespace_head {
+                    return Err(conflict("working namespace changed before initialization"));
+                }
+                if state.directory_git_repositories.contains_key(&directory) {
+                    return Err(conflict("directory repository is already initialized"));
+                }
+                let branch = directory::initialize_git_working_scope(
+                    state, repository, &path, view, &mut |prefix| ids.next(prefix),
+                )?;
+                let tree = state.directory_branches[&branch].head_tree_id.clone();
+                let index = DirectoryGitBranch {
+                    head_tree_id: None,
+                    index_tree_id: tree,
+                    index_generation: 1,
+                    index_boundaries: boundaries(state, repository, &directory, &path, &entries),
+                    index_children: BTreeMap::new(),
+                };
+                state.directory_git_repositories.insert(
+                    directory.clone(),
+                    DirectoryGitRepository {
+                        repository_id: repository.into(),
+                        directory_id: directory.clone(),
+                        initialized_sequence: state.sequence,
+                        main_branch_id: branch.clone(),
+                        current_branch_id: branch.clone(),
+                        branches: BTreeMap::from([(branch.clone(), index)]),
+                        deletions: BTreeMap::new(),
+                    },
+                );
+                // Initializing a child changes its parent's ownership boundary,
+                // not its reviewed index contents or committed HEAD.
+                for (parent_id, parent) in state.directory_git_repositories.iter_mut() {
+                    if parent_id == &directory || parent.repository_id != repository {
+                        continue;
+                    }
+                    if let Some(parent_path) = path_for(&entries, repository, parent_id)
+                        && descendant(&name_policy::path_key(&path), &name_policy::path_key(parent_path))
+                    {
+                        for index in parent.branches.values_mut() {
+                            index.index_generation = increment(index.index_generation)?;
+                        }
+                    }
+                }
+                Ok(GitOutcome::Initialized { directory, branch })
+            }
+            Self::Stage { repository, directory, branch, expected_generation, selection } => {
+                let (git, index) = active_git(state, repository, branch)?;
+                if git.directory_id != directory {
+                    return Err(conflict("index belongs to another directory"));
+                }
+                if index.index_generation != expected_generation {
+                    return Err(conflict("directory index changed; refresh before staging"));
+                }
+                if let Some(view) = view {
+                    view.require_directory_branch_write(state, branch)?;
+                }
+                let working = working_tree(state, git, branch)?.tree_id.clone();
+                let entries = current_entries(state, view, repository)?;
+                let path = path_for(entries, repository, directory)
+                    .ok_or_else(|| Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists"))?
+                    .to_owned();
+                let direct = boundaries(state, repository, directory, &path, entries);
+                match selection {
+                    IndexSelection::Child { directory: child, expected_head } => {
+                        if !direct.contains_key(child) {
+                            return Err(conflict("only a direct independent child repository can be staged"));
+                        }
+                        let child_git = &state.directory_git_repositories[child];
+                        let head = child_git.branches[&child_git.current_branch_id].head_tree_id.as_ref()
+                            .ok_or_else(|| conflict("commit the child repository before staging its reference"))?;
+                        if head != expected_head {
+                            return Err(conflict("child HEAD changed before staging"));
+                        }
+                        let reference = DirectoryGitChildReference {
+                            directory_branch_id: state.directory_trees[head].directory_branch_id.clone(),
+                            tree_id: Some(head.clone()),
+                        };
+                        let index = state.directory_git_repositories
+                            .get_mut(directory).expect("invariant: staging a validated parent repository")
+                            .branches.get_mut(branch).expect("invariant: staging its current branch");
+                        index.index_children.insert(child.into(), reference);
+                        index.index_generation = increment(index.index_generation)?;
+                    }
+                    IndexSelection::Owned { expected_tree } => {
+                        if working != expected_tree {
+                            return Err(conflict("working directory changed before staging"));
+                        }
+                        directory::initialize_git_working_scope(
+                            state, repository, &path, view, &mut |prefix| ids.next(prefix),
+                        )?;
+                        let working = state.directory_branches[branch].head_tree_id.clone();
+                        let index = state.directory_git_repositories
+                            .get_mut(directory).expect("invariant: staging an initialized repository")
+                            .branches.get_mut(branch).expect("invariant: staging its active index");
+                        index.index_children.retain(|id, _| direct.contains_key(id));
+                        index.index_boundaries = direct;
+                        index.index_tree_id = working;
+                        index.index_generation = increment(index.index_generation)?;
+                    }
+                }
+                Ok(GitOutcome::Staged {
+                    directory: directory.into(),
+                    branch: branch.into(),
+                    generation: state.directory_git_repositories[directory].branches[branch].index_generation,
+                })
+            }
+        }
+    }
+}
+
+/// Decode stored operation input only at the replay/publication boundary.
+/// Normal typed calls use the same command without serializing to parse again.
 pub(crate) fn apply_command(
     state: &mut State,
     view: Option<&crate::engine::CurrentNamespaces>,
@@ -484,160 +666,30 @@ pub(crate) fn apply_command(
     operation: OperationId,
 ) -> Result<Value> {
     let repository = text(input, "repository_id")?;
-    let mut ids = Ids {
-        operation,
-        ordinal: 0,
-    };
-    match kind {
-        "directory.git.initialize" => {
-            let path = text(input, "path")?;
-            let entries = current_entries(state, view, repository)?.to_vec();
-            let (directory, path) = locate(&entries, repository, path)?;
-            let repo = &state.repositories[repository];
-            if state.branches[&repo.main_branch_id].head_commit_id
-                != text(input, "expected_namespace_head")?
-            {
-                return Err(conflict("working namespace changed before initialization"));
-            }
-            if state.directory_git_repositories.contains_key(&directory) {
-                return Err(conflict("directory repository is already initialized"));
-            }
-            let branch = directory::initialize_git_working_scope(
-                state,
-                repository,
-                &path,
-                view,
-                &mut |prefix| ids.next(prefix),
-            )?;
-            let tree = state.directory_branches[&branch].head_tree_id.clone();
-            let index = DirectoryGitBranch {
-                head_tree_id: None,
-                index_tree_id: tree,
-                index_generation: 1,
-                index_boundaries: boundaries(state, repository, &directory, &path, &entries),
-                index_children: BTreeMap::new(),
-            };
-            state.directory_git_repositories.insert(
-                directory.clone(),
-                DirectoryGitRepository {
-                    repository_id: repository.into(),
-                    directory_id: directory.clone(),
-                    initialized_sequence: state.sequence,
-                    main_branch_id: branch.clone(),
-                    current_branch_id: branch.clone(),
-                    branches: BTreeMap::from([(branch.clone(), index)]),
-                    deletions: BTreeMap::new(),
-                },
-            );
-            // The old staged parent subtree may no longer cross this ownership
-            // boundary. Keep its bytes and HEAD, but invalidate reviewed tokens.
-            for (parent_id, parent) in state.directory_git_repositories.iter_mut() {
-                if parent_id == &directory || parent.repository_id != repository {
-                    continue;
+    let mut ids = Ids { operation, ordinal: 0 };
+    let command = match kind {
+        "directory.git.initialize" => GitCommand::Initialize {
+            repository,
+            path: text(input, "path")?,
+            expected_namespace_head: text(input, "expected_namespace_head")?,
+        },
+        "directory.git.stage-child" | "directory.git.stage-owned" => GitCommand::Stage {
+            repository,
+            directory: text(input, "directory_id")?,
+            branch: text(input, "directory_branch_id")?,
+            expected_generation: storage_contract::parse_u64_decimal(text(input, "expected_index_generation")?)?,
+            selection: if kind == "directory.git.stage-child" {
+                IndexSelection::Child {
+                    directory: text(input, "child_directory_id")?,
+                    expected_head: text(input, "expected_child_head_tree_id")?,
                 }
-                if let Some(parent_path) = path_for(&entries, repository, parent_id)
-                    && descendant(
-                        &name_policy::path_key(&path),
-                        &name_policy::path_key(parent_path),
-                    )
-                {
-                    for index in parent.branches.values_mut() {
-                        index.index_generation = increment(index.index_generation)?;
-                    }
-                }
-            }
-            Ok(
-                json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"initialized":true}),
-            )
-        }
-        "directory.git.stage-child" | "directory.git.stage-owned" => {
-            let branch = text(input, "directory_branch_id")?;
-            let (git, index) = active_git(state, repository, branch)?;
-            if git.directory_id != text(input, "directory_id")? {
-                return Err(conflict("index belongs to another directory"));
-            }
-            if index.index_generation
-                != storage_contract::parse_u64_decimal(text(input, "expected_index_generation")?)?
-            {
-                return Err(conflict("directory index changed; refresh before staging"));
-            }
-            if let Some(view) = view {
-                view.require_directory_branch_write(state, branch)?;
-            }
-            let directory = git.directory_id.clone();
-            let working = working_tree(state, git, branch)?.tree_id.clone();
-            let entries = current_entries(state, view, repository)?;
-            let path = path_for(entries, repository, &directory)
-                .ok_or_else(|| {
-                    Error::new(ErrorCode::DirectoryNotFound, "directory no longer exists")
-                })?
-                .to_owned();
-            let direct = boundaries(state, repository, &directory, &path, entries);
-            if kind == "directory.git.stage-child" {
-                let child = text(input, "child_directory_id")?;
-                if !direct.contains_key(child) {
-                    return Err(conflict(
-                        "only a direct independent child repository can be staged",
-                    ));
-                }
-                let child_git = &state.directory_git_repositories[child];
-                let head = child_git.branches[&child_git.current_branch_id]
-                    .head_tree_id
-                    .as_ref()
-                    .ok_or_else(|| {
-                        conflict("commit the child repository before staging its reference")
-                    })?;
-                if head != text(input, "expected_child_head_tree_id")? {
-                    return Err(conflict("child HEAD changed before staging"));
-                }
-                let reference = DirectoryGitChildReference {
-                    directory_branch_id: state.directory_trees[head].directory_branch_id.clone(),
-                    tree_id: Some(head.clone()),
-                };
-                let index = state
-                    .directory_git_repositories
-                    .get_mut(&directory)
-                    .expect("invariant: staging a validated parent repository")
-                    .branches
-                    .get_mut(branch)
-                    .expect("invariant: staging its current branch");
-                index.index_children.insert(child.into(), reference);
-                index.index_generation = increment(index.index_generation)?;
             } else {
-                if working != text(input, "expected_tree_id")? {
-                    return Err(conflict("working directory changed before staging"));
-                }
-                directory::initialize_git_working_scope(
-                    state,
-                    repository,
-                    &path,
-                    view,
-                    &mut |prefix| ids.next(prefix),
-                )?;
-                let working = state.directory_branches[branch].head_tree_id.clone();
-                let index = state
-                    .directory_git_repositories
-                    .get_mut(&directory)
-                    .expect("invariant: staging an initialized repository")
-                    .branches
-                    .get_mut(branch)
-                    .expect("invariant: staging its active index");
-                index.index_children.retain(|id, _| direct.contains_key(id));
-                index.index_boundaries = direct;
-                index.index_tree_id = working;
-                index.index_generation = increment(index.index_generation)?;
-            }
-            Ok(
-                json!({"input":input,"directory_id":directory,"directory_branch_id":branch,"index_generation":state.directory_git_repositories[&directory].branches[branch].index_generation.to_string()}),
-            )
-        }
-        "directory.git.branch-create" => branches::create(state, view, input, &mut ids),
-        "directory.git.checkout" => {
-            branches::checkout(state, view, input, principal, operation, &mut ids)
-        }
-        _ => Err(Error::new(
-            ErrorCode::InvalidRequest,
-            "unknown directory Git operation",
-        )),
-    }
+                IndexSelection::Owned { expected_tree: text(input, "expected_tree_id")? }
+            },
+        },
+        "directory.git.branch-create" => return branches::create(state, view, input, &mut ids),
+        "directory.git.checkout" => return branches::checkout(state, view, input, principal, operation, &mut ids),
+        _ => return Err(Error::new(ErrorCode::InvalidRequest, "unknown directory Git operation")),
+    };
+    command.apply(state, view, &mut ids).map(|outcome| outcome.receipt(input))
 }

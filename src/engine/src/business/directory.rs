@@ -1296,12 +1296,11 @@ pub(super) fn record_directory_edits_with_ids(
         if exclude.is_some_and(|key| name_policy::path_key(&path) == key) {
             continue;
         }
-        match scope(state, repository, &path) {
+        match scope_view(state, repository, &path) {
             Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
             Err(e) => return Err(e),
-            Ok(_) => {
-                let source =
-                    DirectorySnapshotSource::capture(state, scope_view(state, repository, &path)?);
+            Ok(view) => {
+                let source = DirectorySnapshotSource::capture(state, view);
                 result.push(snapshot_source_with_ids(state, repository, source, ids)?);
             }
         }
