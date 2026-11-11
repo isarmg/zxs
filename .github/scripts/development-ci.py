@@ -240,7 +240,12 @@ def targeted_projection(source):
         '        type: choice\n'
         '        required: true\n'
         '        default: targeted\n'
-        '        options: [targeted, full]\n', 1)
+        '        options: [targeted, full]\n'
+        '      comparison_base:\n'
+        '        description: Optional full ancestor commit SHA for targeted retry (ignored by full scope)\n'
+        '        type: string\n'
+        '        required: false\n'
+        "        default: ''\n", 1)
     for job in ('static', 'tests', 'web-production', 'browser-smoke', 'smb-sdk', 'phase-one-core'):
         source = source.replace(f'  {job}:\n',
             f'  {job}:\n    if: {FULL_CONDITION}\n', 1)
