@@ -18,7 +18,7 @@ fn summary() -> Summary {
 fn state() -> State {
     let mut state = State::default();
     state.authenticated = true;
-    state.principal = "alice".into();
+    state.principal = Some("alice".parse().unwrap());
     state.session_epoch = 7;
     state.management.storage = crate::management::Storage::Ready;
     state.files.deletion.open = true;
@@ -47,7 +47,7 @@ fn target(state: &State) -> Target {
 fn receipt() -> Value {
     json!({
         "operation_id":id("op", 2), "operation_kind":"file.delete.undo",
-        "request_digest":digest(&summary(), "alice").unwrap(),
+        "request_digest":digest(&summary(), &"alice".parse().unwrap()).unwrap(),
         "state":"completed", "commit_state":"PUBLISHED", "publication_sequence":"2",
         "protection_at_publish":"NOT_APPLICABLE", "error":null,
         "result":{
@@ -217,7 +217,7 @@ fn compact_undo_uses_the_original_body_and_native_request_digest() {
         }),
     )
     .unwrap();
-    assert_eq!(intent.digest("alice").unwrap(), expected);
+    assert_eq!(intent.digest(&"alice".parse().unwrap()).unwrap(), expected);
 }
 #[test]
 fn compact_receipt_requires_original_operation_summary_and_confirmed_publication() {

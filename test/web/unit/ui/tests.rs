@@ -111,7 +111,7 @@ fn detached_completion_rejects_a_disposed_root() {
 fn shell_identity_does_not_change_with_file_progress() {
     let mut state = State {
         authenticated: true,
-        principal: "writer".into(),
+        principal: Some("writer".parse().unwrap()),
         ..Default::default()
     };
     let session = session_view(&state);
@@ -226,7 +226,7 @@ fn language_reload_preserves_storage_retry_admission_until_resolved() {
 #[test]
 fn unconfirmed_logout_cannot_be_replaced_by_login_or_restore() {
     let mut state = State {
-        principal: "original-admin".into(),
+        principal: Some("original-admin".parse().unwrap()),
         session_epoch: 7,
         session_transition: crate::ui::SessionTransition::LogoutUnconfirmed,
         ..Default::default()
@@ -235,7 +235,7 @@ fn unconfirmed_logout_cannot_be_replaced_by_login_or_restore() {
         assert_eq!(begin_login(&mut state), None);
         assert_eq!(begin_restore(&mut state), None);
         assert_eq!(state.session_epoch, 7);
-        assert_eq!(state.principal, "original-admin");
+        assert_eq!(state.principal.as_ref().map(|p| p.as_str()), Some("original-admin"));
         assert_eq!(session_view(&state).phase, SessionPhase::LogoutUnconfirmed);
         assert!(!state.session_active());
     }
@@ -674,4 +674,42 @@ fn current_directory_details_can_refresh_without_a_selected_file() {
     assert!(!header_refresh_disabled(&state));
     state.files.loading = true;
     assert!(header_refresh_disabled(&state));
+}
+
+#[test]
+fn absent_identity_and_logout_transitions_preserve_captured_owner_until_settlement() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        assert!(state.with_untracked(|s| s.principal.is_none()));
+        assert_eq!(state.with_untracked(session_view).username, "");
+        let original: Principal = " e\u{301}/账号 ".parse().unwrap();
+        state.update(|s| {
+            s.authenticated = true;
+            s.principal = Some(original.clone());
+            s.session_epoch = 7;
+        });
+        assert_eq!(state.with_untracked(session_view).username, original.as_str());
+        assert_eq!(state.try_update(begin_logout), Some(Some(8)));
+        assert!(!current_session(state, 7));
+        complete_logout(state, Ok(json!({})));
+        state.with_untracked(|s| {
+            assert_eq!(s.principal.as_ref(), Some(&original));
+            assert!(!s.authenticated);
+            assert!(s.logout_unconfirmed());
+        });
+        state.update(|s| assert_eq!(begin_logout(s), Some(9)));
+        complete_logout(state, Ok(json!({"logged_out":true})));
+        state.with_untracked(|s| {
+            assert!(s.principal.is_none());
+            assert!(!s.authenticated);
+        });
+        state.update(|s| {
+            s.authenticated = true;
+            s.principal = Some("replacement".parse().unwrap());
+            s.session_epoch += 1;
+        });
+        assert!(!current_session(state, 7));
+        assert!(!current_session(state, 9));
+        assert_eq!(original.as_str(), " e\u{301}/账号 ");
+    });
 }

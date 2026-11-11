@@ -4,7 +4,7 @@ use super::*;
 fn record() -> Record {
     Record {
         format: Format::Request,
-        principal: "admin".into(),
+        principal: "admin".parse().unwrap(),
         operation: format!("op_{}", "a".repeat(32)).parse().unwrap(),
         file_id: HistoryFileId::parse(&format!("file_{}", "b".repeat(32))).unwrap(),
         history_root: HistoryRoot::parse(&"c".repeat(64)).unwrap(),
@@ -15,7 +15,7 @@ fn record() -> Record {
 fn authenticated(record: &Record, epoch: u64) -> State {
     let mut state = State {
         authenticated: true,
-        principal: record.principal.clone(),
+        principal: Some(record.principal.clone()),
         session_epoch: epoch,
         ..Default::default()
     };
@@ -47,7 +47,7 @@ fn receipt(record: &Record) -> Value {
 fn saved_request_round_trip_keeps_exact_identity_but_never_restores_success() {
     let original = record();
     let bytes = json_codec::to_string(&original).unwrap();
-    let saved = Record::decode(&original.key(), "admin", &bytes).unwrap();
+    let saved = Record::decode(&original.key(), &"admin".parse().unwrap(), &bytes).unwrap();
     assert_eq!(saved, original);
     let attempt = saved.restored_attempt(8).unwrap();
     assert_eq!(attempt.selection, original.selection().unwrap());
@@ -67,8 +67,15 @@ fn saved_request_round_trip_keeps_exact_identity_but_never_restores_success() {
 fn storage_boundary_rejects_other_accounts_keys_extra_fields_and_unsupported_formats() {
     let original = record();
     let bytes = json_codec::to_string(&original).unwrap();
-    assert!(Record::decode(&original.key(), "another-admin", &bytes).is_err());
-    assert!(Record::decode(&format!("{}other", original.key()), "admin", &bytes).is_err());
+    assert!(Record::decode(&original.key(), &"another-admin".parse().unwrap(), &bytes).is_err());
+    assert!(
+        Record::decode(
+            &format!("{}other", original.key()),
+            &"admin".parse().unwrap(),
+            &bytes,
+        )
+        .is_err()
+    );
     for (field, value) in [
         ("format", json!("old-node-retirement")),
         ("cleanup", json!({"state":"observed"})),
@@ -86,7 +93,7 @@ fn storage_boundary_rejects_other_accounts_keys_extra_fields_and_unsupported_for
         assert!(
             Record::decode(
                 &original.key(),
-                "admin",
+                &"admin".parse().unwrap(),
                 &json_codec::to_string(&changed).unwrap()
             )
             .is_err()
@@ -95,13 +102,13 @@ fn storage_boundary_rejects_other_accounts_keys_extra_fields_and_unsupported_for
     assert!(
         Record::decode(
             &original.key(),
-            "admin",
+            &"admin".parse().unwrap(),
             &" ".repeat(wire::MAX_REQUEST_BYTES + 1)
         )
         .is_err()
     );
     let duplicate = bytes.replacen("{", "{\"principal\":\"admin\",", 1);
-    assert!(Record::decode(&original.key(), "admin", &duplicate).is_err());
+    assert!(Record::decode(&original.key(), &"admin".parse().unwrap(), &duplicate).is_err());
     assert_eq!(json_codec::to_string(&original).unwrap(), bytes);
 }
 
@@ -117,9 +124,9 @@ fn restored_unknown_request_requires_explicit_confirmation_and_current_owner_not
     state.session_epoch = 9;
     assert!(!attempt.retry_allowed(&state));
     state.session_epoch = 8;
-    state.principal = "another-admin".into();
+    state.principal = Some("another-admin".parse().unwrap());
     assert!(!attempt.retry_allowed(&state));
-    state.principal = saved.principal.clone();
+    state.principal = Some(saved.principal.clone());
     state.files.mutation_pending = true;
     assert!(!attempt.retry_allowed(&state));
 }
@@ -152,7 +159,7 @@ fn every_retained_request_is_matched_even_when_a_different_recovery_row_is_open(
             &changed
         ));
     }
-    state.principal = "another-admin".into();
+    state.principal = Some("another-admin".parse().unwrap());
     assert!(!super::super::receipt_matches(
         &state,
         &saved.operation.to_string(),
@@ -198,4 +205,54 @@ fn stale_operation_controls_do_not_retarget_a_reauthenticated_attempt() {
             assert!(!state.files.mutation_pending);
         });
     });
+}
+
+#[test]
+fn typed_retirement_principal_keeps_record_bytes_and_survives_absent_session() {
+    let bytes = concat!(
+        "{\"format\":\"file-node-retirement-recovery\",\"principal\":\" é/账号 \",",
+        "\"operation\":\"op_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",",
+        "\"file_id\":\"file_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",",
+        "\"history_root\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",",
+        "\"version_ids\":[\"ver_dddddddddddddddddddddddddddddddd\"],",
+        "\"label\":\"detached/report.txt\"}",
+    );
+    let principal: Principal = " e\u{301}/账号 ".parse().unwrap();
+    let key = format!("{}{}", prefix(&principal), record().operation);
+    let saved = Record::decode(&key, &principal, bytes).unwrap();
+    assert_eq!(saved.encode().unwrap(), bytes);
+    let attempt = saved.restored_attempt(8).unwrap();
+    assert_eq!(Record::from_attempt(&attempt).encode().unwrap(), bytes);
+    let mut state = authenticated(&saved, 8);
+    state.principal = None;
+    assert!(owner(&state).is_none());
+    assert!(!attempt.retry_allowed(&state));
+    assert_eq!(state.files.node_retirement.recovery.records[0].principal, principal);
+    state.principal = Some(principal.clone());
+    state.session_epoch = 9;
+    assert!(!attempt.retry_allowed(&state));
+    assert_eq!(Record::from_attempt(&attempt).encode().unwrap(), bytes);
+    for value in [json!(""), Value::Null, json!(0)] {
+        let mut malformed: Value = json_codec::from_str(bytes).unwrap();
+        malformed["principal"] = value;
+        assert_eq!(
+            Record::decode(&key, &principal, &malformed.to_string()).unwrap_err().code,
+            ErrorCode::InvalidRequest,
+        );
+    }
+    let mut missing: Value = json_codec::from_str(bytes).unwrap();
+    missing.as_object_mut().unwrap().remove("principal");
+    assert_eq!(
+        Record::decode(&key, &principal, &missing.to_string()).unwrap_err().code,
+        ErrorCode::InvalidRequest,
+    );
+    for length in [1024, 1025] {
+        let mut bounded = saved.clone();
+        bounded.principal = "a".repeat(length).parse().unwrap();
+        let wire = json_codec::to_string(&bounded).unwrap();
+        assert_eq!(
+            Record::decode(&bounded.key(), &bounded.principal, &wire).is_ok(),
+            length == 1024,
+        );
+    }
 }

@@ -27,9 +27,9 @@ fn attempt() -> Attempt {
     ));
     Attempt {
         epoch: 1,
-        principal: "alice".into(),
+        principal: "alice".parse().unwrap(),
         operation: "op_22222222222222222222222222222222".into(),
-        request_digest: intent.digest("alice").unwrap(),
+        request_digest: intent.digest(&"alice".parse().unwrap()).unwrap(),
         intent,
         in_flight: false,
     }
@@ -38,7 +38,7 @@ fn attempt() -> Attempt {
 fn retained_batch_roundtrip_preserves_original_request_and_unknown_fence() {
     let attempt = attempt();
     let record = Record::from_attempt(&attempt).unwrap();
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(restored.intent, attempt.intent);
     assert_eq!(restored.operation.to_string(), attempt.operation);
     assert_eq!(restored.request_digest, attempt.request_digest);
@@ -52,12 +52,12 @@ fn retained_batch_roundtrip_preserves_original_request_and_unknown_fence() {
 #[test]
 fn stored_batch_cannot_substitute_account_or_original_operation() {
     let record = Record::from_attempt(&attempt()).unwrap();
-    assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
+    assert!(Record::decode(&record.key(), &"bob".parse().unwrap(), &record.bytes).is_err());
     let changed = record.bytes.replace(
         "\"deletion_operation_id\":\"op_11111111111111111111111111111111\"",
         "\"deletion_operation_id\":\"op_33333333333333333333333333333333\"",
     );
-    assert!(Record::decode(&record.key(), "alice", &changed).is_err());
+    assert!(Record::decode(&record.key(), &"alice".parse().unwrap(), &changed).is_err());
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn retained_batch_rejects_inconsistent_member_sets_before_recovery() {
     let decode = |value: &json_codec::Value| {
         Record::decode(
             &record.key(),
-            "alice",
+            &"alice".parse().unwrap(),
             &json_codec::to_string(value).unwrap(),
         )
     };
@@ -133,9 +133,9 @@ fn stored_batch_rejects_positional_preview_and_member_arrays_without_rewriting()
     for damaged in [array_preview, array_member] {
         let raw = json_codec::to_string(&damaged).unwrap();
         let retained = raw.clone();
-        assert!(Record::decode(&record.key(), "alice", &raw).is_err());
+        assert!(Record::decode(&record.key(), &"alice".parse().unwrap(), &raw).is_err());
         assert_eq!(raw, retained);
     }
-    let admitted = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let admitted = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(admitted.bytes, record.bytes);
 }

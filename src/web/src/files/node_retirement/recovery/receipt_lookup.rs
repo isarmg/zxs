@@ -1,6 +1,7 @@
 //! A known original operation can recover a missing browser hint.
 use super::*;
 use std::sync::Arc;
+use storage_contract::Principal;
 use storage_contract::history_window::HistoryTreeId;
 
 #[derive(Deserialize)]
@@ -13,14 +14,14 @@ struct PublishedRequest {
 }
 #[derive(Clone)]
 struct Candidate {
-    owner: (u64, String),
+    owner: (u64, Principal),
     history: HistoryTreeId,
     record: Record,
     receipt: Arc<Value>,
 }
 impl Candidate {
     fn read(
-        owner: (u64, String),
+        owner: (u64, Principal),
         operation: OperationId,
         receipt: Value,
     ) -> Result<Self, api::Error> {
@@ -62,7 +63,7 @@ impl Candidate {
 
 #[derive(Clone, Default)]
 struct Lookup {
-    owner: Option<(u64, String)>,
+    owner: Option<(u64, Principal)>,
     input: String,
     generation: u64,
     loading: bool,
@@ -86,7 +87,7 @@ impl Lookup {
         self.saved = None;
         self.error = None;
     }
-    fn current(&self, owner: &(u64, String), generation: u64) -> bool {
+    fn current(&self, owner: &(u64, Principal), generation: u64) -> bool {
         self.owner.as_ref() == Some(owner) && self.generation == generation
     }
 }

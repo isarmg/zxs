@@ -1,12 +1,13 @@
 //! A session-local shortcut after this editor's original move is published.
 use super::{Review, actions};
 use crate::{files::SaveStatus, ui::State};
+use storage_contract::Principal;
 use web_interface::{i18n::t, prelude::*};
 
 #[derive(Clone)]
 pub(super) struct Destination {
     epoch: u64,
-    principal: String,
+    principal: Principal,
     operation: String,
     slot: String,
     path: String,
@@ -22,14 +23,14 @@ impl Destination {
         }
     }
 
-    pub(super) fn owned_by(&self, owner: Option<&(u64, String)>) -> bool {
+    pub(super) fn owned_by(&self, owner: Option<&(u64, Principal)>) -> bool {
         owner.is_some_and(|(epoch, principal)| *epoch == self.epoch && principal == &self.principal)
     }
 
     fn status(&self, state: &State) -> Option<SaveStatus> {
         if !state.session_active()
             || state.session_epoch != self.epoch
-            || state.principal != self.principal
+            || state.principal.as_ref() != Some(&self.principal)
         {
             return None;
         }

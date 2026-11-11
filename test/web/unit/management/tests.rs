@@ -139,12 +139,12 @@ fn authentication_recovery_never_becomes_new_installation() {
 fn health_failure_does_not_revoke_session_or_overwrite_data_outcomes() {
     let mut state = State {
         authenticated: true,
-        principal: "admin".into(),
+        principal: Some("admin".parse().unwrap()),
         ..Default::default()
     };
     state.management.storage = Storage::RecoveryRequired;
     assert!(state.session_active());
-    assert_eq!(state.principal, "admin");
+    assert_eq!(state.principal.as_ref().map(|p| p.as_str()), Some("admin"));
     state.management.storage = Storage::ReadOnly;
     assert!(state.session_active());
     assert!(state.management.storage.readable());
@@ -155,7 +155,7 @@ fn health_failure_does_not_revoke_session_or_overwrite_data_outcomes() {
 fn authentication_lock_contention_is_not_recovery_or_session_revocation() {
     let mut state = State {
         authenticated: true,
-        principal: "admin".into(),
+        principal: Some("admin".parse().unwrap()),
         ..Default::default()
     };
     accept(
@@ -164,7 +164,7 @@ fn authentication_lock_contention_is_not_recovery_or_session_revocation() {
     );
     assert!(!state.management.auth_recovery);
     assert!(state.session_active());
-    assert_eq!(state.principal, "admin");
+    assert_eq!(state.principal.as_ref().map(|p| p.as_str()), Some("admin"));
 }
 
 #[test]

@@ -25,9 +25,9 @@ fn attempt() -> Attempt {
     let intent = Intent::UndoSummary(Arc::new(summary));
     Attempt {
         epoch: 1,
-        principal: "alice".into(),
+        principal: "alice".parse().unwrap(),
         operation: "op_22222222222222222222222222222222".into(),
-        request_digest: intent.digest("alice").unwrap(),
+        request_digest: intent.digest(&"alice".parse().unwrap()).unwrap(),
         intent,
         in_flight: false,
     }
@@ -54,7 +54,7 @@ fn summary_original_request_survives_refresh_without_retaining_the_frontier() {
     let stored: Value = json_codec::from_str(&record.bytes).unwrap();
     assert_eq!(stored["request"]["kind"], "undo_summary");
     assert!(stored["request"].get("deletion_node").is_none());
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(restored.intent, attempt.intent);
     assert_eq!(restored.request_digest, attempt.request_digest);
     assert_eq!(restored.operation.to_string(), attempt.operation);
@@ -68,13 +68,13 @@ fn summary_original_request_survives_refresh_without_retaining_the_frontier() {
 fn restored_summary_operation_uses_only_the_original_compact_outcome_route() {
     let attempt = attempt();
     let record = Record::from_attempt(&attempt).unwrap();
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     let mut state = State::default();
     state.authenticated = true;
-    state.principal = "alice".into();
+    state.principal = Some("alice".parse().unwrap());
     state.session_epoch = 3;
     let mut queue = Queue::default();
-    queue.owner = Some((3, "alice".into()));
+    queue.owner = Some((3, "alice".parse().unwrap()));
     queue.merge(vec![Retained::unknown(restored)]).unwrap();
     state.files.deletion.recovery = queue;
     state
@@ -128,7 +128,7 @@ fn unknown_partial_or_foreign_receipts_cannot_clear_a_summary_recovery_record() 
 #[test]
 fn damaged_summary_storage_preserves_original_bytes_and_account_binding() {
     let record = Record::from_attempt(&attempt()).unwrap();
-    assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
+    assert!(Record::decode(&record.key(), &"bob".parse().unwrap(), &record.bytes).is_err());
     let valid: Value = json_codec::from_str(&record.bytes).unwrap();
     let mut missing = valid.clone();
     missing["request"]["deletion_summary"]
@@ -147,14 +147,14 @@ fn damaged_summary_storage_preserves_original_bytes_and_account_binding() {
     for invalid in [missing, wrong_type, array] {
         let raw = json_codec::to_string(&invalid).unwrap();
         let retained = raw.clone();
-        assert!(Record::decode(&record.key(), "alice", &raw).is_err());
+        assert!(Record::decode(&record.key(), &"alice".parse().unwrap(), &raw).is_err());
         assert_eq!(raw, retained);
     }
     let duplicate = record.bytes.replace(
         "\"node_id\":",
         "\"branch_count\":\"1\",\"node_id\":",
     );
-    assert!(Record::decode(&record.key(), "alice", &duplicate).is_err());
+    assert!(Record::decode(&record.key(), &"alice".parse().unwrap(), &duplicate).is_err());
 }
 
 #[test]
@@ -163,10 +163,10 @@ fn late_compact_receipt_requires_the_same_session_and_keeps_the_original_unknown
     let record = Record::from_attempt(&attempt).unwrap();
     let mut state = State::default();
     state.authenticated = true;
-    state.principal = "alice".into();
+    state.principal = Some("alice".parse().unwrap());
     state.session_epoch = attempt.epoch;
     let mut queue = Queue::default();
-    queue.owner = Some((attempt.epoch, "alice".into()));
+    queue.owner = Some((attempt.epoch, "alice".parse().unwrap()));
     queue.merge(vec![Retained::unknown(record)]).unwrap();
     state.files.deletion.recovery = queue;
     state
@@ -195,4 +195,65 @@ fn late_compact_receipt_requires_the_same_session_and_keeps_the_original_unknown
     assert_eq!(state.files.operations[0].status(), SaveStatus::Unknown);
     assert_eq!(state.files.deletion.recovery.records.len(), 1);
     assert!(state.files.deletion.attempt.is_none());
+}
+
+#[test]
+fn typed_delete_principal_keeps_existing_canonical_storage_and_digest_bytes() {
+    let bytes = concat!(
+        "{\"format\":\"file-deletion-original-request\",",
+        "\"operation\":\"op_22222222222222222222222222222222\",",
+        "\"principal\":\" é/账号 \",\"request\":{",
+        "\"file_id\":\"file_11111111111111111111111111111111\",",
+        "\"kind\":\"delete\",\"path\":\"large.txt\",",
+        "\"repository_id\":\"repo_11111111111111111111111111111111\"}}",
+    );
+    let principal: storage_contract::Principal = " e\u{301}/账号 ".parse().unwrap();
+    let key = concat!(
+        "zxs:file-deletion:%20e%CC%81%2F%E8%B4%A6%E5%8F%B7%20:",
+        "op_22222222222222222222222222222222",
+    );
+    let record = Record::decode(key, &principal, bytes).unwrap();
+    assert_eq!(record.key(), key);
+    assert_eq!(record.bytes.as_ref(), bytes);
+    let attempt = record.attempt(9);
+    assert_eq!(attempt.principal, principal);
+    assert_eq!(Record::from_attempt(&attempt).unwrap().bytes.as_ref(), bytes);
+    let wire: Value = json_codec::from_str(bytes).unwrap();
+    let expected = storage_contract::object_hash(
+        "request",
+        &json!({
+            "kind":"file.delete", "principal":wire["principal"], "body":{
+                "file_id":wire["request"]["file_id"],
+                "repository_id":wire["request"]["repository_id"],
+                "path":wire["request"]["path"],
+            },
+        }),
+    )
+    .unwrap();
+    assert_eq!(record.request_digest, expected);
+    assert!(Record::decode(key, &" é/账号 ".parse().unwrap(), bytes).is_err());
+    assert!(Record::decode(key, &"é/账号".parse().unwrap(), bytes).is_err());
+    for value in [json!(""), Value::Null, json!(0)] {
+        let mut malformed = wire.clone();
+        malformed["principal"] = value;
+        assert_eq!(
+            Record::decode(key, &principal, &malformed.to_string()).err().unwrap().code,
+            storage_contract::ErrorCode::InvalidRequest,
+        );
+    }
+    let mut missing = wire.clone();
+    missing.as_object_mut().unwrap().remove("principal");
+    assert!(Record::decode(key, &principal, &missing.to_string()).is_err());
+    for length in [1024, 1025] {
+        let text = "a".repeat(length);
+        let mut bounded = wire.clone();
+        bounded["principal"] = json!(text);
+        let key = format!(
+            "zxs:file-deletion:{text}:op_22222222222222222222222222222222",
+        );
+        assert_eq!(
+            Record::decode(&key, &text.parse().unwrap(), &bounded.to_string()).is_ok(),
+            length == 1024,
+        );
+    }
 }

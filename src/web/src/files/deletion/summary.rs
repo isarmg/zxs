@@ -6,7 +6,7 @@ use data_serialization::Deserialize;
 use json_codec::Value;
 use std::sync::Arc;
 use storage_contract::{
-    BranchId,
+    BranchId, Principal,
     file_deletion_review::{BranchPage, ParentPage, Summary},
 };
 
@@ -118,7 +118,7 @@ fn unchanged(value: Value, expected: &Summary) -> Result<Summary, api::Error> {
     Ok(summary)
 }
 
-pub(super) fn digest(summary: &Summary, principal: &str) -> Result<String, api::Error> {
+pub(super) fn digest(summary: &Summary, principal: &Principal) -> Result<String, api::Error> {
     #[derive(data_serialization::Serialize)]
     struct Input {
         file_id: storage_contract::FileId,

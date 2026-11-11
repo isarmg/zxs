@@ -92,7 +92,7 @@ fn undo_uses_one_original_operation_request_and_native_digest() {
         }),
     )
     .unwrap();
-    assert_eq!(intent.digest("alice").unwrap(), digest);
+    assert_eq!(intent.digest(&"alice".parse().unwrap()).unwrap(), digest);
 }
 
 #[test]

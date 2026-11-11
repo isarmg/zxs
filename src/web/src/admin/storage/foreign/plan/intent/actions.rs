@@ -9,6 +9,7 @@ pub(super) fn preview(state: RwSignal<State>) {
             if !state.session_active() || !state.admin_console.storage.editable() {
                 return None;
             }
+            let principal = state.principal.clone()?;
             let plan = &mut state.admin_console.storage.foreign.plan;
             let stored = plan.stored.as_ref()?.preview.clone();
             let generation = plan.intent.begin_preview()?;
@@ -23,7 +24,7 @@ pub(super) fn preview(state: RwSignal<State>) {
             };
             Some((
                 state.session_epoch,
-                state.principal.clone(),
+                principal,
                 generation,
                 request,
                 stored,
@@ -86,7 +87,9 @@ pub(super) fn save(state: RwSignal<State>) {
                 return None;
             }
             let intent = &mut storage.foreign.plan.intent;
-            if intent.preview.as_ref()?.principal != state.principal {
+            if Some(intent.preview.as_ref()?.principal.as_str())
+                != state.principal.as_ref().map(|principal| principal.as_str())
+            {
                 return None;
             }
             Some((state.session_epoch, intent.begin_save()?))
@@ -126,7 +129,9 @@ pub(super) fn status(state: RwSignal<State>) {
                 return None;
             }
             let intent = &mut state.admin_console.storage.foreign.plan.intent;
-            if intent.preview.as_ref()?.principal != state.principal {
+            if Some(intent.preview.as_ref()?.principal.as_str())
+                != state.principal.as_ref().map(|principal| principal.as_str())
+            {
                 return None;
             }
             let (generation, expected) = intent.begin_status()?;

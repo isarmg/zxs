@@ -5,6 +5,7 @@ use crate::{
     ui::{State, accept_read_response},
 };
 use storage_contract::{
+    Principal,
     file_relocation::{NamespaceEntryId, ObjectMoveRequest},
     history_window::HistoryRepositoryId,
 };
@@ -22,7 +23,7 @@ mod target;
 #[derive(Clone, PartialEq, Eq)]
 struct Basis {
     epoch: u64,
-    principal: String,
+    principal: Principal,
     generation: u64,
     slot: String,
     directory: String,
@@ -77,7 +78,7 @@ fn basis(state: &State) -> Option<Basis> {
     let entry = selected(state)?;
     Some(Basis {
         epoch: state.session_epoch,
-        principal: state.principal.clone(),
+        principal: state.principal.clone()?,
         generation: state.files.generation,
         slot: state.files.slot.clone(),
         directory: state.files.directory.clone(),
@@ -139,8 +140,10 @@ pub(crate) fn provide(state: RwSignal<State>) {
     Effect::new(move |_| {
         let owner = state.with(|state| {
             state
-                .session_active()
-                .then(|| (state.session_epoch, state.principal.clone()))
+                .principal
+                .as_ref()
+                .filter(|_| state.session_active())
+                .map(|principal| (state.session_epoch, principal.clone()))
         });
         if editor.completion.with_untracked(|completion| {
             completion

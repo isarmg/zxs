@@ -12,7 +12,7 @@ fn ready() -> State {
     }));
     let mut state = State {
         authenticated: true,
-        principal: "alice".into(),
+        principal: Some("alice".parse().unwrap()),
         ..Default::default()
     };
     state.management.storage = crate::management::Storage::Ready;
@@ -243,17 +243,17 @@ fn empty_directory_receipt_matches_full_input_without_equating_selected_and_cas_
         "result":{"input":request.input(),"directory_deletion":node,"deletion_nodes":[],
             "timestamp":"123","membership_epoch":"1","version_protection":[]}
     });
-    assert!(request.receipt_matches(&id("op", 7), "alice", &receipt));
+    assert!(request.receipt_matches(&id("op", 7), &"alice".parse().unwrap(), &receipt));
     let mut wrong = receipt.clone();
     wrong["result"]["input"]["request"]["items"][0]["source"]["expected_tree_id"] =
         id("dtree", 2).into();
-    assert!(!request.receipt_matches(&id("op", 7), "alice", &wrong));
+    assert!(!request.receipt_matches(&id("op", 7), &"alice".parse().unwrap(), &wrong));
     let mut wrong = receipt.clone();
     wrong["result"]["deletion_nodes"] = json!([{}]);
-    assert!(!request.receipt_matches(&id("op", 7), "alice", &wrong));
+    assert!(!request.receipt_matches(&id("op", 7), &"alice".parse().unwrap(), &wrong));
     let mut wrong = receipt;
     wrong["result"]["unexpected"] = true.into();
-    assert!(!request.receipt_matches(&id("op", 7), "alice", &wrong));
+    assert!(!request.receipt_matches(&id("op", 7), &"alice".parse().unwrap(), &wrong));
 }
 #[test]
 fn directory_discovery_and_restore_require_same_complete_d_and_owner() {

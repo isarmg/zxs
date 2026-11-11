@@ -57,7 +57,13 @@ fn unknown(model: &mut Model) -> Submission {
 fn preview_binds_the_complete_review_actor_request_and_closed_effect() {
     let expected = preview();
     assert_eq!(
-        response::preview(json!(expected), &expected.request, &expected.plan, "admin").unwrap(),
+        response::preview(
+            json!(expected),
+            &expected.request,
+            &expected.plan,
+            &"admin".parse().unwrap(),
+        )
+        .unwrap(),
         expected
     );
     for field in 0..8 {
@@ -76,7 +82,13 @@ fn preview_binds_the_complete_review_actor_request_and_closed_effect() {
             _ => value["unexpected"] = json!(true),
         }
         assert!(
-            response::preview(value, &expected.request, &expected.plan, "admin").is_err(),
+            response::preview(
+                value,
+                &expected.request,
+                &expected.plan,
+                &"admin".parse().unwrap(),
+            )
+            .is_err(),
             "case {field}"
         );
     }
@@ -271,7 +283,7 @@ fn response_session_guard_rejects_replacement_sessions_and_disposed_owners() {
     let state = owner.with(|| {
         RwSignal::new(State {
             authenticated: true,
-            principal: "admin".into(),
+            principal: Some("admin".parse().unwrap()),
             session_epoch: 8,
             ..Default::default()
         })
@@ -280,7 +292,7 @@ fn response_session_guard_rejects_replacement_sessions_and_disposed_owners() {
     assert!(accept_read_response(state, 8, &result));
     state.update(|state| {
         state.session_epoch += 1;
-        state.principal = "replacement".into();
+        state.principal = Some("replacement".parse().unwrap());
     });
     assert!(!accept_read_response(state, 8, &result));
     owner.cleanup();

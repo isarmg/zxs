@@ -6,6 +6,7 @@ use data_serialization::{
 };
 use json_codec::{Value, json};
 use std::sync::Arc;
+use storage_contract::Principal;
 use storage_contract::history_window::HistoryRepositoryId;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -127,7 +128,7 @@ impl Request {
     pub(in crate::files::deletion) fn receipt_matches(
         &self,
         id: &str,
-        principal: &str,
+        principal: &Principal,
         receipt: &Value,
     ) -> bool {
         if receipt["operation_kind"] != "directory.delete" {
@@ -153,7 +154,7 @@ impl Request {
             && node.directory_branch_id == self.branch
             && node.path == self.path
             && node.operation_id.to_string() == id
-            && node.author == principal
+            && node.author == principal.as_str()
             && node.sequence == sequence
             // Current's selected tree can differ from the branch CAS baseline.
             // Core verifies that relation; the browser never invents equality.

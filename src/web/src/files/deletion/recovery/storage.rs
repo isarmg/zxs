@@ -5,6 +5,7 @@ use data_serialization::{
     Deserialize, Deserializer, Serialize,
     de::{MapAccess, Visitor, value::MapAccessDeserializer},
 };
+use storage_contract::Principal;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
 const PREFIX: &str = "zxs:file-deletion:";
@@ -22,7 +23,7 @@ enum Format {
 #[serialization(deny_unknown_fields)]
 struct Stored {
     format: Format,
-    principal: String,
+    principal: Principal,
     operation: OperationId,
     request: StoredIntent,
 }
@@ -131,14 +132,18 @@ fn decode_error(source: storage_contract::Error) -> api::Error {
     error.source = Some(Arc::new(api::ErrorSource::FileDeletionRecovery(source)));
     error
 }
-fn prefix(principal: &str) -> String {
-    format!("{PREFIX}{}:", api::segment(principal))
+fn prefix(principal: &Principal) -> String {
+    format!("{PREFIX}{}:", api::segment(principal.as_str()))
 }
 impl Record {
     pub(super) fn key(&self) -> String {
         format!("{}{}", prefix(&self.principal), self.operation)
     }
-    pub(super) fn decode(key: &str, principal: &str, bytes: &str) -> Result<Self, api::Error> {
+    pub(super) fn decode(
+        key: &str,
+        principal: &Principal,
+        bytes: &str,
+    ) -> Result<Self, api::Error> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(limit(
                 "The deletion recovery record exceeds its byte budget.",
@@ -150,10 +155,7 @@ impl Record {
         let stored: Stored = storage_contract::StrictJson::parse(bytes.as_bytes())
             .and_then(|json| json.decode::<Stored>())
             .map_err(decode_error)?;
-        if stored.principal.is_empty()
-            || stored.principal.len() > 1024
-            || stored.principal != principal
-        {
+        if stored.principal.as_str().len() > 1024 || &stored.principal != principal {
             return Err(failure("The deletion recovery account does not match."));
         }
         let intent = match stored.request {
@@ -260,7 +262,7 @@ impl Record {
         })
     }
 }
-pub(super) fn load(principal: &str) -> Result<Vec<Retained>, api::Error> {
+pub(super) fn load(principal: &Principal) -> Result<Vec<Retained>, api::Error> {
     let mut records = Vec::new();
     let mut size = 0;
     Store::open()?.scan(&prefix(principal), |key, bytes| {

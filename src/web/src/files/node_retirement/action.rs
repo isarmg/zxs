@@ -87,7 +87,7 @@ pub(super) fn submit(state: RwSignal<State>) {
         {
             return None;
         }
-        Some((target, selection, snapshot.principal.clone()))
+        Some((target, selection, snapshot.principal.clone()?))
     });
     let Some((target, selection, principal)) = request else {
         return;

@@ -1,13 +1,14 @@
 //! Check the complete native batch result, not a count or a generic operation ID.
 use super::*;
 use data_serialization::Deserialize;
+use storage_contract::Principal;
 use storage_contract::client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES;
 
 impl Request {
     pub(in crate::files::deletion) fn receipt_matches(
         &self,
         id: &str,
-        principal: &str,
+        principal: &Principal,
         receipt: &Value,
     ) -> bool {
         if receipt["operation_kind"] != "file.delete.batch" {
@@ -52,7 +53,7 @@ impl Request {
                 || node.file_id != file
                 || node.path != *path
                 || node.operation_id.to_string() != id
-                || node.author != principal
+                || node.author != principal.as_str()
                 || node.sequence != sequence
                 || !ids.insert(node.node_id.clone())
                 || history

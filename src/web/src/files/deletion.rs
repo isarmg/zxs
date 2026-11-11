@@ -176,7 +176,7 @@ pub(crate) fn outcome_endpoint(state: &State, id: &str) -> Option<String> {
             .as_ref()
             .is_some_and(|attempt| {
                 attempt.epoch == state.session_epoch
-                    && attempt.principal == state.principal
+                    && Some(&attempt.principal) == state.principal.as_ref()
                     && attempt.operation == id
                     && matches!(&attempt.intent, request::Intent::UndoSummary(_))
             });

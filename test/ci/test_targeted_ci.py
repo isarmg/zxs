@@ -24,6 +24,28 @@ class TargetedSelection(unittest.TestCase):
         self.assertIn('test_targeted_ci', plan['python_tests'])
         self.assertTrue(plan['unexecuted'])
 
+    def test_backup_recovery_paths_select_their_behavior_without_adjacent_actions(self):
+        paths = ['src/web/src/admin/backup_transaction/recovery.rs',
+                 'test/web/unit/admin/backup_transaction_recovery.rs']
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'],
+                                 ['browser-identity-generation', 'web-session-principals'])
+                self.assertEqual(len(plan['rust_targets']), 2)
+                self.assertEqual(plan['python_tests'], [])
+                native = next(target for target in plan['rust_targets']
+                              if target.get('mode', 'test') == 'test')
+                self.assertEqual(native['package'], 'web-app')
+                self.assertTrue(any('admin::backup_transaction::recovery::tests::'
+                                    in selection.get('prefixes', [])
+                                    for selection in native['selections']))
+                self.assertTrue(all(selection['max_tests'] <= 192
+                                    for selection in native['selections']))
+                self.assertTrue(any(target.get('compile_target') == 'wasm32-unknown-unknown'
+                                    and target.get('mode') == 'check'
+                                    for target in plan['rust_targets']))
+
     def test_layout_and_ci_changes_union_groups_once(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
                             'src/engine/src/journal.rs', '.github/workflows/ci.yml'])

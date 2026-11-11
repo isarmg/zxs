@@ -1,5 +1,6 @@
 use crate::{admin, api, files, history, icons::FileIcon, management, monitor};
 use json_codec::{Value, json};
+use storage_contract::Principal;
 use web_interface::components::{
     AccountPage, AppShell, ErrorState, Feedback, HeaderActions, HeaderNavigation, LoginCredentials,
     LoginPage, PasswordChange, SessionPhase, SessionView,
@@ -46,7 +47,7 @@ pub(crate) enum PasswordChangeState {
 pub(crate) struct State {
     pub authenticated: bool,
     pub session_epoch: u64,
-    pub principal: String,
+    pub principal: Option<Principal>,
     pub session_transition: SessionTransition,
     pub session_failure: Option<Feedback>,
     pub login_failure: Option<Feedback>,
@@ -217,7 +218,7 @@ pub fn app() -> impl IntoView {
                         *s = State {
                             session_epoch,
                             authenticated: true,
-                            principal: value.principal,
+                            principal: Some(value.principal),
                             page: Page::Files,
                             login_in_flight,
                             ..Default::default()
@@ -361,7 +362,10 @@ fn session_view(state: &State) -> SessionView {
         } else {
             SessionPhase::Anonymous
         },
-        username: state.principal.clone(),
+        username: state
+            .principal
+            .as_ref()
+            .map_or_else(String::new, ToString::to_string),
         message: state
             .session_failure
             .as_ref()
@@ -430,7 +434,7 @@ fn restore_session(state: RwSignal<State>) {
             Ok(value) => {
                 state.update(|s| {
                     s.authenticated = true;
-                    s.principal = value.principal;
+                    s.principal = Some(value.principal);
                 });
             }
             Err(error) => state.update(|s| {
@@ -507,7 +511,9 @@ fn end_session(state: RwSignal<State>, notice: String) {
     });
 }
 fn account(state: RwSignal<State>) -> impl IntoView {
-    let username = Memo::new(move |_| state.with(|s| s.principal.clone()));
+    let username = Memo::new(move |_| {
+        state.with(|s| s.principal.as_ref().map_or_else(String::new, ToString::to_string))
+    });
     let pending = Memo::new(move |_| state.with(State::password_pending));
     let disabled = Memo::new(move |_| state.with(State::password_change_blocked));
     let failure = Memo::new(move |_| state.with(|s| s.password_failure.clone()));

@@ -2,6 +2,7 @@
 use super::*;
 use data_serialization::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
+use storage_contract::Principal;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 const MAX_RECORD_BYTES: usize = wire::MAX_REQUEST_BYTES + 512;
@@ -33,8 +34,8 @@ pub(super) enum Intent {
     Cancel,
 }
 
-fn key(principal: &str) -> String {
-    format!("zxs-backup-transaction:{}", api::segment(principal))
+fn key(principal: &Principal) -> String {
+    format!("zxs-backup-transaction:{}", api::segment(principal.as_str()))
 }
 fn failure() -> api::Error {
     api::error(
@@ -99,7 +100,7 @@ fn retain(
     Ok(record)
 }
 
-pub(super) fn load(principal: &str) -> Result<Option<Record>, api::Error> {
+pub(super) fn load(principal: &Principal) -> Result<Option<Record>, api::Error> {
     storage()?
         .get_item(&key(principal))
         .map_err(api::js_error)?
@@ -109,7 +110,7 @@ pub(super) fn load(principal: &str) -> Result<Option<Record>, api::Error> {
 }
 
 pub(super) async fn remember(
-    principal: &str,
+    principal: &Principal,
     operation: OperationId,
     original_start: Option<wire::StartRequest>,
     intent: Intent,
@@ -126,14 +127,14 @@ pub(super) async fn remember(
 }
 
 pub(super) async fn clear_cancelled(
-    principal: &str,
+    principal: &Principal,
     original: wire::OriginalRequest,
 ) -> Result<(), api::Error> {
     exclusive(principal, Action::ClearCancelled(original)).await
 }
 
 pub(super) async fn reject_cancellation(
-    principal: &str,
+    principal: &Principal,
     original: wire::OriginalRequest,
 ) -> Result<(), api::Error> {
     exclusive(principal, Action::RejectCancellation(original)).await
@@ -218,7 +219,7 @@ fn apply_locked(key: &str, action: Action) -> Result<(), api::Error> {
 
 /// The same origin/account lock covers every writer and compare-and-remove.
 /// A missing lock facility is a hard admission failure, never an unlocked fallback.
-async fn exclusive(principal: &str, action: Action) -> Result<(), api::Error> {
+async fn exclusive(principal: &Principal, action: Action) -> Result<(), api::Error> {
     let window = web_sys::window().ok_or_else(failure)?;
     let navigator = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("navigator"))
         .map_err(api::js_error)?;

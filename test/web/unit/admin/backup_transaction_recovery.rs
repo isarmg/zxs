@@ -75,7 +75,7 @@ fn corrupt_unknown_oversized_and_duplicate_record_fields_are_not_ignored() {
 
 #[test]
 fn browser_keys_are_account_scoped_not_service_credentials() {
-    assert_ne!(key("a"), key("b"));
-    assert_ne!(key("a/b"), key("a%2Fb"));
-    assert!(key("administrator").starts_with("zxs-backup-transaction:"));
+    assert_ne!(key(&"a".parse().unwrap()), key(&"b".parse().unwrap()));
+    assert_ne!(key(&"a/b".parse().unwrap()), key(&"a%2Fb".parse().unwrap()));
+    assert!(key(&"administrator".parse().unwrap()).starts_with("zxs-backup-transaction:"));
 }

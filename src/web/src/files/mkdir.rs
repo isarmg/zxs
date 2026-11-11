@@ -6,7 +6,7 @@ use crate::{
 };
 use json_codec::{Value, json};
 use std::sync::Arc;
-use storage_contract::{ErrorCode, OperationId};
+use storage_contract::{ErrorCode, OperationId, Principal};
 use web_interface::{prelude::*, tasks::spawn_local};
 
 mod storage;
@@ -32,7 +32,7 @@ struct Retained {
 }
 #[derive(Clone, Default)]
 pub(crate) struct Model {
-    owner: Option<(u64, String)>,
+    owner: Option<(u64, Principal)>,
     records: Vec<Retained>,
     error: Option<api::Error>,
 }
@@ -40,7 +40,7 @@ impl Model {
     fn owns(&self, state: &State) -> bool {
         state.session_active()
             && self.owner.as_ref().is_some_and(|(epoch, principal)| {
-                *epoch == state.session_epoch && *principal == state.principal
+                *epoch == state.session_epoch && Some(principal) == state.principal.as_ref()
             })
     }
     fn ready(&self, state: &State) -> bool {
@@ -84,10 +84,12 @@ fn failure(message: &str) -> api::Error {
 fn limit(message: &str) -> api::Error {
     api::error(ErrorCode::ResourceLimit, message)
 }
-fn owner(state: &State) -> Option<(u64, String)> {
+fn owner(state: &State) -> Option<(u64, Principal)> {
     state
-        .session_active()
-        .then(|| (state.session_epoch, state.principal.clone()))
+        .principal
+        .as_ref()
+        .filter(|_| state.session_active())
+        .map(|principal| (state.session_epoch, principal.clone()))
 }
 pub(crate) fn blocks_writes(state: &State) -> bool {
     let model = &state.files.mkdir;
@@ -108,7 +110,9 @@ pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
     {
         return None;
     }
-    capture_and_retain(state, |s, operation| Record::capture(s, operation, name))
+    capture_and_retain(state, |s, principal, operation| {
+        Record::capture(s, principal, operation, name)
+    })
 }
 
 pub(super) fn start_relocation(
@@ -120,8 +124,8 @@ pub(super) fn start_relocation(
     {
         return None;
     }
-    capture_and_retain(state, |s, operation| {
-        Record::capture_relocation(s, operation, movement)
+    capture_and_retain(state, |s, principal, operation| {
+        Record::capture_relocation(s, principal, operation, movement)
     })
 }
 
@@ -140,8 +144,8 @@ pub(super) fn start_directory_branch(
     }) {
         return None;
     }
-    capture_and_retain(state, |s, operation| {
-        Record::capture_directory_branch(s, operation, source, name)
+    capture_and_retain(state, |s, principal, operation| {
+        Record::capture_directory_branch(s, principal, operation, source, name)
     })
 }
 
@@ -158,8 +162,8 @@ pub(super) fn start_historical_directory_branch(
     }) {
         return None;
     }
-    capture_and_retain(state, |s, operation| {
-        Record::capture_historical_directory_branch(s, operation, source, name)
+    capture_and_retain(state, |s, principal, operation| {
+        Record::capture_historical_directory_branch(s, principal, operation, source, name)
     })
 }
 
@@ -181,12 +185,13 @@ pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
 
 fn capture_and_retain(
     state: RwSignal<State>,
-    capture: impl FnOnce(&State, OperationId) -> Result<Record, api::Error>,
+    capture: impl FnOnce(&State, &Principal, OperationId) -> Result<Record, api::Error>,
 ) -> Option<String> {
+    let (_, principal) = state.with_untracked(owner)?;
     let operation = crate::ui::file_operation_id(state)?
         .parse()
         .expect("invariant: UI generated a canonical operation ID");
-    match state.with_untracked(|s| capture(s, operation)) {
+    match state.with_untracked(|s| capture(s, &principal, operation)) {
         Ok(record) => retain(state, Arc::new(record)),
         Err(error) => {
             fail(state, error);
@@ -261,7 +266,7 @@ fn send(state: RwSignal<State>, epoch: u64, record: Arc<Record>, submission: Sub
         .try_update(|s| {
             if !s.files.mkdir.owns(s)
                 || s.session_epoch != epoch
-                || s.principal != record.principal()
+                || s.principal.as_ref() != Some(record.principal())
                 || s.files.mutation_pending
             {
                 return false;
@@ -446,7 +451,7 @@ pub(crate) fn restore(state: RwSignal<State>) {
     }
     actions::poll(state);
 }
-fn adopt_owner(state: &mut State, current: &(u64, String)) {
+fn adopt_owner(state: &mut State, current: &(u64, Principal)) {
     let model = &mut state.files.mkdir;
     let old_ids: Vec<_> = model
         .records

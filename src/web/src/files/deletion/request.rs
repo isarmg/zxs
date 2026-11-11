@@ -3,6 +3,7 @@
 use super::*;
 use crate::files::{FileOperation, SaveStatus, model::entry_key, page::Entry};
 use json_codec::{Value, json};
+use storage_contract::Principal;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use web_interface::i18n::t;
 
@@ -36,7 +37,7 @@ pub(super) enum Intent {
 #[derive(Clone)]
 pub(super) struct Attempt {
     pub(super) epoch: u64,
-    pub(super) principal: String,
+    pub(super) principal: Principal,
     pub(super) operation: String,
     pub(super) intent: Intent,
     pub(super) request_digest: String,
@@ -198,12 +199,12 @@ pub(super) enum Body {
 #[derive(data_serialization::Serialize)]
 struct DigestInput<'a, T> {
     kind: &'a str,
-    principal: &'a str,
+    principal: &'a Principal,
     body: T,
 }
 pub(super) fn native_digest<T: data_serialization::Serialize>(
     kind: &str,
-    principal: &str,
+    principal: &Principal,
     body: T,
 ) -> Result<String, api::Error> {
     storage_contract::object_hash(
@@ -257,7 +258,7 @@ impl Intent {
         };
         (endpoint, Body::Json(body))
     }
-    pub(super) fn digest(&self, principal: &str) -> Result<String, api::Error> {
+    pub(super) fn digest(&self, principal: &Principal) -> Result<String, api::Error> {
         let (kind, body) = match self {
             Self::Delete(target) => (
                 "file.delete",
@@ -282,7 +283,7 @@ impl Intent {
         };
         native_digest(kind, principal, body)
     }
-    pub(super) fn receipt_matches(&self, id: &str, principal: &str, receipt: &Value) -> bool {
+    pub(super) fn receipt_matches(&self, id: &str, principal: &Principal, receipt: &Value) -> bool {
         match self {
             Self::Delete(target) => {
                 if receipt["operation_kind"] != "file.delete" {
@@ -307,7 +308,12 @@ impl Intent {
                     deletion_node_id: deletion_id.into(),
                     path: target.path.clone(),
                 };
-                matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal && node.sequence == sequence)
+                matches!(
+                    wire::node(value.clone(), &summary),
+                    Ok(Some(node)) if node.operation_id.to_string() == id
+                        && node.author == principal.as_str()
+                        && node.sequence == sequence
+                )
             }
             Self::DeleteBatch(request) => request.receipt_matches(id, principal, receipt),
             Self::UndoBatch(request) => request.receipt_matches(receipt),
@@ -333,7 +339,10 @@ pub(super) fn submit(state: RwSignal<State>, intent: Intent) {
     if !state.with_untracked(|s| s.files.deletion.recovery.ready_for_new(s)) {
         return;
     }
-    let request_digest = match state.with_untracked(|s| intent.digest(&s.principal)) {
+    let Some((epoch, principal)) = state.with_untracked(recovery::owner) else {
+        return;
+    };
+    let request_digest = match intent.digest(&principal) {
         Ok(digest) => digest,
         Err(error) => {
             fail(state, error);
@@ -343,10 +352,9 @@ pub(super) fn submit(state: RwSignal<State>, intent: Intent) {
     let Some(id) = crate::ui::file_operation_id(state) else {
         return;
     };
-    let epoch = state.with_untracked(|s| s.session_epoch);
     let attempt = Attempt {
         epoch,
-        principal: state.with_untracked(|s| s.principal.clone()),
+        principal,
         operation: id,
         intent,
         request_digest,
@@ -366,7 +374,7 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
     if !state.with_untracked(|s| {
         s.session_active()
             && s.session_epoch == attempt.epoch
-            && s.principal == attempt.principal
+            && s.principal.as_ref() == Some(&attempt.principal)
             && !s.files.mutation_pending
             && !s
                 .files
@@ -456,7 +464,7 @@ pub(crate) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool 
     if attempt.is_some_and(|attempt| {
         !state.session_active()
             || attempt.epoch != state.session_epoch
-            || attempt.principal != state.principal
+            || Some(&attempt.principal) != state.principal.as_ref()
     }) {
         return false;
     }

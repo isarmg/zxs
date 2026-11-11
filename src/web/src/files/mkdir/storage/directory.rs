@@ -8,7 +8,7 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
 use name_policy::PortablePath;
 use storage_contract::directory_git::{DirectoryBranchCreateSource, HistoricalDirectoryBranchSource};
-use storage_contract::{BranchName, DirectoryBranchId, OperationId};
+use storage_contract::{BranchName, DirectoryBranchId, OperationId, Principal};
 
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -169,7 +169,7 @@ impl DirectoryRequest {
         }
         Ok(())
     }
-    pub(super) fn digest(&self, principal: &str) -> Result<String, api::Error> {
+    pub(super) fn digest(&self, principal: &Principal) -> Result<String, api::Error> {
         storage_contract::object_hash(
             "request",
             &json!({"kind":self.kind(),"principal":principal,"body":self.input()}),
@@ -273,6 +273,7 @@ impl DirectoryRequest {
 impl Record {
     pub(in crate::files::mkdir) fn capture_historical_directory_branch(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
         source: HistoricalDirectoryBranchSource,
         name: String,
@@ -294,6 +295,7 @@ impl Record {
         };
         Self::capture_directory(
             state,
+            principal,
             operation,
             DirectoryRequest::CreateHistorical {
                 source,
@@ -305,12 +307,14 @@ impl Record {
 
     pub(in crate::files::mkdir) fn capture_directory_branch(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
         source: DirectoryBranchCreateSource,
         name: String,
     ) -> Result<Self, api::Error> {
         Self::capture_directory(
             state,
+            principal,
             operation,
             DirectoryRequest::Create {
                 source,
@@ -321,6 +325,7 @@ impl Record {
     }
     pub(in crate::files::mkdir) fn capture_directory_checkout(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
     ) -> Result<Self, api::Error> {
         let branch = state
@@ -332,6 +337,7 @@ impl Record {
             .ok_or_else(|| failure("The reviewed directory branch is no longer displayed."))?;
         Self::capture_directory(
             state,
+            principal,
             operation,
             DirectoryRequest::Checkout {
                 repository_id: state.files.repository_id.clone(),
@@ -343,6 +349,7 @@ impl Record {
     }
     fn capture_directory(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
         request: DirectoryRequest,
     ) -> Result<Self, api::Error> {
@@ -356,7 +363,7 @@ impl Record {
         };
         let stored = Stored {
             format: Format::DirectoryBranch,
-            principal: state.principal.clone(),
+            principal: principal.clone(),
             operation,
             slot: state.files.slot.clone(),
             path,

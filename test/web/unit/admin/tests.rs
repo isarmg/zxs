@@ -609,7 +609,7 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
         let state = RwSignal::new(State {
             authenticated: true,
             session_epoch: 5,
-            principal: "new admin".into(),
+            principal: Some("new admin".parse().unwrap()),
             admin_console: Model {
                 busy: true,
                 plan: reviewed_plan(),
@@ -650,7 +650,7 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
         state.with_untracked(|s| {
             assert!(s.authenticated);
             assert_eq!(s.session_epoch, 5);
-            assert_eq!(s.principal, "new admin");
+            assert_eq!(s.principal.as_ref().map(|p| p.as_str()), Some("new admin"));
             assert!(s.admin_console.busy);
             assert_eq!(s.admin_console.plan, reviewed_plan());
             assert!(s.admin_console.acknowledged);

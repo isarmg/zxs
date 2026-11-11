@@ -3,14 +3,14 @@
 use super::*;
 use crate::files::{FileOperation, SaveStatus};
 use json_codec::Value;
-use storage_contract::{ErrorCode, OperationId};
+use storage_contract::{ErrorCode, OperationId, Principal};
 mod storage;
 mod view;
 pub(crate) use view::view;
 
 #[derive(Clone)]
 struct Record {
-    principal: String,
+    principal: Principal,
     operation: OperationId,
     intent: request::Intent,
     request_digest: String,
@@ -54,7 +54,7 @@ struct RetryReview {
 }
 #[derive(Clone, Default)]
 pub(super) struct Queue {
-    pub(super) owner: Option<(u64, String)>,
+    pub(super) owner: Option<(u64, Principal)>,
     records: Vec<Retained>,
     error: Option<api::Error>,
     generation: u64,
@@ -64,13 +64,12 @@ impl Queue {
     fn owns(&self, state: &State) -> bool {
         state.session_active()
             && self.owner.as_ref().is_some_and(|(epoch, principal)| {
-                *epoch == state.session_epoch && *principal == state.principal
+                *epoch == state.session_epoch && Some(principal) == state.principal.as_ref()
             })
     }
     pub(super) fn ready_for_new(&self, state: &State) -> bool {
         self.owns(state)
-            && !state.principal.is_empty()
-            && state.principal.len() <= 1024
+            && state.principal.as_ref().is_some_and(|principal| principal.as_str().len() <= 1024)
             && self.records.is_empty()
             && self.error.is_none()
     }
@@ -128,10 +127,12 @@ fn failure(message: &str) -> api::Error {
 fn limit(message: &str) -> api::Error {
     api::error(ErrorCode::ResourceLimit, message)
 }
-fn owner(state: &State) -> Option<(u64, String)> {
+pub(super) fn owner(state: &State) -> Option<(u64, Principal)> {
     state
-        .session_active()
-        .then(|| (state.session_epoch, state.principal.clone()))
+        .principal
+        .as_ref()
+        .filter(|_| state.session_active())
+        .map(|principal| (state.session_epoch, principal.clone()))
 }
 pub(crate) fn blocks_writes(state: &State) -> bool {
     let queue = &state.files.deletion.recovery;
@@ -216,7 +217,7 @@ fn register_pending(state: RwSignal<State>) {
         actions::record_operation(state, FileOperation::unknown(&operation));
     }
 }
-fn adopt_owner(state: &mut State, owner: &(u64, String)) {
+fn adopt_owner(state: &mut State, owner: &(u64, Principal)) {
     let model = &mut state.files.deletion;
     if model.recovery.owner.as_ref() == Some(owner) {
         return;
@@ -283,7 +284,7 @@ pub(super) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> Optio
         .find(|r| r.record.operation.to_string() == id)
         .map(|r| {
             queue.owns(state)
-                && r.record.principal == state.principal
+                && Some(&r.record.principal) == state.principal.as_ref()
                 && r.record.matches_receipt(id, receipt)
         })
 }
@@ -337,7 +338,7 @@ fn begin_retry(state: RwSignal<State>, epoch: u64, operation: OperationId) {
         else {
             return;
         };
-        if retained.record.principal != s.principal {
+        if Some(&retained.record.principal) != s.principal.as_ref() {
             return;
         }
         let record = retained.record.clone();

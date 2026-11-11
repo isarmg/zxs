@@ -7,7 +7,10 @@ pub(super) fn load(state: RwSignal<State>) {
     if !state.with_untracked(available) {
         return;
     }
-    match state.with_untracked(|s| recovery::load(&s.principal)) {
+    let Some(principal) = state.with_untracked(|s| s.principal.clone()) else {
+        return;
+    };
+    match recovery::load(&principal) {
         Ok(Some(record)) => {
             let accepted = state.try_update(|s| {
                 let model = &mut s.admin_console.backup;
@@ -289,19 +292,20 @@ pub(super) fn cancel(state: RwSignal<State>) {
 
 pub(super) fn restart(state: RwSignal<State>) {
     let Some((epoch, principal, original)) = state.with_untracked(|s| {
-        (s.session_active() && s.admin_console.backup.can_restart()).then(|| {
-            (
-                s.session_epoch,
-                s.principal.clone(),
-                s.admin_console
-                    .backup
-                    .snapshot
-                    .as_ref()
-                    .expect("invariant: confirmed cancellation has an original snapshot")
-                    .request
-                    .clone(),
-            )
-        })
+        if !s.session_active() || !s.admin_console.backup.can_restart() {
+            return None;
+        }
+        Some((
+            s.session_epoch,
+            s.principal.clone()?,
+            s.admin_console
+                .backup
+                .snapshot
+                .as_ref()
+                .expect("invariant: confirmed cancellation has an original snapshot")
+                .request
+                .clone(),
+        ))
     }) else {
         return;
     };
@@ -371,12 +375,14 @@ fn request(state: RwSignal<State>, request: Request) {
         ),
     };
     let method = if mutation { "POST" } else { "GET" };
-    let (principal, original_start) = state.with_untracked(|s| {
-        (
-            s.principal.clone(),
+    let Some((principal, original_start)) = state.with_untracked(|s| {
+        Some((
+            s.principal.clone()?,
             s.admin_console.backup.original_start.clone(),
-        )
-    });
+        ))
+    }) else {
+        return;
+    };
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| {
         let model = &mut s.admin_console.backup;

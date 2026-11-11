@@ -328,7 +328,7 @@
     "invariant_as_error": 3,
     "join_literal": 0,
     "json_value": 158,
-    "long_line": 1429,
+    "long_line": 1427,
     "parse_discard": 14,
     "state_leak": 0,
     "string_key_map": 31,

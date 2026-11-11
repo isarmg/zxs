@@ -18,12 +18,12 @@ fn receipt() -> Value {
     })
 }
 fn candidate() -> Candidate {
-    Candidate::read((7, "admin".into()), operation(), receipt()).unwrap()
+    Candidate::read((7, "admin".parse().unwrap()), operation(), receipt()).unwrap()
 }
 fn state() -> State {
     let mut state = State {
         authenticated: true,
-        principal: "admin".into(),
+        principal: Some("admin".parse().unwrap()),
         session_epoch: 7,
         ..Default::default()
     };
@@ -65,9 +65,9 @@ fn missing_incomplete_other_kind_or_other_operation_never_becomes_a_saved_reques
     ] {
         let mut response = receipt();
         response[field] = value;
-        assert!(Candidate::read((7, "admin".into()), operation(), response).is_err());
+        assert!(Candidate::read((7, "admin".parse().unwrap()), operation(), response).is_err());
     }
-    assert!(Candidate::read((7, "admin".into()), operation(), Value::Null).is_err());
+    assert!(Candidate::read((7, "admin".parse().unwrap()), operation(), Value::Null).is_err());
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn original_request_is_strict_sorted_bounded_and_does_not_guess_a_current_path()
     ] {
         let mut response = receipt();
         response["result"]["retirement"]["request"][field] = value;
-        assert!(Candidate::read((7, "admin".into()), operation(), response).is_err());
+        assert!(Candidate::read((7, "admin".parse().unwrap()), operation(), response).is_err());
     }
     let mut response = receipt();
     let request = &response["result"]["retirement"]["request"];
@@ -105,21 +105,21 @@ fn original_request_is_strict_sorted_bounded_and_does_not_guess_a_current_path()
         request["origin_file_id"],
         request["version_ids"],
     ]);
-    assert!(Candidate::read((7, "admin".into()), operation(), response).is_err());
+    assert!(Candidate::read((7, "admin".parse().unwrap()), operation(), response).is_err());
     let mut response = receipt();
     response["result"]["retirement"]["request"]["version_ids"] = json!(
         (0..=storage_contract::shared_history::MAX_SHARED_HISTORY_NODES)
             .map(|n| format!("ver_{n:032x}"))
             .collect::<Vec<_>>()
     );
-    assert!(Candidate::read((7, "admin".into()), operation(), response).is_err());
+    assert!(Candidate::read((7, "admin".parse().unwrap()), operation(), response).is_err());
 }
 
 #[test]
 fn resume_only_restriction_survives_storage_without_becoming_publication_evidence() {
     let candidate = candidate();
     let bytes = candidate.record.encode().unwrap();
-    let saved = Record::decode(&candidate.record.key(), "admin", &bytes).unwrap();
+    let saved = Record::decode(&candidate.record.key(), &"admin".parse().unwrap(), &bytes).unwrap();
     let mut attempt = saved.restored_attempt(7).unwrap();
     attempt.retry_confirmed = true;
     let mut state = state();

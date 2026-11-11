@@ -11,6 +11,7 @@ use crate::{
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
 use storage_contract::{
+    Principal,
     history_window::{HistoryFileId, HistoryRoot, HistoryVersionId},
     node_retirement::{self as wire, Cleanup, Preview, Selection},
 };
@@ -55,7 +56,7 @@ impl Target {
 #[derive(Clone)]
 struct Attempt {
     target: Target,
-    principal: String,
+    principal: Principal,
     selection: Selection,
     operation: String,
     in_flight: bool,
@@ -70,7 +71,7 @@ impl Attempt {
     fn owned_by(&self, state: &State) -> bool {
         state.session_active()
             && state.session_epoch == self.target.epoch
-            && state.principal == self.principal
+            && state.principal.as_ref() == Some(&self.principal)
     }
     fn retry_allowed(&self, state: &State) -> bool {
         self.owned_by(state)

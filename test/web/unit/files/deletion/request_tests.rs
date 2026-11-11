@@ -13,7 +13,7 @@ fn ready() -> State {
     let chosen_entry = selected(1, "A.txt");
     let mut state = State {
         authenticated: true,
-        principal: "alice".into(),
+        principal: Some("alice".parse().unwrap()),
         ..Default::default()
     };
     state.management.storage = crate::management::Storage::Ready;
@@ -60,14 +60,20 @@ fn receipt(intent: &Intent, operation: &str) -> Value {
     } else {
         "1"
     };
-    json!({"operation_id":operation,"operation_kind":kind,"request_digest":intent.digest("alice").unwrap(),"state":"completed","commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","publication_sequence":sequence,"result":result,"error":null})
+    json!({
+        "operation_id":operation, "operation_kind":kind,
+        "request_digest":intent.digest(&"alice".parse().unwrap()).unwrap(),
+        "state":"completed", "commit_state":"PUBLISHED",
+        "protection_at_publish":"NOT_APPLICABLE", "publication_sequence":sequence,
+        "result":result, "error":null,
+    })
 }
 fn attempt(intent: Intent, operation: &str) -> Attempt {
     Attempt {
         epoch: 0,
-        principal: "alice".into(),
+        principal: "alice".parse().unwrap(),
         operation: operation.into(),
-        request_digest: intent.digest("alice").unwrap(),
+        request_digest: intent.digest(&"alice".parse().unwrap()).unwrap(),
         intent,
         in_flight: false,
     }
@@ -159,7 +165,17 @@ fn request_body_is_only_exact_file_location_and_original_operation() {
         json_codec::to_string(&expected).unwrap()
     );
     assert_eq!(json_codec::to_value(body).unwrap(), expected);
-    assert_eq!(intent.digest("alice").unwrap(),storage_contract::object_hash("request",&json!({"kind":"file.delete","principal":"alice","body":{"repository_id":id("repo",1),"file_id":id("file",1),"path":"a.txt"}})).unwrap());
+    assert_eq!(
+        intent.digest(&"alice".parse().unwrap()).unwrap(),
+        storage_contract::object_hash(
+            "request",
+            &json!({
+                "kind":"file.delete", "principal":"alice",
+                "body":{"repository_id":id("repo",1),"file_id":id("file",1),"path":"a.txt"},
+            }),
+        )
+        .unwrap(),
+    );
 }
 #[test]
 fn delete_receipt_must_match_kind_owner_file_complete_frontier_and_request_digest() {
@@ -192,9 +208,9 @@ fn delete_receipt_must_match_kind_owner_file_complete_frontier_and_request_diges
         wrong["result"]["deletion_node"][field] = replacement;
         assert!(!receipt_matches(&state, &id, &wrong), "{field}");
     }
-    state.principal = "other".into();
+    state.principal = Some("other".parse().unwrap());
     assert!(!receipt_matches(&state, &id, &valid));
-    state.principal = "alice".into();
+    state.principal = Some("alice".parse().unwrap());
     state.session_epoch += 1;
     assert!(!receipt_matches(&state, &id, &valid));
 }

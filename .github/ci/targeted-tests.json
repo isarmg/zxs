@@ -365,7 +365,7 @@
             "api::tests::",
             "api::read_queue::tests::"
           ],
-          "max_tests": 47
+          "max_tests": 48
         },
         {
           "package": "web-app",
@@ -441,7 +441,7 @@
             "ui::tests::language_reload_waits_for_pending_or_uncertain_work",
             "ui::tests::logout_supersedes_pending_login_and_settlement_reopens_admission"
           ],
-          "max_tests": 101
+          "max_tests": 102
         },
         {
           "package": "web-app",
@@ -615,7 +615,7 @@
           "exact": [
             "history::tests::current_directory_git_operations_have_specific_labels"
           ],
-          "max_tests": 54,
+          "max_tests": 56,
           "timeout_seconds": 900
         },
         {
@@ -751,6 +751,54 @@
           ],
           "max_tests": 4,
           "timeout_seconds": 900
+        }
+      ]
+    },
+    "web-session-principals": {
+      "reason": "Typed authenticated identities and absent-session transitions retain exact response text, old credential generations, logout uncertainty and foreign-intent ownership",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "api::tests::",
+            "ui::tests::",
+            "management::tests::",
+            "admin::tests::",
+            "admin::storage::foreign::plan::intent::tests::"
+          ],
+          "max_tests": 110
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
+    },
+    "web-recovery-principals": {
+      "reason": "Typed retained principals preserve canonical original requests, exact account keys, old-session and cross-account fences, retry queues, receipt lookup and request-text import ownership",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "files::mkdir::storage::tests::",
+            "files::deletion::",
+            "files::node_retirement::",
+            "files::relocation::tests::",
+            "files::actions::browse::tests::"
+          ],
+          "max_tests": 131
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
         }
       ]
     }
@@ -1368,7 +1416,8 @@
     {
       "path": "src/web/src/files/deletion.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
@@ -1380,13 +1429,15 @@
     {
       "path": "src/web/src/files/deletion/recovery.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
       "path": "src/web/src/files/deletion/recovery/storage.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
@@ -1398,7 +1449,8 @@
     {
       "path": "src/web/src/files/deletion/request.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
@@ -1410,7 +1462,8 @@
     {
       "path": "src/web/src/files/deletion/summary.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
@@ -1470,19 +1523,22 @@
     {
       "path": "test/web/unit/files/deletion/request_tests.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
       "path": "test/web/unit/files/deletion/summary_storage_tests.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
       "path": "test/web/unit/files/deletion/summary_tests.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "web-recovery-principals"
       ]
     },
     {
@@ -1933,7 +1989,8 @@
       "groups": [
         "setup-request-boundary",
         "browser-identity-generation",
-        "foreign-draft-names"
+        "foreign-draft-names",
+        "web-session-principals"
       ]
     },
     {
@@ -1946,7 +2003,8 @@
       "path": "test/web/unit/api/tests.rs",
       "groups": [
         "setup-request-boundary",
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "web-session-principals"
       ]
     },
     {
@@ -1983,13 +2041,15 @@
     {
       "path": "src/web/src/ui.rs",
       "groups": [
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "web-session-principals"
       ]
     },
     {
       "path": "src/web/src/admin/backup_transaction/actions.rs",
       "groups": [
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "web-session-principals"
       ]
     },
     {
@@ -2296,13 +2356,15 @@
     {
       "path": "src/web/src/files/mkdir.rs",
       "groups": [
-        "historical-directory-web"
+        "historical-directory-web",
+        "web-recovery-principals"
       ]
     },
     {
       "path": "src/web/src/files/mkdir/storage/directory.rs",
       "groups": [
-        "historical-directory-web"
+        "historical-directory-web",
+        "web-recovery-principals"
       ]
     },
     {
@@ -2326,7 +2388,8 @@
     {
       "path": "test/web/unit/files/directory_branch_recovery_tests.rs",
       "groups": [
-        "historical-directory-web"
+        "historical-directory-web",
+        "web-recovery-principals"
       ]
     },
     {
@@ -2443,7 +2506,177 @@
       "groups": [
         "history-visible-context"
       ]
+    },
+    {
+      "path": "src/web/src/admin/backup_transaction/recovery.rs",
+      "groups": [
+        "web-session-principals",
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/foreign/plan/intent/actions.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/foreign/plan/intent/response.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/batch/receipt.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/batch_restore.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/directory/request.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mkdir/storage.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement/action.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement/recovery.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement/recovery/receipt_lookup.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement/recovery/request_text.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/node_retirement/view.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/relocation.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "src/web/src/files/relocation/completion.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/backup_transaction_recovery.rs",
+      "groups": [
+        "web-session-principals",
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/storage_foreign_intent_tests.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/tests.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/actions/browse/tests.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/batch_restore_storage_tests.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/batch_restore_tests.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/directory_tests.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/node_retirement/recovery.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/node_retirement/recovery/receipt_lookup.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/node_retirement/recovery/request_text.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/relocation_tests.rs",
+      "groups": [
+        "web-recovery-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/management/tests.rs",
+      "groups": [
+        "web-session-principals"
+      ]
+    },
+    {
+      "path": "test/web/unit/ui/tests.rs",
+      "groups": [
+        "web-session-principals"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features; File and Node target ID migration and other HTTP endpoints remain outside this slice. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features; File and Node target ID migration and other HTTP endpoints remain outside this slice. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections."
 }

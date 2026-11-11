@@ -2,6 +2,7 @@ use js_sys::futures::JsFuture;
 use js_sys::{Reflect, Uint8Array};
 use json_codec::{Value, json};
 use std::cell::RefCell;
+use storage_contract::Principal;
 pub use storage_contract::client_protocol::uri_component_segment as segment;
 use wasm_bindgen::{JsCast, JsValue};
 use web_interface::i18n::t;
@@ -530,7 +531,7 @@ pub(crate) async fn setup_request(call: SetupCall) -> Result<Value, Error> {
 /// Public session identity. Authentication secrets never enter the UI model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Authenticated {
-    pub principal: String,
+    pub principal: Principal,
 }
 
 pub(crate) async fn login(username: &str, password: &str) -> Result<Authenticated, Error> {
@@ -571,7 +572,7 @@ fn accept_login(generation: u64, result: Value) -> Result<Authenticated, Error> 
     }
     MANAGEMENT_READS.with(read_queue::Queue::invalidate);
     Ok(Authenticated {
-        principal: session.principal.as_str().to_owned(),
+        principal: session.principal,
     })
 }
 
@@ -606,7 +607,7 @@ fn accept_restore(generation: u64, value: Value) -> Result<Authenticated, Error>
     });
     if accepted {
         Ok(Authenticated {
-            principal: session.principal.as_str().to_owned(),
+            principal: session.principal,
         })
     } else {
         Err(session_changed())

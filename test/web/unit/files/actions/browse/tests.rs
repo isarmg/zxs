@@ -67,7 +67,7 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             session_epoch: 9,
             session_transition: SessionTransition::LoggingOut,
             password_change: PasswordChangeState::Unknown,
-            principal: "administrator".into(),
+            principal: Some("administrator".parse().unwrap()),
             page: Page::Details,
             ..Default::default()
         });
@@ -102,7 +102,7 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             assert_eq!(s.session_epoch, 9);
             assert_eq!(s.session_transition, SessionTransition::LoggingOut);
             assert_eq!(s.password_change, PasswordChangeState::Unknown);
-            assert_eq!(s.principal, "administrator");
+            assert_eq!(s.principal.as_ref().map(|p| p.as_str()), Some("administrator"));
             assert_eq!(
                 s.notices.message(),
                 Some(crate::files::publication_notice(crate::files::SaveStatus::Unknown).as_str())

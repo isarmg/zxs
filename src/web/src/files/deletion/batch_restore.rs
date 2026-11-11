@@ -8,7 +8,7 @@ use data_serialization::Deserialize;
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use storage_contract::{
-    FileDeletionNode, OperationId,
+    FileDeletionNode, OperationId, Principal,
     client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES,
     file_deletion_batch::{FileDeletionBatchUndoPreview, UNDO_KIND, UndoFileDeletionBatchBody},
 };
@@ -120,7 +120,7 @@ impl Request {
     pub(super) fn nodes(&self) -> &[FileDeletionNode] {
         &self.preview.deletion_nodes
     }
-    pub(super) fn digest(&self, principal: &str) -> Result<String, api::Error> {
+    pub(super) fn digest(&self, principal: &Principal) -> Result<String, api::Error> {
         #[derive(data_serialization::Serialize)]
         struct Input {
             deletion_operation_id: OperationId,

@@ -3,7 +3,7 @@
 use super::*;
 use crate::files::recovery_storage::Store;
 use data_serialization::{Deserialize, Serialize};
-use storage_contract::{ErrorCode, OperationId};
+use storage_contract::{ErrorCode, OperationId, Principal};
 mod receipt_lookup;
 mod request_text;
 
@@ -23,7 +23,7 @@ enum Format {
 #[serialization(deny_unknown_fields)]
 pub(super) struct Record {
     format: Format,
-    principal: String,
+    principal: Principal,
     operation: OperationId,
     file_id: HistoryFileId,
     history_root: HistoryRoot,
@@ -33,14 +33,14 @@ pub(super) struct Record {
 
 #[derive(Clone, Default)]
 pub(super) struct Queue {
-    owner: Option<(u64, String)>,
+    owner: Option<(u64, Principal)>,
     records: Vec<Record>,
     pub(super) error: Option<api::Error>,
 }
 impl Queue {
     pub(super) fn ready_for_new(&self, state: &State) -> bool {
         self.owner.as_ref().is_some_and(|(epoch, principal)| {
-            *epoch == state.session_epoch && *principal == state.principal
+            *epoch == state.session_epoch && Some(principal) == state.principal.as_ref()
         }) && self.error.is_none()
             && self.records.is_empty()
     }
@@ -59,16 +59,15 @@ fn wire_error(source: json_codec::Error) -> api::Error {
     )));
     error
 }
-fn prefix(principal: &str) -> String {
-    format!("{PREFIX}{}:", api::segment(principal))
+fn prefix(principal: &Principal) -> String {
+    format!("{PREFIX}{}:", api::segment(principal.as_str()))
 }
 impl Record {
     fn key(&self) -> String {
         format!("{}{}", prefix(&self.principal), self.operation)
     }
     fn selection(&self) -> Result<Selection, api::Error> {
-        if self.principal.is_empty()
-            || self.principal.len() > 1024
+        if self.principal.as_str().len() > 1024
             || self.label.len() > MAX_LABEL_BYTES
             || self.version_ids.windows(2).any(|pair| pair[0] >= pair[1])
         {
@@ -101,7 +100,7 @@ impl Record {
             label: attempt.target.path.clone(),
         }
     }
-    fn decode(key: &str, principal: &str, bytes: &str) -> Result<Self, api::Error> {
+    fn decode(key: &str, principal: &Principal, bytes: &str) -> Result<Self, api::Error> {
         if bytes.len() > wire::MAX_REQUEST_BYTES {
             return Err(api::error(
                 ErrorCode::ResourceLimit,
@@ -110,7 +109,7 @@ impl Record {
         }
         let record: Self = json_codec::from_str(bytes).map_err(wire_error)?;
         record.selection()?;
-        if record.principal != principal || record.key() != key {
+        if &record.principal != principal || record.key() != key {
             return Err(failure(
                 "Retirement recovery record does not belong to this exact account/key; it was not removed.",
             ));
@@ -159,7 +158,7 @@ impl Record {
     }
 }
 
-fn load(principal: &str) -> Result<Vec<Record>, api::Error> {
+fn load(principal: &Principal) -> Result<Vec<Record>, api::Error> {
     let mut records = BTreeMap::new();
     Store::open()?.scan(&prefix(principal), |key, bytes| {
         let record = Record::decode(key, principal, bytes)?;
@@ -222,10 +221,12 @@ pub(super) fn saved(model: &mut Model, record: Record) {
     model.recovery.records.push(record);
 }
 
-fn owner(state: &State) -> Option<(u64, String)> {
+fn owner(state: &State) -> Option<(u64, Principal)> {
     state
-        .session_active()
-        .then(|| (state.session_epoch, state.principal.clone()))
+        .principal
+        .as_ref()
+        .filter(|_| state.session_active())
+        .map(|principal| (state.session_epoch, principal.clone()))
 }
 pub(crate) fn restore(state: RwSignal<State>) {
     let Some(owner) = state.with_untracked(owner) else {
@@ -269,7 +270,7 @@ pub(super) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> bool 
         .iter()
         .find(|record| record.operation.to_string() == id)
         .is_none_or(|record| {
-            record.principal == state.principal
+            Some(&record.principal) == state.principal.as_ref()
                 && matches_request(
                     &record.file_id,
                     record.history_root,
@@ -299,7 +300,7 @@ fn open(state: RwSignal<State>, operation: OperationId, epoch: u64) {
         else {
             return;
         };
-        if record.principal != s.principal {
+        if Some(&record.principal) != s.principal.as_ref() {
             return;
         }
         match record.restored_attempt(epoch) {

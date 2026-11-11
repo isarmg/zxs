@@ -218,7 +218,14 @@ pub(super) fn attempt_view(state: RwSignal<State>) -> impl IntoView {
                         on:change=move |event|{let checked=event_target_checked(&event);operation.with_value(|id|state.update(|s|{
                             let principal=s.principal.clone();let active=s.session_active()&&s.session_epoch==epoch;
                             if let Some(a)=&mut s.files.node_retirement.attempt
-                                && active&&a.target.epoch==epoch&&a.principal==principal&&a.operation==*id&&!a.in_flight {a.retry_confirmed=checked;}
+                                && active
+                                && a.target.epoch == epoch
+                                && Some(&a.principal) == principal.as_ref()
+                                && a.operation == *id
+                                && !a.in_flight
+                            {
+                                a.retry_confirmed = checked;
+                            }
                         }));}/><span>{t("本机记录不是服务器回执。我已核对上述文件、原根及全部版本，确认只重发同一原操作的不可撤销退役请求。", "A local record is not a server receipt. I reviewed the file, original root and all versions, and confirm resubmitting only this original irreversible retirement request.")}</span>
                     </label>
                 </Show>

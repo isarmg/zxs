@@ -209,7 +209,7 @@ fn invalid_logout_success_preserves_credentials_and_the_revocation_retry_fence()
             });
             let state = RwSignal::new(State {
                 authenticated: true,
-                principal: "owner".into(),
+                principal: Some("owner".parse().unwrap()),
                 ..Default::default()
             });
             state.update(|s| assert_eq!(begin_logout(s), Some(1)));
@@ -219,7 +219,7 @@ fn invalid_logout_success_preserves_credentials_and_the_revocation_retry_fence()
                 assert_eq!(s.session_transition, SessionTransition::LogoutUnconfirmed);
                 assert!(!s.session_active());
                 assert!(s.session_failure.is_some());
-                assert_eq!(s.principal, "owner");
+                assert_eq!(s.principal.as_ref().map(|p| p.as_str()), Some("owner"));
                 assert_eq!(s.session_epoch, 1);
             });
             CREDENTIALS.with(|saved| {
@@ -337,7 +337,7 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
     assert_eq!(
         accept_restore(0, response.clone()).unwrap(),
         Authenticated {
-            principal: "owner".into()
+            principal: "owner".parse().unwrap()
         }
     );
     CREDENTIALS.with(|saved| {
@@ -351,7 +351,7 @@ fn validated_session_restoration_requires_the_original_credential_generation() {
     assert_eq!(
         accept_login(0, session_response()).unwrap(),
         Authenticated {
-            principal: "owner".into()
+            principal: "owner".parse().unwrap()
         }
     );
     assert_eq!(
@@ -500,5 +500,27 @@ fn random_identity_bytes_keep_operation_and_disk_wire_without_uuid_bit_rewriting
             json_codec::to_string(&disk).unwrap(),
             format!(r#""disk_{suffix}""#)
         );
+    }
+}
+
+#[test]
+fn authenticated_identity_keeps_exact_response_bytes_through_credential_replacement() {
+    for principal in [" ", " e\u{301}/账号 ", "é", "e\u{301}"] {
+        CREDENTIALS.with(|saved| *saved.borrow_mut() = Credentials::default());
+        let mut wire = session_response();
+        wire["principal"] = json!(principal);
+        let authenticated = accept_login(0, wire).unwrap();
+        assert_eq!(authenticated.principal.as_str(), principal);
+        let generation = CREDENTIALS.with(|saved| saved.borrow().generation);
+        let mut wire = restored_response();
+        wire["principal"] = json!(principal);
+        let restored = accept_restore(generation, wire.clone()).unwrap();
+        assert_eq!(restored, authenticated);
+        clear_session();
+        assert_eq!(
+            accept_restore(generation, wire).unwrap_err().code,
+            storage_contract::ErrorCode::SessionChanged,
+        );
+        assert_eq!(authenticated.principal.as_str(), principal);
     }
 }

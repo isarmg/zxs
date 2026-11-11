@@ -18,7 +18,7 @@ fn state() -> State {
     let mut state = State {
         authenticated: true,
         session_epoch: 7,
-        principal: "alice".into(),
+        principal: Some("alice".parse().unwrap()),
         ..Default::default()
     };
     state.management.storage = crate::management::Storage::Ready;
@@ -34,6 +34,7 @@ fn state() -> State {
 fn create() -> Record {
     Record::capture_directory_branch(
         &state(),
+        &"alice".parse().unwrap(),
         id("op", 1).parse().unwrap(),
         source(),
         "draft".into(),
@@ -50,6 +51,7 @@ fn historical_source() -> storage_contract::directory_git::HistoricalDirectoryBr
 fn historical_create() -> Record {
     Record::capture_historical_directory_branch(
         &state(),
+        &"alice".parse().unwrap(),
         id("op", 5).parse().unwrap(),
         historical_source(),
         "history-draft".into(),
@@ -59,7 +61,7 @@ fn historical_create() -> Record {
 fn checkout() -> Record {
     let stored = Stored {
         format: Format::DirectoryBranch,
-        principal: "alice".into(),
+        principal: "alice".parse().unwrap(),
         operation: id("op", 2).parse().unwrap(),
         slot: "P01".into(),
         path: Some(name_policy::PortablePath::parse("named/folder").unwrap()),
@@ -151,7 +153,7 @@ fn receipt(record: &Record) -> Value {
 #[test]
 fn create_round_trip_retains_exact_post_url_body_operation_and_all_source_fields() {
     let record = create();
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(record.request(), restored.request());
     assert_eq!(record.bytes, restored.bytes);
     let (method, url, body) = restored.request();
@@ -176,7 +178,7 @@ fn create_round_trip_retains_exact_post_url_body_operation_and_all_source_fields
 #[test]
 fn checkout_round_trip_keeps_put_and_the_original_branch_basis() {
     let record = checkout();
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(record.request(), restored.request());
     let (method, url, body) = restored.request();
     assert_eq!(method, "PUT");
@@ -214,12 +216,14 @@ fn root_and_named_root_are_explicit_and_never_guess_a_directory_identity() {
         source.directory_id = source.repository_id.clone();
         let record = Record::capture_directory_branch(
             &state,
+            &"alice".parse().unwrap(),
             id("op", 1).parse().unwrap(),
             source,
             "root-draft".into(),
         )
         .unwrap();
-        let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+        let restored =
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
         assert_eq!(restored.request(), record.request());
         assert_eq!(restored.request().2["path"], display);
     }
@@ -228,6 +232,7 @@ fn root_and_named_root_are_explicit_and_never_guess_a_directory_identity() {
     assert!(
         Record::capture_directory_branch(
             &state,
+            &"alice".parse().unwrap(),
             id("op", 1).parse().unwrap(),
             source(),
             "draft".into(),
@@ -256,7 +261,7 @@ fn malformed_source_and_recovery_records_are_rejected_without_changing_bytes() {
             .remove(field);
         let bytes = json_codec::to_string(&value).unwrap();
         assert!(
-            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes).is_err(),
             "{field}"
         );
     }
@@ -275,11 +280,11 @@ fn malformed_source_and_recovery_records_are_rejected_without_changing_bytes() {
         }
         let bytes = json_codec::to_string(&value).unwrap();
         assert!(
-            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes).is_err(),
             "{change}"
         );
     }
-    assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
+    assert!(Record::decode(&record.key(), &"bob".parse().unwrap(), &record.bytes).is_err());
     assert_eq!(record.bytes, original);
 }
 
@@ -321,7 +326,7 @@ fn navigation_retry_uses_the_retained_request_and_is_fenced_by_owner_and_phase()
         let operation = record.operation();
         let original = record.request();
         let mut state = state();
-        state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
+        state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone().unwrap()));
         state.files.mkdir.records.push(Retained {
             record: Arc::clone(&record),
             phase: Phase::Pending,
@@ -341,7 +346,7 @@ fn navigation_retry_uses_the_retained_request_and_is_fenced_by_owner_and_phase()
         state.files.mkdir.records[0].phase = Phase::Settled;
         assert!(retry_record(&state, 7, operation).is_none());
         state.files.mkdir.records[0].phase = Phase::Pending;
-        state.principal = "bob".into();
+        state.principal = Some("bob".parse().unwrap());
         assert!(retry_record(&state, 7, operation).is_none());
     }
 }
@@ -351,7 +356,7 @@ fn unknown_results_keep_material_and_account_changes_do_not_adopt_it() {
     let record = Arc::new(create());
     let operation = record.operation();
     let mut state = state();
-    state.files.mkdir.owner = Some((7, "alice".into()));
+    state.files.mkdir.owner = Some((7, "alice".parse().unwrap()));
     state.files.mkdir.records.push(Retained {
         record: Arc::clone(&record),
         phase: Phase::Pending,
@@ -364,21 +369,27 @@ fn unknown_results_keep_material_and_account_changes_do_not_adopt_it() {
     assert!(matches!(state.files.mkdir.records[0].phase, Phase::Pending));
     assert_eq!(state.files.mkdir.records[0].record.bytes, record.bytes);
     state.session_epoch = 8;
-    adopt_owner(&mut state, &(8, "alice".into()));
+    adopt_owner(&mut state, &(8, "alice".parse().unwrap()));
     assert_eq!(state.files.mkdir.records.len(), 1);
     assert!(retry_record(&state, 8, operation).is_some());
-    state.principal = "bob".into();
+    state.principal = Some("bob".parse().unwrap());
     state.session_epoch = 9;
-    adopt_owner(&mut state, &(9, "bob".into()));
+    adopt_owner(&mut state, &(9, "bob".parse().unwrap()));
     assert!(state.files.mkdir.records.is_empty());
-    assert_eq!(record.principal(), "alice");
+    assert_eq!(record.principal().as_str(), "alice");
 }
 
 #[test]
 fn existing_folder_creation_keeps_its_original_post_shape() {
     let state = state();
-    let record = Record::capture(&state, id("op", 3).parse().unwrap(), "new").unwrap();
-    let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+    let record = Record::capture(
+        &state,
+        &"alice".parse().unwrap(),
+        id("op", 3).parse().unwrap(),
+        "new",
+    )
+    .unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
     assert_eq!(record.request(), restored.request());
     assert_eq!(
         restored.request(),
@@ -394,10 +405,11 @@ fn existing_folder_creation_keeps_its_original_post_shape() {
 fn duplicate_keys_and_conflicting_same_operation_records_remain_blocked() {
     let original = Arc::new(create());
     let duplicate = format!("{{\"principal\":\"alice\",{}", &original.bytes[1..]);
-    assert!(Record::decode(&original.key(), "alice", &duplicate).is_err());
+    assert!(Record::decode(&original.key(), &"alice".parse().unwrap(), &duplicate).is_err());
     let changed = Arc::new(
         Record::capture_directory_branch(
             &state(),
+            &"alice".parse().unwrap(),
             original.operation(),
             source(),
             "different-name".into(),
@@ -442,9 +454,17 @@ fn first_empty_disk_cleanup_retry_requests_a_fresh_scan_before_new_writes() {
     state.files.directory.clear();
     state.files.repository_path.clear();
     state.files.repository_id.clear();
-    let record = Arc::new(Record::capture(&state, id("op", 3).parse().unwrap(), "first").unwrap());
+    let record = Arc::new(
+        Record::capture(
+            &state,
+            &"alice".parse().unwrap(),
+            id("op", 3).parse().unwrap(),
+            "first",
+        )
+        .unwrap(),
+    );
     assert!(!record.can_lookup());
-    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
+    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone().unwrap()));
     state.files.mkdir.records.push(Retained {
         record: Arc::clone(&record),
         phase: Phase::Settled,
@@ -492,7 +512,7 @@ fn ordinary_cleanup_needs_no_extra_scan_and_preserves_other_originals() {
     let record = Arc::new(create());
     let pending = Arc::new(checkout());
     let mut state = state();
-    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone()));
+    state.files.mkdir.owner = Some((state.session_epoch, state.principal.clone().unwrap()));
     state.files.mkdir.records = vec![
         Retained {
             record: Arc::clone(&record),
@@ -548,7 +568,13 @@ fn cleanup_of_one_record_cannot_erase_an_unrelated_recovery_failure() {
 
 #[test]
 fn shared_encoding_keeps_each_original_shape_bytes_digest_and_request() {
-    let folder = Record::capture(&state(), id("op", 3).parse().unwrap(), "new").unwrap();
+    let folder = Record::capture(
+        &state(),
+        &"alice".parse().unwrap(),
+        id("op", 3).parse().unwrap(),
+        "new",
+    )
+    .unwrap();
     let mut moved = folder.stored;
     moved.format = Format::ObjectMove;
     moved.namespace = Namespace::ObjectMove {
@@ -567,12 +593,19 @@ fn shared_encoding_keeps_each_original_shape_bytes_digest_and_request() {
         },
     };
     let movement = Record::encode(moved, "object move is oversized").unwrap();
-    let folder = Record::capture(&state(), id("op", 4).parse().unwrap(), "new").unwrap();
+    let folder = Record::capture(
+        &state(),
+        &"alice".parse().unwrap(),
+        id("op", 4).parse().unwrap(),
+        "new",
+    )
+    .unwrap();
     for record in [create(), checkout(), historical_create(), folder, movement] {
         let expected = storage_contract::canonical_json(&record.stored).unwrap();
         let encoded = Record::encode(record.stored, "request is oversized").unwrap();
         assert_eq!(encoded.bytes.as_bytes(), expected);
-        let restored = Record::decode(&encoded.key(), "alice", &encoded.bytes).unwrap();
+        let restored =
+            Record::decode(&encoded.key(), &"alice".parse().unwrap(), &encoded.bytes).unwrap();
         assert_eq!(restored.bytes, encoded.bytes);
         assert_eq!(restored.request(), encoded.request());
         assert_eq!(restored.digest, encoded.digest);
@@ -584,9 +617,9 @@ fn shared_encoding_keeps_each_original_shape_bytes_digest_and_request() {
 fn shared_encoding_keeps_the_exact_byte_limit_before_binding() {
     for extra in [0, 1] {
         let mut stored = create().stored;
-        stored.principal.clear();
-        let overhead = storage_contract::canonical_json(&stored).unwrap().len();
-        stored.principal = "a".repeat(MAX_RECORD_BYTES - overhead + extra);
+        let overhead = storage_contract::canonical_json(&stored).unwrap().len()
+            - stored.principal.as_str().len();
+        stored.principal = "a".repeat(MAX_RECORD_BYTES - overhead + extra).parse().unwrap();
         assert_eq!(
             storage_contract::canonical_json(&stored).unwrap().len(),
             MAX_RECORD_BYTES + extra,
@@ -642,7 +675,7 @@ fn historical_registration_round_trip_keeps_canonical_bytes_and_the_distinct_tre
     let record = historical_create();
     let expected = HISTORICAL_ORIGINAL;
     assert_eq!(record.bytes.as_ref(), expected);
-    let restored = Record::decode(&record.key(), "alice", expected).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), expected).unwrap();
     assert_eq!(restored.bytes, record.bytes);
     assert_eq!(restored.request(), record.request());
     assert_eq!(
@@ -707,12 +740,14 @@ fn historical_root_requires_explicit_null_and_binds_current_namespace() {
         .unwrap();
         let record = Record::capture_historical_directory_branch(
             &state,
+            &"alice".parse().unwrap(),
             id("op", 5).parse().unwrap(),
             source,
             "root-history".into(),
         )
         .unwrap();
-        let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+        let restored =
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &record.bytes).unwrap();
         let stored: Value = json_codec::from_str(&record.bytes).unwrap();
         assert_eq!(stored["namespace"]["request"]["repository_path"], Value::Null);
         assert_eq!(restored.request().2["path"], display);
@@ -731,6 +766,7 @@ fn historical_root_requires_explicit_null_and_binds_current_namespace() {
         assert!(
             Record::capture_historical_directory_branch(
                 &state,
+                &"alice".parse().unwrap(),
                 id("op", 5).parse().unwrap(),
                 historical_source(),
                 "history-draft".into(),
@@ -760,7 +796,7 @@ fn historical_recovery_requires_the_complete_current_source() {
             .remove(field);
         let bytes = json_codec::to_string(&stored).unwrap();
         assert!(
-            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes).is_err(),
             "{field}"
         );
     }
@@ -794,11 +830,11 @@ fn historical_recovery_rejects_malformed_path_and_unknown_fields() {
         }
         let bytes = json_codec::to_string(&stored).unwrap();
         assert!(
-            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes).is_err(),
             "{change}"
         );
     }
-    assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
+    assert!(Record::decode(&record.key(), &"bob".parse().unwrap(), &record.bytes).is_err());
     assert_eq!(record.request(), historical_create().request());
 }
 
@@ -852,7 +888,7 @@ fn historical_unknown_reload_and_session_change_keep_only_the_original_request()
     let operation = record.operation();
     let original = record.request();
     let mut state = state();
-    state.files.mkdir.owner = Some((7, "alice".into()));
+    state.files.mkdir.owner = Some((7, "alice".parse().unwrap()));
     state.files.mkdir.restore_records(Ok(vec![Arc::clone(&record)]));
     settle(
         &mut state.files.mkdir,
@@ -877,12 +913,12 @@ fn historical_unknown_reload_and_session_change_keep_only_the_original_request()
         &operation.to_string(),
         &receipt(&record)
     ));
-    adopt_owner(&mut state, &(8, "alice".into()));
+    adopt_owner(&mut state, &(8, "alice".parse().unwrap()));
     assert_eq!(retry_record(&state, 8, operation).unwrap().request(), original);
     assert_eq!(state.files.mkdir.records[0].record.bytes, record.bytes);
     state.session_epoch = 9;
-    state.principal = "bob".into();
-    adopt_owner(&mut state, &(9, "bob".into()));
+    state.principal = Some("bob".parse().unwrap());
+    adopt_owner(&mut state, &(9, "bob".parse().unwrap()));
     assert!(state.files.mkdir.records.is_empty());
     assert_eq!(record.request(), original);
 }
@@ -942,11 +978,11 @@ fn historical_recovery_byte_budget_keeps_the_exact_limit() {
     let record = historical_create();
     let mut bytes = record.bytes.to_string();
     bytes.push_str(&" ".repeat(MAX_RECORD_BYTES - bytes.len()));
-    let restored = Record::decode(&record.key(), "alice", &bytes).unwrap();
+    let restored = Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes).unwrap();
     assert_eq!(restored.bytes.as_ref(), bytes);
     assert_eq!(restored.request(), record.request());
     bytes.push(' ');
-    let error = match Record::decode(&record.key(), "alice", &bytes) {
+    let error = match Record::decode(&record.key(), &"alice".parse().unwrap(), &bytes) {
         Ok(_) => panic!("an oversized original must be refused"),
         Err(error) => error,
     };
@@ -961,6 +997,7 @@ fn historical_recovery_record_budget_preserves_all_originals() {
             Arc::new(
                 Record::capture_historical_directory_branch(
                     &state(),
+                    &"alice".parse().unwrap(),
                     id("op", u8::try_from(number).unwrap()).parse().unwrap(),
                     historical_source(),
                     "history-draft".into(),
@@ -975,6 +1012,7 @@ fn historical_recovery_record_budget_preserves_all_originals() {
     assert_eq!(model.records.len(), MAX_RECORDS);
     let extra = Record::capture_historical_directory_branch(
         &state(),
+        &"alice".parse().unwrap(),
         id("op", 99).parse().unwrap(),
         historical_source(),
         "history-draft".into(),
@@ -988,4 +1026,69 @@ fn historical_recovery_record_budget_preserves_all_originals() {
         assert!(matches!(retained.phase, Phase::Pending));
         assert_eq!(retained.record.request(), original.request());
     }
+}
+
+#[test]
+fn principal_preserves_historical_record_bytes_and_exact_recovery_ownership() {
+    for text in [" ", " e\u{301}/账号 ", "é", "e\u{301}"] {
+        let principal: Principal = text.parse().unwrap();
+        let bytes = HISTORICAL_ORIGINAL.replace("\"alice\"", &format!("\"{text}\""));
+        let key = format!("{}{}", prefix(&principal), id("op", 5));
+        let record = Record::decode(&key, &principal, &bytes).unwrap();
+        assert_eq!(record.principal(), &principal);
+        assert_eq!(record.bytes.as_ref(), bytes);
+        assert_eq!(storage_contract::canonical_json(&record.stored).unwrap(), bytes.as_bytes());
+        let mut state = state();
+        state.principal = Some(principal.clone());
+        state.files.mkdir.owner = Some((7, principal.clone()));
+        state.files.mkdir.records.push(Retained {
+            record: Arc::new(record),
+            phase: Phase::Pending,
+        });
+        assert!(blocks_writes(&state));
+        state.principal = None;
+        assert!(!blocks_writes(&state));
+        assert!(owner(&state).is_none());
+        assert_eq!(state.files.mkdir.records[0].record.principal(), &principal);
+        state.principal = Some(principal.clone());
+        state.session_epoch = 8;
+        assert!(!blocks_writes(&state));
+        adopt_owner(&mut state, &(8, principal.clone()));
+        assert!(blocks_writes(&state));
+        let other: Principal = "another-account".parse().unwrap();
+        state.principal = Some(other.clone());
+        state.session_epoch = 9;
+        adopt_owner(&mut state, &(9, other));
+        assert!(state.files.mkdir.records.is_empty());
+        assert_eq!(Record::decode(&key, &principal, &bytes).unwrap().bytes.as_ref(), bytes);
+    }
+}
+
+#[test]
+fn principal_recovery_admission_rejects_empty_missing_null_and_oversized_bytes() {
+    let principal: Principal = "alice".parse().unwrap();
+    let key = historical_create().key();
+    let original: Value = json_codec::from_str(HISTORICAL_ORIGINAL).unwrap();
+    for value in [json!(""), Value::Null, json!(3)] {
+        let mut changed = original.clone();
+        changed["principal"] = value;
+        assert_eq!(
+            Record::decode(&key, &principal, &changed.to_string()).err().unwrap().code,
+            ErrorCode::InvalidRequest,
+        );
+    }
+    let mut missing = original;
+    missing.as_object_mut().unwrap().remove("principal");
+    assert_eq!(
+        Record::decode(&key, &principal, &missing.to_string()).err().unwrap().code,
+        ErrorCode::InvalidRequest,
+    );
+    for length in [1024, 1025] {
+        let text = "a".repeat(length);
+        let principal = text.parse().unwrap();
+        let bytes = HISTORICAL_ORIGINAL.replace("alice", &text);
+        let key = format!("{}{}", prefix(&principal), id("op", 5));
+        assert_eq!(Record::decode(&key, &principal, &bytes).is_ok(), length == 1024);
+    }
+    assert!(Record::decode(&key, &principal, HISTORICAL_ORIGINAL).is_ok());
 }

@@ -3,7 +3,7 @@ use super::*;
 fn editor() -> Editor {
     let basis = Basis {
         epoch: 1,
-        principal: "alice".into(),
+        principal: "alice".parse().unwrap(),
         generation: 2,
         slot: "P01".into(),
         directory: String::new(),

@@ -2,6 +2,7 @@
 use super::*;
 use crate::files::recovery_storage::Store;
 use data_serialization::{Deserialize, Serialize};
+use storage_contract::Principal;
 use storage_contract::history_window::HistoryRepositoryId;
 
 mod directory;
@@ -46,7 +47,7 @@ enum Namespace {
 #[serialization(deny_unknown_fields)]
 struct Stored {
     format: Format,
-    principal: String,
+    principal: Principal,
     operation: OperationId,
     slot: String,
     #[serialization(deserialize_with = "required_path")]
@@ -64,7 +65,7 @@ impl Record {
     pub(super) fn operation(&self) -> OperationId {
         self.stored.operation
     }
-    pub(super) fn principal(&self) -> &str {
+    pub(super) fn principal(&self) -> &Principal {
         &self.stored.principal
     }
     fn path(&self) -> &str {
@@ -162,7 +163,7 @@ impl Record {
                 storage_contract::ProtectionAtPublish::TargetMet
             };
             return receipt["protection_at_publish"] == json!(protection)
-                && movement.matches_receipt(self.principal(), receipt);
+                && movement.matches_receipt(self.principal().as_str(), receipt);
         }
         if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
             return self.digest.as_deref() == receipt["request_digest"].as_str()
@@ -209,6 +210,7 @@ impl Record {
     }
     pub(super) fn capture(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
         name: &str,
     ) -> Result<Self, api::Error> {
@@ -237,7 +239,7 @@ impl Record {
         };
         let stored = Stored {
             format: Format::OriginalRequest,
-            principal: state.principal.clone(),
+            principal: principal.clone(),
             operation,
             slot: state.files.slot.clone(),
             path: Some(path),
@@ -250,6 +252,7 @@ impl Record {
     }
     pub(super) fn capture_relocation(
         state: &State,
+        principal: &Principal,
         operation: OperationId,
         movement: storage_contract::file_relocation::ObjectMoveRequest,
     ) -> Result<Self, api::Error> {
@@ -268,7 +271,7 @@ impl Record {
             .ok_or_else(|| failure("The captured object is no longer in the current listing."))?;
         let stored = Stored {
             format: Format::ObjectMove,
-            principal: state.principal.clone(),
+            principal: principal.clone(),
             operation,
             slot: state.files.slot.clone(),
             path: Some(
@@ -290,7 +293,7 @@ impl Record {
         let bytes = String::from_utf8(bytes).expect("invariant: canonical JSON is UTF-8");
         Self::bind(stored, Arc::from(bytes))
     }
-    fn decode(key: &str, principal: &str, bytes: &str) -> Result<Self, api::Error> {
+    fn decode(key: &str, principal: &Principal, bytes: &str) -> Result<Self, api::Error> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(limit(
                 "A folder recovery record exceeds 32 KiB; it was preserved.",
@@ -302,7 +305,7 @@ impl Record {
         let stored: Stored = storage_contract::StrictJson::parse(bytes.as_bytes())
             .and_then(|json| json.decode::<Stored>())
             .map_err(decode_error)?;
-        if stored.principal != principal {
+        if &stored.principal != principal {
             return Err(failure("The folder recovery account does not match."));
         }
         let record = Self::bind(stored, Arc::from(bytes))?;
@@ -314,7 +317,7 @@ impl Record {
         Ok(record)
     }
     fn bind(stored: Stored, bytes: Arc<str>) -> Result<Self, api::Error> {
-        if stored.principal.is_empty() || stored.principal.len() > 1024 {
+        if stored.principal.as_str().len() > 1024 {
             return Err(failure("The folder recovery account is invalid."));
         }
         name_policy::validate_slot(&stored.slot).map_err(|source| decode_error(source.into()))?;
@@ -426,10 +429,10 @@ fn decode_error(source: storage_contract::Error) -> api::Error {
     error.source = Some(Arc::new(api::ErrorSource::FolderCreationRecovery(source)));
     error
 }
-fn prefix(principal: &str) -> String {
-    format!("{PREFIX}{}:", api::segment(principal))
+fn prefix(principal: &Principal) -> String {
+    format!("{PREFIX}{}:", api::segment(principal.as_str()))
 }
-pub(super) fn load(principal: &str) -> Result<Vec<Arc<Record>>, api::Error> {
+pub(super) fn load(principal: &Principal) -> Result<Vec<Arc<Record>>, api::Error> {
     let mut records = Vec::new();
     Store::open()?.scan(&prefix(principal), |key, bytes| {
         if records.len() == MAX_RECORDS {

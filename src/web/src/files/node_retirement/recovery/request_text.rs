@@ -1,5 +1,6 @@
 //! Explicit text backup of an original intent.
 use super::*;
+use storage_contract::Principal;
 
 const MAX_ORIGIN_BYTES: usize = 2048;
 const MAX_TRANSFER_BYTES: usize = wire::MAX_REQUEST_BYTES + 4096;
@@ -46,7 +47,7 @@ impl Transfer {
         }
         Ok(bytes)
     }
-    fn decode(bytes: &str, origin: &str, principal: &str) -> Result<Self, api::Error> {
+    fn decode(bytes: &str, origin: &str, principal: &Principal) -> Result<Self, api::Error> {
         if bytes.len() > MAX_TRANSFER_BYTES {
             return Err(api::error(
                 ErrorCode::ResourceLimit,
@@ -62,7 +63,7 @@ impl Transfer {
         let transfer: Self = json_codec::from_value(value).map_err(wire_error)?;
         if transfer.origin.len() > MAX_ORIGIN_BYTES
             || transfer.origin != origin
-            || transfer.record.principal != principal
+            || &transfer.record.principal != principal
         {
             return Err(failure(t(
                 "恢复文本不属于当前准确站点和账号，未导入。不可修改来源或身份字段来绕过此限制。",
@@ -110,7 +111,7 @@ pub(super) fn export_view(state: RwSignal<State>, epoch: u64, record: Record) ->
 
 #[derive(Clone, Default)]
 struct Import {
-    owner: Option<(u64, String)>,
+    owner: Option<(u64, Principal)>,
     input: String,
     generation: u64,
     candidate: Option<Transfer>,
@@ -147,7 +148,7 @@ fn preview(state: RwSignal<State>, model: RwSignal<Import>) {
         }
     });
 }
-fn can_import(state: &State, owner: &(u64, String), record: &Record) -> bool {
+fn can_import(state: &State, owner: &(u64, Principal), record: &Record) -> bool {
     self::owner(state).as_ref() == Some(owner) && !state.files.mutation_pending
         && !state.files.node_retirement.attempt.as_ref().is_some_and(|attempt| attempt.in_flight)
         // An ID-only cached final status cannot authenticate newly imported bytes.

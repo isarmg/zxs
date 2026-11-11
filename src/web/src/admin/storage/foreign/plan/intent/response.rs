@@ -1,15 +1,16 @@
 use super::*;
+use storage_contract::Principal;
 
 pub(super) fn preview(
     value: Value,
     request: &ForeignIntentRequest,
     plan: &ForeignPlanPreview,
-    principal: &str,
+    principal: &Principal,
 ) -> Result<ForeignIntentPreview, api::Error> {
     let preview: ForeignIntentPreview = decode(value)?;
     if preview.request != *request
         || preview.plan != *plan
-        || preview.principal != principal
+        || preview.principal != principal.as_str()
         || !super::super::super::hash(&preview.intent_digest)
     {
         return Err(invalid(ResponseError::Identity));
