@@ -6,7 +6,8 @@
         "test_development_ci",
         "test_targeted_ci",
         "test_workflows",
-        "test_workflow_target_setup"
+        "test_workflow_target_setup",
+        "test_deletion_targeted_ci"
       ],
       "rust_targets": []
     },
@@ -826,6 +827,13 @@
     {
       "path": "test/web/unit/files/deletion/tests.rs",
       "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/ci/test_deletion_targeted_ci.py",
+      "groups": [
+        "ci-selection",
         "paged-deletion-review"
       ]
     }

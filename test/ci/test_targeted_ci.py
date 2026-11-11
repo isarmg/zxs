@@ -28,8 +28,8 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(len(plan['groups']), 2)
         self.assertIn('test_development_ci', plan['python_tests'])
 
-    def test_unknown_empty_and_documentation_only_changes_need_target_selection(self):
-        for changed in ([], ['src/server/src/lib.rs']):
+    def test_unknown_and_empty_changes_need_target_selection(self):
+        for changed in ([], ['__unmapped_fixture__/unknown.rs']):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 CI.select_plan(self.policy, changed)
 
