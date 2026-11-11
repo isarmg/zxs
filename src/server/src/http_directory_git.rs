@@ -2,12 +2,13 @@
 use crate::{
     ApiError, AppState, Backend,
     auth::Identity,
-    http_boundary::{ApiPath, ApiQuery},
+    http_boundary::{ApiPath, ApiQuery, Authenticated},
 };
 use data_serialization::Deserialize;
 use http_routing::{
     Extension, Json,
-    extract::{Request, State},
+    extract::{FromRequestParts, Request, State},
+    http::request::Parts,
     response::Response,
 };
 use json_codec::Value;
@@ -21,7 +22,7 @@ const MAX_DIRECTORY_GIT_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub(crate) struct StatusQuery {
+struct StatusQuery {
     path: String,
 }
 
@@ -44,19 +45,42 @@ fn path(value: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+pub(crate) struct StatusInput {
+    repository: storage_contract::RepositoryId,
+    path: Option<name_policy::LookupPath>,
+}
+
+impl StatusInput {
+    fn parse(repository: &str, query: StatusQuery) -> Result<Self, ApiError> {
+        let repository = repository.parse().map_err(ApiError::invalid_source)?;
+        let path = if query.path.is_empty() {
+            None
+        } else {
+            Some(name_policy::LookupPath::parse(&query.path).map_err(ApiError::invalid_source)?)
+        };
+        Ok(Self { repository, path })
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for StatusInput {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let ApiPath(repository) = ApiPath::<String>::from_request_parts(parts, state).await?;
+        let ApiQuery(query) = ApiQuery::<StatusQuery>::from_request_parts(parts, state).await?;
+        Self::parse(&repository, query)
+    }
+}
+
 pub(crate) async fn read(
     State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
-    ApiPath(repository): ApiPath<String>,
-    ApiQuery(query): ApiQuery<StatusQuery>,
+    Authenticated(identity): Authenticated,
+    input: StatusInput,
 ) -> Result<Response, ApiError> {
-    repository_id(&repository)?;
-    if !query.path.is_empty() {
-        name_policy::LookupPath::parse(&query.path).map_err(ApiError::invalid_source)?;
-    }
     crate::bounded_history_http::read(state, move |backend, cancellation| {
-        let status =
-            backend.directory_git_status(&identity, &repository, &query.path, cancellation)?;
+        let repository = input.repository.to_string();
+        let path = input.path.as_ref().map_or("", name_policy::LookupPath::as_str);
+        let status = backend.directory_git_status(&identity, &repository, path, cancellation)?;
         crate::history_window_encode::encode_bounded(&status, MAX_DIRECTORY_GIT_RESPONSE_BYTES)
     })
     .await
@@ -135,3 +159,7 @@ pub(crate) async fn stage_owned(
     })
     .await
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/http_directory_git.rs"]
+mod tests;

@@ -1293,6 +1293,52 @@
           "default_features": false
         }
       ]
+    },
+    "directory-git-status-http-boundary": {
+      "reason": "Typed repository and optional root/lookup path retain strict status query admission, cancellation, current authentication and read-only directory Git status; existing command workflows remain unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_directory_git::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::directory_git_status_input_errors_precede_capacity",
+            "backend_admission_tests::directory_git_status_only_admits_repository_and_lookup_path_domains",
+            "backend_admission_tests::directory_git_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "prefixes": [
+            "directory_git::"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3541,8 +3587,31 @@
       "groups": [
         "directory-scope-http-boundary"
       ]
+    },
+    {
+      "path": "src/server/src/http_directory_git.rs",
+      "groups": [
+        "directory-git-status-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_directory_git.rs",
+      "groups": [
+        "directory-git-status-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "directory-git-status-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/directory_git.rs",
+      "groups": [
+        "directory-git-status-http-boundary"
+      ]
     }
   ],
   "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections."
 }
-
