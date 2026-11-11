@@ -124,8 +124,12 @@ fn historical_registration_rejects_working_unknown_cross_directory_and_stale_sou
     initialize(&mut engine, &repo, "other");
     let other = commit(&mut engine, &repo, "other");
     let other_repo = engine
-        .create_disk_root("B01", "admin", OperationId::generate().unwrap())
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Other historical source").unwrap(),
+            "P01", 1, "admin", OperationId::generate().unwrap(),
+        )
         .unwrap();
+    assert_ne!(other_repo.repository_id, repo.repository_id);
     save(&mut engine, &other_repo, "file", b"other repository");
     initialize(&mut engine, &other_repo, "");
     let foreign = commit(&mut engine, &other_repo, "");

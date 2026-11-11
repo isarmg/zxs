@@ -3095,20 +3095,29 @@ fn historical_directory_branch_override_preserves_both_sources_and_revocation() 
         operation_id,
         action: crate::DiskDirectoryAction::HistoricalCreate(source.clone()),
     };
-    let error = fixture.backend.mutate_disk_directory(&fixture.identity, request()).unwrap_err();
-    assert_error(error, "mutate_disk_directory");
-    let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
-    assert_eq!(calls.len(), 1);
-    assert_identity(calls[0].identity.as_ref(), &fixture.identity);
-    assert_eq!(calls[0].arguments, json!({
-        "slot_id": "P01", "path": "Café", "name": "History", "operation_id": operation_id,
-        "action": {"kind": "historical_create", "source": source}
-    }));
+    for fail in [false, true] {
+        fixture.probe.fail.store(fail, Ordering::SeqCst);
+        let result = fixture.backend.mutate_disk_directory(&fixture.identity, request());
+        if fail {
+            assert_error(result.unwrap_err(), "mutate_disk_directory");
+        } else {
+            assert_eq!(result.unwrap(), recorded_operation(operation_id, "mutate_disk_directory"));
+        }
+        let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].method, "mutate_disk_directory");
+        assert_identity(calls[0].identity.as_ref(), &fixture.identity);
+        assert_eq!(calls[0].arguments, json!({
+            "slot_id": "P01", "path": "Café", "name": "History", "operation_id": operation_id,
+            "action": {"kind": "historical_create", "source": source}
+        }));
+    }
+    // Revocation is checked before dispatch to a successful backend.
+    fixture.probe.fail.store(false, Ordering::SeqCst);
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
-    assert_eq!(
-        fixture.backend.mutate_disk_directory(&fixture.identity, request()).unwrap_err().status,
-        401
-    );
+    let error = fixture.backend.mutate_disk_directory(&fixture.identity, request()).unwrap_err();
+    assert_eq!(error.status, 401);
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }
 
