@@ -816,7 +816,7 @@ pub(super) fn move_file(
         .repositories
         .get(request.repository_id.as_str())
         .ok_or_else(|| ApiError::invalid("the captured repository is no longer registered"))?;
-    if repo.primary_slot_id != command.slot_id {
+    if repo.primary_slot_id != command.slot_id.as_str() {
         return Err(ApiError::invalid(
             "the captured repository is not on this primary disk",
         ));
@@ -828,9 +828,13 @@ pub(super) fn move_file(
         } else {
             format!("{}/{}", repo.name, path.as_str())
         };
-        let (resolved, relative) =
-            resolve_existing(engine, &command.slot_id, &displayed, DiskAccess::Write)?
-                .ok_or_else(empty_directory)?;
+        let (resolved, relative) = resolve_existing(
+            engine,
+            command.slot_id.as_str(),
+            &displayed,
+            DiskAccess::Write,
+        )?
+        .ok_or_else(empty_directory)?;
         if resolved.repository_id != repository_id || relative != path.as_str() {
             return Err(ApiError::invalid(
                 "the destination leaves the captured disk namespace",
@@ -860,12 +864,12 @@ pub(super) fn move_object(
         .ok_or_else(|| {
             ApiError::invalid("the captured source repository is no longer registered")
         })?;
-    if source.primary_slot_id != command.source_slot_id {
+    if source.primary_slot_id != command.source_slot_id.as_str() {
         return Err(ApiError::invalid(
             "the source repository is not on the requested primary disk",
         ));
     }
-    for slot in [&command.source_slot_id, &request.target_slot_id] {
+    for slot in [command.source_slot_id.as_str(), request.target_slot_id.as_str()] {
         if disk(engine, slot)?.level != 1 {
             return Err(ApiError::new(
                 ::http::StatusCode::FORBIDDEN,

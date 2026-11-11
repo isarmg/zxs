@@ -1,19 +1,17 @@
 //! Repository labels use the full PortableName policy, not the shorter branch limit.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RepositoryName {
-    display: String,
+    display: name_policy::Name,
     key: String,
 }
 impl RepositoryName {
     pub fn parse(name: &str) -> crate::Result<Self> {
-        name_policy::validate_name(name)?;
-        Ok(Self {
-            display: name.into(),
-            key: name_policy::lookup_key(name),
-        })
+        let display = name_policy::Name::parse(name)?;
+        let key = display.key();
+        Ok(Self { display, key })
     }
     pub fn as_str(&self) -> &str {
-        &self.display
+        self.display.as_str()
     }
     pub fn key(&self) -> &str {
         &self.key

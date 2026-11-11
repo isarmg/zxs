@@ -1,6 +1,8 @@
 //! PortableName / PortablePath with fixed Unicode 16.0 data.
 #![forbid(unsafe_code)]
 mod error;
+mod name;
+pub use name::{LookupName, Name, SlotId};
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 use unicode::UnicodeNormalization;
@@ -21,6 +23,23 @@ impl PortablePath {
         Ok(Self {
             display: path.into(),
             key: path_key(path),
+        })
+    }
+    /// A name already proves component validity; paths add their aggregate budgets.
+    pub fn from_name(name: &Name) -> Result<Self> {
+        validate_path_budget(name.as_str())?;
+        Ok(Self {
+            display: name.as_str().into(),
+            key: name.key(),
+        })
+    }
+    /// Append one admitted component, checking only the combined path budgets.
+    pub fn join_name(&self, name: &Name) -> Result<Self> {
+        let display = format!("{}/{}", self.as_str(), name.as_str());
+        validate_path_budget(&display)?;
+        Ok(Self {
+            display,
+            key: format!("{}/{}", self.key(), name.key()),
         })
     }
     pub fn as_str(&self) -> &str {
@@ -185,7 +204,7 @@ pub fn validate_name(name: &str) -> Result<()> {
 }
 /// Validate an existing name reference without requiring NFC input. New names
 /// must still use `validate_name`; character and length restrictions are shared.
-pub fn validate_lookup_name(name: &str) -> Result<()> {
+pub(crate) fn validate_lookup_name(name: &str) -> Result<()> {
     validate_name_inner(name, NameUse::Lookup)
 }
 #[derive(Clone, Copy)]
@@ -338,3 +357,7 @@ impl<'de> data_serialization::Deserialize<'de> for LookupPath {
         Self::parse(&raw).map_err(data_serialization::de::Error::custom)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/naming/unit/names.rs"]
+mod name_tests;

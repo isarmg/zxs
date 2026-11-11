@@ -21,3 +21,29 @@ fn repository_names_keep_full_portable_limits_and_cached_unicode_keys() {
         assert!(std::error::Error::source(&error).is_some());
     }
 }
+
+#[test]
+fn naming_scalars_encode_original_bytes_and_reject_invalid_wire_values() {
+    for raw in ["Café", "Straße", "报告-2026.docx"] {
+        let bytes = json_codec::to_vec(raw).unwrap();
+        let name: name_policy::Name = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(json_codec::to_vec(&name).unwrap(), bytes);
+        let lookup: name_policy::LookupName = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(json_codec::to_vec(&lookup).unwrap(), bytes);
+    }
+    let bytes = json_codec::to_vec("Cafe\u{301}").unwrap();
+    let lookup: name_policy::LookupName = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(json_codec::to_vec(&lookup).unwrap(), bytes);
+    assert!(json_codec::from_slice::<name_policy::Name>(&bytes).is_err());
+    for raw in ["A", "Disk_01-X"] {
+        let bytes = json_codec::to_vec(raw).unwrap();
+        let slot: name_policy::SlotId = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(json_codec::to_vec(&slot).unwrap(), bytes);
+    }
+    for raw in ["", "CON.txt", "a/b"] {
+        let bytes = json_codec::to_vec(raw).unwrap();
+        assert!(json_codec::from_slice::<name_policy::Name>(&bytes).is_err());
+        assert!(json_codec::from_slice::<name_policy::LookupName>(&bytes).is_err());
+    }
+    assert!(json_codec::from_str::<name_policy::SlotId>("\"0disk\"").is_err());
+}

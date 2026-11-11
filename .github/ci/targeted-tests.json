@@ -223,6 +223,80 @@
           "name": "recovery-startup"
         }
       ]
+    },
+    "typed-name-consumers": {
+      "reason": "Name, LookupName and SlotId constructors, RepositoryName wire bytes, foreign mapping and intent, historical saves, listing lookup equivalence and source-slot HTTP admission; native and WASM downstream compilation",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "name-policy",
+          "manifest": "src/naming/Cargo.toml",
+          "prefixes": [
+            "name_tests::"
+          ],
+          "max_tests": 8
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "repository_name::tests::"
+          ],
+          "max_tests": 8
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "foreign_import::tests::",
+            "foreign_import::intent::tests::",
+            "historical_save::tests::"
+          ],
+          "max_tests": 40
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "backend_listing::tests::"
+          ],
+          "max_tests": 16,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "history_alias_operations::"
+          ],
+          "max_tests": 24,
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -697,7 +771,8 @@
     {
       "path": "src/engine/src/lib.rs",
       "groups": [
-        "held-directory-layout"
+        "held-directory-layout",
+        "typed-name-consumers"
       ]
     },
     {
@@ -992,13 +1067,15 @@
     {
       "path": "src/naming/src/lib.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "typed-name-consumers"
       ]
     },
     {
       "path": "src/server/src/engine_backend/file_manager.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "typed-name-consumers"
       ]
     },
     {
@@ -1219,6 +1296,108 @@
       ]
     },
     {
+      "path": "src/contract/src/repository_name.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/mod.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/intent.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/mapping.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/historical_save.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/naming/src/name.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_file_relocation.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_listing.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_object_move.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_relocation.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/http_object_move.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/contract/unit/repository_name.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/tests.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/naming/unit/names.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/history_alias_operations.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_listing.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "compliance/external-tests/integrated.json",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
       "path": "src/engine/src/business/directory.rs",
       "groups": [
         "portable-path-consumers"
@@ -1231,5 +1410,5 @@
       ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout."
 }

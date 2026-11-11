@@ -20,7 +20,8 @@ pub(crate) async fn submit(
     ApiPath(source_slot_id): ApiPath<String>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
-    name_policy::validate_slot(&source_slot_id).map_err(ApiError::invalid_source)?;
+    let source_slot_id =
+        name_policy::SlotId::parse(&source_slot_id).map_err(ApiError::invalid_source)?;
     let body: Body = json_codec::from_value(crate::json_body(request).await?)
         .map_err(ApiError::invalid_source)?;
     name_policy::validate_slot(&body.movement.target_slot_id).map_err(ApiError::invalid_source)?;

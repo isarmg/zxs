@@ -168,3 +168,29 @@ fn preview_query_requires_both_bounded_branch_and_tree_identities() {
         assert!(ReadListing::parse("P01".into(), pairs).is_err());
     }
 }
+
+#[test]
+fn selected_name_keeps_lookup_equivalence_and_component_boundaries() {
+    for (selected, key) in [("CAFE\u{301}", "café"), ("/File", "/file")] {
+        let request = query(&[
+            ("selected_path", selected),
+            ("selected_entry_id", "entry"),
+        ])
+        .unwrap();
+        assert_eq!(request.selected, Some((key.into(), "entry".into())));
+    }
+    let request = query(&[
+        ("path", "Folder"),
+        ("selected_path", "FOLDER/CAFE\u{301}"),
+        ("selected_entry_id", "entry"),
+    ])
+    .unwrap();
+    assert_eq!(request.selected, Some(("folder/café".into(), "entry".into())));
+    for selected in ["", "CON.txt", "a/b", "name.", "name/"] {
+        assert!(query(&[
+            ("selected_path", selected),
+            ("selected_entry_id", "entry"),
+        ])
+        .is_err());
+    }
+}

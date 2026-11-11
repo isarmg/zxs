@@ -20,7 +20,7 @@ const MAX_RETAINED_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Validated target syntax, not proof of a currently writable or empty target.
 pub struct ForeignImportIntentTarget {
-    slot: String,
+    slot: name_policy::SlotId,
     parent: Option<PortablePath>,
     names: BTreeMap<String, String>,
 }
@@ -30,7 +30,7 @@ impl ForeignImportIntentTarget {
         parent: Option<String>,
         names: BTreeMap<String, String>,
     ) -> Result<Self> {
-        name_policy::validate_slot(&slot)?;
+        let slot = name_policy::SlotId::parse(&slot)?;
         let parent = parent.as_deref().map(PortablePath::parse).transpose()?;
         Ok(Self {
             slot,
@@ -251,7 +251,7 @@ impl Engine {
         self.require_foreign_intent_operation(operation)?;
         let mapping = source.preview.map_to_primary(
             self,
-            &target.slot,
+            target.slot.as_str(),
             target.parent.as_ref(),
             &target.names,
         )?;
@@ -320,7 +320,7 @@ impl Engine {
         self.require_foreign_intent_operation(prepared.record.operation_id)?;
         let mapping = prepared.source.preview.map_to_primary(
             self,
-            &prepared.target.slot,
+            prepared.target.slot.as_str(),
             prepared.target.parent.as_ref(),
             &prepared.target.names,
         )?;

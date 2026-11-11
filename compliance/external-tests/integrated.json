@@ -150,6 +150,13 @@
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },
         {
+          "path": "test/naming/unit/names.rs",
+          "sha256": "bc9eb41a447b0a6095a7aa72ad3ec33cc1222047ac7ddb66ecf944479a59ebab",
+          "source": "test/naming/unit/names.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "bc9eb41a447b0a6095a7aa72ad3ec33cc1222047ac7ddb66ecf944479a59ebab"
+        },
+        {
           "path": "test/naming/unit/unicode/__test_api.rs",
           "sha256": "7358862ceccdc9949a140480b3eaef52117ef2b224cb743ea0ced4b64f96ebd9",
           "source": "src/naming/src/unicode/__test_api.rs",

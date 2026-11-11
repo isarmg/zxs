@@ -95,12 +95,12 @@
     "join_literal": 0,
     "json_value": 26,
     "long_line": 15,
-    "parse_discard": 3,
+    "parse_discard": 4,
     "state_leak": 0,
     "string_key_map": 39,
     "unreachable": 0,
     "unwrap_or_default": 1,
-    "validate_fn": 32,
+    "validate_fn": 31,
     "wildcard_arm": 21
   },
   "src/engine": {
@@ -120,13 +120,13 @@
     "invariant_as_error": 648,
     "join_literal": 467,
     "json_value": 465,
-    "long_line": 677,
-    "parse_discard": 128,
+    "long_line": 676,
+    "parse_discard": 131,
     "state_leak": 72,
     "string_key_map": 382,
     "unreachable": 65,
     "unwrap_or_default": 32,
-    "validate_fn": 273,
+    "validate_fn": 271,
     "wildcard_arm": 140
   },
   "src/interface": {
@@ -204,7 +204,7 @@
     "string_key_map": 0,
     "unreachable": 0,
     "unwrap_or_default": 0,
-    "validate_fn": 8,
+    "validate_fn": 11,
     "wildcard_arm": 3
   },
   "src/platform": {
@@ -246,17 +246,17 @@
     "fault_cfg": 0,
     "glob_super": 84,
     "hash_string": 18,
-    "id_string": 425,
+    "id_string": 423,
     "invariant_as_error": 141,
     "join_literal": 62,
     "json_value": 277,
     "long_line": 265,
-    "parse_discard": 32,
+    "parse_discard": 34,
     "state_leak": 51,
     "string_key_map": 122,
     "unreachable": 58,
     "unwrap_or_default": 14,
-    "validate_fn": 37,
+    "validate_fn": 34,
     "wildcard_arm": 86
   },
   "src/smb": {

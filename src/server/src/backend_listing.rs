@@ -129,7 +129,7 @@ impl ReadListing {
         ) {
             (None, None) => None,
             (Some(selected_path), Some(id)) if !id.is_empty() && id.len() <= 256 => {
-                name_policy::validate_lookup_name(
+                let name = name_policy::LookupName::parse(
                     selected_path
                         .rsplit('/')
                         .next()
@@ -140,14 +140,18 @@ impl ReadListing {
                     .rsplit_once('/')
                     .map(|(parent, _)| parent)
                     .unwrap_or("");
-                if name_policy::path_key(parent)
-                    != path.as_ref().map(|path| path.key()).unwrap_or("")
-                {
+                let parent_key = name_policy::path_key(parent);
+                if parent_key != path.as_ref().map(|path| path.key()).unwrap_or("") {
                     return Err(ApiError::invalid(
                         "selected entry must be a direct child of the requested directory",
                     ));
                 }
-                Some((name_policy::path_key(&selected_path), id))
+                let key = if selected_path.contains('/') {
+                    format!("{parent_key}/{}", name.key())
+                } else {
+                    name.key()
+                };
+                Some((key, id))
             }
             (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => {
                 return Err(ApiError::invalid(

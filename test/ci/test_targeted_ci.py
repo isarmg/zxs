@@ -212,6 +212,47 @@ class TargetedSelection(unittest.TestCase):
                          ['held-directory-layout', 'portable-path-consumers'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']], [187, 160])
 
+    def test_typed_name_source_and_provenance_paths_are_admitted(self):
+        paths = [
+            'src/contract/src/repository_name.rs', 'test/contract/unit/repository_name.rs',
+            'src/engine/src/business/mod.rs', 'src/engine/src/foreign_import/intent.rs',
+            'src/engine/src/foreign_import/mapping.rs', 'src/engine/src/historical_save.rs',
+            'src/engine/src/lib.rs', 'test/engine/unit/foreign_import/tests.rs',
+            'src/naming/src/lib.rs', 'src/naming/src/name.rs', 'test/naming/unit/names.rs',
+            'src/server/src/backend_file_relocation.rs', 'src/server/src/backend_listing.rs',
+            'src/server/src/backend_object_move.rs', 'src/server/src/engine_backend/file_manager.rs',
+            'src/server/src/http_file_relocation.rs', 'src/server/src/http_object_move.rs',
+            'test/server/integration/http_engine/history_alias_operations.rs',
+            'test/server/unit/backend_listing.rs']
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertIn('typed-name-consumers', CI.select_plan(self.policy, [path])['groups'])
+        for path in ['compliance/external-tests/integrated.json',
+                     'docs/THIRD_PARTY_RUST_SOURCES.md']:
+            with self.subTest(path=path):
+                self.assertEqual(CI.select_plan(self.policy, [path])['rust_targets'], [])
+        self.assertIn('portable-path-consumers', CI.select_plan(
+            self.policy, ['compliance/rust-sources.json'])['groups'])
+
+    def test_typed_name_overlap_retains_old_groups_with_fifteen_builds(self):
+        plan = CI.select_plan(self.policy, [
+            'src/naming/src/lib.rs', 'src/engine/src/lib.rs',
+            'src/contract/src/repository_name.rs',
+            'src/server/src/backend_listing.rs',
+            'test/server/integration/http_engine/history_alias_operations.rs',
+            '.github/ci/targeted-tests.json'])
+        self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
+                                         'portable-path-consumers', 'typed-name-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 15)
+        engine = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
+        self.assertEqual(engine['selection_groups'],
+                         ['held-directory-layout', 'portable-path-consumers', 'typed-name-consumers'])
+        http = next(target for target in plan['rust_targets'] if target.get('name') == 'http_engine')
+        self.assertEqual(http['features'], ['core'])
+        self.assertEqual([selection['prefixes'] for selection in http['selections']],
+                         [['backup_namespace::'], ['history_alias_operations::']])
+
     def test_invalid_inventory_is_rejected(self):
         self.assertEqual(CI.inventory('module::test: test\n\n1 test, 0 benchmarks\n'), ['module::test'])
         for invalid in ['unexpected output', 'x: test\nx: test\n']:

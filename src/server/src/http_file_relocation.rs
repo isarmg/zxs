@@ -19,7 +19,7 @@ pub(crate) async fn submit(
     ApiPath(slot_id): ApiPath<String>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
-    name_policy::validate_slot(&slot_id).map_err(ApiError::invalid_source)?;
+    let slot_id = name_policy::SlotId::parse(&slot_id).map_err(ApiError::invalid_source)?;
     let body: Body = json_codec::from_value(crate::json_body(request).await?)
         .map_err(ApiError::invalid_source)?;
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?

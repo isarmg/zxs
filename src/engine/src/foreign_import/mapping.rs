@@ -1,5 +1,5 @@
 use super::*;
-use name_policy::PortablePath;
+use name_policy::{Name, PortablePath};
 use std::collections::BTreeSet;
 
 impl ForeignImportPreview {
@@ -115,9 +115,8 @@ impl ForeignImportPreview {
         let mut seen = BTreeSet::new();
         let mut histories = Vec::new();
         for history in &self.histories {
-            let name = &names[&history.group_id];
-            name_policy::validate_name(name)?;
-            if !seen.insert(name_policy::lookup_key(name)) {
+            let name = Name::parse(&names[&history.group_id])?;
+            if !seen.insert(name.key()) {
                 return Err(Error::new(
                     ErrorCode::NameCollision,
                     "source histories map to colliding target names",
@@ -133,10 +132,10 @@ impl ForeignImportPreview {
                     "source history identity already exists in the target pool",
                 ));
             }
-            let path = PortablePath::parse(&parent.map_or_else(
-                || name.clone(),
-                |parent| format!("{}/{name}", parent.as_str()),
-            ))?;
+            let path = match parent {
+                Some(parent) => parent.join_name(&name)?,
+                None => PortablePath::from_name(&name)?,
+            };
             histories.push(ForeignMappedHistory {
                 group_id: history.group_id.clone(),
                 history_tree_id: history.manifest.history.history_tree_id.clone(),

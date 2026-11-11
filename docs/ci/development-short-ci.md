@@ -66,3 +66,12 @@ mode、compile_target 只构建一次；manifest 冲突失败。16 项上限按�
 同一测试只执行一次，采用所有适用选择中最短的 timeout。回执保留来源组、各自配置、
 各自选择结果与最终逐项 timeout，便于核对原范围。组合预算是这些独立预算的并集，
 而不是给单个选择扩容；超过任一原预算仍失败。不同特性、平台或执行模式分别构建。
+
+## 类型化名称的定向范围
+
+`typed-name-consumers` 覆盖 naming 的 `name_tests`、contract 的
+`repository_name::tests`、engine 的 foreign import mapping/intent 与 historical save、
+server listing 的查询名称等价性，以及 `http_engine` 的 `history_alias_operations`。
+HTTP 集成目标显式启用 `core`，包含 source slot 拒绝与 alias 历史行为。
+server 无默认特性的 native check 验证公开边界；web native 和 WASM release check
+验证名称/路径类型消费者的两种编译图。实际测试名称由当前构建的库存确定。

@@ -28,6 +28,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
+
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。

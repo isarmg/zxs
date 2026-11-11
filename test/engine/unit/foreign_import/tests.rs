@@ -263,6 +263,30 @@ fn mappings_bind_each_origin_and_refuse_collisions_unknown_groups_and_backup_tar
             .map_to_primary(&engine, "P01", None, &missing)
             .is_err()
     );
+    let group = preview.histories()[0].group_id().to_owned();
+    let mut unicode_names = names.clone();
+    unicode_names.insert(group.clone(), "Straße".into());
+    let unicode_mapping = preview
+        .map_to_primary(&engine, "P01", None, &unicode_names)
+        .unwrap();
+    assert!(unicode_mapping.histories().iter().any(|history| {
+        history.path().as_str() == "Straße" && history.path().key() == "strasse"
+    }));
+    for (name, code) in [
+        ("CON.txt".to_owned(), ErrorCode::NameReserved),
+        ("Cafe\u{301}".to_owned(), ErrorCode::NameNotNormalized),
+        ("a/b".to_owned(), ErrorCode::NameInvalidCharacter),
+        ("a".repeat(241), ErrorCode::NameTooLong),
+        ("a".repeat(201), ErrorCode::PathInvalid),
+    ] {
+        let mut invalid_names = names.clone();
+        invalid_names.insert(group.clone(), name);
+        let error = preview
+            .map_to_primary(&engine, "P01", None, &invalid_names)
+            .err()
+            .unwrap();
+        assert_eq!(error.code(), code);
+    }
     let mut collision = names;
     for name in collision.values_mut() {
         *name = "same".into();

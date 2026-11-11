@@ -160,7 +160,7 @@ pub use business::{
     CurrentObject, DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection,
     DirectoryGitStatusRead, FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
     FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest, NamespaceTree,
-    PreparedUpload, UploadPreparation, validate_branch_name,
+    PreparedUpload, UploadPreparation,
 };
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{

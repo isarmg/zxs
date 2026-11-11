@@ -691,3 +691,24 @@ async fn activity_typed_route_retains_query_authentication_and_wire_order() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn move_routes_keep_invalid_request_responses_for_malformed_source_slots() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let before = success(&app, &token, "GET", "/api/file-manager/history", None).await;
+    for endpoint in ["file-relocation", "object-move"] {
+        for slot in ["0disk".to_owned(), "_disk".to_owned(), "A".repeat(65)] {
+            let route = format!("/api/file-manager/disks/{slot}/{endpoint}");
+            let (status, failure) =
+                send(&app, Some(&token), "POST", &route, Some(json!({}))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(failure["error"]["code"], "INVALID_REQUEST");
+        }
+    }
+    assert_eq!(
+        success(&app, &token, "GET", "/api/file-manager/history", None).await,
+        before
+    );
+}

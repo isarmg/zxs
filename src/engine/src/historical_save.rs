@@ -311,7 +311,7 @@ impl Engine {
                 "historical file versions must be saved as independent file branches",
             ));
         }
-        crate::business::validate_branch_name(&options.name)?;
+        let name = storage_contract::BranchName::parse(&options.name)?;
         let repository = self.repository_for_history(history)?.clone();
 
         let source = self
@@ -328,7 +328,7 @@ impl Engine {
             })?;
         if self.state.branches.values().any(|branch| {
             branch.history_tree_id == history
-                && name_policy::lookup_key(&branch.name) == name_policy::lookup_key(&options.name)
+                && name_policy::lookup_key(&branch.name) == name.key()
         }) {
             return Err(Error::new(
                 storage_contract::ErrorCode::NameCollision,
@@ -428,7 +428,27 @@ impl Engine {
                 ));
             }
         }
-        let input = json!({"history_tree_id":history,"source_commit_id":source.commit_id,"name":options.name,"workspace_id":options.workspace_id,"sealed_manifest_hash":workspace.as_ref().map(workspace_manifest_hash).transpose()?,"workspace_fencing_token":workspace.as_ref().map(|workspace|workspace.fencing_token.to_string()),"expected_topology_generation":self.state.topology_generation.to_string(),"primary_slot_id":options.primary_slot_id,"target_copies":options.target_copies,"branch_creation":"placeholder-until-write","placeholder_files":entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File&&!entry.version_id.starts_with("staged:")).count(),"full_copy_bytes":total.to_string(),"full_copy_files":count,"required_bytes_by_slot":per_slot.iter().map(|(slot,bytes)|(slot.clone(),bytes.to_string())).collect::<BTreeMap<_,_>>()});
+        let input = json!({
+            "history_tree_id": history,
+            "source_commit_id": source.commit_id,
+            "name": name.as_str(),
+            "workspace_id": options.workspace_id,
+            "sealed_manifest_hash": workspace.as_ref().map(workspace_manifest_hash).transpose()?,
+            "workspace_fencing_token": workspace.as_ref()
+                .map(|workspace| workspace.fencing_token.to_string()),
+            "expected_topology_generation": self.state.topology_generation.to_string(),
+            "primary_slot_id": options.primary_slot_id,
+            "target_copies": options.target_copies,
+            "branch_creation": "placeholder-until-write",
+            "placeholder_files": entries.iter().filter(|entry| {
+                entry.kind == NamespaceEntryKind::File && !entry.version_id.starts_with("staged:")
+            }).count(),
+            "full_copy_bytes": total.to_string(),
+            "full_copy_files": count,
+            "required_bytes_by_slot": per_slot.iter()
+                .map(|(slot, bytes)| (slot.clone(), bytes.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        });
         let plan = Plan {
             plan_id,
             kind: "historical_save".into(),

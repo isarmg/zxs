@@ -68,7 +68,7 @@ fn unix_seconds(time: SystemTime) -> Result<u64> {
     Ok(time.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-pub fn validate_branch_name(name: &str) -> Result<()> {
+pub(crate) fn validate_branch_name(name: &str) -> Result<()> {
     storage_contract::validate_branch_name(name).map_err(Into::into)
 }
 
