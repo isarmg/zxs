@@ -625,8 +625,9 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: storage_contract::directory_history::DirectoryHistoryRequest,
-        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::directory_history::DirectoryHistoryPage, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -2480,4 +2481,129 @@ async fn content_match_only_admits_original_node_cursor_and_limit_domains() {
         assert_eq!(request(app.clone(), &route).await.status(), StatusCode::BAD_REQUEST);
     }
     assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
+}
+
+fn directory_history_route(repository: &str, directory: &str, suffix: &str) -> String {
+    format!("/api/repositories/{repository}/directories/{directory}/history{suffix}")
+}
+
+#[tokio::test]
+async fn directory_history_contract_errors_follow_query_shape_and_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    for suffix in ["", "/branches"] {
+        let route = directory_history_route("malformed", "malformed", suffix);
+        for query in ["limit=0", "unknown=true", "cursor=bad"] {
+            overloaded(app.clone(), &format!("{route}?{query}")).await;
+        }
+        for path in [
+            format!("{route}?limit=1&limit=2"),
+            directory_history_route("%FF", "malformed", suffix),
+            directory_history_route("malformed", "%FF", suffix),
+        ] {
+            let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &path))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn directory_history_retains_root_child_and_collection_domains() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let repo = "repo_00000000000000000000000000000000";
+    let child = "entry_00000000000000000000000000000000";
+    for suffix in ["", "/branches"] {
+        for directory in [repo, child] {
+            let route = directory_history_route(repo, directory, suffix);
+            assert_eq!(
+                request(app.clone(), &format!("{route}?limit=128")).await.status(),
+                StatusCode::NOT_IMPLEMENTED,
+            );
+        }
+        for (repository, directory, query, code) in [
+            ("bad", child, "unknown=true", "INVALID_ID"),
+            (repo, "file_00000000000000000000000000000000", "", "INVALID_ID"),
+            (repo, child, "unknown=true", "INVALID_REQUEST"),
+            (repo, child, "limit=0", "INVALID_REQUEST"),
+            (repo, child, "limit=129", "INVALID_REQUEST"),
+            (repo, child, "cursor=bad", "INVALID_CURSOR"),
+        ] {
+            let route = directory_history_route(repository, directory, suffix);
+            let response = request(app.clone(), &format!("{route}?{query}")).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let result: Value = json_codec::from_slice(&bytes).unwrap();
+            assert_eq!(result["error"]["code"], code);
+            assert!(result["error"].get("source").is_none());
+        }
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
+    let anchor = "anchor_tree_id=dtree_00000000000000000000000000000000";
+    let nodes = directory_history_route(repo, child, "");
+    assert_eq!(
+        request(app.clone(), &format!("{nodes}?{anchor}")).await.status(),
+        StatusCode::NOT_IMPLEMENTED,
+    );
+    let branches = directory_history_route(repo, child, "/branches");
+    assert_eq!(
+        request(app, &format!("{branches}?{anchor}")).await.status(),
+        StatusCode::BAD_REQUEST,
+    );
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test]
+async fn directory_history_cancellation_reaches_both_collection_backends() {
+    for suffix in ["", "/branches"] {
+        let root = crate::tests::private_tempdir();
+        let (app, gate, _release) = fixture(root.path(), 0, false);
+        let route = directory_history_route(
+            "repo_00000000000000000000000000000000",
+            "entry_00000000000000000000000000000000",
+            suffix,
+        );
+        let waiter = tokio::spawn(async move { request(app, &route).await });
+        tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert_eq!(gate.cancellations.lock().unwrap().len(), 1);
+        assert!(!gate.cancellations.lock().unwrap()[0].is_cancelled());
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+        assert_eq!(gate.finished.available_permits(), 0);
+        gate.release();
+        tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    }
 }

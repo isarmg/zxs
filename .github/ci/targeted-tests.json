@@ -1195,6 +1195,58 @@
           "default_features": false
         }
       ]
+    },
+    "directory-history-http-boundary": {
+      "reason": "Typed node/branch history requests retain path/query errors, capacity order, collection/root/cursor domains, cancellation and authenticated read-only graph responses.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backend_admission_tests::directory_history_contract_errors_follow_query_shape_and_capacity",
+            "backend_admission_tests::directory_history_retains_root_child_and_collection_domains",
+            "backend_admission_tests::directory_history_cancellation_reaches_both_collection_backends",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "directory_history::directory_history_http_is_read_only_root_bound_and_authenticated"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "directory_history::tests::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3382,6 +3434,36 @@
       "path": "test/contract/unit/content_matches.rs",
       "groups": [
         "content-match-http-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/http_directory_history.rs",
+      "groups": [
+        "directory-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "directory-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/directory_history.rs",
+      "groups": [
+        "directory-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/contract/src/directory_history.rs",
+      "groups": [
+        "directory-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/contract/unit/directory_history.rs",
+      "groups": [
+        "directory-history-http-boundary"
       ]
     }
   ],

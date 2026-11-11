@@ -29,7 +29,8 @@
 
 ## 新版规范的底层重构
 
-- [ ] 定向 CI 验证 T08 content-matches 请求提取器：path／query 结构解码后一次构造 ContentMatchRequest，原契约错误在容量准入后返回，保持限额与各 ID／根／游标解析顺序；验证取消、撤权、只读匹配、响应字节与冷重开。未本地编译或测试；其他 HTTP 入口继续逐域迁移。
+- [ ] 定向 CI 验证 T08 目录历史 nodes／branches 提取器：边界一次构造 DirectoryHistoryRequest，保留路径／query 结构及容量后契约错误、root／child 域和集合／cursor／anchor 约束；验证取消、当前授权与只读历史响应。未本地编译或测试；目录写入与未决删除布局不在本批范围。
+
 
 
 
