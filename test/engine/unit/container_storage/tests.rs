@@ -879,6 +879,7 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
         "original.txt",
         b"one unique full file",
     );
+    previous.sequence = item.version_sequence;
     let directory = prepare(&history, &item, b"one unique full file");
     let original = install_existing(&directory, &item).unwrap();
     let inode = fs::metadata(&original).unwrap().ino();

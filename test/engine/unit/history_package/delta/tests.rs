@@ -378,12 +378,10 @@ fn repeated_precise_generations_preserve_reverse_indices_and_untouched_history_s
 }
 
 #[test]
-fn exact_empty_and_control_writes_are_ignored_but_all_foreign_and_overflow_are_explicit() {
+fn nonprojected_controls_are_ignored_and_unknown_receipts_require_rebuild() {
     let before = dependency_fixture();
     let index = DerivedOwners::from_state(&before);
     let mut after = candidate(&before);
-    after.operations = Default::default();
-    after.operation_principals = Default::default();
     after.plans = Default::default();
     after.control_auth = Some(json!({"independent": true}));
     after.events.clear();
@@ -402,6 +400,7 @@ fn exact_empty_and_control_writes_are_ignored_but_all_foreign_and_overflow_are_e
         )* };
     }
     projected_fields!(unknown);
+    unknown! { operations, operation_principals, }
     let mut after = candidate(&before);
     after.branches.values_mut().next().unwrap().name = "unknown mutable iterator".into();
     assert!(
