@@ -494,3 +494,35 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 `GET /api/file-manager/files/{file}/shared-history?history_root=...` 返回 `SharedHistoryGraph`。从来源文件全部保留非空版本自动扩展同域文件连通分量，不需要逐对确认候选；真实文件、分支和事件身份不变。响应分别表示同文件祖先和非时间性等内容关系，包含当前无正文 D 节点及已清除正文的保留元数据，不合并稳定文件 ID，也不修改写入权限。
 
 当前范围限同一历史域。完整分量最多 64 文件、512 事件、256 分支、2048 祖先边、1 MiB JSON；请求索引最多 65,536 同域版本，扫描总计费最多 1,048,576 记录。工作／图超限为 429，不成功返回不完整连通分量；未知或重复查询参数 400、身份失效 401、文件不存在 404、根变化 409、编码超限 500。鉴权和当前根在锁外准备前后复核，槽持续持有到响应缓冲释放。跨域永久关联、解除关系和磁盘退出不由本读接口实现，详见[精确语义与复杂度](design/shared-file-history.md)。
+
+### 超预算单文件删除记录审阅与恢复
+
+完整 D 超过既有 4096 条 frontier 或 1 MiB 响应预算时，可使用以下管理员接口。
+所有读取在凭据复核和 Engine 所有权锁内绑定准确 file/D，摘要与分页不授予恢复权限。
+
+- `GET /api/files/{file}/deletion/summary?deletion_node_id={D}`：返回 `file_id`、
+  `node_id`、`repository_id`、`history_tree_id`、`path`、原 `operation_id`、`author`、
+  `sequence`、`created_at`、`branch_count` 和 `parent_count`。计数与时间均为十进制字符串。
+- `GET /api/files/{file}/deletion/branches?deletion_node_id={D}[&after={branch}]`：
+  按分支 ID 升序返回最多 100 个 `{branch_id,node_id}`；响应带 `file_id`、
+  `deletion_node_id`、`entries` 和显式 nullable 的 `next_after`。
+- `GET /api/files/{file}/deletion/parents?deletion_node_id={D}[&offset={decimal}]`：
+  按 D 原父边顺序返回最多 100 个节点 ID，响应带准确身份、`offset`、`entries` 和
+  显式 nullable 的 `next_offset`。位置是规范无符号十进制字符串；省略为零，等于父边数
+  返回空末页，超过父边数返回 400 `INVALID_REQUEST`。
+
+三种读取均复用 1 MiB 有界响应及并发槽。未知或重复查询字段、非法游标返回 400；
+精确 D 消失或被新 D 替换返回 404 `FILE_NODE_NOT_FOUND`，不能将旧分页接到新 D。
+分支页通过有序范围读取，父边页通过原序列切片读取；每页只构造本页投影。
+
+`POST /api/files/{file}/deletion/undo-summary` 的正文严格为
+`{deletion_node_id,operation_id}`，执行原 `file.delete.undo` 及原请求摘要规则。
+响应只将原结果的 `removed_deletion_node` 替换成上述 `removed_deletion_summary`；
+`restored_file_id`、`timestamp`、`membership_epoch`、`version_protection` 和 operation
+封套均保持原值。完整 D 与原永久收据继续保存，普通完整撤销端点保持原协议。
+
+`GET /api/file-deletion-undos/{operation}` 使用原操作主体与历史域的同锁授权，返回同一
+紧凑表示；其他 kind 返回 400 `INVALID_REQUEST`，其他主体返回 403。两种紧凑响应仍受
+1 MiB 上限约束，保留原 `commit_state`、`publication_sequence` 和未确定发布状态。
+响应丢失后查询原操作即可恢复确认，无需重发撤销或按路径猜测当前 D。原操作重试保持
+永久幂等；新操作仍须重新检查当前准确 D、路径、所有者和目录整批恢复围栏。

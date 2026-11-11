@@ -8,6 +8,7 @@ mod listing;
 mod recovery;
 mod request;
 mod restore;
+mod summary;
 mod view;
 mod wire;
 use crate::files::actions;
@@ -28,6 +29,32 @@ pub(crate) use view::view;
 use web_interface::{prelude::*, tasks::spawn_local};
 use wire::{Page, Summary};
 
+#[derive(Clone)]
+enum Inspection {
+    Complete(Arc<storage_contract::FileDeletionNode>),
+    Paged(summary::Model),
+}
+impl Inspection {
+    fn complete(&self) -> Option<&Arc<storage_contract::FileDeletionNode>> {
+        match self {
+            Self::Complete(node) => Some(node),
+            Self::Paged(_) => None,
+        }
+    }
+    fn paged(&self) -> Option<&summary::Model> {
+        match self {
+            Self::Complete(_) => None,
+            Self::Paged(model) => Some(model),
+        }
+    }
+    fn paged_mut(&mut self) -> Option<&mut summary::Model> {
+        match self {
+            Self::Complete(_) => None,
+            Self::Paged(model) => Some(model),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     directory: directory::Model,
@@ -42,7 +69,7 @@ pub(crate) struct Model {
     loading: bool,
     page: Option<Arc<Page>>,
     selected: Option<Summary>,
-    node: Option<Arc<storage_contract::FileDeletionNode>>,
+    node: Option<Inspection>,
     frontier_page: usize,
 }
 impl Model {
@@ -129,10 +156,31 @@ fn select(state: RwSignal<State>, selection: listing::Selection) {
         }
         state.update(|s| s.files.deletion.loading = false);
         match result {
-            Ok(node) => state.update(|s| s.files.deletion.node = node.map(Arc::new)),
+            Ok(node) => state.update(|s| {
+                s.files.deletion.node = node.map(|node| Inspection::Complete(Arc::new(node)));
+            }),
+            Err(error) if summary::needs_pages(error.code) => {
+                summary::load(state, summary, epoch, generation);
+            }
             Err(error) => fail(state, error),
         }
     });
+}
+
+pub(crate) fn outcome_endpoint(state: &State, id: &str) -> Option<String> {
+    let compact = recovery::compact_outcome(state, id)
+        || state
+            .files
+            .deletion
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| {
+                attempt.epoch == state.session_epoch
+                    && attempt.principal == state.principal
+                    && attempt.operation == id
+                    && matches!(&attempt.intent, request::Intent::UndoSummary(_))
+            });
+    compact.then(|| format!("/api/file-deletion-undos/{}", api::segment(id)))
 }
 
 fn undo_allowed(state: &State) -> bool {
@@ -141,12 +189,25 @@ fn undo_allowed(state: &State) -> bool {
         && !actions::pending(state)
         && state.files.deletion.open
         && !state.files.deletion.loading
-        && state.files.deletion.node.is_some()
+        && state
+            .files
+            .deletion
+            .node
+            .as_ref()
+            .and_then(Inspection::complete)
+            .is_some()
 }
 fn undo(state: RwSignal<State>, file_id: &str, deletion_node_id: &str) {
     let Some(node) = state.with_untracked(|s| {
         undo_allowed(s)
-            .then(|| s.files.deletion.node.clone())
+            .then(|| {
+                s.files
+                    .deletion
+                    .node
+                    .as_ref()
+                    .and_then(Inspection::complete)
+                    .cloned()
+            })
             .flatten()
             .filter(|node| node.file_id == file_id && node.node_id == deletion_node_id)
     }) else {

@@ -1,5 +1,5 @@
 //! Branch pages stay attached to the exact complete deletion node being reviewed.
-use crate::files::deletion::{batch_restore, restore};
+use crate::files::deletion::{Inspection, batch_restore, restore};
 use crate::ui::State;
 use std::{ops::Range, sync::Arc};
 use storage_contract::FileDeletionNode;
@@ -28,6 +28,7 @@ impl Target {
             || !model
                 .node
                 .as_ref()
+                .and_then(Inspection::complete)
                 .is_some_and(|node| Arc::ptr_eq(node, &self.node))
         {
             return None;

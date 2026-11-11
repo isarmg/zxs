@@ -28,14 +28,22 @@ fn state(node: Arc<FileDeletionNode>) -> State {
     state.session_epoch = 7;
     state.files.deletion.open = true;
     state.files.deletion.generation = 8;
-    state.files.deletion.node = Some(node);
+    state.files.deletion.node = Some(Inspection::Complete(node));
     state
 }
 fn target(state: &State) -> Target {
     Target {
         epoch: state.session_epoch,
         generation: state.files.deletion.generation,
-        node: state.files.deletion.node.clone().unwrap(),
+        node: state
+            .files
+            .deletion
+            .node
+            .as_ref()
+            .unwrap()
+            .complete()
+            .unwrap()
+            .clone(),
     }
 }
 
@@ -58,7 +66,14 @@ fn every_branch_is_reviewable_in_bounded_pages_without_changing_the_complete_nod
     target.turn(&mut state, Turn::Previous);
     assert_eq!(target.range(&state), Some(100..200));
     assert!(Arc::ptr_eq(
-        state.files.deletion.node.as_ref().unwrap(),
+        state
+            .files
+            .deletion
+            .node
+            .as_ref()
+            .unwrap()
+            .complete()
+            .unwrap(),
         &original,
     ));
     assert_eq!(original.branch_heads.len(), 201);
@@ -84,14 +99,14 @@ fn stale_page_click_cannot_turn_a_different_or_reread_deletion_node() {
     let old = target(&state);
     let mut replacement = (*node(201)).clone();
     replacement.node_id = id("fdel", 2);
-    state.files.deletion.node = Some(Arc::new(replacement));
+    state.files.deletion.node = Some(Inspection::Complete(Arc::new(replacement)));
     old.turn(&mut state, Turn::Next);
     assert!(old.range(&state).is_none());
     assert_eq!(state.files.deletion.frontier_page, 0);
     let fresh = target(&state);
     fresh.turn(&mut state, Turn::Next);
     assert_eq!(fresh.range(&state), Some(100..200));
-    state.files.deletion.node = Some(Arc::new((*fresh.node).clone()));
+    state.files.deletion.node = Some(Inspection::Complete(Arc::new((*fresh.node).clone())));
     fresh.turn(&mut state, Turn::Next);
     assert_eq!(state.files.deletion.frontier_page, 1);
 }

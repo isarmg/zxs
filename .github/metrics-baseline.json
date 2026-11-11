@@ -234,7 +234,7 @@
     "wildcard_arm": 6
   },
   "src/server": {
-    "api_path_literal": 161,
+    "api_path_literal": 166,
     "assert_fn_def": 59,
     "cfg_not_test": 2,
     "cfg_test_item": 48,
@@ -249,7 +249,7 @@
     "id_string": 425,
     "invariant_as_error": 141,
     "join_literal": 62,
-    "json_value": 274,
+    "json_value": 277,
     "long_line": 265,
     "parse_discard": 32,
     "state_leak": 51,
@@ -312,7 +312,7 @@
     "wildcard_arm": 3
   },
   "src/web": {
-    "api_path_literal": 139,
+    "api_path_literal": 145,
     "assert_fn_def": 22,
     "cfg_not_test": 0,
     "cfg_test_item": 21,
@@ -327,8 +327,8 @@
     "id_string": 96,
     "invariant_as_error": 3,
     "join_literal": 0,
-    "json_value": 154,
-    "long_line": 1430,
+    "json_value": 156,
+    "long_line": 1429,
     "parse_discard": 12,
     "state_leak": 0,
     "string_key_map": 33,

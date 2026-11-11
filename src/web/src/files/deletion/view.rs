@@ -1,5 +1,5 @@
 use crate::files::deletion::{
-    batch, batch_restore, directory, frontier, listing, load, request, restore,
+    Inspection, batch, batch_restore, directory, frontier, listing, load, request, restore, summary,
 };
 use crate::ui::State;
 use web_interface::{i18n::t, prelude::*};
@@ -57,7 +57,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <Show when=move ||state.with(|s|!s.files.deletion.loading&&s.files.deletion.page.is_none()&&s.files.deletion.selected.is_none())>
                         <p role="status">{t("列表尚未读取或已因操作结果失效。请重新读取；这里没有记录不代表原操作失败或文件已恢复。", "The list is unread or was invalidated by an operation result. Reload it; an empty panel does not prove that an operation failed or a file was restored.")}</p>
                     </Show>
-                    {move ||state.with(|s|s.files.deletion.node.clone()).map(|node| frontier::view(state,node))}
+                    {move ||state.with(|s|s.files.deletion.node.as_ref()
+                        .and_then(Inspection::complete).cloned())
+                        .map(|node| frontier::view(state,node))}
+                    {summary::view(state)}
                     {restore::view(state)}
                     {batch_restore::view(state)}
                     <Show when=move ||state.with(|s|!s.files.deletion.loading&&s.files.deletion.selected.is_some()&&s.files.deletion.node.is_none())>

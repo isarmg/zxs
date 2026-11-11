@@ -29,6 +29,7 @@ pub(super) enum Intent {
     DeleteBatch(Arc<batch::Request>),
     DeleteDirectory(Arc<directory::Request>),
     Undo(Arc<storage_contract::FileDeletionNode>),
+    UndoSummary(Arc<storage_contract::file_deletion_review::Summary>),
     UndoBatch(Arc<batch_restore::Request>),
     UndoDirectory(Arc<storage_contract::directory_git::DirectoryDeletionNode>),
 }
@@ -191,6 +192,7 @@ pub(super) fn submit_undo(state: RwSignal<State>, node: Arc<storage_contract::Fi
 pub(super) enum Body {
     Json(Value),
     BatchUndo(storage_contract::file_deletion_batch::UndoFileDeletionBatchBody),
+    SummaryUndo(storage_contract::file_deletion_review::UndoBody),
 }
 
 #[derive(data_serialization::Serialize)]
@@ -232,6 +234,15 @@ impl Intent {
                 );
             }
             Self::DeleteDirectory(request) => request.request(operation),
+            Self::UndoSummary(summary) => {
+                return (
+                    format!("/api/files/{}/deletion/undo-summary", summary.file_id),
+                    Body::SummaryUndo(storage_contract::file_deletion_review::UndoBody {
+                        deletion_node_id: summary.node_id,
+                        operation_id,
+                    }),
+                );
+            }
             Self::Undo(node) => (
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
                 json!({"deletion_node_id":node.node_id,"operation_id":operation}),
@@ -256,6 +267,7 @@ impl Intent {
             ),
             Self::DeleteBatch(request) => ("file.delete.batch", request.input()),
             Self::UndoBatch(request) => return request.digest(principal),
+            Self::UndoSummary(summary) => return summary::digest(summary, principal),
             Self::DeleteDirectory(request) => ("directory.delete", request.input()),
             Self::Undo(node) => (
                 "file.delete.undo",
@@ -311,6 +323,7 @@ impl Intent {
                     && receipt["result"]["removed_deletion_node"] == json!(node.as_ref())
             }
             Self::UndoDirectory(node) => directory::wire::undo_receipt_matches(node, receipt),
+            Self::UndoSummary(summary) => summary::receipt_matches(id, summary, receipt),
         }
     }
 }

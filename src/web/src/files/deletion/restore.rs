@@ -19,6 +19,7 @@ impl Target {
                 .deletion
                 .node
                 .as_ref()
+                .and_then(Inspection::complete)
                 .is_some_and(|node| Arc::ptr_eq(node, &self.node))
     }
 }
@@ -32,17 +33,18 @@ pub(super) struct SingleReview {
 pub(super) enum Review {
     Single(SingleReview),
     Batch(crate::files::deletion::batch_restore::Review),
+    Summary(summary::RestoreReview),
 }
 impl Review {
     pub(super) fn single(&self) -> Option<&SingleReview> {
         match self {
             Self::Single(review) => Some(review),
-            Self::Batch(_) => None,
+            Self::Batch(_) | Self::Summary(_) => None,
         }
     }
     pub(super) fn batch(&self) -> Option<&crate::files::deletion::batch_restore::Review> {
         match self {
-            Self::Single(_) => None,
+            Self::Single(_) | Self::Summary(_) => None,
             Self::Batch(review) => Some(review),
         }
     }
@@ -86,7 +88,7 @@ fn begin(state: RwSignal<State>, target: Target) {
         match result {
             Ok(Some(node)) => state.update(|s| {
                 let node = Arc::new(node);
-                s.files.deletion.node = Some(node.clone());
+                s.files.deletion.node = Some(Inspection::Complete(node.clone()));
                 s.files.deletion.restore_review = Some(Review::Single(SingleReview {
                     target: Target {
                         epoch: target.epoch,

@@ -48,29 +48,101 @@ def select_plan(policy, changed):
         targets.extend(group['rust_targets'])
     if len(python_tests) > 8 or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
         raise ValueError('invalid Python modules')
-    if len(targets) > 4 or not (targets or python_tests):
+    if len(targets) > 16 or not (targets or python_tests):
         raise ValueError('target selection must be bounded and nonempty')
-    packages = []
+    identities = []
     for target in targets:
-        if set(target) != {'package', 'manifest', 'prefixes', 'max_tests'}:
+        required = {'package', 'manifest'}
+        optional = {'prefixes', 'exact', 'whole', 'max_tests', 'kind', 'name', 'features',
+                    'default_features', 'mode', 'compile_target', 'timeout_seconds'}
+        if not required <= set(target) or set(target) - required - optional:
             raise ValueError('invalid Rust target fields')
         if not re.fullmatch(r'[a-z][a-z0-9-]+', target['package']):
             raise ValueError('invalid package name')
         if not re.fullmatch(r'(src|tools)/[a-z0-9_-]+/Cargo.toml', target['manifest']):
             raise ValueError('invalid manifest path')
-        prefixes = target['prefixes']
-        if (not isinstance(prefixes, list) or not prefixes or len(prefixes) > 16
-                or any(not re.fullmatch(r'(?:[a-z_][a-z0-9_]*::)+', p) for p in prefixes)
-                or len(set(prefixes)) != len(prefixes)):
-            raise ValueError('select nonempty module prefixes, not fixed test names')
-        if type(target['max_tests']) is not int or not 1 <= target['max_tests'] <= 160:
-            raise ValueError('test count budget must be between 1 and 160')
-        packages.append(target['package'])
-    if len(set(packages)) != len(packages):
-        raise ValueError('duplicate Rust package')
+        kind, mode = target.get('kind', 'lib'), target.get('mode', 'test')
+        if kind not in {'lib', 'test', 'bin'} or mode not in {'test', 'check'}:
+            raise ValueError('invalid target kind or execution mode')
+        if kind != 'lib' and not re.fullmatch(r'[a-z][a-z0-9_-]+', target.get('name', '')):
+            raise ValueError('named target requires its exact Cargo name')
+        if kind == 'lib' and 'name' in target:
+            raise ValueError('library name comes from the package')
+        features = target.get('features', [])
+        if (not isinstance(features, list) or len(set(features)) != len(features)
+                or any(not re.fullmatch(r'[a-z][a-z0-9_-]*', f) for f in features)):
+            raise ValueError('invalid features')
+        if type(target.get('default_features', True)) is not bool:
+            raise ValueError('default_features must be boolean')
+        cross = target.get('compile_target')
+        if cross not in {None, 'wasm32-unknown-unknown'} or (cross and mode != 'check'):
+            raise ValueError('only compile checks may select the reviewed WASM target')
+        if mode == 'check':
+            if set(target) & {'prefixes', 'exact', 'whole', 'max_tests'}:
+                raise ValueError('compile-only targets cannot claim test selection')
+        else:
+            prefixes, exact = target.get('prefixes', []), target.get('exact', [])
+            whole = target.get('whole', False)
+            if (type(whole) is not bool or not isinstance(prefixes, list)
+                    or not isinstance(exact, list) or len(prefixes) > 16 or len(exact) > 16
+                    or len(set(prefixes)) != len(prefixes) or len(set(exact)) != len(exact)
+                    or any(not re.fullmatch(r'(?:[a-z_][a-z0-9_]*::)+', n) for n in prefixes)
+                    or any(not re.fullmatch(r'[a-z_][a-z0-9_:]*', n) for n in exact)
+                    or not (whole or prefixes or exact) or (whole and (prefixes or exact))):
+                raise ValueError('invalid or empty test selection')
+            if type(target.get('max_tests')) is not int or not 1 <= target['max_tests'] <= 160:
+                raise ValueError('test count budget must be between 1 and 160')
+        if (type(target.get('timeout_seconds', 300)) is not int
+                or not 1 <= target.get('timeout_seconds', 300) <= 900):
+            raise ValueError('per-test timeout must be between 1 and 900 seconds')
+        identities.append((target['package'], kind, target.get('name'), tuple(features),
+                           target.get('default_features', True), mode, cross))
+    if len(set(identities)) != len(identities):
+        raise ValueError('duplicate Cargo target configuration')
     return {'groups': sorted(selected), 'changed_paths': sorted(changed),
             'python_tests': sorted(python_tests), 'rust_targets': targets,
             'unexecuted': policy['unexecuted']}
+
+
+def cargo_command(target, build):
+    mode, kind = target.get('mode', 'test'), target.get('kind', 'lib')
+    command = ['cargo', mode, '--locked', '--offline', '-p', target['package'], '--' + kind]
+    if kind != 'lib':
+        command.append(target['name'])
+    if mode == 'test':
+        command.append('--no-run')
+    if target.get('features'):
+        command += ['--features', ','.join(target['features'])]
+    if not target.get('default_features', True):
+        command.append('--no-default-features')
+    if target.get('compile_target'):
+        command += ['--target', target['compile_target'], '--release']
+    return command + ['--message-format=json', '--target-dir', str(build)]
+
+
+def current_artifact(output, target, root):
+    artifacts, finished = [], []
+    kind = target.get('kind', 'lib')
+    name = target['package'].replace('-', '_') if kind == 'lib' else target['name']
+    for line in output.splitlines():
+        item = json.loads(line)
+        if item.get('reason') == 'build-finished':
+            finished.append(item['success'])
+        if item.get('reason') != 'compiler-artifact':
+            continue
+        actual_kind = item['target']['kind']
+        matches_kind = (bool(actual_kind) and set(actual_kind) <= {'lib', 'rlib', 'cdylib'}
+                        if kind == 'lib' else actual_kind == [kind])
+        if (not matches_kind or item['target']['name'] != name
+                or Path(item['manifest_path']).resolve() != root / target['manifest']
+                or item['profile']['test'] != (target.get('mode', 'test') == 'test')):
+            continue
+        if not set(target.get('features', [])) <= set(item['features']):
+            raise ValueError('current artifact lacks requested features')
+        artifacts.append(item)
+    if finished != [True] or len(artifacts) != 1:
+        raise ValueError('missing unique current Cargo target artifact')
+    return artifacts[0]
 
 
 def inventory(output):
@@ -89,13 +161,17 @@ def selected_tests(names, ignored, target):
     if not set(ignored) <= set(names):
         raise ValueError('ignored inventory is outside complete inventory')
     eligible = set(names) - set(ignored)
-    selected = set()
-    for prefix in target['prefixes']:
+    selected = set(eligible) if target.get('whole', False) else set()
+    for name in target.get('exact', []):
+        if name not in eligible:
+            raise ValueError(f'missing or ignored exact test: {name}')
+        selected.add(name)
+    for prefix in target.get('prefixes', []):
         matching = {name for name in eligible if name.startswith(prefix)}
         if not matching:
             raise ValueError(f'empty selected module: {prefix}')
         selected.update(matching)
-    if len(selected) > target['max_tests']:
+    if not selected or len(selected) > target['max_tests']:
         raise ValueError('selected inventory exceeds reviewed budget')
     return sorted(selected)
 
@@ -173,28 +249,31 @@ class Run:
 
     def rust(self, target):
         build = self.directory / 'build'
-        output = self.command(['cargo', 'test', '--locked', '--offline', '-p', target['package'],
-                               '--lib', '--no-run', '--message-format=json',
-                               '--target-dir', str(build)], 1800)
-        artifacts, finished = [], []
-        for line in output.splitlines():
-            item = json.loads(line)
-            if item.get('reason') == 'build-finished':
-                finished.append(item['success'])
-            if (item.get('reason') == 'compiler-artifact'
-                    and item['profile']['test'] and item['target']['kind'] == ['lib']
-                    and Path(item['manifest_path']).resolve() == self.root / target['manifest']):
-                artifacts.append(item)
-        if finished != [True] or len(artifacts) != 1:
-            raise ValueError('missing unique current test artifact')
-        binary = Path(artifacts[0]['executable']).resolve()
+        mode = target.get('mode', 'test')
+        command = cargo_command(target, build)
+        output = self.command(command, 1800)
+        artifact = current_artifact(output, target, self.root)
+        if mode == 'check':
+            files = []
+            for filename in artifact['filenames']:
+                path = Path(filename).resolve()
+                if not path.is_relative_to(build) or not path.is_file():
+                    raise ValueError('compile artifact outside current build')
+                files.append({'path': str(path), 'sha256': digest(path)})
+            if not files:
+                raise ValueError('compile check emitted no target artifact')
+            self.summary['artifacts'].append({'configuration': target, 'files': files})
+            self.summary.setdefault('compiled', []).append(target)
+            self.save()
+            return
+        binary = Path(artifact['executable']).resolve()
         if not binary.is_relative_to(build) or not binary.is_file():
             raise ValueError('test executable outside current build')
         sha = digest(binary)
         names = inventory(self.command([str(binary), '--list', '--format', 'terse']))
         ignored = inventory(self.command([str(binary), '--list', '--ignored', '--format', 'terse']))
         selected = selected_tests(names, ignored, target)
-        evidence = {'package': target['package'], 'path': str(binary), 'sha256': sha,
+        evidence = {'configuration': target, 'package': target['package'], 'path': str(binary), 'sha256': sha,
                     'inventory': names, 'ignored': ignored, 'selected': selected,
                     'unexecuted': sorted(set(names) - set(selected))}
         self.summary['artifacts'].append(evidence)
@@ -202,9 +281,10 @@ class Run:
         for name in selected:
             if digest(binary) != sha:
                 raise ValueError('test executable changed after build')
-            output = self.command([str(binary), '--exact', name, '--test-threads=1'], 300)
+            output = self.command([str(binary), '--exact', name, '--test-threads=1'],
+                                  target.get('timeout_seconds', 300))
             passed_test(output, len(names))
-            self.summary['passed'].append({'package': target['package'], 'name': name})
+            self.summary['passed'].append({'configuration': target, 'name': name})
             self.save()
 
     def execute(self, action):
@@ -229,6 +309,8 @@ class Run:
                 passed_python((self.directory / f'{index:03}.stderr.log').read_text(),
                               suite.countTestCases())
                 self.summary['passed'].append({'python_module': name, 'tests': suite.countTestCases()})
+            if any(t.get('compile_target') for t in plan['rust_targets']):
+                self.command(['rustup', 'target', 'add', 'wasm32-unknown-unknown'], 300)
             for target in plan['rust_targets']:
                 self.rust(target)
             if digest(self.root / 'Cargo.lock') != lock:

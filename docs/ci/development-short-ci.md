@@ -45,3 +45,14 @@ foundation、quality、security 都保持未执行，不能用本批替代发行
 
 CI 路由和证据脚本变化只选择对应 Python 回归，自动入口不会先执行整个 static。
 并发组仍按 run ID 隔离；已有运行的取消由用户单独决定。
+
+## 扩展定向目标
+
+每项可显式指定 Cargo 的 lib、命名 test 或命名 bin，features 与 default_features。
+默认仍为本机 lib 测试。选择支持模块前缀、精确行为名或整个小型测试目标；每个
+目标均受非空与最多 160 项约束。相同包的不同集成目标及特性配置分别绑定回执。
+
+`mode: check` 表示单个指定目标的编译验证，不计入测试通过数。只有该项显式指定
+`compile_target: wasm32-unknown-unknown` 时安装 WASM 标准库并执行 release check。
+编译项保存当前 Cargo 成功回执及实际目标产物摘要；执行项仍保存二进制库存与逐项
+结果。包、manifest、target 名称/种类与要求的 features 必须匹配当前构建输出。

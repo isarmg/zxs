@@ -46,6 +46,10 @@ enum StoredIntent {
         #[serialization(deserialize_with = "stored_node")]
         deletion_node: storage_contract::FileDeletionNode,
     },
+    UndoSummary {
+        #[serialization(deserialize_with = "stored_summary")]
+        deletion_summary: storage_contract::file_deletion_review::Summary,
+    },
     UndoBatch {
         #[serialization(deserialize_with = "stored_batch_preview")]
         preview: storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview,
@@ -70,6 +74,22 @@ fn stored_node<'de, D: Deserializer<'de>>(
     }
     deserializer.deserialize_map(NodeObject)
 }
+fn stored_summary<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<storage_contract::file_deletion_review::Summary, D::Error> {
+    struct SummaryObject;
+    impl<'de> Visitor<'de> for SummaryObject {
+        type Value = storage_contract::file_deletion_review::Summary;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a named deletion-summary object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            Self::Value::deserialize(MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(SummaryObject)
+}
+
 fn stored_batch_preview<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, D::Error> {
@@ -161,6 +181,9 @@ impl Record {
                 })?;
                 request::Intent::Undo(Arc::new(deletion_node))
             }
+            StoredIntent::UndoSummary { deletion_summary } => {
+                request::Intent::UndoSummary(Arc::new(deletion_summary))
+            }
             StoredIntent::UndoBatch { preview } => {
                 request::Intent::UndoBatch(Arc::new(batch_restore::Request::admit(
                     preview.deletion_operation_id,
@@ -200,6 +223,9 @@ impl Record {
             },
             request::Intent::Undo(node) => StoredIntent::Undo {
                 deletion_node: node.as_ref().clone(),
+            },
+            request::Intent::UndoSummary(summary) => StoredIntent::UndoSummary {
+                deletion_summary: summary.as_ref().clone(),
             },
             request::Intent::UndoBatch(request) => StoredIntent::UndoBatch {
                 preview: request.preview().clone(),
@@ -274,3 +300,7 @@ pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
 #[cfg(test)]
 #[path = "../../../../../../test/web/unit/files/deletion/batch_restore_storage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../../test/web/unit/files/deletion/summary_storage_tests.rs"]
+mod summary_tests;

@@ -89,7 +89,9 @@ fn restore_action_requires_active_session_exact_read_and_settled_global_operatio
             s.management.storage = crate::management::Storage::Ready;
             s.files.deletion.open = true;
             s.files.deletion.node =
-                Some(Arc::new(wire::node(node(), &summary()).unwrap().unwrap()));
+                Some(Inspection::Complete(Arc::new(
+                    wire::node(node(), &summary()).unwrap().unwrap(),
+                )));
             assert!(undo_allowed(s));
             s.files.operations.push(FileOperation::unknown("original"));
         });

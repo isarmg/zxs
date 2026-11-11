@@ -43,6 +43,63 @@
           "max_tests": 100
         }
       ]
+    },
+    "paged-deletion-review": {
+      "reason": "Paged deletion approval, canonical contract, HTTP authority and recoverable Web state",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "file_deletion_review::tests::"
+          ],
+          "max_tests": 80
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "files::deletion::",
+            "files::actions::operation::tests::"
+          ],
+          "max_tests": 80
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "http_soft_deletion::"
+          ],
+          "max_tests": 80,
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "soft_deletion::public_http_deletion_is_discoverable_and_undo_is_exact_authenticated_and_durable"
+          ],
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "http_file_deletion::projection::tests::"
+          ],
+          "max_tests": 80,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -579,7 +636,199 @@
       "groups": [
         "ci-selection"
       ]
+    },
+    {
+      "path": "src/contract/src/file_deletion_review.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/contract/src/lib.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_methods.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_deletion.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_deletion/review.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_deletion.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_deletion/projection.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_deletion/review.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/server/src/lib.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/operation.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/frontier.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/recovery.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/recovery/storage.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/recovery/view.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/request.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/restore.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/summary.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/summary/read.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/summary/restore.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/summary/view.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/view.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_deletion_review.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc/deletion_review.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc/http_soft_deletion.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/server/unit/deletion_review_projection.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/frontier_tests.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/request_tests.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/summary_storage_tests.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/summary_tests.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/deletion/tests.rs",
+      "groups": [
+        "paged-deletion-review"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group."
 }

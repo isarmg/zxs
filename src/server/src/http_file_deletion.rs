@@ -179,3 +179,6 @@ pub(crate) async fn mutate(
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_file_deletion.rs"]
 mod tests;
+
+pub(crate) mod projection;
+pub(crate) mod review;

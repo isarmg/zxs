@@ -631,6 +631,35 @@ macro_rules! methods {
                     Err($crate::ApiError::unsupported())
                 }
 
+                fn file_deletion_summary(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _file: storage_contract::FileId,
+                    _deletion: storage_contract::FileDeletionId,
+                ) -> Result<storage_contract::file_deletion_review::Summary, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
+                fn file_deletion_branches(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _file: storage_contract::FileId,
+                    _deletion: storage_contract::FileDeletionId,
+                    _after: Option<storage_contract::BranchId>,
+                ) -> Result<storage_contract::file_deletion_review::BranchPage, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
+                fn file_deletion_parents(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _file: storage_contract::FileId,
+                    _deletion: storage_contract::FileDeletionId,
+                    _offset: u64,
+                ) -> Result<storage_contract::file_deletion_review::ParentPage, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
                 fn current_file_deletion(
                     &self,
                     _identity: &$crate::Identity,

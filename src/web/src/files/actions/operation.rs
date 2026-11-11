@@ -112,14 +112,13 @@ pub(crate) fn poll(state: RwSignal<State>) {
         return;
     };
     for id in operations {
+        let endpoint = state.with_untracked(|s| {
+            crate::files::deletion::outcome_endpoint(s, &id)
+                .unwrap_or_else(|| format!("/api/operations/{}/outcome", api::segment(&id)))
+        });
         state.update(|s| s.files.polling_operations.push(id.clone()));
         spawn_local(async move {
-            let result = api::request(
-                "GET",
-                &format!("/api/operations/{}/outcome", api::segment(&id)),
-                None,
-            )
-            .await;
+            let result = api::request("GET", &endpoint, None).await;
             complete_poll(state, epoch, &id, result);
         });
     }

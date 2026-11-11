@@ -1160,6 +1160,26 @@ fn router_shared(
             "/api/file-deletion-batches/undo",
             post(http_file_deletion::undo_batch),
         )
+        .route(
+            "/api/files/{file}/deletion/summary",
+            get(http_file_deletion::review::summary),
+        )
+        .route(
+            "/api/files/{file}/deletion/branches",
+            get(http_file_deletion::review::branches),
+        )
+        .route(
+            "/api/files/{file}/deletion/parents",
+            get(http_file_deletion::review::parents),
+        )
+        .route(
+            "/api/files/{file}/deletion/undo-summary",
+            post(http_file_deletion::review::undo),
+        )
+        .route(
+            "/api/file-deletion-undos/{operation}",
+            get(http_file_deletion::review::outcome),
+        )
         .route("/api/file-deletions", get(http_file_deletion::list))
         .route(
             "/api/files/{file}/deletion",

@@ -39,6 +39,14 @@ fn description(record: &Record) -> String {
             node.node_id,
             record.operation
         ),
+        request::Intent::UndoSummary(summary) => format!(
+            "{} · {} · {} · {} · {}",
+            t("按摘要恢复准确 D", "Restore exact D from its summary"),
+            summary.path.as_str(),
+            summary.file_id,
+            summary.node_id,
+            record.operation,
+        ),
         request::Intent::UndoDirectory(node) => format!(
             "{} · {} · {} · {} · {}",
             t("恢复准确目录删除节点", "Restore exact folder deletion"),
@@ -56,6 +64,7 @@ fn batch_details(record: &Record) -> impl IntoView + use<> {
         | request::Intent::DeleteDirectory(_)
         | request::Intent::UndoBatch(_)
         | request::Intent::Undo(_)
+        | request::Intent::UndoSummary(_)
         | request::Intent::UndoDirectory(_) => None,
     }
 }
@@ -67,6 +76,7 @@ fn batch_restore_details(record: &Record) -> impl IntoView + use<> {
         | request::Intent::DeleteBatch(_)
         | request::Intent::DeleteDirectory(_)
         | request::Intent::Undo(_)
+        | request::Intent::UndoSummary(_)
         | request::Intent::UndoDirectory(_) => None,
     }
 }
@@ -120,6 +130,7 @@ fn directory_details(record: &Record) -> impl IntoView + use<> {
         request::Intent::Delete(_)
         | request::Intent::DeleteBatch(_)
         | request::Intent::Undo(_)
+        | request::Intent::UndoSummary(_)
         | request::Intent::UndoBatch(_) => None,
     };
     details.map(|(scope, entries)| view! {

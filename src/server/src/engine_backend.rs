@@ -1362,6 +1362,35 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.restore_deleted_directory_admitted(identity, repository, request)
     }
+    fn file_deletion_summary(
+        &self,
+        identity: &Identity,
+        file: storage_contract::FileId,
+        deletion: storage_contract::FileDeletionId,
+    ) -> Result<storage_contract::file_deletion_review::Summary, ApiError> {
+        self.file_deletion_summary_admitted(identity, file, deletion)
+    }
+
+    fn file_deletion_branches(
+        &self,
+        identity: &Identity,
+        file: storage_contract::FileId,
+        deletion: storage_contract::FileDeletionId,
+        after: Option<storage_contract::BranchId>,
+    ) -> Result<storage_contract::file_deletion_review::BranchPage, ApiError> {
+        self.file_deletion_branches_admitted(identity, file, deletion, after)
+    }
+
+    fn file_deletion_parents(
+        &self,
+        identity: &Identity,
+        file: storage_contract::FileId,
+        deletion: storage_contract::FileDeletionId,
+        offset: u64,
+    ) -> Result<storage_contract::file_deletion_review::ParentPage, ApiError> {
+        self.file_deletion_parents_admitted(identity, file, deletion, offset)
+    }
+
     fn current_file_deletion(
         &self,
         identity: &Identity,

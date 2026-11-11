@@ -266,6 +266,15 @@ fn adopt_owner(state: &mut State, owner: &(u64, String)) {
         ..Default::default()
     };
 }
+pub(super) fn compact_outcome(state: &State, id: &str) -> bool {
+    let queue = &state.files.deletion.recovery;
+    queue.owns(state)
+        && queue.records.iter().any(|retained| {
+            retained.record.operation.to_string() == id
+                && matches!(&retained.record.intent, request::Intent::UndoSummary(_))
+        })
+}
+
 pub(super) fn receipt_matches(state: &State, id: &str, receipt: &Value) -> Option<bool> {
     let queue = &state.files.deletion.recovery;
     queue

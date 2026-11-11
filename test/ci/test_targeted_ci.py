@@ -35,7 +35,7 @@ class TargetedSelection(unittest.TestCase):
 
     def test_malformed_or_unbounded_target_is_rejected(self):
         for field, value in [('prefixes', []), ('max_tests', 0), ('max_tests', 161),
-                             ('prefixes', ['']), ('package', '--workspace')]:
+                             ('prefixes', ['']), ('package', '--workspace'), ('timeout_seconds', 901)]:
             policy = copy.deepcopy(self.policy)
             policy['groups']['held-directory-layout']['rust_targets'][0][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -78,6 +78,54 @@ class TargetedSelection(unittest.TestCase):
                        'Ran 1 test in 0.001s\n\nOK (skipped=1)\n']:
             with self.assertRaises(ValueError):
                 CI.passed_python(output, 1)
+
+    def test_named_core_integration_build_is_explicit(self):
+        target = {'package': 'storage-server', 'manifest': 'src/server/Cargo.toml',
+                  'kind': 'test', 'name': 'phase1_smb_rpc', 'features': ['core'],
+                  'prefixes': ['http_soft_deletion::'], 'max_tests': 30}
+        command = CI.cargo_command(target, '/build')
+        self.assertIn('--test', command)
+        self.assertIn('phase1_smb_rpc', command)
+        self.assertIn('--no-run', command)
+        self.assertEqual(command[command.index('--features') + 1], 'core')
+        self.assertNotIn('--lib', command)
+
+    def test_wasm_check_and_native_bin_check_do_not_claim_tests(self):
+        target = {'package': 'web-app', 'mode': 'check', 'compile_target': 'wasm32-unknown-unknown'}
+        command = CI.cargo_command(target, '/build')
+        self.assertEqual(command[:2], ['cargo', 'check'])
+        self.assertIn('--release', command)
+        self.assertIn('wasm32-unknown-unknown', command)
+        self.assertNotIn('--no-run', command)
+        binary = CI.cargo_command({'package': 'perf-check', 'mode': 'check',
+                                  'kind': 'bin', 'name': 'recovery-startup'}, '/build')
+        self.assertIn('recovery-startup', binary)
+        self.assertNotIn('--all-targets', binary)
+
+    def test_exact_selection_must_exist_and_be_runnable(self):
+        target = {'exact': ['module::test'], 'max_tests': 2}
+        self.assertEqual(CI.selected_tests(['module::test'], [], target), ['module::test'])
+        for names, ignored in [([], []), (['module::test'], ['module::test'])]:
+            with self.assertRaises(ValueError):
+                CI.selected_tests(names, ignored, target)
+
+    def test_artifact_kind_name_features_manifest_and_completion_are_bound(self):
+        target = {'package': 'web-app', 'manifest': 'src/web/Cargo.toml'}
+        item = {'reason': 'compiler-artifact', 'target': {'name': 'web_app',
+                'kind': ['cdylib', 'rlib']}, 'manifest_path': str(ROOT / target['manifest']),
+                'profile': {'test': True}, 'features': [], 'executable': '/build/web_app'}
+        def output(artifact, success=True):
+            return json.dumps(artifact) + '\n' + json.dumps({'reason': 'build-finished', 'success': success})
+        self.assertEqual(CI.current_artifact(output(item), target, ROOT), item)
+        for mutation in [{'target': {'name': 'other', 'kind': ['lib']}},
+                         {'manifest_path': '/different/Cargo.toml'},
+                         {'profile': {'test': False}}]:
+            with self.assertRaises(ValueError):
+                CI.current_artifact(output(dict(item, **mutation)), target, ROOT)
+        with self.assertRaises(ValueError):
+            CI.current_artifact(output(item, False), target, ROOT)
+        with self.assertRaises(ValueError):
+            CI.current_artifact(output(item), dict(target, features=['core']), ROOT)
 
     def test_invalid_inventory_is_rejected(self):
         self.assertEqual(CI.inventory('module::test: test\n\n1 test, 0 benchmarks\n'), ['module::test'])

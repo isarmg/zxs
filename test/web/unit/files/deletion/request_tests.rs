@@ -43,8 +43,9 @@ fn receipt(intent: &Intent, operation: &str) -> Value {
         Intent::DeleteBatch(_)
         | Intent::DeleteDirectory(_)
         | Intent::UndoDirectory(_)
+        | Intent::UndoSummary(_)
         | Intent::UndoBatch(_) => {
-            panic!("single-file fixture does not construct group receipts")
+            panic!("this fixture constructs complete single-file receipts")
         }
         Intent::Undo(node) => (
             "file.delete.undo",
@@ -210,7 +211,7 @@ fn undo_receipt_cannot_restore_another_node_and_close_keeps_unknown_fence() {
         let valid = receipt(&intent, &operation);
         let mut initial = ready();
         initial.files.deletion.open = true;
-        initial.files.deletion.node = Some(deleted);
+        initial.files.deletion.node = Some(Inspection::Complete(deleted));
         initial.files.deletion.attempt = Some(attempt(intent, &operation));
         initial.files.slot.clear();
         initial
@@ -246,7 +247,7 @@ fn stale_undo_button_and_unknown_attempt_do_not_generate_new_browser_requests() 
         let state = RwSignal::new(ready());
         state.update(|s| {
             s.files.deletion.open = true;
-            s.files.deletion.node = Some(Arc::new(node(&id("op", 7))));
+            s.files.deletion.node = Some(Inspection::Complete(Arc::new(node(&id("op", 7)))));
         });
         super::super::undo(state, &id("file", 1), &id("fdel", 2));
         assert!(state.with_untracked(|s| s.files.operations.is_empty()));

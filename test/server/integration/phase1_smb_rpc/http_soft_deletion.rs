@@ -227,3 +227,6 @@ fn soft_delete_adapter_checks_current_auth_and_preserves_cross_interface_receipt
         second.result["deletion_node"]["node_id"].as_str().unwrap()
     );
 }
+
+#[path = "deletion_review.rs"]
+mod deletion_review;
