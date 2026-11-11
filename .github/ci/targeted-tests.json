@@ -172,6 +172,9 @@
             "engine_backend::admission::tests::",
             "engine_backend::file_manager::history_nodes::tests::",
             "engine_backend::read_projection::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors"
           ]
         },
         {
@@ -1251,6 +1254,12 @@
     },
     {
       "path": "test/server/integration/http_engine/backup_namespace.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/authorized_backend.rs",
       "groups": [
         "portable-path-consumers"
       ]

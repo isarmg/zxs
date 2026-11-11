@@ -1559,7 +1559,7 @@ impl Backend for RecordingBackend {
         self.record(
             "upload",
             Some(identity),
-            upload_arguments(workspace, item, path, source),
+            upload_arguments(workspace, item, path.as_str(), source),
         )?;
         Ok(staged_result("upload", path, source, 1))
     }
@@ -1572,7 +1572,7 @@ impl Backend for RecordingBackend {
         source: &UploadSource,
         generation: u64,
     ) -> Result<storage_contract::StagedFile, ApiError> {
-        let mut arguments = upload_arguments(workspace, item, path, source);
+        let mut arguments = upload_arguments(workspace, item, path.as_str(), source);
         arguments["generation"] = generation.into();
         self.record("upload_generation", Some(identity), arguments)?;
         Ok(staged_result("upload_generation", path, source, generation))
