@@ -300,6 +300,15 @@ impl DiskRoot {
         file.map(|file| operation.into_read_file(file)).transpose()
     }
 
+    pub(crate) fn open_optional_read_relative(
+        &self,
+        path: &RelativePath,
+    ) -> Result<Option<ReadFile>> {
+        let operation = self.operation()?;
+        let file = operation.open_optional_relative_regular(path)?;
+        file.map(|file| operation.into_read_file(file)).transpose()
+    }
+
     /// Copy, error cleanup and publication share one operation. Only the synced
     /// file survives, with that same admission transferred into a revocable owner.
     pub(crate) fn verified_copy<'a>(
@@ -585,6 +594,15 @@ impl DiskRoot {
 
     pub(crate) fn write_atomic(&self, path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
         self.operation()?.write_atomic(path, bytes, replace)
+    }
+
+    pub(crate) fn write_relative_atomic(
+        &self,
+        path: &RelativePath,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        self.operation()?.write_relative_atomic(path, bytes, replace)
     }
 
     pub(crate) fn write_json<T: Serialize + ?Sized>(

@@ -3,12 +3,18 @@ use crate::journal::RecordType;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
+#[path = "layout_tests.rs"]
+mod layout_tests;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "membership_io_tests.rs"]
 mod membership_io_tests;
 #[path = "scope_tests.rs"]
 mod scope_tests;
+
+fn path(disk: &DiskConfig) -> std::path::PathBuf {
+    disk.root.join("metadata/replay-checkpoint.json")
+}
 
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();

@@ -9,8 +9,8 @@
 //! can restore the admitted current namespace, not merely its raw snapshot.
 use super::Engine;
 use crate::journal::RecordType;
-use crate::{disk::*, journal::*, *};
 use crate::persist::layout;
+use crate::{disk::*, journal::*, *};
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -122,10 +122,6 @@ struct Envelope {
     checkpoint: Checkpoint,
     hash: String,
 }
-fn path(d: &DiskConfig) -> std::path::PathBuf {
-    d.root.join("metadata/replay-checkpoint.json")
-}
-
 fn checkpoint_disk<'a>(engine: &'a Engine, disk: &DiskConfig) -> Result<&'a DiskHandle> {
     let held = engine.disk_resources.get(disk)?;
     let stored = decode_seal(&held.root.read_bytes_observed(
@@ -249,7 +245,7 @@ fn relative_parts(path: &Path) -> Result<Vec<&str>> {
 }
 fn excluded(path: &Path) -> bool {
     path == Path::new("metadata/application-log")
-        || path == Path::new("metadata/replay-checkpoint.json")
+        || path == layout::REPLAY_CHECKPOINT.as_path()
 }
 fn append_only(root: &DiskRoot, path: &Path) -> Result<bool> {
     let parts = relative_parts(path)?;
@@ -701,7 +697,7 @@ pub(super) fn load(
             .disk_resources
             .get(d)?
             .root
-            .open_optional_read_regular(&path(d))?
+            .open_optional_read_relative(&layout::REPLAY_CHECKPOINT)?
         else {
             return Ok(None);
         };
@@ -859,7 +855,7 @@ pub(super) fn save(
             .disk_resources
             .get(d)?
             .root
-            .write_atomic(&path(d), &bytes, true)?;
+            .write_relative_atomic(&layout::REPLAY_CHECKPOINT, &bytes, true)?;
     }
     Ok(())
 }

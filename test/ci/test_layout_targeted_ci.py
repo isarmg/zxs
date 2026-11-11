@@ -12,6 +12,8 @@ SPEC.loader.exec_module(CI)
 
 # Compiled inventory: run 42988331435, artifact 13840114727, SHA 6b311c0d.
 # 190 selected names include three ignored tests; all 187 runnable tests remain selected.
+# Checkpoint layout adds three behaviors, so this candidate has 190 runnable tests.
+# This addition is a static source count; CI must re-enumerate the compiled inventory.
 # Record module sizes, not test names, so legitimate behavior renames remain possible.
 # Each tuple is (prefix, runnable count, ignored count).
 MODULE_SIZES = [
@@ -25,7 +27,7 @@ MODULE_SIZES = [
     ('engine::membership_transition::pending::terminal_resume::', 47, 1),
     ('engine::membership_transition::pending::activation::backup::startup::resume::', 4, 0),
     ('engine::backup_preparation::tests::', 7, 0),
-    ('engine::recovery_checkpoint::tests::', 50, 0),
+    ('engine::recovery_checkpoint::tests::', 53, 0),
     ('engine::history_move_decision::choice::tests::', 6, 0),
     ('engine::backup_preparation::native_control::databases::scoped::cutover::'
      'registration::target_seals::store::tests::', 8, 0),
@@ -67,8 +69,8 @@ class LayoutTargetedCi(unittest.TestCase):
         selected = CI.selected_tests(self.runnable + self.ignored + unrelated,
                                      self.ignored, self.target)
         self.assertEqual(selected, sorted(self.runnable))
-        self.assertEqual(len(selected), 187)
-        self.assertEqual(self.target['max_tests'], 187)
+        self.assertEqual(len(selected), 190)
+        self.assertEqual(self.target['max_tests'], 190)
         self.assertEqual(len(self.ignored), 3)
 
     def test_one_more_selected_test_requires_review(self):
@@ -109,16 +111,18 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
 
     def test_shared_layout_keeps_both_independent_budgets_and_their_full_union(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs'])
-        self.assertEqual(plan['groups'], ['held-directory-layout', 'projection-cache-layout'])
+        self.assertEqual(plan['groups'],
+                         ['checkpoint-layout', 'held-directory-layout', 'projection-cache-layout'])
         engine = next(target for target in plan['rust_targets']
-                      if target['package'] == 'storage-engine')
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [187, 52])
+                      if target['package'] == 'storage-engine'
+                      and target.get('mode', 'test') == 'test' and not target.get('features'))
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [190, 52])
         layout = [f'{prefix}behavior_{index}'
                   for prefix, count, _ in MODULE_SIZES for index in range(count)]
         selected = CI.selected_tests(layout + self.runnable + self.ignored,
                                      self.ignored, engine)
         self.assertEqual(selected, sorted(layout + self.runnable))
-        self.assertEqual(len(selected), 239)
+        self.assertEqual(len(selected), 242)
         self.assertEqual({target['package'] for target in plan['rust_targets']},
                          {'storage-engine', 'platform-io'})
 
@@ -138,6 +142,66 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
             names = [name for name in self.runnable if not name.startswith(prefix)]
             with self.subTest(prefix=prefix), self.assertRaises(ValueError):
                 CI.selected_tests(names, [], self.target)
+
+
+class CheckpointLayoutTargetedCi(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    def test_product_check_and_explicit_injection_tests_keep_separate_builds(self):
+        paths = [
+            'src/engine/src/engine/recovery_checkpoint.rs',
+            'test/engine/unit/engine/recovery_checkpoint/tests.rs',
+            'test/engine/unit/engine/recovery_checkpoint/layout_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['checkpoint-layout', 'held-directory-layout'])
+                product = next(target for target in plan['rust_targets']
+                               if target.get('mode') == 'check')
+                self.assertEqual(product['package'], 'storage-engine')
+                self.assertFalse(product['default_features'])
+                self.assertNotIn('features', product)
+                injected = next(target for target in plan['rust_targets']
+                                if target.get('features') == ['fault-injection'])
+                self.assertEqual(injected['prefixes'], ['engine::recovery_checkpoint::tests::'])
+                self.assertEqual(injected['max_tests'], 53)
+                self.assertEqual(injected['timeout_seconds'], 900)
+
+    def test_all_changed_paths_keep_every_original_overlap_within_the_build_limit(self):
+        paths = [
+            '.github/ci/targeted-tests.json',
+            'src/engine/src/disk/owned.rs',
+            'src/engine/src/persist/layout.rs',
+            'src/engine/src/engine/recovery_checkpoint.rs',
+            'test/engine/unit/engine/recovery_checkpoint/tests.rs',
+            'test/engine/unit/engine/recovery_checkpoint/layout_tests.rs',
+            'test/ci/test_layout_targeted_ci.py',
+            'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'],
+                         ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
+                          'ordinary-conversion-name-budget', 'projection-cache-layout'])
+        self.assertEqual(len(plan['rust_targets']), 6)
+        engine = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-engine'
+                      and target.get('mode', 'test') == 'test' and not target.get('features'))
+        self.assertEqual(engine['selection_groups'],
+                         ['held-directory-layout', 'ordinary-conversion-name-budget',
+                          'projection-cache-layout'])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [190, 22, 52])
+        self.assertEqual([item.get('timeout_seconds', 300) for item in engine['selections']],
+                         [300, 900, 300])
+        platform = next(target for target in plan['rust_targets']
+                        if target['package'] == 'platform-io')
+        self.assertEqual(platform['max_tests'], 100)
+        server = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-server'
+                      and target.get('mode', 'test') == 'test')
+        self.assertEqual(server['max_tests'], 20)
+        self.assertEqual(server['features'], ['core'])
 
 
 if __name__ == '__main__':

@@ -49,8 +49,8 @@ class TargetedSelection(unittest.TestCase):
     def test_layout_and_ci_changes_union_groups_once(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
                             'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
-        self.assertEqual(len(plan['rust_targets']), 2)
-        self.assertEqual(len(plan['groups']), 3)
+        self.assertEqual(len(plan['rust_targets']), 4)
+        self.assertEqual(len(plan['groups']), 4)
         self.assertIn('test_development_ci', plan['python_tests'])
 
     def test_unknown_and_empty_changes_need_target_selection(self):
@@ -343,7 +343,7 @@ class TargetedSelection(unittest.TestCase):
                          ['held-directory-layout', 'historical-directory-runtime',
                           'portable-path-consumers', 'projection-cache-layout'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [187, 6, 160, 52])
+                         [190, 6, 160, 52])
 
     def test_typed_name_source_and_provenance_paths_are_admitted(self):
         paths = [
@@ -384,7 +384,7 @@ class TargetedSelection(unittest.TestCase):
                          ['held-directory-layout', 'ordinary-conversion-name-budget',
                           'portable-path-consumers', 'typed-name-consumers'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [187, 22, 160, 40])
+                         [190, 22, 160, 40])
         server = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-server'
                       and target.get('kind', 'lib') == 'lib'

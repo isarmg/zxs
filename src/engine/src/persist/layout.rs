@@ -1,5 +1,5 @@
 //! Stable entry names shared by runtime publication and recovery.
-use platform_io::fs_safety::EntryName;
+use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
 
 pub(crate) static DISK_IDENTITY: LazyLock<EntryName> = LazyLock::new(|| {
@@ -18,6 +18,12 @@ pub(crate) static DISK_WRITER_LOCK: LazyLock<EntryName> = LazyLock::new(|| {
 
 pub(crate) static JOURNAL: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("journal.bin").expect("invariant: journal uses one canonical entry")
+});
+
+/// Address below a held disk root, shared by publication, loading and coverage exclusion.
+pub(crate) static REPLAY_CHECKPOINT: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("metadata/replay-checkpoint.json")
+        .expect("invariant: replay checkpoint uses a canonical disk-relative path")
 });
 
 pub(crate) static PROJECTION_KIND: LazyLock<EntryName> = LazyLock::new(|| {

@@ -37,7 +37,7 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_writers::store::tests::",
             "container_storage::tests::cross_directory_recovery::"
           ],
-          "max_tests": 187
+          "max_tests": 190
         },
         {
           "package": "platform-io",
@@ -1595,6 +1595,30 @@
           "kind": "bin",
           "name": "browser-smoke",
           "mode": "check"
+        }
+      ]
+    },
+    "checkpoint-layout": {
+      "reason": "Disk-relative replay checkpoint load, coverage exclusion and atomic save retain byte identity, links, private parents and revocable read ownership; product compilation is separate from explicit injection-enabled tests.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::recovery_checkpoint::tests::"
+          ],
+          "max_tests": 53,
+          "timeout_seconds": 900
         }
       ]
     }
@@ -4073,7 +4097,39 @@
       "groups": [
         "browser-smoke-fixture"
       ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "checkpoint-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned.rs",
+      "groups": [
+        "checkpoint-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery_checkpoint.rs",
+      "groups": [
+        "checkpoint-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/tests.rs",
+      "groups": [
+        "held-directory-layout",
+        "checkpoint-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/layout_tests.rs",
+      "groups": [
+        "held-directory-layout",
+        "checkpoint-layout"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts."
 }
