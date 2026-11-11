@@ -15,9 +15,22 @@ class OfflineTargetedCi(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
-    def test_unchanged_engine_export_keeps_its_original_selection(self):
+    def test_engine_export_keeps_original_selections_and_adds_conversion_budget(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
-        self.assertEqual(plan['groups'], ['held-directory-layout', 'typed-name-consumers'])
+        self.assertEqual(plan['groups'], ['held-directory-layout',
+                                         'ordinary-conversion-name-budget',
+                                         'typed-name-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 9)
+        for group in plan['groups']:
+            selections = []
+            for target in plan['rust_targets']:
+                configurations = target.get('selections', [
+                    {key: value for key, value in target.items() if key != 'selection_groups'}
+                ])
+                selections.extend(configuration for origin, configuration
+                                  in zip(target['selection_groups'], configurations)
+                                  if origin == group)
+            self.assertCountEqual(selections, self.policy['groups'][group]['rust_targets'])
 
     def test_offline_paths_select_behavior_and_explicit_consumer_checks(self):
         for path in ['src/server/src/offline/foreign_chain.rs',

@@ -100,8 +100,8 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 self.assertIn('note-target-consumers', plan['groups'])
                 self.assertEqual(len(plan['rust_targets']), 2)
 
-    def test_note_target_batch_has_complete_mapping_within_sixteen_builds(self):
-        plan = CI.select_plan(self.policy, [
+    def note_target_paths(self):
+        return [
             '.github/ci/targeted-tests.json',
             'TASKS.md',
             'src/server/src/backend_note.rs',
@@ -116,15 +116,48 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             'test/server/unit/engine_backend/revocation_tests.rs',
             'test/server/unit/http_note.rs',
             'test/server/unit/smb_rpc/phase1_new_file_tests.rs',
+        ]
+
+    def test_note_target_batch_rejects_more_than_sixteen_builds(self):
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, self.note_target_paths())
+
+    def test_note_target_split_preserves_every_path_group_and_selection(self):
+        paths = self.note_target_paths()
+        self.assertEqual(len(paths), 14)
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['changed_paths'], [path])
+                self.assertLessEqual(len(plan['rust_targets']), 16)
+
+        # Shared-history adds a third server integration target to the combined batch.
+        authorization = ['test/server/unit/authorized_backend.rs']
+        notes = [path for path in paths if path not in authorization]
+        plans = [CI.select_plan(self.policy, batch) for batch in [authorization, notes]]
+        self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 7])
+        self.assertEqual([len(plan['python_tests']) for plan in plans], [1, 8])
+        self.assertCountEqual([path for plan in plans for path in plan['changed_paths']], paths)
+        self.assertEqual(plans[0]['groups'], [
+            'portable-path-consumers', 'server-authorization', 'shared-history-http-boundary',
         ])
-        self.assertEqual(len(plan['changed_paths']), 14)
-        self.assertEqual(len(plan['rust_targets']), 16)
-        self.assertEqual(len(plan['python_tests']), 8)
-        self.assertIn('portable-path-consumers', plan['groups'])
-        self.assertIn('paged-deletion-review', plan['groups'])
-        self.assertIn('note-http-boundary', plan['groups'])
-        self.assertIn('server-authorization', plan['groups'])
-        self.assertIn('note-target-consumers', plan['groups'])
+        self.assertEqual(plans[1]['groups'], [
+            'ci-selection', 'note-http-boundary', 'note-target-consumers',
+            'paged-deletion-review', 'server-authorization',
+        ])
+        for plan in plans:
+            for group in plan['groups']:
+                configurations = []
+                for target in plan['rust_targets']:
+                    selections = target.get('selections', [
+                        {key: value for key, value in target.items()
+                         if key != 'selection_groups'}
+                    ])
+                    configurations.extend(selection for origin, selection
+                                          in zip(target['selection_groups'], selections)
+                                          if origin == group)
+                self.assertCountEqual(configurations,
+                                      self.policy['groups'][group]['rust_targets'])
 
     def test_native_targets_preserve_core_features_exact_scope_and_each_budget(self):
         targets = self.group['rust_targets']

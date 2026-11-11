@@ -375,12 +375,32 @@ class TargetedSelection(unittest.TestCase):
             'test/server/integration/http_engine/history_alias_operations.rs',
             '.github/ci/targeted-tests.json'])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
+                                         'ordinary-conversion-name-budget',
                                          'portable-path-consumers', 'typed-name-consumers'])
         self.assertEqual(len(plan['rust_targets']), 15)
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
         self.assertEqual(engine['selection_groups'],
-                         ['held-directory-layout', 'portable-path-consumers', 'typed-name-consumers'])
+                         ['held-directory-layout', 'ordinary-conversion-name-budget',
+                          'portable-path-consumers', 'typed-name-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in engine['selections']],
+                         [187, 22, 160, 40])
+        server = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-server'
+                      and target.get('kind', 'lib') == 'lib'
+                      and target.get('mode', 'test') == 'test')
+        self.assertEqual(server['features'], ['core'])
+        self.assertEqual(server['selection_groups'],
+                         ['ordinary-conversion-name-budget', 'portable-path-consumers',
+                          'typed-name-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in server['selections']],
+                         [20, 160, 16])
+        check = next(target for target in plan['rust_targets']
+                     if target['package'] == 'storage-server' and target.get('mode') == 'check')
+        self.assertFalse(check['default_features'])
+        self.assertEqual(check['selection_groups'],
+                         ['ordinary-conversion-name-budget', 'portable-path-consumers',
+                          'typed-name-consumers'])
         http = next(target for target in plan['rust_targets'] if target.get('name') == 'http_engine')
         self.assertEqual(http['features'], ['core'])
         self.assertEqual([selection['prefixes'] for selection in http['selections']],
