@@ -520,6 +520,77 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "historical-directory-runtime": {
+      "reason": "Historical directory commit registration, separate current CAS, unchanged legacy request, exact permanent replay and Current closed State proof",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "exact": [
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_historical_directory_registration_replays_closed_state_and_reopens",
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_historical_directory_registration_rejects_hidden_source_without_receipt",
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_directory_commit_replay_proves_closed_write_set_without_tracking",
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_parent_checkout_preserves_child_after_its_old_file_branch_is_archived",
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_historical_three_level_checkout_preserves_dirty_children_and_cold_replay",
+            "engine::disk_registry::current::directory_branches::tests::disk_exit_historical_three_level_tags_keep_exact_nodes_and_working_projection_after_reopen"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "directory_git_index",
+          "features": [],
+          "prefixes": [
+            "historical_branch::"
+          ],
+          "exact": [
+            "unstaged_work_cannot_be_committed_or_discarded_by_branch_operations"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_disk_directory::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::historical_directory_branch_override_preserves_both_sources_and_revocation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "historical_directory_branch::",
+            "directory_branch_source::"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -1880,6 +1951,150 @@
       "path": "test/contract/unit/historical_directory_branch.rs",
       "groups": [
         "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_git.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_git/branches.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/directory_branches.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/directory_staging.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/file_tags/publication.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/directory_branch.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/mod.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_disk_directory.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/activity.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/server/src/file_manager.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/server/src/http_disk_directory.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_git_index.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_git_index/historical_branch.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_directory_branch_proof_tests.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/historical_directory_branch.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/server/unit/authorized_backend.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/revocation_tests.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_disk_directory.rs",
+      "groups": [
+        "historical-directory-runtime"
       ]
     }
   ],

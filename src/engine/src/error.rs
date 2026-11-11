@@ -10,6 +10,8 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    HistoricalBranch(#[from] HistoricalBranchError),
+    #[error(transparent)]
     BatchUndo(crate::BatchUndoError),
     #[error("{}: {}", self.code(), self.message())]
     DirectoryLayout(#[source] Box<crate::DirectoryLayoutError>),
@@ -97,7 +99,8 @@ impl Error {
                 retryable: true,
                 source,
             },
-            source @ (Self::BatchUndo(_)
+            source @ (Self::HistoricalBranch(_)
+            | Self::BatchUndo(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Checkpoint(_)
@@ -126,7 +129,8 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::BatchUndo(_)
+            Self::HistoricalBranch(_)
+            | Self::BatchUndo(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::PublishedWorkspaceReconciliation(_)
@@ -149,6 +153,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::HistoricalBranch(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
             Self::DirectoryLayout(error) => match error.as_ref() {
                 crate::DirectoryLayoutError::ResourceLimit => ErrorCode::ResourceLimit,
@@ -198,6 +203,7 @@ impl Error {
     }
     pub fn message(&self) -> Cow<'_, str> {
         match self {
+            Self::HistoricalBranch(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
             Self::DirectoryLayout(error) => error.to_string().into(),
             Self::DiskObservation(_) => "disk observation unavailable".into(),
@@ -251,7 +257,8 @@ impl Error {
             Self::PublishedRecoveryReconciliation(error) => Some(error.result()),
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
-            Self::BatchUndo(_)
+            Self::HistoricalBranch(_)
+            | Self::BatchUndo(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Clock(_)
@@ -383,4 +390,41 @@ pub enum CheckpointError {
     SuffixConflict(u64),
     #[error("checkpoint suffix pool, sequence or previous snapshot differs at sequence {0}")]
     SuffixChain(u64),
+}
+
+#[derive(Debug, error_definition::Error)]
+pub enum HistoricalBranchError {
+    #[error("initialize the directory repository before creating a historical branch")]
+    Uninitialized,
+    #[error("stage and commit this repository's changes before creating a historical branch")]
+    Dirty,
+    #[error("historical directory tree {0} is not retained")]
+    Missing(storage_contract::DirectoryTreeId),
+    #[error("historical directory tree belongs to another repository or stable directory")]
+    Scope,
+    #[error("historical directory source must name an explicit user commit")]
+    Uncommitted,
+    #[error("directory branch name already exists")]
+    NameCollision,
+    #[error("historical directory source includes an unavailable or hidden owned occurrence")]
+    Unavailable,
+    #[error("historical directory input differs from its source repository")]
+    InputScope,
+    #[error("decoding historical directory publication input: {0}")]
+    Decode(#[source] json_codec::Error),
+}
+
+impl HistoricalBranchError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Uninitialized => ErrorCode::DirectoryScopeRequired,
+            Self::NameCollision => ErrorCode::NameCollision,
+            Self::InputScope | Self::Decode(_) => ErrorCode::PublicationInvalid,
+            Self::Dirty
+            | Self::Missing(_)
+            | Self::Scope
+            | Self::Uncommitted
+            | Self::Unavailable => ErrorCode::DirectoryBranchConflict,
+        }
+    }
 }

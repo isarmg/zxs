@@ -570,7 +570,7 @@ impl CurrentNamespaces {
         }
         self.verify_merge_links(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
-        self.verify_directory_commits(previous, next)?;
+        let historical_fork = self.verify_directory_commits(previous, next)?;
         let mut view = self.clone();
         view.recursive_policies =
             self.advance_recursive_index(previous, next, backup, follow.as_ref())?;
@@ -700,7 +700,13 @@ impl CurrentNamespaces {
                 .get(&repository.main_branch_id)
                 .ok_or_else(stale)?;
             changes.synchronize_directory(next, branch, &owner.entries)?;
-            let fork_source = self.directory_fork_source(previous, next, branch, owner)?;
+            let fork_source = match historical_fork
+                .as_ref()
+                .and_then(|fork| fork.source(branch, owner))
+            {
+                Some(source) => Some(source),
+                None => self.directory_fork_source(previous, next, branch, owner)?,
+            };
             self.validate_entry_changes(
                 fork_source.as_ref().or(old.map(Arc::as_ref)),
                 &branch.entries,

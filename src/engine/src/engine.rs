@@ -1611,6 +1611,7 @@ impl Engine {
                 | "directory.git.initialize"
                 | "directory.git.stage-child"
                 | "directory.git.stage-owned"
+                | "directory.git.branch-create-history"
                 | "directory.git.branch-create"
                 | "directory.git.checkout"
         ) {

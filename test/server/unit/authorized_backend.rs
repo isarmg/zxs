@@ -1077,6 +1077,9 @@ impl Backend for RecordingBackend {
             crate::DiskDirectoryAction::ReviewedCreate(source) => {
                 json!({"kind": "reviewed_create", "source": source})
             }
+            crate::DiskDirectoryAction::HistoricalCreate(source) => {
+                json!({"kind": "historical_create", "source": source})
+            }
             crate::DiskDirectoryAction::Select => json!({"kind": "select"}),
         };
         self.record(
@@ -3049,6 +3052,38 @@ fn historical_source_override_preserves_request_identity_and_revocation() {
             )
             .unwrap_err()
             .status,
+        401
+    );
+    assert!(fixture.probe.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn historical_directory_branch_override_preserves_both_sources_and_revocation() {
+    let fixture = Fixture::new();
+    let source = storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+        reviewed_directory_source(),
+        storage_contract::DirectoryTreeId::from_random([7; 16]),
+    ).unwrap();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
+    let request = || crate::MutateDiskDirectory {
+        slot_id: "P01".into(),
+        path: Some(name_policy::LookupPath::parse("Café").unwrap()),
+        name: storage_contract::BranchName::parse("History").unwrap(),
+        operation_id,
+        action: crate::DiskDirectoryAction::HistoricalCreate(source.clone()),
+    };
+    let error = fixture.backend.mutate_disk_directory(&fixture.identity, request()).unwrap_err();
+    assert_error(error, "mutate_disk_directory");
+    let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
+    assert_eq!(calls.len(), 1);
+    assert_identity(calls[0].identity.as_ref(), &fixture.identity);
+    assert_eq!(calls[0].arguments, json!({
+        "slot_id": "P01", "path": "Café", "name": "History", "operation_id": operation_id,
+        "action": {"kind": "historical_create", "source": source}
+    }));
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    assert_eq!(
+        fixture.backend.mutate_disk_directory(&fixture.identity, request()).unwrap_err().status,
         401
     );
     assert!(fixture.probe.calls.lock().unwrap().is_empty());

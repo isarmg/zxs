@@ -1,4 +1,6 @@
 //! Public-engine regressions for explicit index snapshots and live working files.
+#[path = "directory_git_index/historical_branch.rs"]
+mod historical_branch;
 #[path = "directory_git_index/empty_initialization.rs"]
 mod empty_initialization;
 #[path = "directory_git_index/file_separation.rs"]

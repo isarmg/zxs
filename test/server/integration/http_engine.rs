@@ -22,6 +22,8 @@ mod branch_preview;
 mod daily_management;
 #[path = "http_engine/directory_branch_source.rs"]
 mod directory_branch_source;
+#[path = "http_engine/historical_directory_branch.rs"]
+mod historical_directory_branch;
 #[path = "http_engine/directory_git.rs"]
 mod directory_git;
 #[path = "http_engine/directory_history.rs"]

@@ -1169,3 +1169,377 @@ fn shared_directory_rebase_preserves_current_projection_error_classification() {
     expected.relocate(name_policy::PortablePath::parse("Target/File").unwrap());
     assert_eq!(actual, vec![expected]);
 }
+
+fn historical_source(
+    engine: &Engine,
+    repo: &Repository,
+    path: &str,
+    tree: &str,
+) -> storage_contract::directory_git::HistoricalDirectoryBranchSource {
+    let status = engine.directory_git_status(&repo.repository_id, path).unwrap();
+    storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+        storage_contract::directory_git::DirectoryBranchCreateSource {
+            repository_id: repo.repository_id.clone(),
+            directory_id: status.directory_id,
+            directory_branch_id: status.directory_branch_id.unwrap(),
+            working_tree_id: status.working_tree_id.unwrap(),
+            head_tree_id: status.head_tree_id.unwrap(),
+            index_generation: status.index_generation,
+            namespace_head: engine.state.branches[&repo.main_branch_id].head_commit_id.clone(),
+        },
+        tree.parse().unwrap(),
+    ).unwrap()
+}
+
+#[test]
+fn disk_exit_historical_directory_registration_replays_closed_state_and_reopens() {
+    let mut f = Fixture::new();
+    f.exit(MembershipExitAction::Deregister);
+    save(&mut f.engine, &f.repo, "new-owned", b"first retained commit");
+    let old = review_git(&mut f.engine, &f.repo, "").head_tree_id.unwrap();
+    let historical = f.engine.state.directory_trees[&old].clone();
+    save(&mut f.engine, &f.repo, "new-owned", b"current retained commit");
+    review_git(&mut f.engine, &f.repo, "");
+    let source = historical_source(&f.engine, &f.repo, "", &old);
+    let previous = Arc::clone(&f.engine.state);
+    let view = Arc::clone(f.engine.current_namespaces.as_ref().unwrap());
+    let namespace = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
+    let disk_bytes = files(&f.target.root);
+    let operation = op();
+    let apply = |engine: &mut Engine| {
+        engine.create_directory_branch_from_history(
+            &source,
+            None,
+            &BranchName::parse("historical retained").unwrap(),
+            &"admin".parse().unwrap(),
+            operation,
+        )
+    };
+    let result = apply(&mut f.engine).unwrap();
+    let id = result.result["directory_branch_id"].as_str().unwrap();
+    assert_eq!(f.engine.state.directory_branches[id].entries, historical.entries);
+    assert_eq!(f.engine.current_directory_entries(id).unwrap(), historical.entries);
+    assert_eq!(f.engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace);
+    assert_eq!(f.engine.state.directory_selections, previous.directory_selections);
+    assert_eq!(f.engine.state.versions, previous.versions);
+    assert_eq!(f.engine.state.branches, previous.branches);
+    let previous: State =
+        json_codec::from_slice(&canonical_json(previous.as_ref()).unwrap()).unwrap();
+    let next: State = json_codec::from_slice(&canonical_json(f.engine.state()).unwrap()).unwrap();
+    view.advance(&previous, &next).unwrap();
+    for corruption in [
+        "source", "current", "source_tree", "entries", "contexts", "parent", "index",
+        "children", "selection", "namespace", "principal", "event", "unrelated",
+        "source_rehashed", "foreign_source_rehashed",
+    ] {
+        let mut forged = next.clone();
+        match corruption {
+            "source" => forged.operations.get_mut(&operation).unwrap().result["input"]["source"]
+                ["tree_id"] = source.current().head_tree_id.clone().into(),
+            "current" => forged.operations.get_mut(&operation).unwrap().result["input"]["source"]
+                ["current"]["index_generation"] = "999".into(),
+            "source_rehashed" | "foreign_source_rehashed" => {
+                let tree = if corruption == "source_rehashed" {
+                    source.current().head_tree_id.clone()
+                } else {
+                    f.engine.directory_git_status(&f.repo.repository_id, "dir")
+                        .unwrap().head_tree_id.unwrap()
+                };
+                let principal = forged.operation_principals[&operation].clone();
+                let receipt = forged.operations.get_mut(&operation).unwrap();
+                receipt.result["input"]["source"]["tree_id"] = tree.into();
+                receipt.request_digest = Engine::native_request_digest(
+                    &receipt.kind, &principal, &receipt.result["input"],
+                ).unwrap();
+            }
+            "source_tree" => forged.directory_trees.get_mut(&old).unwrap().entries.clear(),
+            "entries" => forged.directory_branches.get_mut(id).unwrap().entries.clear(),
+            "contexts" => forged.directory_branches.get_mut(id).unwrap().file_contexts.clear(),
+            "parent" => forged.directory_branches.get_mut(id).unwrap().parent_branch_id = None,
+            "index" => {
+                forged.directory_git_repositories.get_mut(&f.repo.repository_id).unwrap()
+                    .branches.get_mut(id).unwrap().index_tree_id =
+                    source.current().working_tree_id.clone();
+            }
+            "children" => {
+                forged.directory_git_repositories.get_mut(&f.repo.repository_id).unwrap()
+                    .branches.get_mut(id).unwrap().index_children.insert(
+                        f.repo.repository_id.clone(),
+                        storage_contract::directory_git::DirectoryGitChildReference {
+                            directory_branch_id: id.into(), tree_id: Some(old.clone()),
+                        },
+                    );
+            }
+            "selection" => {
+                forged.directory_selections.insert(f.repo.repository_id.clone(), id.into());
+            }
+            "namespace" => forged.branches.get_mut(&f.repo.main_branch_id).unwrap().generation += 1,
+            "principal" => {
+                forged.operation_principals.insert(operation, "other".into());
+            }
+            "event" => {
+                forged.events.pop();
+            }
+            "unrelated" => {
+                forged.file_notes.insert(f.hidden[0].file_id.clone(), "unrelated".into());
+            }
+            _ => unreachable!(),
+        }
+        assert!(view.advance(&previous, &forged).is_err(), "{corruption}");
+    }
+    drop(f.engine);
+    let mut engine = Engine::open(&f.temp.path().join("system")).unwrap();
+    assert_eq!(apply(&mut engine).unwrap(), result);
+    assert_eq!(engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace);
+    assert_eq!(engine.current_directory_entries(id).unwrap(), historical.entries);
+    assert_eq!(files(&f.target.root), disk_bytes);
+}
+
+#[test]
+fn disk_exit_historical_directory_registration_rejects_hidden_source_without_receipt() {
+    let mut f = Fixture::new();
+    let old = f.engine.directory_git_status(&f.repo.repository_id, "dir")
+        .unwrap().head_tree_id.unwrap();
+    f.exit(MembershipExitAction::Deregister);
+    let clean = review_git(&mut f.engine, &f.repo, "dir");
+    assert!(!clean.staged && !clean.unstaged && !clean.needs_restage);
+    let source = historical_source(&f.engine, &f.repo, "dir", &old);
+    let view = f.engine.current_namespaces.as_ref().unwrap();
+    assert_eq!(
+        view.historical_directory_source(&f.engine.state, &f.engine.state.directory_trees[&old])
+            .unwrap_err().code(),
+        ErrorCode::DirectoryBranchConflict,
+    );
+    let previous = Arc::clone(&f.engine.state);
+    let operation = op();
+    let error = f.engine.create_directory_branch_from_history(
+        &source,
+        Some(&name_policy::LookupPath::parse("dir").unwrap()),
+        &BranchName::parse("hidden historical").unwrap(),
+        &"admin".parse().unwrap(),
+        operation,
+    ).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::DirectoryBranchConflict);
+    assert_eq!(f.engine.state.as_ref(), previous.as_ref());
+    assert!(!f.engine.state.operations.contains_key(&operation));
+    assert_projected_graph(&f.engine, &f.repo.repository_id, &f.hidden);
+}
+
+fn stage_current_child(engine: &mut Engine, repo: &Repository, parent: &str, child: &str) {
+    let parent = engine.directory_git_status(&repo.repository_id, parent).unwrap();
+    let child = engine.directory_git_status(&repo.repository_id, child).unwrap();
+    engine
+        .stage_directory_git_child(
+            &repo.repository_id,
+            &storage_contract::directory_git::DirectoryGitStageChildBody {
+                directory_id: parent.directory_id,
+                directory_branch_id: parent.directory_branch_id.unwrap(),
+                expected_index_generation: parent.index_generation,
+                child_directory_id: child.directory_id,
+                expected_child_head_tree_id: child.head_tree_id.unwrap(),
+                operation_id: op(),
+            },
+            "admin",
+        )
+        .unwrap();
+}
+
+fn historical_hierarchy() -> (Fixture, String, String, String) {
+    let mut f = Fixture::new();
+    f.exit(MembershipExitAction::Deregister);
+    for path in ["triple/owned", "triple/child/owned", "triple/child/grand/file"] {
+        save(&mut f.engine, &f.repo, path, b"old hierarchy");
+    }
+    initialize_git(&mut f.engine, &f.repo, "triple/child/grand");
+    let grand = review_git(&mut f.engine, &f.repo, "triple/child/grand")
+        .head_tree_id.unwrap();
+    initialize_git(&mut f.engine, &f.repo, "triple/child");
+    stage_current_child(&mut f.engine, &f.repo, "triple/child", "triple/child/grand");
+    let child = review_git(&mut f.engine, &f.repo, "triple/child").head_tree_id.unwrap();
+    initialize_git(&mut f.engine, &f.repo, "triple");
+    stage_current_child(&mut f.engine, &f.repo, "triple", "triple/child");
+    let parent = review_git(&mut f.engine, &f.repo, "triple").head_tree_id.unwrap();
+    save(&mut f.engine, &f.repo, "triple/child/grand/file", b"new grand commit");
+    review_git(&mut f.engine, &f.repo, "triple/child/grand");
+    save(&mut f.engine, &f.repo, "triple/child/owned", b"new child commit");
+    stage_current_child(&mut f.engine, &f.repo, "triple/child", "triple/child/grand");
+    review_git(&mut f.engine, &f.repo, "triple/child");
+    save(&mut f.engine, &f.repo, "triple/owned", b"new parent commit");
+    stage_current_child(&mut f.engine, &f.repo, "triple", "triple/child");
+    review_git(&mut f.engine, &f.repo, "triple");
+    save(&mut f.engine, &f.repo, "triple/child/grand/file", b"dirty grand workspace");
+    save(&mut f.engine, &f.repo, "triple/child/owned", b"dirty child workspace");
+    (f, parent, child, grand)
+}
+
+#[test]
+fn disk_exit_historical_three_level_checkout_preserves_dirty_children_and_cold_replay() {
+    let (mut f, parent_tree, child_tree, grand_tree) = historical_hierarchy();
+    let source = historical_source(&f.engine, &f.repo, "triple", &parent_tree);
+    let path = name_policy::LookupPath::parse("triple").unwrap();
+    let name = BranchName::parse("historical hierarchy").unwrap();
+    let principal = "admin".parse().unwrap();
+    let operation = op();
+    let result = f.engine.create_directory_branch_from_history(
+        &source, Some(&path), &name, &principal, operation,
+    ).unwrap();
+    let id = result.result["directory_branch_id"].as_str().unwrap();
+    let child = f.engine.directory_git_status(&f.repo.repository_id, "triple/child").unwrap();
+    let grand = f.engine.directory_git_status(&f.repo.repository_id, "triple/child/grand").unwrap();
+    assert!(child.unstaged && grand.unstaged);
+    assert_ne!(child.head_tree_id.as_ref(), Some(&child_tree));
+    assert_ne!(grand.head_tree_id.as_ref(), Some(&grand_tree));
+    let state = f.engine.state.as_ref();
+    let view = f.engine.current_namespaces.as_ref().unwrap();
+    let retained = BTreeMap::from([(child.directory_id.clone(), "triple/child".into())]);
+    let projection = view.directory_checkout_projection(state, id, &retained).unwrap();
+    assert_eq!(projection.nodes.len(), 3);
+    assert_eq!(projection.nodes[&child.directory_id].source.tree_id, child_tree);
+    assert_eq!(projection.nodes[&grand.directory_id].source.tree_id, grand_tree);
+    projection.require_commit_source(state).unwrap();
+    let index = &state.directory_git_repositories[&source.current().directory_id].branches[id];
+    assert_eq!(index.index_boundaries.len(), 1);
+    assert_eq!(index.index_children.len(), 1);
+    assert_eq!(index.index_children[&child.directory_id].tree_id.as_ref(), Some(&child_tree));
+    assert_eq!(state.directory_trees[&parent_tree].directory_refs.len(), 1);
+    assert_eq!(state.directory_trees[&child_tree].directory_refs.len(), 1);
+    let mut forged = state.clone();
+    forged.directory_trees.get_mut(&child_tree).unwrap()
+        .directory_refs.get_mut(&grand.directory_id).unwrap().tree_id =
+        grand.head_tree_id.clone().unwrap();
+    assert_eq!(
+        view.directory_checkout_projection(&forged, id, &retained).err().unwrap().code(),
+        ErrorCode::WorkspaceChanged,
+    );
+    let mut working = state.clone();
+    let current = &source.current().directory_branch_id;
+    let working_tree = working.directory_branches[current].head_tree_id.clone();
+    assert!(working.directory_branches[current].directory_refs.contains_key(&grand.directory_id));
+    working.directory_branches.get_mut(current).unwrap()
+        .directory_refs.remove(&grand.directory_id);
+    working.directory_trees.get_mut(&working_tree).unwrap()
+        .directory_refs.remove(&grand.directory_id);
+    assert_eq!(
+        view.directory_projection(&working, current).err().unwrap().code(),
+        ErrorCode::WorkspaceChanged,
+    );
+    let before_children = f.engine.list_tree(&f.repo.main_branch_id).unwrap()
+        .into_iter().filter(|entry| entry.path().starts_with("triple/child/")).collect::<Vec<_>>();
+    let checkout_operation = op();
+    let checkout = f.engine.select_directory_branches(
+        &f.repo.repository_id, Some(&path), &name, "admin", checkout_operation,
+    ).unwrap();
+    assert_eq!(
+        f.engine.directory_git_status(&f.repo.repository_id, "triple/child").unwrap(), child,
+    );
+    assert_eq!(
+        f.engine.directory_git_status(&f.repo.repository_id, "triple/child/grand").unwrap(), grand,
+    );
+    let namespace = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
+    assert_eq!(
+        namespace.iter().filter(|entry| entry.path().starts_with("triple/child/"))
+            .cloned().collect::<Vec<_>>(),
+        before_children,
+    );
+    assert_eq!(
+        namespace.iter().find(|entry| entry.path() == "triple/owned").unwrap(),
+        f.engine.state.directory_trees[&parent_tree].entries.iter()
+            .find(|entry| entry.path() == "triple/owned").unwrap(),
+    );
+    drop(f.engine);
+    let mut engine = Engine::open(&f.temp.path().join("system")).unwrap();
+    assert_eq!(engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace);
+    assert_eq!(
+        engine.create_directory_branch_from_history(
+            &source, Some(&path), &name, &principal, operation,
+        ).unwrap(),
+        result,
+    );
+    assert_eq!(
+        engine.select_directory_branches(
+            &f.repo.repository_id, Some(&path), &name, "admin", checkout_operation,
+        ).unwrap(),
+        checkout,
+    );
+    assert_eq!(engine.directory_git_status(&f.repo.repository_id, "triple/child").unwrap(), child);
+    assert_eq!(
+        engine.directory_git_status(&f.repo.repository_id, "triple/child/grand").unwrap(), grand,
+    );
+}
+
+#[test]
+fn disk_exit_historical_three_level_tags_keep_exact_nodes_and_working_projection_after_reopen() {
+    let (mut f, parent_tree, child_tree, grand_tree) = historical_hierarchy();
+    let source = historical_source(&f.engine, &f.repo, "triple", &parent_tree);
+    let path = name_policy::LookupPath::parse("triple").unwrap();
+    let result = f.engine.create_directory_branch_from_history(
+        &source,
+        Some(&path),
+        &BranchName::parse("historical tags").unwrap(),
+        &"admin".parse().unwrap(),
+        op(),
+    ).unwrap();
+    let id = result.result["directory_branch_id"].as_str().unwrap();
+    let old_parent = f.engine.state.directory_trees[&parent_tree].clone();
+    let old_child = f.engine.state.directory_trees[&child_tree].clone();
+    let old_grand = f.engine.state.directory_trees[&grand_tree].clone();
+    let entry = old_grand.entries.iter()
+        .find(|entry| entry.path() == "triple/child/grand/file").unwrap();
+    let context = &old_grand.file_contexts[entry.lookup_key()];
+    let targets = [FileTagTarget {
+        branch_id: context.branch_id.clone(),
+        source_node_id: context.node_id.clone().unwrap_or_else(|| entry.version_id.clone()),
+        expected_node_id: f.engine.file_branch_head(&context.branch_id).unwrap(),
+    }];
+    let tags = ["historical hierarchy".to_owned()];
+    let operation = op();
+    let apply = |engine: &mut Engine| {
+        engine.update_file_node_tags(FileNodeTagsUpdateRequest {
+            file_id: &entry.file_id,
+            targets: &targets,
+            add: &tags,
+            remove: &[],
+            location: None,
+            principal: "admin",
+            operation_id: operation,
+        })
+    };
+    let namespace_before_tags = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
+    let tagged = apply(&mut f.engine).unwrap();
+    assert_eq!(f.engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace_before_tags);
+    let node = tagged.result["nodes"][0]["node_id"].as_str().unwrap();
+    assert_eq!(f.engine.state.file_metadata_nodes[node].version_id, entry.version_id);
+    let branch = &f.engine.state.directory_branches[id];
+    assert!(branch.materialized);
+    assert_eq!(branch.file_contexts[entry.lookup_key()].node_id.as_deref(), Some(node));
+    assert_eq!(branch.directory_refs.len(), 2);
+    for (directory, reference) in old_parent.directory_refs.iter()
+        .chain(&old_child.directory_refs)
+    {
+        assert_eq!(
+            branch.directory_refs[directory].directory_branch_id,
+            reference.directory_branch_id,
+        );
+    }
+    let view = f.engine.current_namespaces.as_ref().unwrap();
+    let projection = view.directory_projection(&f.engine.state, id).unwrap();
+    assert_eq!(projection.nodes.len(), 3);
+    projection.require_commit_source(&f.engine.state).unwrap();
+    assert_eq!(f.engine.state.directory_trees[&parent_tree], old_parent);
+    assert_eq!(f.engine.state.directory_trees[&child_tree], old_child);
+    assert_eq!(f.engine.state.directory_trees[&grand_tree], old_grand);
+    let index = &f.engine.state.directory_git_repositories[&source.current().directory_id]
+        .branches[id];
+    assert_eq!(index.head_tree_id.as_ref(), Some(&parent_tree));
+    assert_eq!(index.index_children.len(), 1);
+    let tagged_tree = branch.head_tree_id.clone();
+    let namespace = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
+    drop(f.engine);
+    let mut engine = Engine::open(&f.temp.path().join("system")).unwrap();
+    assert_eq!(apply(&mut engine).unwrap(), tagged);
+    assert_eq!(engine.state.directory_branches[id].head_tree_id, tagged_tree);
+    assert_eq!(engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace);
+    engine.current_namespaces.as_ref().unwrap()
+        .directory_projection(&engine.state, id).unwrap()
+        .require_commit_source(&engine.state).unwrap();
+}

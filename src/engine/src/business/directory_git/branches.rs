@@ -1,5 +1,170 @@
 //! Git branch registration and checkout preserve independent child workspaces.
+use crate::error::HistoricalBranchError;
 use super::*;
+use storage_contract::directory_git::HistoricalDirectoryBranchSource;
+
+pub(crate) const HISTORY_CREATE_KIND: &str = "directory.git.branch-create-history";
+
+pub(crate) struct HistoricalBranchRegistration<'a> {
+    pub(crate) branch: &'a DirectoryBranch,
+    pub(crate) repository: &'a Repository,
+}
+
+pub(crate) struct HistoricalBranchCommand<'a> {
+    pub(crate) source: &'a HistoricalDirectoryBranchSource,
+    pub(crate) path: Option<&'a name_policy::LookupPath>,
+    pub(crate) name: &'a storage_contract::BranchName,
+}
+
+impl HistoricalBranchCommand<'_> {
+    pub(crate) fn apply<'a>(
+        &self,
+        state: &'a mut State,
+        view: Option<&crate::engine::CurrentNamespaces>,
+        operation: OperationId,
+    ) -> Result<HistoricalBranchRegistration<'a>> {
+        let source = self.source.current();
+        let status = status_for(
+            state,
+            view,
+            &source.repository_id,
+            self.path.map_or("", name_policy::LookupPath::as_str),
+        )?;
+        if !status.initialized {
+            return Err(HistoricalBranchError::Uninitialized.into());
+        }
+        if status.staged || status.unstaged || status.needs_restage {
+            return Err(HistoricalBranchError::Dirty.into());
+        }
+        let git = &state.directory_git_repositories[&status.directory_id];
+        require_reviewed_source(state, &source.repository_id, git, source)?;
+        if git.branches.keys().any(|id| {
+            name_policy::lookup_key(&state.directory_branches[id].name) == self.name.key()
+        }) {
+            return Err(HistoricalBranchError::NameCollision.into());
+        }
+        if let Some(view) = view {
+            view.require_directory_branch_write(state, &git.current_branch_id)?;
+            view.directory_projection(state, &git.current_branch_id)?
+                .require_commit_source(state)?;
+        }
+        let tree = self.committed_source(state, git)?;
+        let tree = match view {
+            Some(view) => view.historical_directory_source(state, tree)?,
+            None => tree,
+        };
+        let id = crate::persist::directory_branch::branch_id(operation)?;
+        let branch = self.inherited_branch(state, tree, id);
+        let index = historical_index(tree);
+        state.directory_branches.insert(id.to_string(), branch);
+        state
+            .directory_git_repositories
+            .get_mut(&status.directory_id)
+            .expect("invariant: registration preserves the initialized directory repository")
+            .branches
+            .insert(id.to_string(), index);
+        Ok(HistoricalBranchRegistration {
+            branch: &state.directory_branches[&id.to_string()],
+            repository: &state.repositories[&source.repository_id],
+        })
+    }
+
+    fn committed_source<'a>(
+        &self,
+        state: &'a State,
+        git: &DirectoryGitRepository,
+    ) -> Result<&'a DirectoryTree> {
+        let tree = state
+            .directory_trees
+            .get(&self.source.tree_id().to_string())
+            .ok_or(HistoricalBranchError::Missing(self.source.tree_id()))?;
+        let owner = &state.directory_branches[&tree.directory_branch_id];
+        if owner.repository_id != git.repository_id || owner.directory_id != git.directory_id {
+            return Err(HistoricalBranchError::Scope.into());
+        }
+        if !storage_contract::directory_staging::directory_tree_is_committed(state, tree) {
+            return Err(HistoricalBranchError::Uncommitted.into());
+        }
+        let children =
+            ChildBoundaries::new(&tree.entries, |id| tree.directory_refs.contains_key(id));
+        for entry in tree.entries.iter().filter(|entry| {
+            entry.kind == NamespaceEntryKind::File && !children.contains(entry.lookup_key())
+        }) {
+            let context = &tree.file_contexts[entry.lookup_key()];
+            if state.branches[&context.branch_id].state != BranchState::Active
+                || state.branches[&tree.file_branches[&entry.file_id]].state != BranchState::Active
+            {
+                return Err(HistoricalBranchError::Unavailable.into());
+            }
+        }
+        Ok(tree)
+    }
+
+    fn inherited_branch(
+        &self,
+        state: &State,
+        tree: &DirectoryTree,
+        id: storage_contract::DirectoryBranchId,
+    ) -> DirectoryBranch {
+        let owner = &state.directory_branches[&tree.directory_branch_id];
+        let mut contexts = tree.file_contexts.clone();
+        for context in contexts.values_mut() {
+            context.selection_generation = 0;
+            context.inherited_from = Some(id.to_string());
+        }
+        DirectoryBranch {
+            directory_branch_id: id.to_string(),
+            repository_id: owner.repository_id.clone(),
+            directory_id: owner.directory_id.clone(),
+            path: tree.path.clone(),
+            name: self.name.as_str().into(),
+            parent_branch_id: Some(tree.directory_branch_id.clone()),
+            head_tree_id: tree.tree_id.clone(),
+            commit_id: tree.commit_id.clone(),
+            entries: tree.entries.clone(),
+            file_branches: tree.file_branches.clone(),
+            file_contexts: contexts,
+            inherited_files: tree
+                .file_branches
+                .keys()
+                .map(|file| (file.clone(), id.to_string()))
+                .collect(),
+            directory_refs: tree.directory_refs.clone(),
+            materialized: false,
+            sequence: state.sequence,
+        }
+    }
+}
+
+fn historical_index(tree: &DirectoryTree) -> DirectoryGitBranch {
+    DirectoryGitBranch {
+        head_tree_id: Some(tree.tree_id.clone()),
+        index_tree_id: tree.tree_id.clone(),
+        index_generation: 1,
+        index_boundaries: tree
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == NamespaceEntryKind::Directory
+                    && tree.directory_refs.contains_key(&entry.entry_id)
+            })
+            .map(|entry| (entry.entry_id.clone(), entry.path().into()))
+            .collect(),
+        index_children: tree
+            .directory_refs
+            .iter()
+            .map(|(directory, reference)| {
+                (
+                    directory.clone(),
+                    DirectoryGitChildReference {
+                        directory_branch_id: reference.directory_branch_id.clone(),
+                        tree_id: Some(reference.tree_id.clone()),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
 
 pub(super) fn create(
     state: &mut State,

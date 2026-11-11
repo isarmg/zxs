@@ -112,3 +112,30 @@ fn directory_create_requires_complete_exact_source_without_wire_fallback() {
     root["source"]["index_generation"] = json!(u64::MAX.to_string());
     assert!(decode(root).is_ok());
 }
+
+#[test]
+fn historical_create_keeps_history_choice_separate_from_current_source() {
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let history = json!({
+        "current": source(),
+        "tree_id": "dtree_00000000000000000000000000000007"
+    });
+    let body = json!({
+        "slot_id": "P01", "path": "docs", "name": "History",
+        "operation_id": operation, "source": history
+    });
+    let command = parse_history(body.as_object().unwrap().clone()).unwrap();
+    let DiskDirectoryAction::HistoricalCreate(parsed) = command.action else {
+        panic!("historical creation must retain both sources");
+    };
+    assert_eq!(json_codec::to_value(parsed).unwrap(), history);
+    assert!(parse(body.as_object().unwrap().clone()).is_err());
+    let mut current_only = body.clone();
+    current_only["source"] = source();
+    assert!(parse_history(current_only.as_object().unwrap().clone()).is_err());
+    for field in ["current", "tree_id"] {
+        let mut missing = body.clone();
+        missing["source"].as_object_mut().unwrap().remove(field);
+        assert!(parse_history(missing.as_object().unwrap().clone()).is_err());
+    }
+}

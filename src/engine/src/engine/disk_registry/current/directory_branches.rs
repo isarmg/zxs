@@ -344,7 +344,34 @@ impl CurrentNamespaces {
             .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
             .map(|entry| (entry.entry_id.as_str(), entry))
             .collect::<BTreeMap<_, _>>();
-        for (directory, reference) in &branch.directory_refs {
+        let mut references = branch.directory_refs.iter().collect::<BTreeMap<_, _>>();
+        if storage_contract::directory_staging::directory_tree_is_committed(state, &original) {
+            // User commits pin direct repositories; working trees carry the
+            // flattened graph. Expand only these authenticated historical edges.
+            let mut pending = references.values().copied().collect::<Vec<_>>();
+            while let Some(reference) = pending.pop() {
+                let child = &state.directory_trees[&reference.tree_id];
+                for (directory, reference) in &child.directory_refs {
+                    if !directories.contains_key(directory.as_str()) {
+                        continue;
+                    }
+                    match references.entry(directory) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(reference);
+                            pending.push(reference);
+                        }
+                        std::collections::btree_map::Entry::Occupied(entry) => {
+                            if *entry.get() != reference {
+                                return Err(invalid(
+                                    "directory descendant graph has conflicting historical edges",
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (directory, reference) in references.iter().map(|(id, reference)| (*id, *reference)) {
             let entry = directories
                 .get(directory.as_str())
                 .expect("invariant: projected references come from retained directory entries");
@@ -397,7 +424,7 @@ impl CurrentNamespaces {
                 retained_children,
             )?;
             for (child, reference) in &snapshot.directory_refs {
-                if branch.directory_refs.get(child) != Some(reference) {
+                if references.get(&child).copied() != Some(reference) {
                     return Err(invalid(
                         "directory descendant graph differs from its admitted root",
                     ));
@@ -458,12 +485,24 @@ impl CurrentDirectoryProjection {
         &self.path
     }
 
-    /// Exact frozen nodes from this admitted head's retained occurrence graph.
-    /// A metadata publication must not substitute a descendant's newer HEAD.
-    pub(super) fn file_tag_trees(&self) -> impl Iterator<Item = (&str, &DirectoryTree)> {
-        self.nodes
-            .iter()
-            .map(|(directory, node)| (directory.as_str(), &node.projected))
+    /// Metadata writes produce working snapshots with a flattened reference
+    /// graph, using only the exact historical nodes proven by this projection.
+    pub(super) fn file_tag_trees(&self) -> impl Iterator<Item = (&str, DirectoryTree)> {
+        self.nodes.iter().map(|(directory, node)| {
+            let mut tree = node.projected.clone();
+            let mut pending = node.projected.directory_refs.keys().collect::<Vec<_>>();
+            while let Some(child) = pending.pop() {
+                for (descendant, reference) in &self.nodes[child].projected.directory_refs {
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        tree.directory_refs.entry(descendant.clone())
+                    {
+                        entry.insert(reference.clone());
+                        pending.push(descendant);
+                    }
+                }
+            }
+            (directory.as_str(), tree)
+        })
     }
 
     fn matching_selected_tree(

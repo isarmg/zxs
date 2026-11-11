@@ -36,6 +36,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_disk_directory::create),
         )
         .route(
+            "/api/file-manager/disks/{slot}/directory-branches/from-history",
+            post(http_disk_directory::create_from_history),
+        )
+        .route(
             "/api/file-manager/files/{file}/node-retirement/preview",
             post(http_node_retirement::preview),
         )

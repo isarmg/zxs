@@ -119,7 +119,7 @@
     "id_string": 335,
     "invariant_as_error": 648,
     "join_literal": 467,
-    "json_value": 465,
+    "json_value": 473,
     "long_line": 676,
     "parse_discard": 131,
     "state_leak": 72,
@@ -234,7 +234,7 @@
     "wildcard_arm": 6
   },
   "src/server": {
-    "api_path_literal": 166,
+    "api_path_literal": 167,
     "assert_fn_def": 59,
     "cfg_not_test": 2,
     "cfg_test_item": 48,
@@ -249,7 +249,7 @@
     "id_string": 423,
     "invariant_as_error": 141,
     "join_literal": 62,
-    "json_value": 278,
+    "json_value": 279,
     "long_line": 265,
     "parse_discard": 38,
     "state_leak": 50,

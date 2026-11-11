@@ -5,12 +5,32 @@ use crate::business::{
     directory_git::staged_owned_files,
     directory_staging::{CommitInput, apply_commit},
 };
+use crate::error::HistoricalBranchError;
 use crate::{
     CommitState, ContentState, CurrentHealth, DirectoryTree, Event, OperationResult,
     ProtectionAtPublish,
 };
 use json_codec::json;
-use storage_contract::MapChanges;
+use storage_contract::{DirectoryBranchId, MapChanges};
+
+pub(super) struct HistoricalDirectoryFork {
+    branch: DirectoryBranchId,
+}
+
+impl HistoricalDirectoryFork {
+    pub(super) fn source(
+        &self,
+        branch: &crate::DirectoryBranch,
+        owner: &CurrentScope,
+    ) -> Option<CurrentScope> {
+        if branch.directory_branch_id != self.branch.to_string() {
+            return None;
+        }
+        let mut source = owner.clone();
+        source.entries = Arc::new(branch.entries.clone());
+        Some(source)
+    }
+}
 
 fn accepts(kind: &str) -> bool {
     matches!(
@@ -19,6 +39,7 @@ fn accepts(kind: &str) -> bool {
             | "directory.git.initialize"
             | "directory.git.stage-child"
             | "directory.git.stage-owned"
+            | "directory.git.branch-create-history"
             | "directory.git.branch-create"
             | "directory.git.checkout"
     )
@@ -32,6 +53,23 @@ fn invalid() -> Error {
 }
 
 impl CurrentNamespaces {
+    pub(crate) fn historical_directory_source<'a>(
+        &self,
+        state: &State,
+        tree: &'a DirectoryTree,
+    ) -> Result<&'a DirectoryTree> {
+        self.require_directory_branch_write(state, &tree.directory_branch_id)?;
+        let source = &self.directories[&tree.directory_branch_id];
+        if tree.entries.iter().any(|entry| {
+            source.hidden_paths.contains(entry.lookup_key())
+                || entry.kind == NamespaceEntryKind::File
+                    && self.unavailable_versions.contains(&entry.version_id)
+        }) {
+            return Err(HistoricalBranchError::Unavailable.into());
+        }
+        Ok(tree)
+    }
+
     /// A staged owned snapshot may differ from the live working tree, including
     /// after a working deletion. Its bodies still need current availability.
     /// Explicit child commits are historical references and are checked by the
@@ -70,16 +108,29 @@ impl CurrentNamespaces {
         self.verify_directory_commit(previous, next, receipt)
     }
 
-    pub(super) fn verify_directory_commits(&self, previous: &State, next: &State) -> Result<()> {
+    pub(super) fn verify_directory_commits(
+        &self,
+        previous: &State,
+        next: &State,
+    ) -> Result<Option<HistoricalDirectoryFork>> {
         match publication_delta::receipt(previous, next, |receipt| accepts(&receipt.kind), invalid)?
         {
-            Some(receipt) => self.verify_directory_commit(previous, next, receipt),
+            Some(receipt) => {
+                self.verify_directory_commit(previous, next, receipt)?;
+                if receipt.kind == crate::business::directory_git::HISTORY_CREATE_KIND {
+                    Ok(Some(HistoricalDirectoryFork {
+                        branch: crate::persist::directory_branch::branch_id(receipt.operation_id)?,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
             None if marked_history_changed(previous, next)
                 || previous.directory_git_repositories != next.directory_git_repositories =>
             {
                 Err(invalid())
             }
-            None => Ok(()),
+            None => Ok(None),
         }
     }
 

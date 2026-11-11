@@ -482,6 +482,7 @@ fn directory_operation_events<'a>(
                 | "directory.default.select"
                 | "directory.default.set"
                 | "directory.git.branch-create"
+                | "directory.git.branch-create-history"
                 | "directory.git.checkout"
                 | "directory.git.initialize"
                 | "directory.git.stage-owned"
@@ -664,6 +665,7 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
                 | "directory.scope.initialize"
                 | "directory.git.initialize"
                 | "directory.git.branch-create"
+                | "directory.git.branch-create-history"
         ) {
             continue;
         }

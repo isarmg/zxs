@@ -716,6 +716,7 @@ pub(super) fn mutate_directory(
         crate::DiskDirectoryAction::Create if path.is_none() => DiskAccess::Create,
         crate::DiskDirectoryAction::Create
         | crate::DiskDirectoryAction::ReviewedCreate(_)
+        | crate::DiskDirectoryAction::HistoricalCreate(_)
         | crate::DiskDirectoryAction::Select => DiskAccess::Write,
     };
     if access == DiskAccess::Create
@@ -735,6 +736,23 @@ pub(super) fn mutate_directory(
             .strip_components(1)
     };
     match action {
+        crate::DiskDirectoryAction::HistoricalCreate(source) => {
+            if source.current().repository_id != repo.repository_id {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::DirectoryBranchConflict,
+                    "historical directory source belongs to another repository",
+                ));
+            }
+            let principal: storage_contract::Principal = identity.principal.parse()
+                .expect("invariant: current authentication admits a nonempty principal");
+            engine.create_directory_branch_from_history(
+                &source,
+                relative.as_ref(),
+                &name,
+                &principal,
+                operation_id,
+            )
+        }
         crate::DiskDirectoryAction::ReviewedCreate(source) => {
             if source.repository_id != repo.repository_id {
                 return Err(ApiError::conflict(

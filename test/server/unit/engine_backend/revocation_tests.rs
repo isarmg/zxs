@@ -896,6 +896,7 @@ enum Request {
     RenameFileBranch,
     DiskDirectoryCreate,
     DiskDirectoryReviewedCreate,
+    DiskDirectoryHistoricalCreate,
     DiskDirectorySelect,
     InitializeDirectoryScope,
     ArchiveBranch,
@@ -1561,6 +1562,23 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
+            Self::DiskDirectoryHistoricalCreate => backend
+                .mutate_disk_directory(
+                    identity,
+                    crate::MutateDiskDirectory {
+                        slot_id: "missing".into(),
+                        path: None,
+                        name: storage_contract::BranchName::parse("History").unwrap(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
+                        action: crate::DiskDirectoryAction::HistoricalCreate(
+                            storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+                                reviewed_directory_source(),
+                                storage_contract::DirectoryTreeId::from_random([7; 16]),
+                            ).unwrap(),
+                        ),
+                    },
+                )
+                .map(|_| ()),
             Self::DiskDirectorySelect => backend
                 .mutate_disk_directory(
                     identity,
@@ -1811,6 +1829,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::DiskDirectorySelect,
                 Request::DiskDirectoryCreate,
                 Request::DiskDirectoryReviewedCreate,
+                Request::DiskDirectoryHistoricalCreate,
                 Request::InitializeDirectoryScope,
                 Request::CreateMergeLink,
                 Request::CreateBranch,
@@ -2084,6 +2103,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::RenameFileBranch,
         Request::DiskDirectoryCreate,
         Request::DiskDirectoryReviewedCreate,
+        Request::DiskDirectoryHistoricalCreate,
         Request::DiskDirectorySelect,
         Request::InitializeDirectoryScope,
         Request::ArchiveBranch,

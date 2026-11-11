@@ -263,7 +263,7 @@ impl Planner<'_> {
                 .directory_projection(self.previous, &source.directory_branch_id)?;
             let mut nodes = projection
                 .file_tag_trees()
-                .map(|(directory, tree)| (directory.to_owned(), tree.clone()))
+                .map(|(directory, tree)| (directory.to_owned(), tree))
                 .collect::<Vec<_>>();
             if !nodes.iter().any(|(_, tree)| self.matches_tree(tree)) {
                 continue;

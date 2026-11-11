@@ -1365,6 +1365,31 @@ impl Engine {
         self.create_directory_branch_input(input, principal, operation)
     }
 
+    pub fn create_directory_branch_from_history(
+        &mut self,
+        source: &storage_contract::directory_git::HistoricalDirectoryBranchSource,
+        path: Option<&name_policy::LookupPath>,
+        name: &storage_contract::BranchName,
+        principal: &storage_contract::Principal,
+        operation: OperationId,
+    ) -> Result<OperationResult> {
+        let command = directory_git::HistoricalBranchCommand { source, path, name };
+        self.mutate(
+            directory_git::HISTORY_CREATE_KIND,
+            principal.as_str(),
+            operation,
+            command.digest_body(),
+            |engine, state, _| {
+                let registration =
+                    command.apply(state, engine.admitted_current_namespaces()?, operation)?;
+                Ok(crate::persist::directory_branch::receipt(
+                    &command,
+                    registration,
+                ))
+            },
+        )
+    }
+
     fn create_directory_branch_input(
         &mut self,
         input: json_codec::Value,

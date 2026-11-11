@@ -3,6 +3,7 @@
 pub enum DiskDirectoryAction {
     Create,
     ReviewedCreate(storage_contract::directory_git::DirectoryBranchCreateSource),
+    HistoricalCreate(storage_contract::directory_git::HistoricalDirectoryBranchSource),
     Select,
 }
 pub struct MutateDiskDirectory {

@@ -3,6 +3,9 @@
 use super::directory_staging::Ids;
 use super::*;
 mod branches;
+pub(crate) use branches::{
+    HISTORY_CREATE_KIND, HistoricalBranchCommand, HistoricalBranchRegistration,
+};
 pub(crate) mod export;
 mod ownership;
 mod rename;
@@ -765,6 +768,9 @@ pub(crate) fn apply_command(
                 }
             },
         },
+        HISTORY_CREATE_KIND => {
+            return crate::persist::directory_branch::replay(state, view, input, operation);
+        }
         "directory.git.branch-create" => return branches::create(state, view, input, &mut ids),
         "directory.git.checkout" => {
             return branches::checkout(state, view, input, principal, operation, &mut ids);
