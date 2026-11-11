@@ -131,10 +131,31 @@ fn delete_observed_file(
     (original, deleted, scoped)
 }
 
+fn initialize_file_branch_owner(engine: &mut Engine, version: &HistoryVersionId) {
+    let history = &engine.state.versions[version.as_str()].history_tree_id;
+    let repository = &engine.state.repositories[&engine.state.histories[history].repository_id];
+    let repository_id = repository.repository_id.clone();
+    let expected_namespace_head = engine.state.branches[&repository.main_branch_id]
+        .head_commit_id
+        .clone();
+    engine
+        .initialize_directory_git(
+            &repository_id,
+            &storage_contract::directory_git::DirectoryGitInitializeBody {
+                path: String::new(),
+                expected_namespace_head,
+                operation_id: crate::OperationId::generate().unwrap(),
+            },
+            "admin",
+        )
+        .unwrap();
+}
+
 #[test]
 fn soft_deleted_history_keeps_retained_nodes_without_current_context_across_reopen_and_undo() {
     use crate::file_deletion::UndoFileDeletionRequest;
     let (temp, mut engine, file, version) = actual();
+    initialize_file_branch_owner(&mut engine, &version);
     let (original, deleted, scoped) = delete_observed_file(&mut engine, &file, &version);
     assert_hidden_history(&engine, &file, &version);
     drop(engine);
