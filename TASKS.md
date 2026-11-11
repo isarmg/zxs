@@ -28,6 +28,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
+
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。
 
 - [ ] GitHub CI 验证 T05 Generation／Sequence／Principal／Timestamp 定义和既有固定字节向量：完整 u64 字符串、MAX 耗尽、主体非空及原 Unicode／空白、Unix 整秒和 epoch 前错误来源。两个集中 next 保留可失败 checked_add；尚未迁移使用点或执行 T16 时钟迁移。

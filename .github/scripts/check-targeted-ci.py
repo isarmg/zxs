@@ -59,7 +59,7 @@ def select_plan(policy, changed):
             raise ValueError('invalid Rust target fields')
         if not re.fullmatch(r'[a-z][a-z0-9-]+', target['package']):
             raise ValueError('invalid package name')
-        if not re.fullmatch(r'(src|tools)/[a-z0-9_-]+/Cargo.toml', target['manifest']):
+        if not re.fullmatch(r'(?:(?:src|tools)/[a-z0-9_-]+|helper)/Cargo.toml', target['manifest']):
             raise ValueError('invalid manifest path')
         kind, mode = target.get('kind', 'lib'), target.get('mode', 'test')
         if kind not in {'lib', 'test', 'bin'} or mode not in {'test', 'check'}:

@@ -118,7 +118,7 @@ fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
         .entries()
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "report.txt")
+        .find(|entry| entry.path.as_str() == "report.txt")
         .unwrap();
     assert_eq!(
         backend
@@ -209,8 +209,8 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
         }
     );
     let entries = named_session(shared.clone(), &branch).entries().unwrap();
-    assert!(entries.iter().any(|entry| entry.path == "created"));
-    assert!(entries.iter().any(|entry| entry.path == "report.txt"));
+    assert!(entries.iter().any(|entry| entry.path.as_str() == "created"));
+    assert!(entries.iter().any(|entry| entry.path.as_str() == "report.txt"));
     drop(wire);
     worker.join().unwrap();
 }

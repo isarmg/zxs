@@ -332,7 +332,7 @@ fn split_preserves_bound_settings_when_the_original_scope_is_outside_the_cut() {
         );
         assert_eq!(
             engine
-                .backup_configuration(&copied.repository_id, &file.path)
+                .backup_configuration(&copied.repository_id, file.path.as_str())
                 .unwrap()
                 .target_copies,
             2
@@ -700,7 +700,7 @@ fn inherited_branches_and_their_workspaces_pin_sources_until_first_own_content()
     assert_eq!(inherited.version_id, old.version_id);
     assert_eq!(inherited.size, old.size);
     engine
-        .stage_bytes(&workspace.workspace_id, &old.path, b"first own body")
+        .stage_bytes(&workspace.workspace_id, old.path.as_str(), b"first own body")
         .unwrap();
     engine
         .commit_workspace(CommitRequest {
@@ -787,7 +787,7 @@ fn selected_inherited_file_pins_source_through_directory_main_until_materialized
     engine
         .stage_bytes(
             &workspace.workspace_id,
-            &old.path,
+            old.path.as_str(),
             b"first selected branch bytes",
         )
         .unwrap();

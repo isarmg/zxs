@@ -104,6 +104,124 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "portable-path-consumers": {
+      "reason": "PortablePath explicit text boundaries, canonical entries, namespace consumers and downstream compilation",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "name-policy",
+          "manifest": "src/naming/Cargo.toml",
+          "max_tests": 160,
+          "whole": true
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "max_tests": 160,
+          "prefixes": [
+            "tests::"
+          ]
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "max_tests": 160,
+          "prefixes": [
+            "business::namespace::",
+            "business::composition_tests::",
+            "business::file_tags::tests::"
+          ]
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "max_tests": 160,
+          "kind": "test",
+          "name": "branch_alias_operations",
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "max_tests": 160,
+          "kind": "test",
+          "name": "workspace_commit_replay",
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "max_tests": 160,
+          "kind": "test",
+          "name": "workspace_namespace_preconditions",
+          "whole": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "max_tests": 160,
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "engine_backend::admission::tests::",
+            "engine_backend::file_manager::history_nodes::tests::",
+            "engine_backend::read_projection::tests::"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "max_tests": 160,
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "prefixes": [
+            "backup_namespace::"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "zxs-helper"
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "perf-check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "recovery-startup"
+        }
+      ]
     }
   },
   "rules": [
@@ -862,6 +980,234 @@
       "path": "test/engine/unit/container_storage/cross_directory_recovery.rs",
       "groups": [
         "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/wire.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "src/naming/src/lib.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/wire.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/batch_planning_scenarios.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/copy_alias_scenarios.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/deletion_rebase_scenarios.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/file_merge_scenarios.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_commit_replay.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_namespace_preconditions.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/composition_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file_tags/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/draft_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/query_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/reference_corruption_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_activation_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/cache_budget_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/historical_save/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/maintenance/split_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/protection/backup_paths/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/backup_namespace.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/admission_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/application/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/history_nodes_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/read_projection/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/directory_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/namespace_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/published_selection_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/system_samba_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/write_generation_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "tools/perf-check/src/bin/recovery-startup.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "tools/perf-check/src/main.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "compliance/rust-sources.json",
+      "groups": [
+        "portable-path-consumers"
       ]
     }
   ],

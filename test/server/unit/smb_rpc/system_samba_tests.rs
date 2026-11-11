@@ -46,7 +46,7 @@ fn verify_body(shared: &Shared, branch: &str, path: &str, expected: &[u8]) {
     let entry = tree
         .entries
         .iter()
-        .find(|entry| entry.path == path)
+        .find(|entry| entry.path.as_str() == path)
         .expect("published file missing");
     let content = shared
         .backend

@@ -139,7 +139,7 @@ impl Pool {
         self.engine.state().directory_branches[branch]
             .entries
             .iter()
-            .find(|entry| entry.path == path)
+            .find(|entry| entry.path.as_str() == path)
             .unwrap_or_else(|| panic!("missing {path} in branch {branch}"))
             .clone()
     }
@@ -217,7 +217,7 @@ impl Pool {
             .list_tree(&self.repo.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.path == path)
+            .find(|entry| entry.path.as_str() == path)
             .unwrap()
     }
     fn reopen(self, inspect: impl FnOnce(&Engine)) {
@@ -300,7 +300,7 @@ fn folder_copy_shares_one_new_folder_and_file_identity_across_target_branches() 
         p.branch(&q)
             .entries
             .iter()
-            .all(|entry| !entry.path.starts_with("b/copied"))
+            .all(|entry| !entry.path.as_str().starts_with("b/copied"))
     );
     p.reopen(|recovered| {
         assert_eq!(
@@ -826,7 +826,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     let original = p.current_entry("a/child/report.txt");
     let context = p
         .engine
-        .file_context(&p.repo.repository_id, &original.path)
+        .file_context(&p.repo.repository_id, original.path.as_str())
         .unwrap();
     let workspace = p
         .engine
@@ -850,7 +850,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     assert_eq!(renamed.entry_id, original.entry_id);
     let updated = p
         .engine
-        .file_context(&p.repo.repository_id, &renamed.path)
+        .file_context(&p.repo.repository_id, renamed.path.as_str())
         .unwrap();
     assert_eq!(updated.branch_id, context.branch_id);
     assert_eq!(updated.inherited_from, context.inherited_from);
@@ -863,7 +863,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     assert_eq!(p.bytes(&original.version_id), b"original");
     let repo = p.repo.repository_id.clone();
     p.reopen(|engine| {
-        assert_eq!(engine.file_context(&repo, &renamed.path).unwrap(), updated);
+        assert_eq!(engine.file_context(&repo, renamed.path.as_str()).unwrap(), updated);
         assert_eq!(
             engine.state().file_locations[&original.file_id],
             renamed.path()
@@ -1059,7 +1059,7 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
             storage_contract::DirectoryBatchKind::Move,
             vec![p.mapping(
                 &moved,
-                &original.path,
+                original.path.as_str(),
                 &target,
                 &format!("{owner}/report.txt"),
             )],
@@ -1189,7 +1189,7 @@ fn batch_file_deletion_requires_selected_scope_and_preserves_alias_compositions(
             );
             let node = p.engine.file_deletion(&original.file_id).unwrap();
             assert_eq!(node.operation_id, operation);
-            assert_eq!(node.path, "a/report.txt");
+            assert_eq!(node.path.as_str(), "a/report.txt");
             assert_eq!(p.engine.state().commits, before.commits);
             assert_eq!(
                 p.engine.state().directory_branches,

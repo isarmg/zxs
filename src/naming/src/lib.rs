@@ -300,12 +300,6 @@ mod key_tests;
 #[path = "../../../test/naming/unit/golden_tests.rs"]
 mod golden_tests;
 
-impl std::ops::Deref for PortablePath {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.as_str()
-    }
-}
 impl std::fmt::Display for PortablePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -342,21 +336,5 @@ impl<'de> data_serialization::Deserialize<'de> for LookupPath {
     ) -> std::result::Result<Self, D::Error> {
         let raw = <String as data_serialization::Deserialize>::deserialize(deserializer)?;
         Self::parse(&raw).map_err(data_serialization::de::Error::custom)
-    }
-}
-
-impl PartialEq<str> for PortablePath {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-impl PartialEq<&str> for PortablePath {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-impl PartialEq<String> for PortablePath {
-    fn eq(&self, other: &String) -> bool {
-        self.as_str() == other
     }
 }

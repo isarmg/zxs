@@ -444,12 +444,12 @@ fn file_branches_register_then_write_and_switch_only_one_file_and_survive_reopen
     let before = engine.list_tree(&repo.main_branch_id).unwrap();
     let one = before
         .iter()
-        .find(|e| e.path == "docs/one.txt")
+        .find(|e| e.path.as_str() == "docs/one.txt")
         .unwrap()
         .clone();
     let two = before
         .iter()
-        .find(|e| e.path == "docs/two.txt")
+        .find(|e| e.path.as_str() == "docs/two.txt")
         .unwrap()
         .clone();
     let versions = engine.state().versions.len();
@@ -770,7 +770,7 @@ fn directory_writes_update_only_the_selected_file_branch() {
         )
         .unwrap();
     let visible = engine.list_tree(&repo.main_branch_id).unwrap();
-    assert_eq!(visible[0].path, "renamed.txt");
+    assert_eq!(visible[0].path.as_str(), "renamed.txt");
     assert_eq!(visible[0].version_id, file.version_id);
     assert_eq!(visible[0].size, file.size);
     save(
@@ -808,7 +808,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     let before = engine.list_tree(&repo.main_branch_id).unwrap();
     let outside = before
         .iter()
-        .find(|e| e.path == "outside/c.txt")
+        .find(|e| e.path.as_str() == "outside/c.txt")
         .unwrap()
         .clone();
     let versions = engine.state().versions.len();
@@ -860,7 +860,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
         save(
             &mut engine,
             id,
-            &file.path,
+            file.path.as_str(),
             format!("draft {}", file.path).as_bytes(),
         );
     }
@@ -885,7 +885,7 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     assert_eq!(
         tree.iter()
             .filter(|entry| {
-                entry.kind == NamespaceEntryKind::File && entry.path.starts_with("inside/")
+                entry.kind == NamespaceEntryKind::File && entry.path.as_str().starts_with("inside/")
             })
             .count(),
         2,
@@ -901,11 +901,11 @@ fn directory_file_branch_batch_is_recursive_atomic_and_idempotent() {
     assert_eq!(bytes(&engine, &outside.version_id), b"C unchanged");
     for file in tree
         .iter()
-        .filter(|e| e.kind == NamespaceEntryKind::File && e.path.starts_with("inside/"))
+        .filter(|e| e.kind == NamespaceEntryKind::File && e.path.as_str().starts_with("inside/"))
     {
         assert_eq!(
             bytes(&engine, &file.version_id),
-            if file.path.ends_with("a.txt") {
+            if file.path.as_str().ends_with("a.txt") {
                 b"A main".as_slice()
             } else {
                 b"B main".as_slice()
@@ -960,7 +960,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
     save(&mut engine, &repo.main_branch_id, "folder/a.txt", b"A");
     save(&mut engine, &repo.main_branch_id, "folder/b.txt", b"B");
     let files = engine.list_tree(&repo.main_branch_id).unwrap();
-    let b = files.iter().find(|e| e.path == "folder/b.txt").unwrap();
+    let b = files.iter().find(|e| e.path.as_str() == "folder/b.txt").unwrap();
     engine
         .create_file_branch(
             &b.file_id,
@@ -1031,7 +1031,7 @@ fn directory_batch_conflict_and_new_file_reject_without_partial_changes() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .iter()
-            .any(|e| e.path == "folder/new.txt")
+            .any(|e| e.path.as_str() == "folder/new.txt")
     );
     let before = canonical_json(engine.state()).unwrap();
     assert_eq!(
@@ -2748,7 +2748,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
             .iter()
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
         {
-            if entry.path == "folder/a.txt" {
+            if entry.path.as_str() == "folder/a.txt" {
                 assert_ne!(entry.version_id, parents[entry.path()].version_id);
                 assert_eq!(bytes(engine, &entry.version_id), b"draft A only");
                 assert!(
@@ -2770,7 +2770,7 @@ fn directory_branch_inherits_frozen_parents_and_overrides_only_written_files_aft
                 );
                 assert_eq!(
                     bytes(engine, &entry.version_id),
-                    if entry.path == "folder/b.txt" {
+                    if entry.path.as_str() == "folder/b.txt" {
                         b"parent B"
                     } else {
                         b"parent C"
@@ -2923,7 +2923,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
         storage_contract::ErrorCode::ChecksumMismatch
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
-    fs::write(&staged.source_path, staged.path.as_bytes()).unwrap();
+    fs::write(&staged.source_path, staged.path.as_str().as_bytes()).unwrap();
     let result = engine.commit_workspace(request.clone()).unwrap();
     assert_eq!(
         engine.commit_workspace(request.clone()).unwrap().commit_id,
@@ -2940,7 +2940,7 @@ fn sealed_batch_checksum_failure_rolls_back_all_files_and_retries_after_restart(
     let entries = engine.list_tree(&repo.main_branch_id).unwrap();
     assert_eq!(entries.len(), 2);
     for entry in entries {
-        assert_eq!(bytes(&engine, &entry.version_id), entry.path.as_bytes());
+        assert_eq!(bytes(&engine, &entry.version_id), entry.path.as_str().as_bytes());
     }
     assert_eq!(engine.state().versions.len(), 2);
     assert_eq!(

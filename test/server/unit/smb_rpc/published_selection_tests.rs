@@ -57,7 +57,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
     let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone()).unwrap();
     let entry = entries
         .into_iter()
-        .find(|entry| entry.path == path)
+        .find(|entry| entry.path.as_str() == path)
         .unwrap();
     let created = shared
         .backend

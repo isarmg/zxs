@@ -96,11 +96,11 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
     let old = engine.state.commits[&source]
         .entries
         .iter()
-        .find(|entry| entry.path == "unchanged.txt")
+        .find(|entry| entry.path.as_str() == "unchanged.txt")
         .unwrap();
     let new = entries
         .iter()
-        .find(|entry| entry.path == "unchanged.txt")
+        .find(|entry| entry.path.as_str() == "unchanged.txt")
         .unwrap();
     assert_eq!(new.version_id, old.version_id);
     assert_eq!(new.size, old.size);
@@ -112,7 +112,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
     assert_eq!(saved.result["placeholder_files"], 1);
     let edited = entries
         .iter()
-        .find(|entry| entry.path == "edited.txt")
+        .find(|entry| entry.path.as_str() == "edited.txt")
         .unwrap();
     let mut content = engine.open_content(&edited.version_id).unwrap();
     let mut bytes = Vec::new();

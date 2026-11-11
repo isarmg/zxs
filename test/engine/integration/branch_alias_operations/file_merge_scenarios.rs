@@ -356,7 +356,7 @@ fn a_frozen_parent_derives_its_own_changed_child_without_following_the_childs_ne
         derived
             .entries
             .iter()
-            .find(|entry| entry.path == "dir/child/stay.txt")
+            .find(|entry| entry.path.as_str() == "dir/child/stay.txt")
             .unwrap()
             .version_id,
         sibling.version_id

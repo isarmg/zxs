@@ -27,7 +27,7 @@ fn save(
         .list_tree(branch)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == path)
+        .find(|entry| entry.path.as_str() == path)
         .unwrap()
 }
 

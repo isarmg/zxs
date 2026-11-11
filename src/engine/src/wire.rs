@@ -80,7 +80,8 @@ impl Engine {
         self.workspaces.insert(id.into(), w.clone());
         let mut placement = BTreeMap::new();
         for f in w.files.values() {
-            let (primary, copies) = self.new_file_placement(&repository.repository_id, &f.path)?;
+            let (primary, copies) =
+                self.new_file_placement(&repository.repository_id, f.path.as_str())?;
             placement.insert(
                 f.item_id.clone(),
                 FilePlacement {

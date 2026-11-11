@@ -70,7 +70,7 @@ fn active_frozen_batch_deletion_records_one_d_at_the_live_rebased_path() {
         assert_eq!(nodes.len(), 1);
         let node = engine.file_deletion(&original.file_id).unwrap();
         assert_eq!(node.operation_id, operation.operation_id);
-        assert_eq!(node.path, "renamed/report.txt");
+        assert_eq!(node.path.as_str(), "renamed/report.txt");
         assert_eq!(json_codec::to_value(node).unwrap(), nodes[0]);
         assert_eq!(engine.state().commits, before.commits);
         assert_eq!(engine.state().directory_branches, before.directory_branches);

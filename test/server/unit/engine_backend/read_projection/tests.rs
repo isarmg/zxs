@@ -218,7 +218,7 @@ fn legacy_pending_entry_source<'a>(
             .repositories
             .values()
             .find(|repo| repo.main_branch_id == branch)
-            && let Some(context) = engine.file_context(&repo.repository_id, &entry.path)
+            && let Some(context) = engine.file_context(&repo.repository_id, entry.path.as_str())
         {
             return if context.inherited_from.is_some() {
                 Some(visible.version_id.as_str())
@@ -432,7 +432,7 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
                     engine
                         .file_context_for_current_entry(&repo.repository_id, entry)
                         .map(|context| context.into_owned()),
-                    engine.file_context(&repo.repository_id, &entry.path)
+                    engine.file_context(&repo.repository_id, entry.path.as_str())
                 );
             }
         }
@@ -583,7 +583,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         .unwrap();
     assert!(
         engine
-            .file_context(&repo.repository_id, &original.path)
+            .file_context(&repo.repository_id, original.path.as_str())
             .unwrap()
             .inherited_from
             .is_some()
@@ -709,7 +709,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
         .map(|index| directory_entry(index, format!("f{index:05}-{}", "x".repeat(180))))
         .collect();
     for entry in &entries {
-        name_policy::validate_path(&entry.path).unwrap();
+        name_policy::validate_path(entry.path.as_str()).unwrap();
     }
     entries.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
     let state = directory_page_state(&entries);
@@ -768,7 +768,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
         .map(|index| directory_entry(index, format!("{parent}/f{index:05}")))
         .collect();
     for entry in &entries {
-        name_policy::validate_path(&entry.path).unwrap();
+        name_policy::validate_path(entry.path.as_str()).unwrap();
     }
     let state = directory_page_state(&entries);
     let page = DirectoryPageProjection::page(
@@ -827,7 +827,7 @@ fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
                 .list_tree_ref(&repo.main_branch_id)
                 .unwrap()
                 .iter()
-                .find(|entry| name_policy::path_key(&entry.path) == key)
+                .find(|entry| name_policy::path_key(entry.path.as_str()) == key)
                 .cloned();
             if path.is_empty() {
                 assert!(name_policy::LookupPath::parse(path).is_err());
@@ -865,7 +865,7 @@ fn smb_lookup_rechecks_admission_and_returns_only_current_entry() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| name_policy::path_key(&entry.path) == "strasse.txt");
+        .find(|entry| name_policy::path_key(entry.path.as_str()) == "strasse.txt");
     let path = name_policy::LookupPath::parse("STRASSE.TXT").unwrap();
     let frozen = lookup_current(&engine, &repo.main_branch_id, &path).unwrap();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());

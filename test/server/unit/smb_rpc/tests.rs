@@ -1774,7 +1774,7 @@ fn actual_core_flush_publishes_full_file_and_old_reader_keeps_its_version() {
         .entries()
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "report.txt")
+        .find(|entry| entry.path.as_str() == "report.txt")
         .unwrap();
     let content = backend
         .content(&one.identity, &new_entry.version_id)
@@ -1805,7 +1805,7 @@ fn lost_commit_reply_reconciles_same_operation_without_restaging_or_second_versi
         .entries()
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "report.txt")
+        .find(|entry| entry.path.as_str() == "report.txt")
         .unwrap();
     let history = backend.file_history(&one.identity, &entry.file_id).unwrap();
     assert_eq!(history.len(), 2);
@@ -1857,7 +1857,7 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
             .count(),
         2
     );
-    let other = entries.iter().find(|e| e.path == "other.txt").unwrap();
+    let other = entries.iter().find(|e| e.path.as_str() == "other.txt").unwrap();
     let content = one
         .shared
         .backend
@@ -1992,7 +1992,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         .unwrap();
     assert_eq!(after.entry_id, before.entry_id);
     assert_eq!(after.version_id, before.version_id);
-    assert_eq!(after.path, "REPORT.txt");
+    assert_eq!(after.path.as_str(), "REPORT.txt");
     let (opened, fd) = one
         .open("dir/file.txt".into(), true, true, false, false, false)
         .unwrap();
@@ -2946,7 +2946,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };
-    assert_eq!(writer.path, "é.txt");
+    assert_eq!(writer.path.as_str(), "é.txt");
     let file = File::from(fd);
     file.write_all_at(b"new", 0).unwrap();
     session.dirty(opened.handle).unwrap();
@@ -2961,7 +2961,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
         .find(&name_policy::LookupPath::parse("e\u{301}.txt").unwrap())
         .unwrap()
         .unwrap();
-    assert_eq!(published.path, "é.txt");
+    assert_eq!(published.path.as_str(), "é.txt");
     assert_eq!(published.name(), "é.txt");
     assert_eq!(published.entry_id, original.entry_id);
     assert_eq!(published.file_id, original.file_id);
@@ -2995,7 +2995,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
     let Handle::Write(writer, _) = &session.handles[&opened.handle] else {
         panic!("expected writer")
     };
-    assert_eq!(writer.path, "é.txt");
+    assert_eq!(writer.path.as_str(), "é.txt");
     drop(fd);
     session.close(opened.handle, true).unwrap();
     assert!(

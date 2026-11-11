@@ -26,7 +26,7 @@ fn relocating_entry_updates_path_fields_without_changing_identity_or_body() {
     let original = file.clone();
     for path in ["Straße/文档.txt", "STRASSE/文档.txt", "STRASSE/文档.txt"] {
         relocate_entry(&mut file, name_policy::PortablePath::parse(path).unwrap());
-        assert_eq!(file.path, path);
+        assert_eq!(file.path.as_str(), path);
         assert_eq!(file.name(), "文档.txt");
         assert_eq!(file.lookup_key(), name_policy::path_key(path));
         assert_eq!(file.entry_id, original.entry_id);
@@ -46,7 +46,7 @@ fn rebasing_directory_preserves_identity_and_uses_component_depth() {
     let rebased =
         super::super::directory::rebase_entries(std::slice::from_ref(&original), "Straße", "Moved")
             .unwrap();
-    assert_eq!(rebased[0].path, "Moved/文档.txt");
+    assert_eq!(rebased[0].path.as_str(), "Moved/文档.txt");
     assert_eq!(rebased[0].name(), "文档.txt");
     assert_eq!(
         rebased[0].lookup_key(),
@@ -214,7 +214,7 @@ fn canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinati
         assert_eq!(entries[0].entry_id, original.entry_id);
         assert_eq!(entries[0].file_id, original.file_id);
         assert_eq!(entries[0].version_id, original.version_id);
-        assert_eq!(entries[0].path, "renamed.txt");
+        assert_eq!(entries[0].path.as_str(), "renamed.txt");
         let mut entries = vec![original];
         apply_namespace(
             &mut entries,

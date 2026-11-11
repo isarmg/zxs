@@ -1166,7 +1166,7 @@ fn membership_activation_reconciles_old_and_new_workspace_completion_contexts() 
             .list_tree(&fixture.branch)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.path == path)
+            .find(|entry| entry.path.as_str() == path)
             .unwrap();
         let alternative = fixture
             .engine

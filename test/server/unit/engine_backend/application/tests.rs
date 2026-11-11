@@ -231,7 +231,7 @@ fn public_commit_roundtrip_preserves_canonical_envelope_and_executes() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .iter()
-            .any(|entry| entry.path == "Folder")
+            .any(|entry| entry.path.as_str() == "Folder")
     );
 }
 

@@ -96,7 +96,7 @@ fn shared_parent_creation_matches_legacy_order_and_preserves_existing_identity()
     // Newly materialized parent identities are independently random; all other
     // fields and the pre-existing parent identity must match exactly.
     for (actual, expected) in actual.iter_mut().zip(&legacy) {
-        if actual.kind == NamespaceEntryKind::Directory && actual.path != "Existing" {
+        if actual.kind == NamespaceEntryKind::Directory && actual.path.as_str() != "Existing" {
             actual.entry_id = expected.entry_id.clone();
         }
     }
@@ -185,8 +185,8 @@ fn thousand_to_hundred_thousand_replacements_keep_index_and_slot_order() {
         }
         let entries = draft.into_entries();
         assert_eq!(entries.len(), count);
-        assert_eq!(entries[0].path, "file-000000");
-        assert_eq!(entries[count - 1].path, format!("file-{:06}", count - 1));
+        assert_eq!(entries[0].path.as_str(), "file-000000");
+        assert_eq!(entries[count - 1].path.as_str(), format!("file-{:06}", count - 1));
     }
 }
 

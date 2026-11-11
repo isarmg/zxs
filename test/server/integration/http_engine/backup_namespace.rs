@@ -307,7 +307,9 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         namespace
             .entries()
             .iter()
-            .any(|entry| entry.file_id == file && entry.path == "archive/nested/renamed.txt"),
+            .any(|entry| {
+                entry.file_id == file && entry.path.as_str() == "archive/nested/renamed.txt"
+            }),
         "reversible deletion retains the original namespace row"
     );
     assert!(

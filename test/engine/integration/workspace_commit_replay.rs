@@ -767,7 +767,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                 .list_tree(&branch)
                 .unwrap()
                 .into_iter()
-                .find(|entry| entry.path == "first-file")
+                .find(|entry| entry.path.as_str() == "first-file")
                 .unwrap();
             let alternative = engine
                 .create_file_branch(

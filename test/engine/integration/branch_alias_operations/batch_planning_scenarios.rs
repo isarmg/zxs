@@ -35,11 +35,11 @@ fn frozen_batch_chain_is_order_independent_and_survives_reopen() {
             let entries = engine.list_tree(&main).unwrap();
             assert_eq!(entries.len(), 2);
             assert_eq!(
-                entries.iter().find(|e| e.path == "b.txt").unwrap().file_id,
+                entries.iter().find(|e| e.path.as_str() == "b.txt").unwrap().file_id,
                 a.file_id
             );
             assert_eq!(
-                entries.iter().find(|e| e.path == "c.txt").unwrap().file_id,
+                entries.iter().find(|e| e.path.as_str() == "c.txt").unwrap().file_id,
                 b.file_id
             );
         });

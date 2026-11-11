@@ -39,7 +39,7 @@ fn save(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Entry {
         .list_tree(branch)
         .unwrap()
         .into_iter()
-        .find(|e| e.path == path)
+        .find(|e| e.path.as_str() == path)
         .unwrap()
 }
 fn target(engine: &Engine, branch: &str, node: &str) -> FileTagTarget {
@@ -165,7 +165,7 @@ fn historical_labels_add_a_child_without_rewinding_newer_content() {
         e.list_tree(&r.main_branch_id)
             .unwrap()
             .into_iter()
-            .find(|e| e.path == "a.txt")
+            .find(|e| e.path.as_str() == "a.txt")
             .unwrap()
             .version_id,
         second.version_id

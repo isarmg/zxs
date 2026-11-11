@@ -229,7 +229,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     assert_eq!(engine.snapshot, original_snapshot);
     assert_eq!(engine.next_slot, original_slot);
     assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].path,
+        engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),
         "file.txt"
     );
     assert_eq!(
@@ -269,7 +269,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .unwrap();
     engine.decide_publication(detached).unwrap();
     assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].path,
+        engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),
         "renamed.txt"
     );
     for disk in &engine.config.disks {

@@ -315,7 +315,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
     for missing in ["frozen_tree", "pending_projection"] {
         let (_temporary, mut engine, repo, entry, _) = fixture();
         let file_branch = engine
-            .file_context(&repo.repository_id, &entry.path)
+            .file_context(&repo.repository_id, entry.path.as_str())
             .unwrap()
             .branch_id
             .clone();
@@ -525,7 +525,7 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
                 &repo.repository_id,
                 NamespaceOperation::parse(
                     NamespaceOperationKind::Rename,
-                    &(entry.path.clone()),
+                    entry.path.as_str(),
                     Some("folder/renamed.txt"),
                 )
                 .unwrap(),
@@ -601,7 +601,7 @@ fn exhausted_workspace_generations_reject_candidate_without_publication() {
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
         engine
-            .stage_bytes(&workspace.workspace_id, &entry.path, b"changed body")
+            .stage_bytes(&workspace.workspace_id, entry.path.as_str(), b"changed body")
             .unwrap();
         let before = canonical_json(engine.state()).unwrap();
         let error = engine

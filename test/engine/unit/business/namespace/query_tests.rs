@@ -50,7 +50,7 @@ fn legacy_lookup<'a>(entries: &'a [Entry], path: &str, visits: &mut usize) -> Op
     let key = name_policy::path_key(path);
     entries.iter().find(|entry| {
         *visits += 1;
-        name_policy::path_key(&entry.path) == key
+        name_policy::path_key(entry.path.as_str()) == key
     })
 }
 
@@ -98,7 +98,7 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
     let alias = tree.get("ALIAS.TXT").unwrap();
     assert_eq!(original.file_id, alias.file_id);
     assert_ne!(original.path, alias.path);
-    assert_eq!(original.path, "Straße/Café.txt");
+    assert_eq!(original.path.as_str(), "Straße/Café.txt");
     assert_eq!(original.name(), "Café.txt");
 }
 
@@ -173,7 +173,7 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         &NamespaceOperation::parse(NamespaceOperationKind::Rename, "A", Some("0")).unwrap(),
     )
     .unwrap();
-    assert_eq!(find_unordered(&entries, "0/b/c").unwrap().path, "0/B/C");
+    assert_eq!(find_unordered(&entries, "0/b/c").unwrap().path.as_str(), "0/B/C");
     assert_eq!(
         apply_namespace(
             &mut entries,
@@ -187,7 +187,10 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         .iter()
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
-    assert_eq!(mutation_order, ["Z", "0", "0/B", "0/B/C"]);
+    assert_eq!(
+        mutation_order.iter().map(|path| path.as_str()).collect::<Vec<_>>(),
+        ["Z", "0", "0/B", "0/B/C"]
+    );
     let draft = NamespaceDraft::new(entries);
     assert_eq!(
         draft
@@ -264,7 +267,7 @@ fn assert_published_matches_legacy(engine: &Engine, branch: &str) {
     assert!(
         entries
             .iter()
-            .all(|entry| entry.lookup_key() == name_policy::path_key(&entry.path))
+            .all(|entry| entry.lookup_key() == name_policy::path_key(entry.path.as_str()))
     );
     for query in [
         "STRASSE/CAFE\u{301}.TXT",
@@ -369,10 +372,10 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
                     "folded_duplicate" => {
                         let mut duplicate = entries
                             .iter()
-                            .find(|entry| entry.path == "Straße")
+                            .find(|entry| entry.path.as_str() == "Straße")
                             .unwrap()
                             .clone();
-                        let path = duplicate.path.to_uppercase();
+                        let path = duplicate.path.as_str().to_uppercase();
                         relocate_entry(
                             &mut duplicate,
                             name_policy::PortablePath::parse(&path).unwrap(),

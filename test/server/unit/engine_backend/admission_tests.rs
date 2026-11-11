@@ -368,7 +368,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .unwrap();
         let context = crate::DownloadContext {
             repository_id: repo.repository_id.clone(),
-            path: name_policy::LookupPath::parse(&entry.path).unwrap(),
+            path: name_policy::LookupPath::parse(entry.path.as_str()).unwrap(),
         };
         backend
             .range_content(
@@ -463,7 +463,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     );
     let context = crate::DownloadContext {
         repository_id: repo.repository_id.clone(),
-        path: name_policy::LookupPath::parse(&entry.path).unwrap(),
+        path: name_policy::LookupPath::parse(entry.path.as_str()).unwrap(),
     };
     assert_eq!(
         backend

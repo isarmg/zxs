@@ -30,7 +30,7 @@ fn version(engine: &Engine, branch: &str) -> String {
         .list_tree(branch)
         .unwrap()
         .into_iter()
-        .find(|e| e.path == "sample.bin")
+        .find(|e| e.path.as_str() == "sample.bin")
         .unwrap()
         .version_id
 }

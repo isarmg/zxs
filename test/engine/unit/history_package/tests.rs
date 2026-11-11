@@ -789,7 +789,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     let frozen = engine.state.directory_branches[&id]
         .entries
         .iter()
-        .find(|entry| entry.path == "folder/nested/b.txt")
+        .find(|entry| entry.path.as_str() == "folder/nested/b.txt")
         .unwrap()
         .clone();
     engine
@@ -959,7 +959,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "a/f.txt")
+        .find(|entry| entry.path.as_str() == "a/f.txt")
         .unwrap();
     let create = |engine: &mut Engine, path: &str, name: &str| {
         crate::directory_git_fixture::checkpoint_as(engine, &repo, path, "alice");
@@ -1048,7 +1048,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "b/f.txt")
+        .find(|entry| entry.path.as_str() == "b/f.txt")
         .unwrap();
     crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
@@ -1127,8 +1127,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     );
     save_path(&mut restored, "a/f.txt", b"F3 from old alias");
     let live = restored.list_tree(&repo.main_branch_id).unwrap();
-    let a = live.iter().find(|entry| entry.path == "a/f.txt").unwrap();
-    let b = live.iter().find(|entry| entry.path == "b/f.txt").unwrap();
+    let a = live.iter().find(|entry| entry.path.as_str() == "a/f.txt").unwrap();
+    let b = live.iter().find(|entry| entry.path.as_str() == "b/f.txt").unwrap();
     assert_eq!(a.file_id, b.file_id);
     assert_eq!(b.version_id, moved.version_id);
     assert_ne!(a.version_id, original.version_id);
@@ -3018,7 +3018,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
             .list_tree(&repo.main_branch_id)
             .unwrap()
             .iter()
-            .any(|entry| entry.path == "file.txt")
+            .any(|entry| entry.path.as_str() == "file.txt")
     );
 }
 

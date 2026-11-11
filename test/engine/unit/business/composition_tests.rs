@@ -246,7 +246,7 @@ fn item(e: &Engine, src: &str, path: &str, dst: Option<(&str, &str)>) -> Directo
             entry_id: b
                 .entries
                 .iter()
-                .find(|x| x.path == path)
+                .find(|x| x.path.as_str() == path)
                 .unwrap()
                 .entry_id
                 .clone(),
@@ -377,7 +377,7 @@ fn move_within_one_owner_retains_unselected_frozen_branches_and_identity() {
         let retained = frozen
             .entries
             .iter()
-            .find(|entry| entry.path == "a/f.txt")
+            .find(|entry| entry.path.as_str() == "a/f.txt")
             .unwrap();
         assert_eq!(retained.file_id, f.file_id);
         assert_eq!(retained.version_id, f.version_id);

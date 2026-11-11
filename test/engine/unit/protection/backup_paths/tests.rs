@@ -46,7 +46,7 @@ fn save(engine: &mut Engine, repo: &Repository, path: &str, bytes: &[u8]) -> Ent
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == path)
+        .find(|entry| entry.path.as_str() == path)
         .unwrap()
 }
 fn prefixes(values: &[(&str, &str)]) -> BTreeMap<String, String> {

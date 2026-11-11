@@ -169,7 +169,7 @@ fn main() -> Result<()> {
                 engine
                     .list_tree(&branch)?
                     .iter()
-                    .find(|entry| entry.path == path)
+                    .find(|entry| entry.path.as_str() == path)
                     .expect("committed file exists")
                     .version_id
                     .clone(),

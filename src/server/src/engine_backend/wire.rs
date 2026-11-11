@@ -174,7 +174,7 @@ impl<'a> PendingSources<'a> {
                 let context = match context {
                     CurrentContext::Resolved(context) => context,
                     CurrentContext::Lookup => {
-                        owned = self.engine.file_context(repository, &entry.path);
+                        owned = self.engine.file_context(repository, entry.path.as_str());
                         owned.as_ref()
                     }
                 };

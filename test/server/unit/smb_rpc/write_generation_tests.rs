@@ -103,7 +103,7 @@ fn published(session: &Session, path: &str) -> Vec<u8> {
         .entries()
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == path)
+        .find(|entry| entry.path.as_str() == path)
         .unwrap();
     let content = session
         .shared
@@ -321,7 +321,7 @@ fn lost_core_publication_reply_requires_reconciliation_before_the_next_mutation(
             .entries()
             .unwrap()
             .into_iter()
-            .find(|entry| entry.path == "report.txt")
+            .find(|entry| entry.path.as_str() == "report.txt")
             .unwrap();
         assert_eq!(
             backend
@@ -377,7 +377,7 @@ fn write_through_reports_and_saves_every_change() {
         .entries()
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "report.txt")
+        .find(|entry| entry.path.as_str() == "report.txt")
         .unwrap();
     let history = backend
         .file_history(&session.identity, &entry.file_id)

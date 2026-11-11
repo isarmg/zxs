@@ -85,7 +85,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         let current = engine.list_tree(&repo.main_branch_id).unwrap();
         assert_eq!(current.len(), 1);
         assert_eq!(current[0].entry_id, replacement.entry_id);
-        assert_eq!(current[0].path, "Documents");
+        assert_eq!(current[0].path.as_str(), "Documents");
         assert_eq!(
             engine
                 .workspace(&workspace.workspace_id)
@@ -159,12 +159,12 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
         )
         .unwrap();
     let moved = engine.list_tree(&repo.main_branch_id).unwrap();
-    assert!(moved.iter().any(|entry| entry.path == "Café"));
+    assert!(moved.iter().any(|entry| entry.path.as_str() == "Café"));
     let before = original
         .iter()
-        .find(|entry| entry.path == "Café/Å")
+        .find(|entry| entry.path.as_str() == "Café/Å")
         .unwrap();
-    let after = moved.iter().find(|entry| entry.path == "Café/가").unwrap();
+    let after = moved.iter().find(|entry| entry.path.as_str() == "Café/가").unwrap();
     assert_eq!(before.entry_id, after.entry_id);
     engine
         .file_namespace(
@@ -176,7 +176,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
         .unwrap();
     let remaining = engine.list_tree(&repo.main_branch_id).unwrap();
     assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].path, "Café");
+    assert_eq!(remaining[0].path.as_str(), "Café");
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
         .list_tree(&repo.main_branch_id)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.path == "Café/Å.txt")
+        .find(|entry| entry.path.as_str() == "Café/Å.txt")
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -253,10 +253,10 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
         })
         .unwrap();
     let entries = engine.list_tree(&repo.main_branch_id).unwrap();
-    assert!(entries.iter().any(|entry| entry.path == "Café"));
+    assert!(entries.iter().any(|entry| entry.path.as_str() == "Café"));
     let renamed = entries
         .iter()
-        .find(|entry| entry.path == "Café/가.txt")
+        .find(|entry| entry.path.as_str() == "Café/가.txt")
         .unwrap();
     assert_eq!(renamed.name(), "가.txt");
     assert_eq!(renamed.entry_id, original.entry_id);

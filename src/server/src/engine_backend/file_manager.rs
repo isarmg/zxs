@@ -501,7 +501,7 @@ impl FileHistoryRead {
         };
         let context = current
             .as_ref()
-            .and_then(|entry| engine.file_context(&repo.repository_id, &entry.path));
+            .and_then(|entry| engine.file_context(&repo.repository_id, entry.path.as_str()));
         let current_node = context
             .as_ref()
             .and_then(|context| context.node_id.clone())
