@@ -916,7 +916,7 @@ pub(crate) fn namespace_locations(
                 physical_path,
                 &moved,
                 change.path(),
-                destination,
+                destination.as_str(),
                 DirectoryBatchKind::Rename,
                 moved.lookup_key() != source,
             );

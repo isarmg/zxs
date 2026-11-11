@@ -30,7 +30,7 @@ engine.rs/lib.rs 等公共入口当前映射到本轮恢复、journal 与 IO 模
 - platform fs_safety：原子替换、已有句柄身份、锁、路径与字节上限。
 
 每个模块从本次 Cargo 生成的测试二进制枚举，名称变化无需维护固定测试名。
-每个选择前缀至少有一个非 ignored 测试；engine 最多 160 项，platform 最多 100 项。
+每个选择前缀至少有一个非 ignored 测试；engine layout 最多 187 项，platform 最多 100 项。
 超过预算需审阅分批，不能静默截断。每项以 `--exact` 执行并核对一项通过，零项、
 ignored、最终父测试摘要不匹配、执行失败均无法完成本批。构建仅针对两个包的 lib 测试目标；
 其依赖仍需正常编译。
@@ -50,9 +50,19 @@ CI 路由和证据脚本变化只选择对应 Python 回归，自动入口不会
 
 每项可显式指定 Cargo 的 lib、命名 test 或命名 bin，features 与 default_features。
 默认仍为本机 lib 测试。选择支持模块前缀、精确行为名或整个小型测试目标；每个
-目标均受非空与最多 160 项约束。相同包的不同集成目标及特性配置分别绑定回执。
+目标均受非空与各自 max_tests 约束，配置准入上限为 192 项。相同包的不同集成目标及特性配置分别绑定回执。
 
 `mode: check` 表示单个指定目标的编译验证，不计入测试通过数。只有该项显式指定
 `compile_target: wasm32-unknown-unknown` 时安装 WASM 标准库并执行 release check。
 编译项保存当前 Cargo 成功回执及实际目标产物摘要；执行项仍保存二进制库存与逐项
 结果。包、manifest、target 名称/种类与要求的 features 必须匹配当前构建输出。
+
+
+## 重叠选择的构建与预算
+
+重叠路径保留原有组。相同 package、kind/name、features 集合、default_features、
+mode、compile_target 只构建一次；manifest 冲突失败。16 项上限按唯一构建配置计数。
+每个原选择独立检查非空、ignored、模块存在性及 max_tests，再合并执行名称。
+同一测试只执行一次，采用所有适用选择中最短的 timeout。回执保留来源组、各自配置、
+各自选择结果与最终逐项 timeout，便于核对原范围。组合预算是这些独立预算的并集，
+而不是给单个选择扩容；超过任一原预算仍失败。不同特性、平台或执行模式分别构建。

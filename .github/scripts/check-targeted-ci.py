@@ -39,16 +39,17 @@ def select_plan(policy, changed):
         raise ValueError(f'unmapped changes need a reviewed targeted rule: {unknown}')
     if not changed or not selected or not selected <= set(groups):
         raise ValueError('empty or unknown targeted selection')
-    targets, python_tests = [], set()
+    targets, origins, python_tests = [], [], set()
     for name in sorted(selected):
         group = groups[name]
         if set(group) != {'reason', 'python_tests', 'rust_targets'} or not group['reason']:
             raise ValueError('invalid target group')
         python_tests.update(group['python_tests'])
         targets.extend(group['rust_targets'])
+        origins.extend([name] * len(group['rust_targets']))
     if len(python_tests) > 8 or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
         raise ValueError('invalid Python modules')
-    if len(targets) > 16 or not (targets or python_tests):
+    if not (targets or python_tests):
         raise ValueError('target selection must be bounded and nonempty')
     identities = []
     for target in targets:
@@ -90,15 +91,34 @@ def select_plan(policy, changed):
                     or any(not re.fullmatch(r'[a-z_][a-z0-9_:]*', n) for n in exact)
                     or not (whole or prefixes or exact) or (whole and (prefixes or exact))):
                 raise ValueError('invalid or empty test selection')
-            if type(target.get('max_tests')) is not int or not 1 <= target['max_tests'] <= 160:
-                raise ValueError('test count budget must be between 1 and 160')
+            # The compiled held-layout inventory has 187 runnable tests; each target
+            # still enforces its own reviewed cap below this admission ceiling.
+            if type(target.get('max_tests')) is not int or not 1 <= target['max_tests'] <= 192:
+                raise ValueError('test count budget must be between 1 and 192')
         if (type(target.get('timeout_seconds', 300)) is not int
                 or not 1 <= target.get('timeout_seconds', 300) <= 900):
             raise ValueError('per-test timeout must be between 1 and 900 seconds')
-        identities.append((target['package'], kind, target.get('name'), tuple(features),
+        identities.append((target['package'], kind, target.get('name'), tuple(sorted(features)),
                            target.get('default_features', True), mode, cross))
-    if len(set(identities)) != len(identities):
-        raise ValueError('duplicate Cargo target configuration')
+    builds = {}
+    for identity, target, origin in zip(identities, targets, origins):
+        if identity not in builds:
+            builds[identity] = dict(target, selection_groups=[origin])
+            continue
+        combined = builds[identity]
+        if combined['manifest'] != target['manifest']:
+            raise ValueError('same Cargo identity has conflicting manifests')
+        if 'selections' not in combined:
+            original = {key: value for key, value in combined.items()
+                        if key != 'selection_groups'}
+            combined['selections'] = [original]
+            for key in ('prefixes', 'exact', 'whole', 'max_tests', 'timeout_seconds'):
+                combined.pop(key, None)
+        combined['selections'].append(dict(target))
+        combined['selection_groups'].append(origin)
+    targets = list(builds.values())
+    if len(targets) > 16:
+        raise ValueError('target selection must be bounded and nonempty')
     return {'groups': sorted(selected), 'changed_paths': sorted(changed),
             'python_tests': sorted(python_tests), 'rust_targets': targets,
             'unexecuted': policy['unexecuted']}
@@ -158,6 +178,9 @@ def inventory(output):
 
 
 def selected_tests(names, ignored, target):
+    if 'selections' in target:
+        return sorted({name for selection in target['selections']
+                       for name in selected_tests(names, ignored, selection)})
     if not set(ignored) <= set(names):
         raise ValueError('ignored inventory is outside complete inventory')
     eligible = set(names) - set(ignored)
@@ -174,6 +197,22 @@ def selected_tests(names, ignored, target):
     if not selected or len(selected) > target['max_tests']:
         raise ValueError('selected inventory exceeds reviewed budget')
     return sorted(selected)
+
+
+def selection_evidence(names, ignored, target):
+    selections = target.get('selections', [target])
+    return [{'group': group, 'configuration': selection,
+             'selected': selected_tests(names, ignored, selection)}
+            for group, selection in zip(target['selection_groups'], selections)]
+
+
+def test_timeouts(selections):
+    timeouts = {}
+    for selection in selections:
+        timeout = selection['configuration'].get('timeout_seconds', 300)
+        for name in selection['selected']:
+            timeouts[name] = min(timeouts.get(name, timeout), timeout)
+    return timeouts
 
 
 def passed_test(output, total):
@@ -272,9 +311,12 @@ class Run:
         sha = digest(binary)
         names = inventory(self.command([str(binary), '--list', '--format', 'terse']))
         ignored = inventory(self.command([str(binary), '--list', '--ignored', '--format', 'terse']))
-        selected = selected_tests(names, ignored, target)
+        selections = selection_evidence(names, ignored, target)
+        timeouts = test_timeouts(selections)
+        selected = sorted(timeouts)
         evidence = {'configuration': target, 'package': target['package'], 'path': str(binary), 'sha256': sha,
                     'inventory': names, 'ignored': ignored, 'selected': selected,
+                    'selections': selections, 'test_timeouts': timeouts,
                     'unexecuted': sorted(set(names) - set(selected))}
         self.summary['artifacts'].append(evidence)
         self.save()
@@ -282,7 +324,7 @@ class Run:
             if digest(binary) != sha:
                 raise ValueError('test executable changed after build')
             output = self.command([str(binary), '--exact', name, '--test-threads=1'],
-                                  target.get('timeout_seconds', 300))
+                                  timeouts[name])
             passed_test(output, len(names))
             self.summary['passed'].append({'configuration': target, 'name': name})
             self.save()

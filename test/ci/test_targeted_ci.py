@@ -34,7 +34,7 @@ class TargetedSelection(unittest.TestCase):
                 CI.select_plan(self.policy, changed)
 
     def test_malformed_or_unbounded_target_is_rejected(self):
-        for field, value in [('prefixes', []), ('max_tests', 0), ('max_tests', 161),
+        for field, value in [('prefixes', []), ('max_tests', 0), ('max_tests', 193),
                              ('prefixes', ['']), ('package', '--workspace'), ('timeout_seconds', 901)]:
             policy = copy.deepcopy(self.policy)
             policy['groups']['held-directory-layout']['rust_targets'][0][field] = value
@@ -126,6 +126,91 @@ class TargetedSelection(unittest.TestCase):
             CI.current_artifact(output(item, False), target, ROOT)
         with self.assertRaises(ValueError):
             CI.current_artifact(output(item), dict(target, features=['core']), ROOT)
+
+    def overlapping_policy(self, first, second):
+        return {'groups': {
+            'first': {'reason': 'first behavior', 'python_tests': [], 'rust_targets': [first]},
+            'second': {'reason': 'second behavior', 'python_tests': [], 'rust_targets': [second]}},
+            'rules': [{'path': 'change', 'groups': ['first', 'second']}],
+            'unexecuted': 'other behaviors'}
+
+    def test_overlapping_build_keeps_separate_budgets_and_strictest_timeout(self):
+        first = {'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
+                 'prefixes': ['left::'], 'max_tests': 2, 'timeout_seconds': 900}
+        second = dict(first, prefixes=['right::'], exact=['left::shared'],
+                      max_tests=2, timeout_seconds=120)
+        plan = CI.select_plan(self.overlapping_policy(first, second), ['change'])
+        self.assertEqual(len(plan['rust_targets']), 1)
+        target = plan['rust_targets'][0]
+        names = ['left::shared', 'left::only', 'right::only', 'other::ignored']
+        evidence = CI.selection_evidence(names, ['other::ignored'], target)
+        self.assertEqual([item['group'] for item in evidence], ['first', 'second'])
+        self.assertEqual([item['configuration'] for item in evidence], [first, second])
+        self.assertEqual(CI.test_timeouts(evidence),
+                         {'left::shared': 120, 'left::only': 900, 'right::only': 120})
+        self.assertEqual(CI.selected_tests(names, ['other::ignored'], target),
+                         ['left::only', 'left::shared', 'right::only'])
+        self.assertEqual(first['max_tests'], 2)
+
+    def test_overlap_cannot_mask_missing_ignored_or_over_budget_selection(self):
+        first = {'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
+                 'whole': True, 'max_tests': 10}
+        for second, names, ignored in [
+            (dict(first, whole=False, prefixes=['missing::']), ['other::x'], []),
+            (dict(first, whole=False, exact=['other::x']), ['other::x', 'other::y'],
+             ['other::x']),
+            (dict(first, max_tests=1), ['other::x', 'other::y'], [])]:
+            with self.subTest(second=second):
+                target = CI.select_plan(self.overlapping_policy(first, second),
+                                        ['change'])['rust_targets'][0]
+                with self.assertRaises(ValueError):
+                    CI.selection_evidence(names, ignored, target)
+
+    def test_build_identity_normalizes_feature_order_but_preserves_graphs(self):
+        first = {'package': 'storage-server', 'manifest': 'src/server/Cargo.toml',
+                 'mode': 'check', 'features': ['core', 'extra']}
+        reordered = dict(first, features=['extra', 'core'])
+        plan = CI.select_plan(self.overlapping_policy(first, reordered), ['change'])
+        self.assertEqual(len(plan['rust_targets']), 1)
+        self.assertEqual(plan['rust_targets'][0]['selection_groups'], ['first', 'second'])
+        for mutation in [{'features': ['core']}, {'default_features': False},
+                         {'compile_target': 'wasm32-unknown-unknown'},
+                         {'kind': 'bin', 'name': 'zxs'},
+                         {'mode': 'test', 'whole': True, 'max_tests': 2}]:
+            with self.subTest(mutation=mutation):
+                plan = CI.select_plan(self.overlapping_policy(first, dict(first, **mutation)),
+                                      ['change'])
+                self.assertEqual(len(plan['rust_targets']), 2)
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.overlapping_policy(first, dict(first, manifest='helper/Cargo.toml')),
+                           ['change'])
+
+    def test_unique_build_cap_applies_after_overlap_coalescing(self):
+        target = {'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
+                  'whole': True, 'max_tests': 2}
+        policy = self.overlapping_policy(target, dict(target))
+        policy['groups']['first']['rust_targets'] = [dict(target) for _ in range(17)]
+        self.assertEqual(len(CI.select_plan(policy, ['change'])['rust_targets']), 1)
+        policy['groups']['first']['rust_targets'] = [
+            dict(target, kind='test', name=f'target_{index}') for index in range(16)]
+        with self.assertRaises(ValueError):
+            CI.select_plan(policy, ['change'])
+        policy['groups']['first']['rust_targets'] = [dict(target, max_tests=193)]
+        with self.assertRaises(ValueError):
+            CI.select_plan(policy, ['change'])
+
+    def test_path_consumer_repairs_and_layout_policy_share_fifteen_builds(self):
+        plan = CI.select_plan(self.policy, ['src/engine/src/business/directory.rs',
+                            'src/engine/src/business/workspace.rs',
+                            'test/ci/test_layout_targeted_ci.py'])
+        self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
+                                         'portable-path-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 15)
+        engine = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
+        self.assertEqual(engine['selection_groups'],
+                         ['held-directory-layout', 'portable-path-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in engine['selections']], [187, 160])
 
     def test_invalid_inventory_is_rejected(self):
         self.assertEqual(CI.inventory('module::test: test\n\n1 test, 0 benchmarks\n'), ['module::test'])

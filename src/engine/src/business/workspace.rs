@@ -1183,7 +1183,7 @@ impl crate::engine::PlanningContext<'_> {
             ));
         }
         let (storage_name, created_at) =
-            crate::container_storage::version_identity(state, file_id, path, &digest)?;
+            crate::container_storage::version_identity(state, file_id, path.as_str(), &digest)?;
         let version = FileVersion {
             history_tree_id: history.into(),
             version_id: new_id("ver")?,
@@ -1213,7 +1213,7 @@ impl crate::engine::PlanningContext<'_> {
                 current_entries,
                 &repository,
                 file_id,
-                path,
+                path.as_str(),
                 &route,
                 self.current_namespaces.map(AsRef::as_ref),
             )?;

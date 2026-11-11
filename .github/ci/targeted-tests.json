@@ -7,7 +7,8 @@
         "test_targeted_ci",
         "test_workflows",
         "test_workflow_target_setup",
-        "test_deletion_targeted_ci"
+        "test_deletion_targeted_ci",
+        "test_layout_targeted_ci"
       ],
       "rust_targets": []
     },
@@ -35,7 +36,7 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_writers::store::tests::",
             "container_storage::tests::cross_directory_recovery::"
           ],
-          "max_tests": 160
+          "max_tests": 187
         },
         {
           "package": "platform-io",
@@ -1206,6 +1207,25 @@
     },
     {
       "path": "compliance/rust-sources.json",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/ci/test_layout_targeted_ci.py",
+      "groups": [
+        "ci-selection",
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
       "groups": [
         "portable-path-consumers"
       ]
