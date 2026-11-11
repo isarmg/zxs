@@ -625,6 +625,22 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "projection-cache-layout": {
+      "reason": "Projection file names and bytes, held cache publication, writer locks, link safety and disk recovery",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "disk_authority::cache::tests::",
+            "disk_authority::protocol_tests::",
+            "disk_authority::journal_tests::"
+          ],
+          "max_tests": 52
+        }
+      ]
     }
   },
   "rules": [
@@ -1106,7 +1122,8 @@
     {
       "path": "src/engine/src/persist/layout.rs",
       "groups": [
-        "held-directory-layout"
+        "held-directory-layout",
+        "projection-cache-layout"
       ]
     },
     {
@@ -1626,7 +1643,8 @@
       "path": "test/ci/test_layout_targeted_ci.py",
       "groups": [
         "ci-selection",
-        "held-directory-layout"
+        "held-directory-layout",
+        "projection-cache-layout"
       ]
     },
     {
@@ -2220,6 +2238,36 @@
       "groups": [
         "ci-selection",
         "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk_authority/cache.rs",
+      "groups": [
+        "projection-cache-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk_authority/projection.rs",
+      "groups": [
+        "projection-cache-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_authority/cache_layout.rs",
+      "groups": [
+        "projection-cache-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_authority/protocol.rs",
+      "groups": [
+        "projection-cache-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_authority/journal.rs",
+      "groups": [
+        "projection-cache-layout"
       ]
     }
   ],

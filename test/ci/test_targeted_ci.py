@@ -28,7 +28,7 @@ class TargetedSelection(unittest.TestCase):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
                             'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
         self.assertEqual(len(plan['rust_targets']), 2)
-        self.assertEqual(len(plan['groups']), 2)
+        self.assertEqual(len(plan['groups']), 3)
         self.assertIn('test_development_ci', plan['python_tests'])
 
     def test_unknown_and_empty_changes_need_target_selection(self):
@@ -202,20 +202,21 @@ class TargetedSelection(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.select_plan(policy, ['change'])
 
-    def test_path_consumer_repairs_layout_and_history_share_sixteen_builds(self):
+    def test_path_consumer_repairs_and_layout_policy_share_sixteen_builds(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/business/directory.rs',
                             'src/engine/src/business/workspace.rs',
                             'test/ci/test_layout_targeted_ci.py'])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
-                                         'historical-directory-runtime', 'portable-path-consumers'])
+                                         'historical-directory-runtime', 'portable-path-consumers',
+                                         'projection-cache-layout'])
         self.assertEqual(len(plan['rust_targets']), 16)
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
         self.assertEqual(engine['selection_groups'],
                          ['held-directory-layout', 'historical-directory-runtime',
-                          'portable-path-consumers'])
+                          'portable-path-consumers', 'projection-cache-layout'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [187, 6, 160])
+                         [187, 6, 160, 52])
 
     def test_typed_name_source_and_provenance_paths_are_admitted(self):
         paths = [

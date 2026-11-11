@@ -1,5 +1,13 @@
 //! Hold the selected target through source verification and all projection I/O.
-use super::*;
+use crate::disk_authority::{
+    Error, Result,
+    cache::{self, CachedCopy},
+    journal::DiskSelection,
+    location,
+    model::{MAX_BYTES, MAX_OBJECTS, MAX_PUBLICATIONS},
+    storage::Disk,
+};
+use crate::persist::layout;
 use platform_io::fs_safety::{AtomicFile, EntryName, PrivateDirectory};
 use std::path::{Path, PathBuf};
 
@@ -116,9 +124,8 @@ pub fn rebuild_projection(path: &Path, selections: &[DiskSelection]) -> Result<V
         verified.push(snapshot);
     }
     let directory = destination.open_for_write()?;
-    let marker = EntryName::new("projection-kind.json")?;
     let bytes = br#"{"format":"independent-disk-projection"}"#;
-    match directory.read_bounded(&marker, 256) {
+    match directory.read_bounded(&layout::PROJECTION_KIND, 256) {
         Ok(existing) if existing == bytes => {}
         Ok(_) => return Err(Error::Invalid("projection format differs")),
         Err(platform_io::fs_safety::Error::Io(error))
@@ -131,7 +138,7 @@ pub fn rebuild_projection(path: &Path, selections: &[DiskSelection]) -> Result<V
             {
                 return Err(Error::Invalid("new projection directory must be empty"));
             }
-            AtomicFile::create(&directory, &marker, bytes)?;
+            AtomicFile::create(&directory, &layout::PROJECTION_KIND, bytes)?;
         }
         Err(error) => return Err(error.into()),
     }

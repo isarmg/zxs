@@ -1,11 +1,14 @@
 //! A disposable system-disk SQLite projection. No cache value is accepted by
 //! Disk::writer, verification, publication, identity admission, or recovery.
-use super::*;
+use crate::disk_authority::{
+    Error, Result,
+    model::{Digest, MAX_BYTES, MAX_OBJECTS, MAX_PUBLICATIONS, Origin, Token},
+    verify::{Availability, VerifiedDisk},
+};
+use crate::persist::layout;
 use data_serialization::Serialize;
 use platform_io::{
-    fs_safety::{
-        AdvisoryLock, AtomicFile, EntryName, PayloadOpenMode, PrivateDirectory, RelativePath,
-    },
+    fs_safety::{AdvisoryLock, AtomicFile, EntryName, PayloadOpenMode, PrivateDirectory},
     sqlite::block_on_sqlite_connection,
 };
 use sqlite_access::{
@@ -19,7 +22,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-const DATABASE: &str = "cache.db";
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -51,12 +53,15 @@ impl PublishedCache {
     }
 }
 impl PreparedCache {
-    /// The replacement affects only cache.db. Data disks are not even held by
-    /// this type, so a cache failure cannot authorize a disk mutation.
+    /// Verify the held staging file before replacing the published projection.
     pub fn publish(self) -> Result<PublishedCache> {
         self.directory.verify_identity()?;
         self.directory.verify_payload(&self.staging, &self.file)?;
-        AtomicFile::replace(&self.directory, &RelativePath::new(DATABASE)?, &self.bytes)?;
+        AtomicFile::replace(
+            &self.directory,
+            &layout::PROJECTION_CACHE.as_relative(),
+            &self.bytes,
+        )?;
         self.directory.remove_file(&self.staging)?;
         Ok(PublishedCache {
             directory: self.directory,
@@ -68,7 +73,7 @@ impl PreparedCache {
 pub fn prepare(directory: PrivateDirectory, disks: &[VerifiedDisk]) -> Result<PreparedCache> {
     validate_observations(disks)?;
     directory.verify_identity()?;
-    let lock = AdvisoryLock::acquire(&directory, &RelativePath::new("cache.lock")?)?;
+    let lock = AdvisoryLock::acquire(&directory, &layout::PROJECTION_CACHE_LOCK.as_relative())?;
     let (staging, mut file) = staging_file(&directory)?;
     // SQLite builds only in memory. It cannot follow a changed target path or
     // create journals in another directory before a post-I/O identity check.
@@ -186,8 +191,7 @@ pub fn read(directory: &std::path::Path) -> Result<Vec<CachedCopy>> {
 }
 
 pub(super) fn read_held(directory: &PrivateDirectory) -> Result<Vec<CachedCopy>> {
-    let name = EntryName::new(DATABASE)?;
-    let mut file = directory.open_payload(&name, PayloadOpenMode::Existing)?;
+    let mut file = directory.open_payload(&layout::PROJECTION_CACHE, PayloadOpenMode::Existing)?;
     if file.metadata()?.len() > MAX_BYTES as u64 {
         return Err(Error::Budget);
     }
@@ -198,7 +202,7 @@ pub(super) fn read_held(directory: &PrivateDirectory) -> Result<Vec<CachedCopy>>
     if bytes.len() > MAX_BYTES {
         return Err(Error::Budget);
     }
-    directory.verify_payload(&name, &file)?;
+    directory.verify_payload(&layout::PROJECTION_CACHE, &file)?;
     // Deserialize the bounded held-FD snapshot, never a pathname (including
     // /proc aliases that SQLite may resolve back into mutable filesystem names).
     let database = SqliteOwnedBuf::try_from(bytes.as_slice())?;
@@ -276,17 +280,16 @@ pub(super) fn read_held(directory: &PrivateDirectory) -> Result<Vec<CachedCopy>>
         let closed = connection.close().await;
         finish_connection(queried, closed)
     })?;
-    directory.verify_payload(&name, &file)?;
+    directory.verify_payload(&layout::PROJECTION_CACHE, &file)?;
     Ok(result)
 }
 
 fn staging_file(directory: &PrivateDirectory) -> Result<(EntryName, File)> {
     for _ in 0..MAX_PUBLICATIONS {
-        let name = EntryName::new(format!(
-            "cache-build-{}-{}.db",
+        let name = layout::projection_cache_staging(
             std::process::id(),
-            NEXT_FILE.fetch_add(1, Ordering::Relaxed)
-        ))?;
+            NEXT_FILE.fetch_add(1, Ordering::Relaxed),
+        );
         match directory.open_payload(&name, PayloadOpenMode::CreateNew) {
             Ok(file) => return Ok((name, file)),
             Err(platform_io::fs_safety::Error::Io(error))
@@ -314,3 +317,7 @@ fn finish_connection<T>(
         (Ok(value), Ok(())) => Ok(value),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/disk_authority/cache_layout.rs"]
+mod tests;
