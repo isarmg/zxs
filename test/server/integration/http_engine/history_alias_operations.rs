@@ -983,7 +983,7 @@ async fn cross_repository_overwrite_keeps_both_deletions_at_the_same_path() {
     )
     .await;
     let events = operation_events(&app, &token, &moved, alias_entry(&source, "f")).await;
-    assert_paths(&events, "delete", &["a/x/f"]);
+    assert_paths(&events, "delete", &["a/x/f", "a/x/f"]);
     let deletions = events
         .iter()
         .filter(|event| event["action"] == "delete")
