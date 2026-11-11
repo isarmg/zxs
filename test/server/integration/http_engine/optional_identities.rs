@@ -2464,3 +2464,116 @@ async fn archive_unknown_paths_keep_body_errors_and_resource_before_replay_order
         assert_eq!(response["error"]["code"], "UNAUTHORIZED");
     }
 }
+
+async fn assert_metadata_operation_lookup(
+    app: &Router,
+    token: &str,
+    operation: storage_contract::OperationId,
+    expected: &Value,
+) {
+    let path = format!("/api/operations/{operation}");
+    let outcome = success(
+        app,
+        token,
+        "GET",
+        &format!("{path}/outcome?unused=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        storage_contract::canonical_json(&outcome).unwrap(),
+        storage_contract::canonical_json(expected).unwrap(),
+    );
+    assert!(outcome.get("current_health").is_none());
+    let mut observed = success(app, token, "GET", &path, None).await;
+    assert_eq!(
+        observed.as_object_mut().unwrap().remove("current_health"),
+        Some(Value::Null),
+    );
+    assert_eq!(observed, outcome);
+}
+
+#[tokio::test]
+async fn operation_lookup_preserves_frozen_note_receipt_through_cold_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "lookup.txt", b"operation lookup").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let file = listing["entries"][0]["file_id"].as_str().unwrap();
+    let operation = storage_contract::OperationId::from_random([18; 16]);
+    let saved = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/metadata"),
+        Some(json!({"note":"lookup","operation_id":operation})),
+    )
+    .await;
+    assert_metadata_operation_lookup(&app, &token, operation, &saved).await;
+    drop(app);
+    let engine = reopen_after_router_drop(&system).await;
+    let record = &engine.state().operations[&operation];
+    assert_eq!(record.request_digest, saved["request_digest"].as_str().unwrap());
+    let bytes = storage_contract::canonical_json(record).unwrap();
+    let decoded: storage_contract::OperationResult = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    assert_metadata_operation_lookup(&app, &token, operation, &saved).await;
+    drop(app);
+    let reopened = reopen_after_router_drop(&system).await;
+    assert_eq!(
+        storage_contract::canonical_json(&reopened.state().operations[&operation]).unwrap(),
+        bytes,
+    );
+}
+
+#[tokio::test]
+async fn operation_lookup_keeps_auth_query_and_not_found_errors_separate() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    for suffix in ["", "/outcome"] {
+        for id in [
+            "malformed",
+            "op_0000000000000000000000000000000A",
+            "br_00000000000000000000000000000000",
+            "op_000102030405060708090a0b0c0d0e0f",
+        ] {
+            let path = format!("/api/operations/{id}{suffix}");
+            let (status, response) = send(
+                &app, Some(&token), "GET", &format!("{path}?unused=accepted"), None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(response["error"]["code"], "OPERATION_NOT_FOUND");
+            assert!(response["error"].get("source").is_none());
+            let (status, response) = send(
+                &app, Some(&token), "GET", &format!("{path}?x=1&x=2"), None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+            assert_eq!(send(&app, None, "GET", &path, None).await.0, StatusCode::UNAUTHORIZED);
+        }
+    }
+    success(&app, &token, "POST", "/api/auth/logout", None).await;
+    for suffix in ["", "/outcome"] {
+        for id in ["malformed", "op_000102030405060708090a0b0c0d0e0f"] {
+            let path = format!("/api/operations/{id}{suffix}?x=1&x=2");
+            let (status, response) = send(&app, Some(&token), "GET", &path, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+            assert_eq!(response["error"]["code"], "UNAUTHORIZED");
+        }
+    }
+}

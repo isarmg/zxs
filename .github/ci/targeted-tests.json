@@ -897,6 +897,53 @@
           "default_features": false
         }
       ]
+    },
+    "operation-http-boundary": {
+      "reason": "Typed operation lookup paths with deferred not-found sources, query and capacity priority, current receipt ownership, unchanged outcome and health projections and cold-open receipt reads",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_operation::tests::",
+            "engine_backend::operations::tests::",
+            "operation_observation::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::operation_lookup_defers_id_errors_until_after_query_and_capacity",
+            "backend_admission_tests::operation_lookup_calls_backend_only_for_admitted_ids_and_queries",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation"
+          ],
+          "max_tests": 18,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "optional_identities::operation_lookup_preserves_frozen_note_receipt_through_cold_reads",
+            "optional_identities::operation_lookup_keeps_auth_query_and_not_found_errors_separate",
+            "recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavailable_slots"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -2909,6 +2956,30 @@
       "path": "test/tools/rust-sources/test_source_layout.py",
       "groups": [
         "engineering-guidance"
+      ]
+    },
+    {
+      "path": "src/server/src/http_operation.rs",
+      "groups": [
+        "operation-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_operation.rs",
+      "groups": [
+        "operation-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "operation-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/optional_identities.rs",
+      "groups": [
+        "operation-http-boundary"
       ]
     }
   ],

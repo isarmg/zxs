@@ -2002,3 +2002,81 @@ async fn archive_binding_precedes_capacity_while_command_parsing_waits_for_admis
         assert_eq!(job.await.unwrap().status(), StatusCode::OK);
     }
 }
+
+#[tokio::test]
+async fn operation_lookup_defers_id_errors_until_after_query_and_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    for suffix in ["", "/outcome"] {
+        overloaded(app.clone(), &format!("/api/operations/malformed{suffix}")).await;
+        for path in [
+            format!("/api/operations/malformed{suffix}?x=1&x=2"),
+            format!("/api/operations/%FF{suffix}"),
+        ] {
+            let response = tokio::time::timeout(
+                Duration::from_secs(5),
+                request(app.clone(), &path),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn operation_lookup_calls_backend_only_for_admitted_ids_and_queries() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    for suffix in ["", "/outcome"] {
+        for value in [
+            "malformed",
+            "op_0000000000000000000000000000000A",
+            "br_00000000000000000000000000000000",
+        ] {
+            let path = format!("/api/operations/{value}{suffix}?unused=accepted");
+            let response = request(app.clone(), &path).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let result: Value = json_codec::from_slice(&bytes).unwrap();
+            assert_eq!(result["error"]["code"], "OPERATION_NOT_FOUND");
+        }
+        let path = format!("/api/operations/op_000102030405060708090a0b0c0d0e0f{suffix}");
+        assert_eq!(
+            request(app.clone(), &format!("{path}?x=1&x=2")).await.status(),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    for suffix in ["", "/outcome"] {
+        let response = request(
+            app.clone(),
+            &format!("/api/operations/op_000102030405060708090a0b0c0d0e0f{suffix}?unused=accepted"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+}
