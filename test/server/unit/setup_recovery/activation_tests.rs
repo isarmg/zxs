@@ -1,6 +1,6 @@
 use super::*;
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 #[path = "primary_import_recovery_tests.rs"]
 mod primary_import_recovery;
@@ -1283,6 +1283,9 @@ fn exact_completed_activation_still_runs_the_offline_materialization_callback() 
     f.service
         .activate(&admin(), original.clone(), |_| Ok(()), |_| Ok(()))
         .unwrap();
+    let completion = f.service.data_root.join(ACTIVATION_COMPLETE);
+    let bytes = std::fs::read(&completion).unwrap();
+    let metadata = std::fs::metadata(&completion).unwrap();
     let mut called = false;
     f.service
         .complete_activation_exact(
@@ -1297,5 +1300,55 @@ fn exact_completed_activation_still_runs_the_offline_materialization_callback() 
         )
         .unwrap();
     assert!(called);
+    assert_eq!(std::fs::read(&completion).unwrap(), bytes);
+    let retained = std::fs::metadata(&completion).unwrap();
+    assert_eq!(
+        (retained.dev(), retained.ino()),
+        (metadata.dev(), metadata.ino())
+    );
+    assert!(f.service.activation_admitted().is_ok());
+}
+
+#[test]
+fn exact_completed_activation_preserves_receipt_when_callback_or_authority_fails() {
+    let f = fixture();
+    initialize(&f.service);
+    let original = request(&f.service, &["one"]);
+    f.service
+        .activate(&admin(), original.clone(), |_| Ok(()), |_| Ok(()))
+        .unwrap();
+    let completion = f.service.data_root.join(ACTIVATION_COMPLETE);
+    let bytes = fs::read(&completion).unwrap();
+    let error = f
+        .service
+        .complete_activation_exact(
+            &admin(),
+            &original,
+            |_| Ok(()),
+            |_| Err(ApiError::unauthorized()),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    assert_eq!(fs::read(&completion).unwrap(), bytes);
+    let mut checks = 0;
+    let error = f
+        .service
+        .complete_activation_exact(
+            &admin(),
+            &original,
+            |_| {
+                checks += 1;
+                if checks == 2 {
+                    Err(ApiError::unauthorized())
+                } else {
+                    Ok(())
+                }
+            },
+            |_| panic!("revoked authority cannot invoke materialization"),
+        )
+        .unwrap_err();
+    assert_eq!(checks, 2);
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    assert_eq!(fs::read(&completion).unwrap(), bytes);
     assert!(f.service.activation_admitted().is_ok());
 }

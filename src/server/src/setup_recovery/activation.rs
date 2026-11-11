@@ -405,7 +405,8 @@ impl SetupRecovery {
                 "exact activation recovery requires its original intent",
             ));
         }
-        if present(&self.data_root.join(ACTIVATION_COMPLETE))? {
+        let completed = present(&self.data_root.join(ACTIVATION_COMPLETE))?;
+        if completed {
             self.activation_admitted()?;
             if expected.is_none() {
                 return Ok(());
@@ -434,10 +435,14 @@ impl SetupRecovery {
         drop(proof.probe);
         revalidate(identity)?;
         install(engine)?;
-        self.write_control(
-            ACTIVATION_COMPLETE,
-            &StorageActivationComplete { intent_digest },
-        )
+        if completed {
+            Ok(())
+        } else {
+            self.write_control(
+                ACTIVATION_COMPLETE,
+                &StorageActivationComplete { intent_digest },
+            )
+        }
     }
 
     fn verify_activation_configuration(
