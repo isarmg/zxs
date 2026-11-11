@@ -1144,6 +1144,57 @@
           "default_features": false
         }
       ]
+    },
+    "content-match-http-boundary": {
+      "reason": "Typed path/query extraction preserves content-match contract order after capacity, strict HTTP query rejection, cancellation, authorization and read-only cold-reopen results.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backend_admission_tests::content_match_contract_errors_wait_for_capacity_but_query_errors_do_not",
+            "backend_admission_tests::content_match_only_admits_original_node_cursor_and_limit_domains",
+            "backend_admission_tests::content_matches_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::content_matches_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "exact": [
+            "content_matches::content_matches_real_router_is_read_only_authenticated_and_root_bound"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "content_matches::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3301,6 +3352,36 @@
       "path": "test/server/integration/http_engine/history_query.rs",
       "groups": [
         "detached-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/http_content_matches.rs",
+      "groups": [
+        "content-match-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "content-match-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/content_matches.rs",
+      "groups": [
+        "content-match-http-boundary"
+      ]
+    },
+    {
+      "path": "src/contract/src/content_matches.rs",
+      "groups": [
+        "content-match-http-boundary"
+      ]
+    },
+    {
+      "path": "test/contract/unit/content_matches.rs",
+      "groups": [
+        "content-match-http-boundary"
       ]
     }
   ],

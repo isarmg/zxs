@@ -29,7 +29,8 @@
 
 ## 新版规范的底层重构
 
-- [ ] 定向 CI 验证 T08 detached-history 输入类型：查询持有配对 snapshot／after_file 请求或原契约错误，保持容量前验证、严格查询结构、取消和会话撤销；真实管理员只读查询及其余 HTTP 迁移仍待验证。未本地编译或测试。
+- [ ] 定向 CI 验证 T08 content-matches 请求提取器：path／query 结构解码后一次构造 ContentMatchRequest，原契约错误在容量准入后返回，保持限额与各 ID／根／游标解析顺序；验证取消、撤权、只读匹配、响应字节与冷重开。未本地编译或测试；其他 HTTP 入口继续逐域迁移。
+
 
 
 - [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。

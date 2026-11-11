@@ -2386,3 +2386,98 @@ async fn detached_history_cancellation_reaches_admitted_backend() {
         .unwrap()
         .forget();
 }
+
+fn content_match_route(file: &str, node: &str, root: &str, limit: usize) -> String {
+    format!(
+        "/api/file-manager/files/{file}/content-matches?node_id={node}&history_root={root}&limit={limit}"
+    )
+}
+
+#[tokio::test]
+async fn content_match_contract_errors_wait_for_capacity_but_query_errors_do_not() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    for limit in [0, 1, 65] {
+        let route = content_match_route("malformed", "malformed", "malformed", limit);
+        overloaded(app.clone(), &route).await;
+    }
+    let malformed = content_match_route("malformed", "malformed", "malformed", 1);
+    for route in [
+        format!("{malformed}&unexpected=true"),
+        format!("{malformed}&limit=1"),
+        format!("{malformed}&after_version_id=bad&after_version_id=bad"),
+        malformed.replace("limit=1", "limit=bad"),
+        malformed.replace("&limit=1", ""),
+        content_match_route("%FF", "malformed", "malformed", 1),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &route))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn content_match_only_admits_original_node_cursor_and_limit_domains() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let file = "file_00000000000000000000000000000000";
+    let version = "ver_00000000000000000000000000000000";
+    let root = "a".repeat(64);
+    for prefix in ["ver", "fnode", "fmeta"] {
+        let node = format!("{prefix}_00000000000000000000000000000000");
+        let route = format!(
+            "{}&after_version_id={version}",
+            content_match_route(file, &node, &root, 64),
+        );
+        assert_eq!(request(app.clone(), &route).await.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
+    for (file_id, node, digest, limit) in [
+        ("malformed", version, root.as_str(), 1),
+        (file, "fdel_00000000000000000000000000000000", root.as_str(), 1),
+        (file, "fmerge_00000000000000000000000000000000", root.as_str(), 1),
+        (file, "ver_0000000000000000000000000000000A", root.as_str(), 1),
+        (file, version, "malformed", 1),
+        (file, version, root.as_str(), 0),
+        (file, version, root.as_str(), 65),
+    ] {
+        let route = content_match_route(file_id, node, digest, limit);
+        let response = request(app.clone(), &route).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(result["error"].get("source").is_none());
+    }
+    for cursor in ["bad", "fnode_00000000000000000000000000000000"] {
+        let route = format!(
+            "{}&after_version_id={cursor}",
+            content_match_route(file, version, &root, 1),
+        );
+        assert_eq!(request(app.clone(), &route).await.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
+}
