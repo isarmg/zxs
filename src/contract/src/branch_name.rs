@@ -1,5 +1,6 @@
 //! Validated public branch labels and their fixed-Unicode collision keys.
 use crate::{Error, ErrorCode, Result};
+use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct BranchName {
@@ -20,6 +21,19 @@ impl BranchName {
     }
     pub fn key(&self) -> &str {
         &self.key
+    }
+}
+
+impl Serialize for BranchName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for BranchName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(data_serialization::de::Error::custom)
     }
 }
 /// Validate raw persisted labels and the public entrypoints not yet carrying BranchName.

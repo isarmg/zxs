@@ -31,5 +31,6 @@
 | [终态剩余登记原生决定](terminal-retirement-decisions.md) | 仅未完成选择/原请求恢复；最终后继与成功回执未实现 | SYSTEM terminal owner、metadata resume 围栏与严格状态边界 |
 
 | [SMB Rename 单一原生对象操作](unified-smb-object-move.md) | 当前源码设计；两种共享统一捕获／发布，运行验收独立核实 | SMB、完整历史移动、原绑定与永久收据边界 |
+| [历史目录节点建分支](historical-directory-branch.md) | 历史来源与当前 CAS 分开绑定；定向运行与 Web 接线独立验收 | 同目录用户提交、固定子引用、Current 来源证明与永久原请求 |
 
 决策文档只保留当前背景、选择、代价、替代方案与关联规则，不追加实施进度或构建日志。

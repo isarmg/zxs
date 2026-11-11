@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 
 mod visibility;
 pub use visibility::current_entry_visible;
+mod historical_branch;
+pub use historical_branch::HistoricalDirectoryBranchSource;
 
 /// The exact initialized source reviewed before creating a directory branch.
 /// This is a wire request value; current ownership and state are checked at commit.

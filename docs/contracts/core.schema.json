@@ -11084,6 +11084,23 @@
         "next_after"
       ],
       "additionalProperties": false
+    },
+    "HistoricalDirectoryBranchSource": {
+      "type": "object",
+      "description": "当前七项审阅 CAS 与独立历史用户提交树；两者同时进入新操作的永久请求摘要。",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/DirectoryBranchCreateSource"
+        },
+        "tree_id": {
+          "$ref": "#/$defs/DirectoryTreeId"
+        }
+      },
+      "required": [
+        "current",
+        "tree_id"
+      ],
+      "additionalProperties": false
     }
   }
 }

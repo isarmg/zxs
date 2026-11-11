@@ -10054,6 +10054,232 @@
           }
         }
       }
+    },
+    "/api/file-manager/disks/{slot}/directory-branches/from-history": {
+      "post": {
+        "operationId": "createHistoricalDirectoryBranch",
+        "description": "从同一已初始化稳定目录的准确历史用户提交登记命名分支。source.current 保留当前七项审阅 CAS，source.tree_id 独立固定历史内容；内部工作检查点、其他目录树及失效当前来源拒绝。登记不自动 checkout、不复制正文；原请求重放永久收据，旧当前来源入口保持原编码与 409 语义。",
+        "parameters": [
+          {
+            "name": "slot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlotId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "operation_id": {
+                      "$ref": "#/components/schemas/OperationId"
+                    },
+                    "operation_kind": {
+                      "type": "string"
+                    },
+                    "request_digest": {
+                      "$ref": "#/components/schemas/Hash"
+                    },
+                    "state": {
+                      "enum": [
+                        "completed",
+                        "in_doubt"
+                      ]
+                    },
+                    "commit_state": {
+                      "type": "string"
+                    },
+                    "protection_at_publish": {
+                      "type": "string"
+                    },
+                    "publication_sequence": {
+                      "$ref": "#/components/schemas/UInt64"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "history_tree_id": {
+                          "$ref": "#/components/schemas/HistoryId"
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "branches": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "file_id": {
+                                "$ref": "#/components/schemas/FileId"
+                              },
+                              "branch_id": {
+                                "$ref": "#/components/schemas/BranchId"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "version_id": {
+                                "$ref": "#/components/schemas/VersionId"
+                              }
+                            },
+                            "additionalProperties": true,
+                            "required": [
+                              "file_id",
+                              "branch_id",
+                              "path",
+                              "version_id"
+                            ]
+                          }
+                        },
+                        "copied_files": {
+                          "const": "0"
+                        },
+                        "count": {
+                          "$ref": "#/components/schemas/UInt64"
+                        },
+                        "selected": {
+                          "type": "boolean"
+                        },
+                        "timestamp": {
+                          "$ref": "#/components/schemas/UInt64"
+                        },
+                        "membership_epoch": {
+                          "$ref": "#/components/schemas/UInt64"
+                        },
+                        "version_protection": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "placeholder_files": {
+                          "const": "0"
+                        },
+                        "directory_branch_id": {
+                          "type": "string"
+                        },
+                        "head_tree_id": {
+                          "type": "string"
+                        },
+                        "materialized": {
+                          "const": false
+                        }
+                      },
+                      "additionalProperties": true,
+                      "required": [
+                        "directory_branch_id",
+                        "head_tree_id",
+                        "materialized",
+                        "history_tree_id",
+                        "path",
+                        "name",
+                        "branches",
+                        "count",
+                        "selected",
+                        "copied_files",
+                        "placeholder_files"
+                      ],
+                      "description": "冻结登记时的目录组成。branches指现有公共文件分支引用，不表示创建这些分支；copied_files和placeholder_files均为0。"
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "operation_id",
+                    "operation_kind",
+                    "request_digest",
+                    "state",
+                    "commit_state",
+                    "result",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "来源已失效或目录范围冲突；同一 operation_id 更改来源为 IDEMPOTENCY_KEY_REUSED。原请求不自动重新取源。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "备份盘或当前目录引用只读。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operation_id": {
+                    "$ref": "#/components/schemas/OperationId"
+                  },
+                  "source": {
+                    "$ref": "#/components/schemas/HistoricalDirectoryBranchSource"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "operation_id",
+                  "source"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -21150,6 +21376,23 @@
           "snapshot",
           "entries",
           "next_after"
+        ],
+        "additionalProperties": false
+      },
+      "HistoricalDirectoryBranchSource": {
+        "type": "object",
+        "description": "当前七项审阅 CAS 与独立历史用户提交树；两者同时进入新操作的永久请求摘要。",
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/DirectoryBranchCreateSource"
+          },
+          "tree_id": {
+            "$ref": "#/components/schemas/DirectoryTreeId"
+          }
+        },
+        "required": [
+          "current",
+          "tree_id"
         ],
         "additionalProperties": false
       }

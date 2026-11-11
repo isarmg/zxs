@@ -487,6 +487,39 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "historical-directory-foundation": {
+      "reason": "Strict separate historical source and original BranchName wire; execute schemas, fixed vectors, OpenAPI and documentation contracts",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "prefixes": [
+            "directory_git::historical_branch::tests::",
+            "branch_name::tests::"
+          ],
+          "exact": [
+            "directory_git::tests::directory_branch_create_source_vectors_match_wire_and_identity_validation",
+            "directory_git::tests::directory_git_fixed_vectors_match_strict_rust_wire_types"
+          ],
+          "max_tests": 9
+        },
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "features": [],
+          "exact": [
+            "tests::checked_in_contracts_and_document_examples_are_consistent"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -1769,6 +1802,84 @@
       "path": "src/web/src/admin/storage/foreign/plan/messages.rs",
       "groups": [
         "foreign-draft-names"
+      ]
+    },
+    {
+      "path": "docs/15-api-and-errors.md",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/adr/README.md",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/adr/historical-directory-branch.md",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/contracts/README.md",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/contracts/core.schema.json",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/contracts/openapi.json",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/contracts/vectors.json",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "docs/design/directory-git-repositories.md",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "src/contract/src/branch_name.rs",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "src/contract/src/directory_git.rs",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "src/contract/src/directory_git/historical_branch.rs",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "test/contract/unit/branch_name.rs",
+      "groups": [
+        "historical-directory-foundation"
+      ]
+    },
+    {
+      "path": "test/contract/unit/historical_directory_branch.rs",
+      "groups": [
+        "historical-directory-foundation"
       ]
     }
   ],

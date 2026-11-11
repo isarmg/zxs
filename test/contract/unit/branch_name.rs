@@ -34,3 +34,29 @@ fn branch_names_bind_nfc_display_to_the_fixed_collision_key() {
         assert_eq!(validate_branch_name(name).unwrap_err().code(), code);
     }
 }
+
+#[test]
+fn branch_name_wire_preserves_exact_string_bytes_and_collision_key() {
+    for (wire, name, key) in [
+        ("\"Main\"", "Main", "main"),
+        ("\"Café\"", "Café", "café"),
+        ("\"Straße\"", "Straße", "strasse"),
+    ] {
+        let decoded: BranchName = json_codec::from_str(wire).unwrap();
+        assert_eq!(decoded.as_str(), name);
+        assert_eq!(decoded.key(), key);
+        assert_eq!(json_codec::to_string(&decoded).unwrap().as_bytes(), wire.as_bytes());
+    }
+}
+
+#[test]
+fn branch_name_wire_rejects_nonstring_and_invalid_creation_labels() {
+    for wire in [
+        "null", "true", "1", "{}", "[]", "\"\"", "\"CON.txt\"",
+        "\"bad/label\"", "\"name \"", "\"Cafe\\u0301\"",
+    ] {
+        assert!(json_codec::from_str::<BranchName>(wire).is_err(), "{wire}");
+    }
+    let oversized = json_codec::to_string(&"é".repeat(65)).unwrap();
+    assert!(json_codec::from_str::<BranchName>(&oversized).is_err());
+}

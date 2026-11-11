@@ -5776,6 +5776,23 @@
         "index_generation": "18446744073709551615",
         "namespace_head": "commit_00000000000000000000000000000006"
       }
+    },
+    {
+      "name": "historical-directory-source-exact",
+      "schema": "HistoricalDirectoryBranchSource",
+      "layer": "schema",
+      "value": {
+        "current": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "directory_id": "entry_00000000000000000000000000000002",
+          "directory_branch_id": "dbr_00000000000000000000000000000003",
+          "working_tree_id": "dtree_00000000000000000000000000000004",
+          "head_tree_id": "dtree_00000000000000000000000000000005",
+          "index_generation": "9007199254740993",
+          "namespace_head": "commit_00000000000000000000000000000006"
+        },
+        "tree_id": "dtree_00000000000000000000000000000007"
+      }
     }
   ],
   "negative": [
@@ -20629,6 +20646,64 @@
         "head_tree_id": "dtree_00000000000000000000000000000005",
         "index_generation": "9007199254740993",
         "namespace_head": "bad"
+      }
+    },
+    {
+      "name": "historical-directory-source-missing-current",
+      "schema": "HistoricalDirectoryBranchSource",
+      "layer": "schema",
+      "value": {
+        "tree_id": "dtree_00000000000000000000000000000007"
+      }
+    },
+    {
+      "name": "historical-directory-source-missing-tree_id",
+      "schema": "HistoricalDirectoryBranchSource",
+      "layer": "schema",
+      "value": {
+        "current": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "directory_id": "entry_00000000000000000000000000000002",
+          "directory_branch_id": "dbr_00000000000000000000000000000003",
+          "working_tree_id": "dtree_00000000000000000000000000000004",
+          "head_tree_id": "dtree_00000000000000000000000000000005",
+          "index_generation": "9007199254740993",
+          "namespace_head": "commit_00000000000000000000000000000006"
+        }
+      }
+    },
+    {
+      "name": "historical-directory-source-wrong-tree-kind",
+      "schema": "HistoricalDirectoryBranchSource",
+      "layer": "schema",
+      "value": {
+        "current": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "directory_id": "entry_00000000000000000000000000000002",
+          "directory_branch_id": "dbr_00000000000000000000000000000003",
+          "working_tree_id": "dtree_00000000000000000000000000000004",
+          "head_tree_id": "dtree_00000000000000000000000000000005",
+          "index_generation": "9007199254740993",
+          "namespace_head": "commit_00000000000000000000000000000006"
+        },
+        "tree_id": "tree_00000000000000000000000000000007"
+      }
+    },
+    {
+      "name": "historical-directory-source-zero-generation",
+      "schema": "HistoricalDirectoryBranchSource",
+      "layer": "schema",
+      "value": {
+        "current": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "directory_id": "entry_00000000000000000000000000000002",
+          "directory_branch_id": "dbr_00000000000000000000000000000003",
+          "working_tree_id": "dtree_00000000000000000000000000000004",
+          "head_tree_id": "dtree_00000000000000000000000000000005",
+          "index_generation": "0",
+          "namespace_head": "commit_00000000000000000000000000000006"
+        },
+        "tree_id": "dtree_00000000000000000000000000000007"
       }
     }
   ],

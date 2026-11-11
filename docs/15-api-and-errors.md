@@ -90,7 +90,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/repositories/{repo}/directory-git/stage` | 准确目录、分支、工作树和 index 代数：暂存自身工作内容，不自动纳入孩子的新 HEAD |
 | `POST /api/repositories/{repo}/directory-git/children/stage` | 准确父 index 代数和直接独立孩子已提交 HEAD：只暂存该引用，不替孩子提交 |
 | `POST /api/repositories/{repo}/directory-branches/{id}/commits` | `expected_tree_id`、必填十进制字符串 `expected_index_generation`、`message`、`operation_id`：只提交此仓库的暂存内容和明确子仓库引用 |
-| `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id}`：登记命名目录分支，直接引用父子树；不提前创建文件分支、不复制正文、不创建占位文件、不自动选择 |
+| `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id,source}`：source 绑定当前仓库、目录、分支、工作树、已提交 HEAD、index 代数及 namespace HEAD；登记冻结命名分支，不自动选择 |
+| `POST /api/file-manager/disks/{slot}/directory-branches/from-history` | `{path,name,operation_id,source:{current,tree_id}}`：current 为原七项当前 CAS，tree_id 固定同一目录的历史用户提交；只登记引用，不复制正文或创建占位文件，不自动 checkout |
 | `GET /api/file-manager/files/{file}/history` | 当前根上的统一节点窗口及有界父边预览；可成对传入 repository_id/path 区分别名，支持 limit/cursor 或精确 anchor_node_id |
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径、标签或合并节点的独立备注，最多128 UTF-8字节；空字符串清空，不改正文备注或新增节点 |
