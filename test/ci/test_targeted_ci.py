@@ -202,18 +202,20 @@ class TargetedSelection(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.select_plan(policy, ['change'])
 
-    def test_path_consumer_repairs_and_layout_policy_share_fifteen_builds(self):
+    def test_path_consumer_repairs_layout_and_history_share_sixteen_builds(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/business/directory.rs',
                             'src/engine/src/business/workspace.rs',
                             'test/ci/test_layout_targeted_ci.py'])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
-                                         'portable-path-consumers'])
-        self.assertEqual(len(plan['rust_targets']), 15)
+                                         'historical-directory-runtime', 'portable-path-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 16)
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
         self.assertEqual(engine['selection_groups'],
-                         ['held-directory-layout', 'portable-path-consumers'])
-        self.assertEqual([selection['max_tests'] for selection in engine['selections']], [187, 160])
+                         ['held-directory-layout', 'historical-directory-runtime',
+                          'portable-path-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in engine['selections']],
+                         [187, 6, 160])
 
     def test_typed_name_source_and_provenance_paths_are_admitted(self):
         paths = [

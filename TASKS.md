@@ -8,13 +8,9 @@
 
 - [ ] 定向 CI 验证历史目录分支 Core／HTTP：准确历史提交与当前 CAS、旧入口旧 source 409、权限撤销、本仓干净围栏、固定三级子仓引用、完整写集与永久重放、checkout／标签后冷重开。Web 另片接线；本次仅新增持久请求／完整回执编解码与 HTTP 边界计数：engine json_value +8，server json_value +1、api_path_literal +1，其余指标不变。
 
-- [ ] 定向 CI 验证历史目录分支契约地基：历史 tree 与当前七项 CAS 分离、严格来源 DTO、BranchName 原字符串 serde、固定字节向量与真实 schema／OpenAPI／文档检查。本批仅登记契约；Core／HTTP 执行和 Web 接线另片交付，旧入口及原摘要保持。
-
 - [ ] 验证按实际变更选择的 GitHub 定向 CI，核对当前编译库存、非空选择、逐测试完成与未执行清单。完整 workspace、ignored、跨特性及其余恢复场景尚未验证；后续语义变化须审阅并扩展持久路径映射。
 
 - [ ] 完成 D 审阅的真实浏览器验收：准确页面／节点／读取代数／会话绑定、旧行及旧续页回调隔离、分页范围完整、恢复后第一页重读与原未知结果围栏。相关原生定向测试已通过；超预算 D 的分页／紧凑恢复已实现，其剩余验证见删除与审计项。
-
-- [ ] GitHub CI 验证合法同 scope alias 逐路径审计与全文件 D 生命周期，并验证四类软删除／恢复全局活动投影：原路径、不同主体、准确序号／节点、整批每文件一事件、精确重放与跨仓移动后冷开保留。
 
 - [ ] 按每批实际变更只运行相关定向测试，核对准确 main 提交的选择范围、当前二进制库存与逐项完成证据；继续处理已知失败。未选择的 static、quality、contracts、security、workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收仍未完成，不以定向通过替代完整覆盖。
 - [ ] 验证 13 片的当前产物／测试库存、分配并集与互斥、完整回执、11 个 I/O 门禁和三项显式 ignored 验收；验证参考配方不受分片环境污染、保存配方可达性及失败证据。完成各功能项仍待执行的原生、集成和浏览器测试。
@@ -41,11 +37,7 @@
 
 - [ ] 定向 CI 验证 T07 foreign-plan 目标槽位边界：ForeignDestination 从原 TryFrom 位置保留 SlotId 至 engine 映射，维持槽位先于 parent 的错误顺序和原始 history_names 延后准入；覆盖大小写、64 字节边界、原父路径与命名错误源，并运行既有 foreign-plan 管理行为。server 文本计数 validate_fn 33→32、parse_discard 35→36，新增匹配为持有 slot 的 let 绑定；其余 T07 迁移继续保留。
 
-- [ ] 定向 CI 验证 T07 offline foreign-chain 槽位准入：持有 SlotId 完成前驱精确比较与大小写折叠碰撞检测，保持链基数／槽位／链接错误顺序、资源上限与持久记录；engine validate_slot 公有再导出暂保留，另轮降可见性并依据完整消费者编译证据处理。核对 zxs/core 行为、engine 产品图及已登记 helper／perf 消费者；server 文本计数 validate_fn 32→30、parse_discard 36→38，后者两处为持有结果的 let 绑定。其余 naming 公开 validator 与 manifest 准入迁移仍待完成。
-
-- [ ] 定向 CI 验证 T07 Web recursive-backup capture 名称边界：Disk.name 在原字段解码位置构造并持有 Name，移除私有校验后回传 String 的 helper；验证既有 capture 的 canonical 原字节、Unicode／240 字节展示前缀、保留名／NFD／超长拒绝及原递归保护 UI 行为，并编译 WASM 产品。web 文本 validate_fn 87→86，其余指标不变；其余名称与槽位消费者及 manifest 准入仍待逐域迁移。
-
-- [ ] 定向 CI 验证 T07 Web foreign-plan 本地意图：持有 SlotId／Name／可空 PortablePath，名称借用已准入的 ForeignHistorySummary，仅请求边界恢复原 DTO；保留 Slot／Name／Parent 错误源至 api::Error，UI 文本保持。验证槽位→覆盖→名称／碰撞→parent 的顺序、空 parent 显式 null、原 JSON／canonical 字节和 admission 模式拒绝生成请求；运行既有 plan／recovery 行为及 WASM 编译。web 文本 validate_fn 86→83、parse_discard 12→14（持有结果）、string_key_map 33→31、erase_error 4→2；计数规则保持不变，其余 T07 迁移继续保留。
+- [ ] 按 §7 收紧 engine validate_slot 公有再导出，取得完整消费者编译证据后处理未使用项；继续迁移其余 naming 公开 validator 与 manifest 准入。
 
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
@@ -63,7 +55,6 @@
 - [ ] 清点并逐类替换读取第一方源码或绑定测试名的 CI 门禁，改为行为验证；保留 foundation 依赖图、Cargo 元数据、来源与许可检查。
 - [ ] 按 §19 的新版 T04–T07 完成 contract／naming 类型地基：`Id<K>`、多前缀 ID、`Generation`／`Sequence`／`Principal`／`Timestamp`、名称构造器及路径去字符串退化；补齐 `Hash<D>`、`TrackedMap<K, V>` 与 `EncodedLen`。
 - [ ] 按新版 T08–T09 推进 HTTP 提取器、类型化备注目标、Web 操作号、会话 DTO 与 `SetupCall`，继续逐领域迁移 Web Endpoint／响应 DTO；保持现有未知字段错误、响应关联和凭据代数边界。
-- [ ] T09：以 GitHub 定向 CI 验证 `SetupCall` 首次设置请求切片的 wire、未知结果围栏、会话代数与管理读取队列，并完成 Web WASM 编译检查；以定向 CI 验证登录／恢复会话 DTO 对响应接受域、迟到结果与错误来源的保持，以定向 CI 验证操作号／磁盘号直接从浏览器随机字节构造、原 wire 编码、未知结果操作号稳定性与既有会话围栏。
 - [ ] 按新版 T10–T11 保留并传递现有 `AdmittedState` 证明、提升本状态访问器；完成 `BusinessState`／类型化 `AuthState` 与授权收据读接口，逐领域迁移 server 的裸 State 读取。
 - [ ] 按新版 T12、T14–T16 推进错误显式映射、计数查询、`persist/layout` 句柄名字及确定性计划时间；迁移 serde 表示时完成真实快照／收据字节往返和摘要固定向量。
 - [ ] 逐 kind 完成 `Command → plan → linearize → publish`，收敛 `Activity`／`Availability`、`BranchScope`／`DirectoryComposition`／`PolicyScope` 与文件属性聚合；先核实可达状态及写集成本。

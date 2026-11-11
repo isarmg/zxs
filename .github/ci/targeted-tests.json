@@ -523,7 +523,9 @@
     },
     "historical-directory-runtime": {
       "reason": "Historical directory commit registration, separate current CAS, unchanged legacy request, exact permanent replay and Current closed State proof",
-      "python_tests": [],
+      "python_tests": [
+        "test_historical_directory_targeted_ci"
+      ],
       "rust_targets": [
         {
           "package": "storage-engine",
@@ -2211,6 +2213,13 @@
       "path": "test/web/unit/files/directory_history/creation_tests.rs",
       "groups": [
         "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/ci/test_historical_directory_targeted_ci.py",
+      "groups": [
+        "ci-selection",
+        "historical-directory-runtime"
       ]
     }
   ],
