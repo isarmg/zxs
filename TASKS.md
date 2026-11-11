@@ -32,7 +32,7 @@
 ## 新版规范的底层重构
 
 - [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
-- [ ] GitHub 定向 CI 验证 T08 File／Version 备注目标：路径原文只保留到同名字段比对，backend 持有真实 ID 或解析来源，持锁凭据准入后沿原查找次序返回 404；覆盖 body 优先、撤权、已用操作号、自定义 Backend、固定摘要与永久收据冷开。保留已有回归，note-http-boundary 预算为单元十项、HTTP 八项。Node 的 ApiPath 与 NoteTarget 类型化仍待迁移。
+- [ ] GitHub 定向 CI 验证 T08 File／Version／Node 备注目标：Node 仅允许 fnode／fmeta 类型，未知原文与解析来源保留到原 engine 摘要桥；先 body／凭据／file 查找，再永久收据、已用操作号、写围栏与 node 查找，保持原 source、wire、摘要和永久收据。覆盖自定义 Backend、两类真实节点固定摘要与冷开重放；保留已有回归，note-http-boundary 预算为单元十四项、HTTP 十项。
 
 - [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。
 

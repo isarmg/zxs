@@ -953,10 +953,21 @@ impl Backend for EngineBackend {
                 )
             }
             crate::NoteTarget::Node { file, node } => {
+                let file = file
+                    .into_id()
+                    .map_err(|source| {
+                        ApiError::new(
+                            ::http::StatusCode::NOT_FOUND,
+                            storage_contract::ErrorCode::FileNotFound,
+                            "file not found",
+                        )
+                        .with_source(source)
+                    })?
+                    .to_string();
                 file_manager::file_repo(&engine, &file)?;
                 engine.set_file_node_note(
                     &file,
-                    &node,
+                    &node.request_text(),
                     &request.note,
                     &current.principal,
                     request.operation_id,

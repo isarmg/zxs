@@ -1148,8 +1148,10 @@ impl Request {
                     identity,
                     crate::UpdateNote {
                         target: crate::NoteTarget::Node {
-                            file: "file".into(),
-                            node: "node".into(),
+                            file: crate::FileNoteTarget::malformed(
+                                "file".parse::<storage_contract::FileId>().unwrap_err(),
+                            ),
+                            node: crate::NodeNoteTarget::from_wire("node".into()),
                         },
                         note: storage_contract::Note::parse("".into()).unwrap(),
                         operation_id: storage_contract::OperationId::generate().unwrap(),
@@ -2369,4 +2371,68 @@ fn typed_workspace_abort_checks_owner_before_changing_workspace_or_journal() {
         json_codec::to_value(engine.workspace_view(&foreign.workspace_id).unwrap()).unwrap(),
         json_codec::to_value(&foreign).unwrap()
     );
+}
+
+#[test]
+fn node_note_lookup_preserves_receipt_write_fence_and_revocation_order() {
+    let fixture = Fixture::new(true);
+    let file = fixture.backend.engine.lock().unwrap().state().versions[&fixture.version]
+        .file_id
+        .parse::<storage_contract::FileId>()
+        .unwrap();
+    let request = |operation_id| crate::UpdateNote {
+        target: crate::NoteTarget::Node {
+            file: file.into(),
+            node: crate::NodeNoteTarget::from_wire("malformed".into()),
+        },
+        note: storage_contract::Note::parse("".into()).unwrap(),
+        operation_id,
+    };
+    let before = fixture.snapshot();
+    let fresh = storage_contract::OperationId::from_random([11; 16]);
+    for (operation, expected) in [
+        (fresh, storage_contract::ErrorCode::FileNodeNotFound),
+        (fixture.operation, storage_contract::ErrorCode::IdempotencyKeyReused),
+    ] {
+        let error = fixture.backend.update_note(&fixture.identity, request(operation)).unwrap_err();
+        assert_eq!(error.code, expected);
+        let Some(crate::http_boundary::ApiErrorSource::Engine(source)) = error.source.as_deref()
+        else {
+            panic!("node lookup preserves its original engine error source");
+        };
+        assert_eq!(source.code(), expected);
+    }
+    assert_eq!(fixture.snapshot(), before);
+
+    let preparation = fixture.backend.engine.lock().unwrap()
+        .prepare_workspace_commit(
+            CommitRequest {
+                workspace_id: fixture.workspace.workspace_id.clone(),
+                operation_id: storage_contract::OperationId::from_random([12; 16]),
+                principal: "owner".into(),
+                expected_head: fixture.workspace.base_head.clone(),
+                fencing_token: fixture.workspace.fencing_token,
+                message: "hold note write fence".into(),
+                request_digest: None,
+            },
+            None,
+        )
+        .unwrap();
+    for (operation, expected) in [
+        (fresh, storage_contract::ErrorCode::CommitPreparationBusy),
+        (fixture.operation, storage_contract::ErrorCode::IdempotencyKeyReused),
+    ] {
+        let error = fixture.backend.update_note(&fixture.identity, request(operation)).unwrap_err();
+        assert_eq!(error.code, expected);
+    }
+    drop(preparation);
+    assert_eq!(fixture.snapshot(), before);
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    let before = fixture.snapshot();
+    for operation in [fresh, fixture.operation] {
+        let error = fixture.backend.update_note(&fixture.identity, request(operation)).unwrap_err();
+        assert_eq!(error.status, http::StatusCode::UNAUTHORIZED);
+        assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    }
+    assert_eq!(fixture.snapshot(), before);
 }

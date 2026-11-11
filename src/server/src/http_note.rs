@@ -76,6 +76,22 @@ impl VersionNotePath {
     }
 }
 
+pub(crate) struct NodeNotePath(crate::NodeNoteTarget);
+
+impl<'de> Deserialize<'de> for NodeNotePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let original = String::deserialize(deserializer)?;
+        Ok(Self(crate::NodeNoteTarget::from_wire(original)))
+    }
+}
+
+impl NodeNotePath {
+    fn bind(self, body: &NoteBody) -> Result<crate::NodeNoteTarget, ApiError> {
+        body.matches_path("node_id", &self.0.request_text())?;
+        Ok(self.0)
+    }
+}
+
 pub(crate) struct NoteBody(Map<String, Value>);
 
 impl JsonBody for NoteBody {
@@ -157,11 +173,11 @@ pub(crate) async fn version(
 pub(crate) async fn node(
     State(state): State<AppState>,
     Authenticated(identity): Authenticated,
-    ApiPath((file, node)): ApiPath<(String, String)>,
+    ApiPath((file, node)): ApiPath<(FileNotePath, NodeNotePath)>,
     ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    body.matches_path("file_id", &file)?;
-    body.matches_path("node_id", &node)?;
+    let file = file.bind(&body)?;
+    let node = node.bind(&body)?;
     submit(state, identity, body, NoteTarget::Node { file, node }).await
 }
 #[cfg(test)]

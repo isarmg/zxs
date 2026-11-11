@@ -1991,7 +1991,25 @@ impl Fixture {
                     })
             }),
             ("update_note", {
-                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Node {file:"file".into(),node:"node".into()},note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+                backend
+                    .update_note(
+                        identity,
+                        crate::UpdateNote {
+                            target: crate::NoteTarget::Node {
+                                file: storage_contract::FileId::from_random([0; 16]).into(),
+                                node: crate::NoteNodeId::Anchor(
+                                    storage_contract::FileAnchorId::from_random([0; 16]),
+                                )
+                                .into(),
+                            },
+                            note: storage_contract::Note::parse("".into()).unwrap(),
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(result, recorded_operation(operation_id, "update_note"));
+                        json!({"returned_by":"update_note"})
+                    })
             }),
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
@@ -2561,7 +2579,20 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
             "note":"",
             "operation_id":"op_00000000000000000000000000000000",
         }),
-        json!({"target":"Node { file: \"file\", node: \"node\" }","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({
+            "target":format!(
+                "{:?}",
+                crate::NoteTarget::Node {
+                    file: storage_contract::FileId::from_random([0; 16]).into(),
+                    node: crate::NoteNodeId::Anchor(
+                        storage_contract::FileAnchorId::from_random([0; 16]),
+                    )
+                    .into(),
+                },
+            ),
+            "note":"",
+            "operation_id":"op_00000000000000000000000000000000",
+        }),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","source_node_id":"old","expected_node_id":"head"}],"chosen_node_id":"old","name":"History result","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),

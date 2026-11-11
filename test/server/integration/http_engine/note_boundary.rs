@@ -355,3 +355,208 @@ async fn file_note_wire_digest_and_permanent_receipts_survive_clear_replay_and_r
     );
     assert_eq!(reopened.state().file_notes[&file], "later note");
 }
+
+async fn node_note_fixture() -> (tempfile::TempDir, Router, String, String, [String; 2]) {
+    let (root, app, token, file, version) = note_target_fixture().await;
+    let branch = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/branches"),
+        Some(json!({
+            "source_version_id":version,
+            "source_node_id":version,
+            "name":"Note target",
+            "operation_id":new_id("op").unwrap(),
+        })),
+    )
+    .await["result"]["branch_id"].as_str().unwrap().to_owned();
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/select"),
+        Some(json!({"branch_id":branch,"operation_id":new_id("op").unwrap()})),
+    )
+    .await;
+    let tagged = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/tags"),
+        Some(json!({
+            "targets":[{"branch_id":branch,"source_node_id":version,"expected_node_id":version}],
+            "add":["reviewed"],
+            "remove":[],
+            "operation_id":new_id("op").unwrap(),
+        })),
+    )
+    .await;
+    let metadata = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap().to_owned();
+    manager_namespace(&app, &token, "rename", "version-note.txt", Some("node-note.txt")).await;
+    let listing = success(
+        &app, &token, "GET", "/api/file-manager/disks/P01/entries", None,
+    )
+    .await;
+    let anchor = listing["entries"][0]["node_id"].as_str().unwrap().to_owned();
+    assert!(anchor.starts_with("fnode_"));
+    assert!(metadata.starts_with("fmeta_"));
+    (root, app, token, file, [anchor, metadata])
+}
+
+#[tokio::test]
+async fn node_note_unknown_paths_preserve_body_file_and_idempotency_order() {
+    let (_root, app, token, file, _) = note_target_fixture().await;
+    let operation = storage_contract::OperationId::from_random([13; 16]);
+    success(
+        &app, &token, "POST", &format!("/api/file-manager/files/{file}/metadata"),
+        Some(json!({"note":"","operation_id":operation})),
+    )
+    .await;
+    for node in [
+        "malformed",
+        "fnode_0123456789ABCDEF0123456789abcdef",
+        "fnode_0123456789abcdef0123456789abcdef",
+        "fmeta_0123456789abcdef0123456789abcdef",
+        "ver_0123456789abcdef0123456789abcdef",
+        "fdel_0123456789abcdef0123456789abcdef",
+        "fmerge_0123456789abcdef0123456789abcdef",
+    ] {
+        let route = format!("/api/file-manager/files/{file}/nodes/{node}");
+        for (operation_id, expected_status, expected_code) in [
+            (new_id("op").unwrap(), StatusCode::NOT_FOUND, "FILE_NODE_NOT_FOUND"),
+            (operation.to_string(), StatusCode::CONFLICT, "IDEMPOTENCY_KEY_REUSED"),
+        ] {
+            let (status, result) = send(
+                &app, Some(&token), "PATCH", &route,
+                Some(json!({"note":"","operation_id":operation_id,"file_id":file,"node_id":node})),
+            )
+            .await;
+            assert_eq!(status, expected_status);
+            assert_eq!(result["error"]["code"], expected_code);
+        }
+        assert_node_body_errors(&app, &token, &route, operation).await;
+    }
+    for missing in ["malformed", "file_0123456789abcdef0123456789abcdef"] {
+        let route = format!("/api/file-manager/files/{missing}/nodes/malformed");
+        let (status, result) = send(
+            &app, Some(&token), "PATCH", &route,
+            Some(json!({"note":"","operation_id":operation})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(result["error"]["code"], "FILE_NOT_FOUND");
+    }
+}
+
+async fn assert_node_body_errors(
+    app: &Router,
+    token: &str,
+    route: &str,
+    operation: storage_contract::OperationId,
+) {
+    let (status, result) = send(app, None, "PATCH", route, Some(json!(null))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(result["error"]["code"], "UNAUTHORIZED");
+    for body in [
+        json!({"note":null,"operation_id":operation}),
+        json!({"note":"","operation_id":"bad"}),
+        json!({"note":"","operation_id":operation,"unknown":0}),
+        json!({"note":"","operation_id":operation,"file_id":null}),
+        json!({"note":"","operation_id":operation,"file_id":7}),
+        json!({"note":"","operation_id":operation,"file_id":"different"}),
+        json!({"note":"","operation_id":operation,"node_id":null}),
+        json!({"note":"","operation_id":operation,"node_id":7}),
+        json!({"note":"","operation_id":operation,"node_id":"different"}),
+    ] {
+        let (status, result) = send(app, Some(token), "PATCH", route, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+    }
+}
+
+fn node_note_clear_digest(file: &str, node: &str) -> String {
+    let body = json!({"file_id":file,"node_id":node,"note":""});
+    assert_eq!(
+        storage_contract::canonical_json(&body).unwrap(),
+        format!("{{\"file_id\":\"{file}\",\"node_id\":\"{node}\",\"note\":\"\"}}").as_bytes(),
+    );
+    storage_contract::object_hash(
+        "request",
+        &json!({"kind":"file.path.metadata","principal":"admin","body":body}),
+    )
+    .unwrap()
+}
+
+async fn node_note_clear_and_replay(
+    app: &Router,
+    token: &str,
+    file: &str,
+    node: &str,
+    operation: storage_contract::OperationId,
+) -> (Value, String) {
+    let route = format!("/api/file-manager/files/{file}/nodes/{node}");
+    let clear = json!({"note":"","operation_id":operation,"file_id":file,"node_id":node});
+    let original = success(app, token, "PATCH", &route, Some(clear.clone())).await;
+    assert_eq!(original["operation_kind"], "file.path.metadata");
+    assert_eq!(original["result"]["file_id"], file);
+    assert_eq!(original["result"]["node_id"], node);
+    assert_eq!(original["result"]["note"], "");
+    let digest = node_note_clear_digest(file, node);
+    assert_eq!(original["request_digest"], digest);
+    success(
+        app, token, "PATCH", &route,
+        Some(json!({"note":"later note","operation_id":new_id("op").unwrap()})),
+    )
+    .await;
+    let replay = success(app, token, "PATCH", &route, Some(clear)).await;
+    assert_eq!(
+        storage_contract::canonical_json(&replay).unwrap(),
+        storage_contract::canonical_json(&original).unwrap(),
+    );
+    (original, digest)
+}
+
+#[tokio::test]
+async fn node_note_both_prefixes_keep_wire_digest_receipts_and_cold_replay() {
+    let (root, app, token, file, nodes) = node_note_fixture().await;
+    let mut receipts = Vec::new();
+    for (node, operation) in nodes.iter().zip([
+        storage_contract::OperationId::from_random([14; 16]),
+        storage_contract::OperationId::from_random([15; 16]),
+    ]) {
+        let (wire, digest) = node_note_clear_and_replay(
+            &app, &token, &file, node, operation,
+        )
+        .await;
+        receipts.push((node.clone(), operation, wire, digest));
+    }
+    drop(app);
+    let mut engine = reopen_after_router_drop(&root.path().join("system")).await;
+    let mut stored = Vec::new();
+    for (node, operation, wire, digest) in receipts {
+        assert_eq!(engine.state().file_path_notes[&node], "later note");
+        let receipt = &engine.state().operations[&operation];
+        assert_eq!(receipt.request_digest, digest);
+        assert_eq!(receipt.result, wire["result"]);
+        let bytes = storage_contract::canonical_json(receipt).unwrap();
+        let decoded: storage_contract::OperationResult = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
+        let replay = engine.set_file_node_note(
+            &file, &node, &storage_contract::Note::parse("".into()).unwrap(), "admin", operation,
+        )
+        .unwrap();
+        assert_eq!(storage_contract::canonical_json(&replay).unwrap(), bytes);
+        assert_eq!(engine.state().file_path_notes[&node], "later note");
+        stored.push((node, operation, bytes));
+    }
+    drop(engine);
+    let reopened = Engine::open(&root.path().join("system")).unwrap();
+    for (node, operation, bytes) in stored {
+        assert_eq!(
+            storage_contract::canonical_json(&reopened.state().operations[&operation]).unwrap(),
+            bytes,
+        );
+        assert_eq!(reopened.state().file_path_notes[&node], "later note");
+    }
+}

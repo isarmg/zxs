@@ -568,8 +568,8 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
                     .into(),
             ),
             storage_server::NoteTarget::Node {
-                file: a.file_id.clone(),
-                node: tagged.clone(),
+                file: a.file_id.parse::<storage_contract::FileId>().unwrap().into(),
+                node: tagged.parse::<storage_server::NoteNodeId>().unwrap().into(),
             },
         ] {
             assert_eq!(

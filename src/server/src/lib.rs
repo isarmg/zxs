@@ -98,7 +98,9 @@ mod http_create_file_branch;
 pub use backend_create_file_branch::CreateFileBranch;
 mod backend_note;
 mod http_note;
-pub use backend_note::{FileNoteTarget, NoteTarget, UpdateNote, VersionNoteTarget};
+pub use backend_note::{
+    FileNoteTarget, NodeNoteTarget, NoteNodeId, NoteTarget, UpdateNote, VersionNoteTarget,
+};
 mod backend_file_merge;
 mod http_file_history_merge;
 mod http_file_merge;

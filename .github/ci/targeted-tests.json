@@ -309,7 +309,7 @@
       ]
     },
     "note-http-boundary": {
-      "reason": "Typed file and version-note lookup, deferred failures and authentication ordering, existing note body fields, durable receipts and rename graph preservation",
+      "reason": "Typed file, version and restricted path/metadata note targets, deferred lookup and receipt ordering, body and authorization boundaries, durable receipts and rename graph preservation",
       "python_tests": [],
       "rust_targets": [
         {
@@ -321,10 +321,11 @@
           "prefixes": [
             "http_note::tests::"
           ],
-          "max_tests": 10,
+          "max_tests": 14,
           "exact": [
             "engine_backend::revocation_tests::version_note_lookup_preserves_revocation_and_replay_order",
-            "engine_backend::revocation_tests::file_note_lookup_preserves_revocation_and_replay_order"
+            "engine_backend::revocation_tests::file_note_lookup_preserves_revocation_and_replay_order",
+            "engine_backend::revocation_tests::node_note_lookup_preserves_receipt_write_fence_and_revocation_order"
           ]
         },
         {
@@ -342,7 +343,7 @@
             "file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name",
             "rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_sources"
           ],
-          "max_tests": 8,
+          "max_tests": 10,
           "timeout_seconds": 900
         },
         {
