@@ -1,14 +1,14 @@
 //! Production publication and cold evidence. These tests use real Engine
 //! fixtures; malformed clones only exercise admission, never authorize writes.
 use super::*;
-use crate::{DirectoryNamespaceBatch, ErrorCode};
-use json_codec::json;
-use storage_contract::history_window::HistoryFileId;
 use crate::{
     CommitRequest, Config, DirectoryBatchKind, DirectoryNamespaceItem, DirectoryNamespaceSource,
     Entry, Repository, UndoFileDeletionRequest, canonical_json,
 };
+use crate::{DirectoryNamespaceBatch, ErrorCode};
+use json_codec::json;
 use std::{io::Read, path::PathBuf};
+use storage_contract::history_window::HistoryFileId;
 
 fn op() -> OperationId {
     OperationId::generate().unwrap()
@@ -134,7 +134,10 @@ fn complete_original_batch_restores_once_without_rewriting_history_and_survives_
     fixture.assert_visibility(false);
     let preview = fixture
         .engine
-        .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("other-admin").unwrap())
+        .preflight_file_deletion_batch_undo(
+            deleted.operation_id,
+            BatchUndoActor::parse("other-admin").unwrap(),
+        )
         .unwrap();
     assert_eq!(preview.deletion_operation_id, deleted.operation_id);
     assert_eq!(
@@ -221,7 +224,10 @@ fn complete_original_batch_restores_once_without_rewriting_history_and_survives_
     assert_eq!(
         fixture
             .engine
-            .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("admin").unwrap())
+            .preflight_file_deletion_batch_undo(
+                deleted.operation_id,
+                BatchUndoActor::parse("admin").unwrap()
+            )
             .unwrap_err()
             .code(),
         ErrorCode::RecoveryRequired
@@ -272,7 +278,10 @@ fn any_missing_original_member_prevents_the_entire_undo_publication() {
     let deleted = fixture.delete();
     let preview = fixture
         .engine
-        .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("admin").unwrap())
+        .preflight_file_deletion_batch_undo(
+            deleted.operation_id,
+            BatchUndoActor::parse("admin").unwrap(),
+        )
         .unwrap();
     assert_eq!(preview.deletion_nodes.len(), 2);
     let node = fixture
@@ -293,7 +302,10 @@ fn any_missing_original_member_prevents_the_entire_undo_publication() {
     assert_eq!(
         fixture
             .engine
-            .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("admin").unwrap())
+            .preflight_file_deletion_batch_undo(
+                deleted.operation_id,
+                BatchUndoActor::parse("admin").unwrap()
+            )
             .unwrap_err()
             .code(),
         ErrorCode::FileNodeNotFound

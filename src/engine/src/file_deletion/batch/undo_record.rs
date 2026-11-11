@@ -1,7 +1,7 @@
 //! Canonical persistent encoding and admission for original batch restoration.
-use crate::{Error, FileDeletionNode, OperationId, OperationResult, Result, State};
-use super::{MAX_RESULT_BYTES, UNDO, admit};
 use super::undo_error::BatchUndoError;
+use super::{MAX_RESULT_BYTES, UNDO, admit};
+use crate::{Error, FileDeletionNode, OperationId, OperationResult, Result, State};
 use data_serialization::Serialize;
 
 #[derive(Serialize)]
@@ -25,7 +25,7 @@ pub(super) fn input(operation: OperationId) -> Result<json_codec::Value> {
     json_codec::to_value(Input {
         deletion_operation_id: operation,
     })
-        .map_err(|source| Error::BatchUndo(BatchUndoError::Encoding(source)))
+    .map_err(|source| Error::BatchUndo(BatchUndoError::Encoding(source)))
 }
 pub(super) fn outcome(
     operation: OperationId,

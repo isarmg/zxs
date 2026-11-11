@@ -1,4 +1,7 @@
-use crate::files::deletion::{batch_restore::{Request, begin, confirm, reviewed}, restore};
+use crate::files::deletion::{
+    batch_restore::{Request, begin, confirm, reviewed},
+    restore,
+};
 use crate::ui::State;
 use std::sync::Arc;
 use storage_contract::FileDeletionNode;
@@ -6,9 +9,18 @@ use web_interface::{i18n::t, prelude::*};
 
 pub(in crate::files::deletion) fn retained_view(request: &Request) -> impl IntoView + use<> {
     let original = request.original().to_string();
-    let nodes = request.nodes().iter().map(|node| {
-        format!("{} · {} · {}", node.path.as_str(), node.file_id, node.node_id)
-    }).collect::<Vec<_>>();
+    let nodes = request
+        .nodes()
+        .iter()
+        .map(|node| {
+            format!(
+                "{} · {} · {}",
+                node.path.as_str(),
+                node.file_id,
+                node.node_id
+            )
+        })
+        .collect::<Vec<_>>();
     view! {
         <details class="zxs-stack" {web_interface::attr::custom::custom_attribute("open", "")}>
             <summary>{t("完整原批次的文件与删除节点", "Files and deletion nodes of the complete original batch")}</summary>

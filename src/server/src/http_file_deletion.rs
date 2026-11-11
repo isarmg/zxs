@@ -130,7 +130,9 @@ pub(crate) async fn batch_preview(
     ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
 ) -> Result<Response, ApiError> {
     if !query.is_empty() {
-        return Err(ApiError::invalid("batch restore preview does not accept query fields"));
+        return Err(ApiError::invalid(
+            "batch restore preview does not accept query fields",
+        ));
     }
     crate::bounded_history_http::read(state, move |backend, _| {
         crate::history_window_encode::encode_bounded(

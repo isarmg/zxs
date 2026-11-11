@@ -41,7 +41,10 @@ fn membership_registry_current_file_batch_undo_restores_only_the_original_curren
     let frozen = fixture.engine.state().clone();
     let preview = fixture
         .engine
-        .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("admin").unwrap())
+        .preflight_file_deletion_batch_undo(
+            deleted.operation_id,
+            BatchUndoActor::parse("admin").unwrap(),
+        )
         .unwrap();
     assert_eq!(
         json_codec::to_value(preview.deletion_nodes).unwrap(),
@@ -94,7 +97,10 @@ fn membership_registry_current_file_batch_undo_rejects_a_member_without_a_curren
     assert_eq!(
         fixture
             .engine
-            .preflight_file_deletion_batch_undo(deleted.operation_id, BatchUndoActor::parse("admin").unwrap())
+            .preflight_file_deletion_batch_undo(
+                deleted.operation_id,
+                BatchUndoActor::parse("admin").unwrap()
+            )
             .unwrap_err()
             .code(),
         ErrorCode::UnsupportedOperation

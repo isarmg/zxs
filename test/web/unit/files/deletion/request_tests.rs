@@ -40,7 +40,10 @@ fn node(operation: &str) -> storage_contract::FileDeletionNode {
 fn receipt(intent: &Intent, operation: &str) -> Value {
     let (kind, mut result) = match intent {
         Intent::Delete(_) => ("file.delete", json!({"deletion_node":node(operation)})),
-        Intent::DeleteBatch(_) | Intent::DeleteDirectory(_) | Intent::UndoDirectory(_) | Intent::UndoBatch(_) => {
+        Intent::DeleteBatch(_)
+        | Intent::DeleteDirectory(_)
+        | Intent::UndoDirectory(_)
+        | Intent::UndoBatch(_) => {
             panic!("single-file fixture does not construct group receipts")
         }
         Intent::Undo(node) => (
@@ -150,7 +153,10 @@ fn request_body_is_only_exact_file_location_and_original_operation() {
     assert_eq!(endpoint, format!("/api/files/{}/deletion", id("file", 1)));
     let expected = json!({"repository_id":id("repo",1),"path":"A.txt","operation_id":operation});
     assert!(matches!(&body, Body::Json(_)));
-    assert_eq!(json_codec::to_string(&body).unwrap(), json_codec::to_string(&expected).unwrap());
+    assert_eq!(
+        json_codec::to_string(&body).unwrap(),
+        json_codec::to_string(&expected).unwrap()
+    );
     assert_eq!(json_codec::to_value(body).unwrap(), expected);
     assert_eq!(intent.digest("alice").unwrap(),storage_contract::object_hash("request",&json!({"kind":"file.delete","principal":"alice","body":{"repository_id":id("repo",1),"file_id":id("file",1),"path":"a.txt"}})).unwrap());
 }

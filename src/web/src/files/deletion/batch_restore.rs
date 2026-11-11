@@ -1,18 +1,18 @@
 //! Restore one complete original file-deletion batch through the existing ledger.
+use crate::files::deletion::{request, restore, wire};
 use crate::{
     api,
     ui::{State, accept_read_response, fail},
 };
-use crate::files::deletion::{request, restore, wire};
-use std::{collections::BTreeSet, sync::Arc};
-use web_interface::{prelude::*, tasks::spawn_local};
 use data_serialization::Deserialize;
 use json_codec::Value;
+use std::{collections::BTreeSet, sync::Arc};
 use storage_contract::{
     FileDeletionNode, OperationId,
     client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES,
-    file_deletion_batch::{FileDeletionBatchUndoPreview, UndoFileDeletionBatchBody, UNDO_KIND},
+    file_deletion_batch::{FileDeletionBatchUndoPreview, UNDO_KIND, UndoFileDeletionBatchBody},
 };
+use web_interface::{prelude::*, tasks::spawn_local};
 mod view;
 pub(super) use view::{button, retained_view, view};
 
@@ -34,13 +34,19 @@ impl Request {
         deletion_nodes: Vec<FileDeletionNode>,
     ) -> Result<Self, api::Error> {
         if deletion_nodes.is_empty() || deletion_nodes.len() > 100 {
-            return Err(invalid("the batch must contain one to one hundred deletion nodes"));
+            return Err(invalid(
+                "the batch must contain one to one hundred deletion nodes",
+            ));
         }
         let first = &deletion_nodes[0];
         if first.sequence == 0
-            || deletion_nodes.windows(2).any(|pair| pair[0].file_id >= pair[1].file_id)
+            || deletion_nodes
+                .windows(2)
+                .any(|pair| pair[0].file_id >= pair[1].file_id)
         {
-            return Err(invalid("the original batch requires a publication sequence and ordered unique files"));
+            return Err(invalid(
+                "the original batch requires a publication sequence and ordered unique files",
+            ));
         }
         let mut node_ids = BTreeSet::new();
         let mut branches = 0;
@@ -56,7 +62,9 @@ impl Request {
                 || node.author != first.author
                 || !node_ids.insert(&node.node_id)
             {
-                return Err(invalid("the original batch members must share one publication and distinct deletion identities"));
+                return Err(invalid(
+                    "the original batch members must share one publication and distinct deletion identities",
+                ));
             }
             branches += node.branch_heads.len();
             parents += node.parent_node_ids.len();
@@ -75,10 +83,13 @@ impl Request {
     }
     fn decode(value: Value, selected: &FileDeletionNode) -> Result<Self, api::Error> {
         if !value.is_object()
-            || !value["deletion_nodes"].as_array()
+            || !value["deletion_nodes"]
+                .as_array()
                 .is_some_and(|nodes| nodes.iter().all(Value::is_object))
         {
-            return Err(invalid("the batch preview requires named deletion-node objects"));
+            return Err(invalid(
+                "the batch preview requires named deletion-node objects",
+            ));
         }
         let preview = FileDeletionBatchUndoPreview::deserialize(value).map_err(|source| {
             api::Error::invalid_response(
@@ -88,9 +99,15 @@ impl Request {
         })?;
         let request = Self::admit(preview.deletion_operation_id, preview.deletion_nodes)?;
         if request.preview.deletion_operation_id != selected.operation_id
-            || !request.preview.deletion_nodes.iter().any(|node| node == selected)
+            || !request
+                .preview
+                .deletion_nodes
+                .iter()
+                .any(|node| node == selected)
         {
-            return Err(invalid("the selected complete D is not in this original batch"));
+            return Err(invalid(
+                "the selected complete D is not in this original batch",
+            ));
         }
         Ok(request)
     }
@@ -108,9 +125,13 @@ impl Request {
         struct Input {
             deletion_operation_id: OperationId,
         }
-        request::native_digest(UNDO_KIND, principal, Input {
-            deletion_operation_id: self.original(),
-        })
+        request::native_digest(
+            UNDO_KIND,
+            principal,
+            Input {
+                deletion_operation_id: self.original(),
+            },
+        )
     }
     pub(super) fn request(&self, operation_id: OperationId) -> UndoFileDeletionBatchBody {
         UndoFileDeletionBatchBody {
@@ -123,15 +144,17 @@ impl Request {
             || receipt["result"]["deletion_operation_id"].as_str()
                 != Some(self.original().to_string().as_str())
             || !wire::publication_sequence(
-                receipt, &["deletion_operation_id", "removed_deletion_nodes"],
-            ).is_some_and(|sequence| self.nodes().iter().all(|node| sequence > node.sequence))
+                receipt,
+                &["deletion_operation_id", "removed_deletion_nodes"],
+            )
+            .is_some_and(|sequence| self.nodes().iter().all(|node| sequence > node.sequence))
         {
             return false;
         }
         let removed = &receipt["result"]["removed_deletion_nodes"];
-        if !removed.as_array().is_some_and(|nodes| nodes.len() == self.nodes().len()
-            && nodes.iter().all(Value::is_object))
-        {
+        if !removed.as_array().is_some_and(|nodes| {
+            nodes.len() == self.nodes().len() && nodes.iter().all(Value::is_object)
+        }) {
             return false;
         }
         matches!(Vec::<FileDeletionNode>::deserialize(removed),
@@ -148,18 +171,21 @@ fn begin(state: RwSignal<State>, target: restore::Target) {
     if !state.with_untracked(|s| target.current(s)) {
         return;
     }
-    let (generation, review_generation) = state.try_update(|s| {
-        let model = &mut s.files.deletion;
-        model.cancel_review();
-        model.generation += 1;
-        model.loading = true;
-        (model.generation, model.review_generation)
-    }).expect("invariant: mounted batch restore owns its application state");
+    let (generation, review_generation) = state
+        .try_update(|s| {
+            let model = &mut s.files.deletion;
+            model.cancel_review();
+            model.generation += 1;
+            model.loading = true;
+            (model.generation, model.review_generation)
+        })
+        .expect("invariant: mounted batch restore owns its application state");
     spawn_local(async move {
         let endpoint = format!("/api/file-deletion-batches/{}", target.node.operation_id);
         let result = api::validated_request("GET", &endpoint, None, |value| {
             Request::decode(value, &target.node)
-        }).await;
+        })
+        .await;
         complete(state, target, generation, review_generation, result);
     });
 }
@@ -182,7 +208,10 @@ fn complete(
     match result {
         Ok(request) => state.update(|s| {
             s.files.deletion.restore_review = Some(restore::Review::Batch(Review {
-                target: restore::Target { generation, ..target },
+                target: restore::Target {
+                    generation,
+                    ..target
+                },
                 generation: review_generation,
                 request: Arc::new(request),
             }));
@@ -196,7 +225,7 @@ fn reviewed(state: &State, epoch: u64, generation: u64) -> Option<Arc<Request>> 
         && review.generation == generation
         && state.files.deletion.review_generation == generation
         && review.target.current(state))
-        .then(|| review.request.clone())
+    .then(|| review.request.clone())
 }
 fn confirm(state: RwSignal<State>, epoch: u64, generation: u64) {
     let Some(request) = state.with_untracked(|s| reviewed(s, epoch, generation)) else {

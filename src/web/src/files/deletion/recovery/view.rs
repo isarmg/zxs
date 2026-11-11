@@ -24,7 +24,10 @@ fn description(record: &Record) -> String {
         ),
         request::Intent::UndoBatch(request) => format!(
             "{} · {} · {}",
-            t("原子恢复原删除批次", "Restore original deletion batch atomically"),
+            t(
+                "原子恢复原删除批次",
+                "Restore original deletion batch atomically"
+            ),
             request.original(),
             record.operation,
         ),
@@ -114,9 +117,10 @@ fn directory_details(record: &Record) -> impl IntoView + use<> {
                 })
                 .collect(),
         )),
-        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) | request::Intent::UndoBatch(_) => {
-            None
-        }
+        request::Intent::Delete(_)
+        | request::Intent::DeleteBatch(_)
+        | request::Intent::Undo(_)
+        | request::Intent::UndoBatch(_) => None,
     };
     details.map(|(scope, entries)| view! {
         <details class="zxs-stack">

@@ -204,8 +204,15 @@ pub(super) fn native_digest<T: data_serialization::Serialize>(
     principal: &str,
     body: T,
 ) -> Result<String, api::Error> {
-    storage_contract::object_hash("request", &DigestInput { kind, principal, body })
-        .map_err(identity_error)
+    storage_contract::object_hash(
+        "request",
+        &DigestInput {
+            kind,
+            principal,
+            body,
+        },
+    )
+    .map_err(identity_error)
 }
 
 impl Intent {
@@ -218,10 +225,12 @@ impl Intent {
                 json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
             ),
             Self::DeleteBatch(request) => request.request(operation),
-            Self::UndoBatch(request) => return (
-                "/api/file-deletion-batches/undo".into(),
-                Body::BatchUndo(request.request(operation_id)),
-            ),
+            Self::UndoBatch(request) => {
+                return (
+                    "/api/file-deletion-batches/undo".into(),
+                    Body::BatchUndo(request.request(operation_id)),
+                );
+            }
             Self::DeleteDirectory(request) => request.request(operation),
             Self::Undo(node) => (
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
@@ -357,7 +366,9 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
     }
     let id = attempt.operation.clone();
     let epoch = attempt.epoch;
-    let operation = id.parse().expect("invariant: the retained or generated operation ID is canonical");
+    let operation = id
+        .parse()
+        .expect("invariant: the retained or generated operation ID is canonical");
     let (endpoint, body) = attempt.intent.request(operation);
     attempt.in_flight = true;
     state.update(|s| {

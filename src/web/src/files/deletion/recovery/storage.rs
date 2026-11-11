@@ -75,8 +75,7 @@ fn stored_batch_preview<'de, D: Deserializer<'de>>(
 ) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, D::Error> {
     #[derive(Deserialize)]
     struct Member(
-        #[serialization(deserialize_with = "stored_node")]
-        storage_contract::FileDeletionNode,
+        #[serialization(deserialize_with = "stored_node")] storage_contract::FileDeletionNode,
     );
     #[derive(Deserialize)]
     #[serialization(deny_unknown_fields)]
@@ -92,10 +91,16 @@ fn stored_batch_preview<'de, D: Deserializer<'de>>(
         }
         fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
             let preview = Preview::deserialize(MapAccessDeserializer::new(map))?;
-            Ok(storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview {
-                deletion_operation_id: preview.deletion_operation_id,
-                deletion_nodes: preview.deletion_nodes.into_iter().map(|member| member.0).collect(),
-            })
+            Ok(
+                storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview {
+                    deletion_operation_id: preview.deletion_operation_id,
+                    deletion_nodes: preview
+                        .deletion_nodes
+                        .into_iter()
+                        .map(|member| member.0)
+                        .collect(),
+                },
+            )
         }
     }
     deserializer.deserialize_map(PreviewObject)
@@ -158,7 +163,8 @@ impl Record {
             }
             StoredIntent::UndoBatch { preview } => {
                 request::Intent::UndoBatch(Arc::new(batch_restore::Request::admit(
-                    preview.deletion_operation_id, preview.deletion_nodes,
+                    preview.deletion_operation_id,
+                    preview.deletion_nodes,
                 )?))
             }
             StoredIntent::UndoDirectory { deletion_node } => {

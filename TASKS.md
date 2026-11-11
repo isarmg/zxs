@@ -1,5 +1,7 @@
 # ZXS 当前任务清单
 
+- [ ] #1160 quality：按准确 CI rustfmt 日志修复原批次撤销相关 16 文件的 53 处格式差异，保留后继 WASM 默认展开修复；未本地编译、测试或运行 rustfmt，待准确提交 CI 验证。
+
 ## 当前 CI 与失败闭环
 
 - [ ] 核对当前 main 准确提交的全量 CI，继续处理 #1170 及后继运行的失败；完成 static、quality、contracts、security、全部 13 个 workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收。

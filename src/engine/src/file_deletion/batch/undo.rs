@@ -1,9 +1,9 @@
 //! Restore one complete native batch through the ordinary publication owner.
-use super::{KIND, MAX_RESULT_BYTES, UNDO, admit, receipt};
-use crate::{Engine, Error, FileDeletionNode, OperationId, OperationResult, Result, State};
-use crate::file_deletion::{directory, lifecycle, preflight};
-use super::undo_record;
 pub use super::undo_error::{BatchUndoActor, BatchUndoError};
+use super::undo_record;
+use super::{KIND, MAX_RESULT_BYTES, UNDO, admit, receipt};
+use crate::file_deletion::{directory, lifecycle, preflight};
+use crate::{Engine, Error, FileDeletionNode, OperationId, OperationResult, Result, State};
 use std::collections::BTreeSet;
 use storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview;
 
@@ -18,11 +18,14 @@ fn invalid() -> Error {
 }
 
 fn original(state: &State, operation: OperationId) -> Result<receipt::Evidence> {
-    let receipt = state.operations.get(&operation).ok_or_else(|| {
-        Error::BatchUndo(BatchUndoError::OperationMissing(operation))
-    })?;
+    let receipt = state
+        .operations
+        .get(&operation)
+        .ok_or_else(|| Error::BatchUndo(BatchUndoError::OperationMissing(operation)))?;
     if receipt.kind != KIND {
-        return Err(Error::BatchUndo(BatchUndoError::NotDeletionBatch(operation)));
+        return Err(Error::BatchUndo(BatchUndoError::NotDeletionBatch(
+            operation,
+        )));
     }
     if receipt.operation_id != operation {
         return Err(invalid());

@@ -1,4 +1,11 @@
-use crate::files::{SaveStatus, deletion::{batch_restore, recovery::{Queue, Record, Retained}, request::{Attempt, Intent}}};
+use crate::files::{
+    SaveStatus,
+    deletion::{
+        batch_restore,
+        recovery::{Queue, Record, Retained},
+        request::{Attempt, Intent},
+    },
+};
 use json_codec::json;
 use std::sync::Arc;
 use storage_contract::{FileDeletionNode, OperationId};
@@ -15,7 +22,9 @@ fn attempt() -> Attempt {
         "parent_node_ids":["ver_11111111111111111111111111111111"],
         "operation_id":original,"author":"alice","sequence":"1","created_at":"123"
     })).unwrap();
-    let intent = Intent::UndoBatch(Arc::new(batch_restore::Request::admit(original, vec![node]).unwrap()));
+    let intent = Intent::UndoBatch(Arc::new(
+        batch_restore::Request::admit(original, vec![node]).unwrap(),
+    ));
     Attempt {
         epoch: 1,
         principal: "alice".into(),
@@ -59,16 +68,26 @@ fn retained_batch_rejects_inconsistent_member_sets_before_recovery() {
     second["file_id"] = json!("file_22222222222222222222222222222222");
     second["node_id"] = json!("fdel_22222222222222222222222222222222");
     second["path"] = json!("B.txt");
-    second["branch_heads"] = json!({"br_22222222222222222222222222222222":"ver_22222222222222222222222222222222"});
+    second["branch_heads"] =
+        json!({"br_22222222222222222222222222222222":"ver_22222222222222222222222222222222"});
     second["parent_node_ids"] = json!(["ver_22222222222222222222222222222222"]);
-    valid["request"]["preview"]["deletion_nodes"].as_array_mut().unwrap().push(second);
+    valid["request"]["preview"]["deletion_nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
     let decode = |value: &json_codec::Value| {
-        Record::decode(&record.key(), "alice", &json_codec::to_string(value).unwrap())
+        Record::decode(
+            &record.key(),
+            "alice",
+            &json_codec::to_string(value).unwrap(),
+        )
     };
     assert!(decode(&valid).is_ok());
     for change in 0..8 {
         let mut damaged = valid.clone();
-        let nodes = damaged["request"]["preview"]["deletion_nodes"].as_array_mut().unwrap();
+        let nodes = damaged["request"]["preview"]["deletion_nodes"]
+            .as_array_mut()
+            .unwrap();
         match change {
             0 => nodes[1] = nodes[0].clone(),
             1 => nodes.reverse(),
@@ -95,14 +114,21 @@ fn stored_batch_rejects_positional_preview_and_member_arrays_without_rewriting()
     let preview = &valid["request"]["preview"];
     let node = &preview["deletion_nodes"][0];
     let mut array_preview = valid.clone();
-    array_preview["request"]["preview"] = json!([
-        preview["deletion_operation_id"], preview["deletion_nodes"]
-    ]);
+    array_preview["request"]["preview"] =
+        json!([preview["deletion_operation_id"], preview["deletion_nodes"]]);
     let mut array_member = valid.clone();
     array_member["request"]["preview"]["deletion_nodes"][0] = json!([
-        node["node_id"], node["repository_id"], node["history_tree_id"],
-        node["file_id"], node["path"], node["branch_heads"], node["parent_node_ids"],
-        node["operation_id"], node["author"], node["sequence"], node["created_at"]
+        node["node_id"],
+        node["repository_id"],
+        node["history_tree_id"],
+        node["file_id"],
+        node["path"],
+        node["branch_heads"],
+        node["parent_node_ids"],
+        node["operation_id"],
+        node["author"],
+        node["sequence"],
+        node["created_at"]
     ]);
     for damaged in [array_preview, array_member] {
         let raw = json_codec::to_string(&damaged).unwrap();

@@ -287,7 +287,10 @@ async fn fetch_authorized<T: data_serialization::Serialize>(
     options.set_signal(Some(&cancellation.signal()));
     if let Some(body) = body {
         let body = json_codec::to_string(&body).map_err(|source| {
-            let mut failure = error(storage_contract::ErrorCode::InvalidRequest, "The request could not be encoded.");
+            let mut failure = error(
+                storage_contract::ErrorCode::InvalidRequest,
+                "The request could not be encoded.",
+            );
             failure.source = Some(std::sync::Arc::new(ErrorSource::RequestEncoding(source)));
             failure
         })?;

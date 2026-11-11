@@ -1,7 +1,7 @@
 use crate::files::deletion::{batch_restore::Request, request::Intent};
 use json_codec::{Value, json};
-use storage_contract::{FileDeletionNode, OperationId};
 use std::sync::Arc;
+use storage_contract::{FileDeletionNode, OperationId};
 
 fn operation(n: u32) -> OperationId {
     format!("op_{n:032x}").parse().unwrap()
@@ -16,7 +16,8 @@ fn node(n: u32) -> FileDeletionNode {
         "branch_heads":{format!("br_{n:032x}"):format!("ver_{n:032x}")},
         "parent_node_ids":[format!("ver_{n:032x}")],
         "operation_id":operation(1), "author":"alice", "sequence":"1", "created_at":"123"
-    })).unwrap()
+    }))
+    .unwrap()
 }
 fn request() -> Request {
     Request::admit(operation(1), vec![node(1), node(2)]).unwrap()
@@ -42,7 +43,7 @@ fn preview_requires_selected_exact_node_and_original_batch() {
     changed.operation_id = operation(3);
     assert!(Request::decode(preview, &changed).is_err());
     assert!(Request::admit(operation(1), vec![]).is_err());
-    assert!(Request::admit(operation(1), vec![node(1);101]).is_err());
+    assert!(Request::admit(operation(1), vec![node(1); 101]).is_err());
 }
 #[test]
 fn receipt_requires_complete_exact_original_nodes() {
@@ -71,13 +72,26 @@ fn undo_uses_one_original_operation_request_and_native_digest() {
         deletion_operation_id: operation(1),
         operation_id: operation(2),
     };
-    assert!(matches!(&body, crate::files::deletion::request::Body::BatchUndo(_)));
-    assert_eq!(json_codec::to_string(&body).unwrap(), json_codec::to_string(&expected).unwrap());
-    assert_eq!(json_codec::to_value(body).unwrap(), json!({"deletion_operation_id":operation(1),"operation_id":operation(2)}));
-    let digest = storage_contract::object_hash("request", &json!({
-        "kind":"file.delete.batch.undo", "principal":"alice",
-        "body":{"deletion_operation_id":operation(1)}
-    })).unwrap();
+    assert!(matches!(
+        &body,
+        crate::files::deletion::request::Body::BatchUndo(_)
+    ));
+    assert_eq!(
+        json_codec::to_string(&body).unwrap(),
+        json_codec::to_string(&expected).unwrap()
+    );
+    assert_eq!(
+        json_codec::to_value(body).unwrap(),
+        json!({"deletion_operation_id":operation(1),"operation_id":operation(2)})
+    );
+    let digest = storage_contract::object_hash(
+        "request",
+        &json!({
+            "kind":"file.delete.batch.undo", "principal":"alice",
+            "body":{"deletion_operation_id":operation(1)}
+        }),
+    )
+    .unwrap();
     assert_eq!(intent.digest("alice").unwrap(), digest);
 }
 
