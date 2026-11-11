@@ -313,7 +313,7 @@
   },
   "src/web": {
     "api_path_literal": 143,
-    "assert_fn_def": 22,
+    "assert_fn_def": 21,
     "cfg_not_test": 0,
     "cfg_test_item": 21,
     "checked_add_1": 5,

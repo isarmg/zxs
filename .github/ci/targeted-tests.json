@@ -349,7 +349,7 @@
       ]
     },
     "setup-request-boundary": {
-      "reason": "Typed first-time setup request wire, unknown-outcome fences, credential generations and management read queue",
+      "reason": "Typed setup and authentication response boundaries, unknown-outcome fences, credential generations and management read queue",
       "python_tests": [],
       "rust_targets": [
         {
@@ -361,7 +361,7 @@
             "api::tests::",
             "api::read_queue::tests::"
           ],
-          "max_tests": 43
+          "max_tests": 46
         },
         {
           "package": "web-app",
@@ -1556,6 +1556,12 @@
     },
     {
       "path": "test/web/unit/setup/tests.rs",
+      "groups": [
+        "setup-request-boundary"
+      ]
+    },
+    {
+      "path": "src/web/src/api/session.rs",
       "groups": [
         "setup-request-boundary"
       ]

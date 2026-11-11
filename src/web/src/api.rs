@@ -10,6 +10,8 @@ use web_sys::{RequestCredentials, RequestInit, RequestMode, RequestRedirect, Res
 mod browser;
 mod read_queue;
 mod response;
+mod session;
+use session::{LoginResponse, SessionResponse};
 use browser::AbortOnDrop;
 pub(crate) use browser::{ReadCancellation, js_error};
 
@@ -53,6 +55,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid authentication response: {0}")]
+    Session(#[source] session::DecodeError),
     #[error("encoding HTTP request: {0}")]
     RequestEncoding(#[source] json_codec::Error),
     #[error("invalid management status response: {0}")]
@@ -533,70 +537,35 @@ pub(crate) async fn login(username: &str, password: &str) -> Result<Authenticate
     accept_login(generation, result)
 }
 
-struct ValidatedSession {
-    authenticated: Authenticated,
-    csrf: String,
-    token: Option<String>,
-}
-
-fn validate_session(value: &Value, login: bool) -> Result<ValidatedSession, Error> {
-    let fields: &[&str] = if login {
-        &["principal", "csrf_token", "token", "expires_at"]
-    } else {
-        &["principal", "csrf_token"]
-    };
-    let Some(object) = value.as_object() else {
-        return Err(invalid_session());
-    };
-    if object.len() != fields.len()
-        || !fields
-            .iter()
-            .all(|field| value[*field].as_str().is_some_and(|text| !text.is_empty()))
-        || (login
-            && value["expires_at"].as_str().is_none_or(|expires| {
-                !storage_contract::parse_u64_decimal(expires).is_ok_and(|expires| expires > 0)
-            }))
-    {
-        return Err(invalid_session());
-    }
-    let field = |name: &str| {
-        value[name]
-            .as_str()
-            .expect("invariant: session fields were validated")
-            .to_owned()
-    };
-    Ok(ValidatedSession {
-        authenticated: Authenticated {
-            principal: field("principal"),
-        },
-        csrf: field("csrf_token"),
-        token: login.then(|| field("token")),
-    })
-}
-
-fn invalid_session() -> Error {
-    error(
+fn invalid_session(source: session::DecodeError) -> Error {
+    let mut failure = error(
         storage_contract::ErrorCode::InvalidSession,
         t(
             "认证响应未确认完整的会话，请重试登录。",
             "The authentication response did not confirm a complete session. Try signing in again.",
         ),
     )
-    .with_status(200)
+    .with_status(200);
+    failure.source = Some(std::sync::Arc::new(ErrorSource::Session(source)));
+    failure
 }
 
 fn accept_login(generation: u64, result: Value) -> Result<Authenticated, Error> {
-    let session = validate_session(&result, true)?;
+    let session = session::decode::<LoginResponse>(result).map_err(invalid_session)?;
     let accepted = CREDENTIALS.with(|saved| {
-        saved
-            .borrow_mut()
-            .replace_if_current(generation, session.token, Some(session.csrf))
+        saved.borrow_mut().replace_if_current(
+            generation,
+            Some(session.token.0),
+            Some(session.csrf_token.0),
+        )
     });
     if !accepted {
         return Err(session_changed());
     }
     MANAGEMENT_READS.with(read_queue::Queue::invalidate);
-    Ok(session.authenticated)
+    Ok(Authenticated {
+        principal: session.principal.as_str().to_owned(),
+    })
 }
 
 fn read_admission_error(failure: read_queue::AdmissionError) -> Error {
@@ -619,17 +588,19 @@ pub(crate) async fn restore() -> Result<Authenticated, Error> {
 }
 
 fn accept_restore(generation: u64, value: Value) -> Result<Authenticated, Error> {
-    let session = validate_session(&value, false)?;
+    let session = session::decode::<SessionResponse>(value).map_err(invalid_session)?;
     let accepted = CREDENTIALS.with(|saved| {
         let mut saved = saved.borrow_mut();
         if saved.generation != generation {
             return false;
         }
-        saved.csrf = Some(session.csrf);
+        saved.csrf = Some(session.csrf_token.0);
         true
     });
     if accepted {
-        Ok(session.authenticated)
+        Ok(Authenticated {
+            principal: session.principal.as_str().to_owned(),
+        })
     } else {
         Err(session_changed())
     }

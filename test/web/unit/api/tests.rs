@@ -266,7 +266,18 @@ fn malformed_authentication_success_cannot_install_or_restore_a_session() {
         } else {
             restored_response()
         };
-        let mut invalid = vec![Value::Null, json!({}), json!({"token":"new-token"})];
+        let mut invalid = vec![
+            Value::Null,
+            json!({}),
+            json!({"token":"new-token"}),
+            json!(["owner", "new-csrf"]),
+            json!(["owner", "new-csrf", "new-token", "9999999999"]),
+            if login {
+                restored_response()
+            } else {
+                session_response()
+            },
+        ];
         for field in if login {
             vec!["principal", "csrf_token", "token", "expires_at"]
         } else {
@@ -292,7 +303,7 @@ fn malformed_authentication_success_cannot_install_or_restore_a_session() {
             invalid.push(response);
         }
         if login {
-            for expiry in ["0", "01", "18446744073709551616"] {
+            for expiry in ["0", "01", "+1", "-1", " 1", "1 ", "1.0", "18446744073709551616"] {
                 let mut response = valid.clone();
                 response["expires_at"] = expiry.into();
                 invalid.push(response);
@@ -392,4 +403,76 @@ fn setup_status_is_a_bodyless_read() {
     assert_eq!(method, "GET");
     assert_eq!(path, "/api/setup/status");
     assert!(body.is_none());
+}
+
+#[test]
+fn authentication_dtos_accept_the_existing_wire_domain_without_normalizing_identity() {
+    for expires_at in ["1", "18446744073709551615"] {
+        let wire = format!(
+            r#"{{"principal":" ","csrf_token":" ","token":" ","expires_at":"{expires_at}"}}"#
+        );
+        let value: Value = json_codec::from_str(&wire).unwrap();
+        let response = session::decode::<LoginResponse>(value).unwrap();
+        assert_eq!(response.principal.as_str(), " ");
+        assert_eq!(response.csrf_token.0, " ");
+        assert_eq!(response.token.0, " ");
+    }
+    let wire = r#"{"principal":"owner","csrf_token":"new-csrf"}"#;
+    let response = session::decode::<SessionResponse>(json_codec::from_str(wire).unwrap()).unwrap();
+    assert_eq!(response.principal.as_str(), "owner");
+    assert_eq!(response.csrf_token.0, "new-csrf");
+}
+
+#[test]
+fn authentication_decode_failure_retains_its_source_without_changing_the_error_code() {
+    use std::error::Error as _;
+
+    let failure = accept_login(0, json!({"principal":null})).unwrap_err();
+    assert_eq!(failure.code, storage_contract::ErrorCode::InvalidSession);
+    assert_eq!(failure.status, 200);
+    assert!(matches!(
+        failure.source.as_deref(),
+        Some(ErrorSource::Session(_))
+    ));
+    assert!(failure.source().unwrap().source().unwrap().is::<session::DecodeError>());
+}
+
+#[test]
+fn authentication_diagnostics_redact_response_values_and_unknown_field_names() {
+    use std::error::Error as _;
+
+    for login in [false, true] {
+        let valid = if login {
+            session_response()
+        } else {
+            restored_response()
+        };
+        let mut invalid = vec![json!("response-secret-marker")];
+        for field in ["principal", "csrf_token", "token", "expires_at"] {
+            let mut response = valid.clone();
+            response[field] = json!(8723941029384756_u64);
+            invalid.push(response);
+        }
+        let mut response = valid;
+        response["response-secret-marker"] = json!("response-secret-marker");
+        invalid.push(response);
+        for value in invalid {
+            let failure = if login {
+                accept_login(0, value).unwrap_err()
+            } else {
+                accept_restore(0, value).unwrap_err()
+            };
+            assert_eq!(failure.code, storage_contract::ErrorCode::InvalidSession);
+            assert_eq!(failure.status, 200);
+            let mut diagnostics = format!("{failure:?} {failure} {:?}", failure.clone());
+            let mut source = failure.source();
+            while let Some(cause) = source {
+                diagnostics.push_str(&format!(" {cause:?} {cause}"));
+                assert!(!cause.is::<json_codec::Error>());
+                source = cause.source();
+            }
+            assert!(!diagnostics.contains("response-secret-marker"));
+            assert!(!diagnostics.contains("8723941029384756"));
+        }
+    }
 }
