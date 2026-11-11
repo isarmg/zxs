@@ -37,6 +37,8 @@
 
 - [ ] 定向 CI 验证 T07 offline foreign-chain 槽位准入：持有 SlotId 完成前驱精确比较与大小写折叠碰撞检测，保持链基数／槽位／链接错误顺序、资源上限与持久记录；engine validate_slot 公有再导出暂保留，另轮降可见性并依据完整消费者编译证据处理。核对 zxs/core 行为、engine 产品图及已登记 helper／perf 消费者；server 文本计数 validate_fn 32→30、parse_discard 36→38，后者两处为持有结果的 let 绑定。其余 naming 公开 validator 与 manifest 准入迁移仍待完成。
 
+- [ ] 定向 CI 验证 T07 Web recursive-backup capture 名称边界：Disk.name 在原字段解码位置构造并持有 Name，移除私有校验后回传 String 的 helper；验证既有 capture 的 canonical 原字节、Unicode／240 字节展示前缀、保留名／NFD／超长拒绝及原递归保护 UI 行为，并编译 WASM 产品。web 文本 validate_fn 87→86，其余指标不变；其余名称与槽位消费者及 manifest 准入仍待逐域迁移。
+
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。

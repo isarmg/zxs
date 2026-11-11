@@ -678,3 +678,39 @@ fn replaced_or_old_session_mode_cannot_reset_a_current_selection() {
         ));
     });
 }
+
+#[test]
+fn typed_capture_names_preserve_fixture_bytes_and_preview_spelling() {
+    for name in ["Straße".to_owned(), "Café".into(), "a".repeat(240)] {
+        let mut wire = response()["capture"].clone();
+        wire["disks"]["P01"]["name"] = json!(name);
+        let bytes = storage_contract::canonical_json(&wire).unwrap();
+        let captured: capture::Capture = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(storage_contract::canonical_json(&captured).unwrap(), bytes);
+        let prefixes = captured
+            .prefixes(&[vec!["P01".into(), "B01".into(), "C01".into()]])
+            .unwrap();
+        assert_eq!(prefixes["B01"].path, name);
+        assert_eq!(prefixes["C01"].path, format!("磁盘B/{name}"));
+    }
+}
+
+#[test]
+fn typed_capture_names_reject_invalid_names_at_response_admission() {
+    for name in [
+        "".to_owned(),
+        "CON.txt".into(),
+        "a/b".into(),
+        "name.".into(),
+        "Cafe\u{301}".into(),
+        "a".repeat(241),
+    ] {
+        let mut wire = response();
+        wire["capture"]["disks"]["P01"]["name"] = json!(name);
+        let error = read_response(wire, &draft()).err().unwrap();
+        assert!(matches!(
+            error.source.as_deref(),
+            Some(api::ErrorSource::BackupConfiguration(_))
+        ));
+    }
+}

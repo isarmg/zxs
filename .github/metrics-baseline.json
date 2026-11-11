@@ -334,7 +334,7 @@
     "string_key_map": 33,
     "unreachable": 17,
     "unwrap_or_default": 108,
-    "validate_fn": 87,
+    "validate_fn": 86,
     "wildcard_arm": 41
   },
   "tools": {

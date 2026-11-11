@@ -32,8 +32,7 @@ struct Disk {
     level: u32,
     #[serialization(deserialize_with = "required_upstream")]
     upstream_slot_id: Option<String>,
-    #[serialization(deserialize_with = "disk_name")]
-    name: String,
+    name: name_policy::Name,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -46,11 +45,6 @@ struct Identity {
 }
 fn required_upstream<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     Option::deserialize(d)
-}
-fn disk_name<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    let name = String::deserialize(d)?;
-    name_policy::validate_name(&name).map_err(data_serialization::de::Error::custom)?;
-    Ok(name)
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -83,7 +77,7 @@ impl Capture {
                         return Err("route does not follow the captured immediate source");
                     }
                     prefix = if prefix.is_empty() {
-                        source.name.clone()
+                        source.name.to_string()
                     } else {
                         format!("{}/{prefix}", source.name)
                     };

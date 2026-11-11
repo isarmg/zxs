@@ -447,6 +447,26 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "recursive-capture-names": {
+      "reason": "Typed recursive-backup capture names preserve response admission, canonical wire evidence, original display prefixes and UI lifecycle; native module behaviour and WASM product compilation",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "files::backup::recursive::tests::"
+          ],
+          "max_tests": 32
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -1686,6 +1706,18 @@
       "path": "src/server/src/engine_backend/file_manager/activity.rs",
       "groups": [
         "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/backup/recursive/capture.rs",
+      "groups": [
+        "recursive-capture-names"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/backup/recursive_tests.rs",
+      "groups": [
+        "recursive-capture-names"
       ]
     }
   ],
