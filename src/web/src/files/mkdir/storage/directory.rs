@@ -8,11 +8,18 @@ use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
 use name_policy::PortablePath;
 use storage_contract::directory_git::{DirectoryBranchCreateSource, HistoricalDirectoryBranchSource};
-use storage_contract::{BranchName, DirectoryBranchId, OperationId, Principal};
+use storage_contract::{
+    BranchName, DirectoryBranchId, DirectoryTreeId, OperationId, Principal, RepositoryId,
+};
 
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum DirectoryRequest {
+    Rename {
+        repository_id: RepositoryId,
+        directory_branch_id: DirectoryBranchId,
+        name: BranchName,
+    },
     Create {
         source: DirectoryBranchCreateSource,
         repository_path: String,
@@ -54,11 +61,16 @@ impl DirectoryRequest {
                                 && branch.head_tree_id() == expected_tree_id
                         })
             }
-            Self::Create { .. } | Self::CreateHistorical { .. } => false,
+            Self::Create { .. } | Self::CreateHistorical { .. } | Self::Rename { .. } => false,
         }
     }
     pub(super) fn label(&self, path: &str) -> String {
         match self {
+            Self::Rename {
+                directory_branch_id,
+                name,
+                ..
+            } => format!("{path} · rename {directory_branch_id} → {}", name.as_str()),
             Self::Create { name, .. } => format!("{path} · create branch {name}"),
             Self::CreateHistorical { name, source, .. } => format!(
                 "{path} · create branch {} from {}",
@@ -75,6 +87,7 @@ impl DirectoryRequest {
     }
     fn kind(&self) -> &'static str {
         match self {
+            Self::Rename { .. } => "directory.branch.rename",
             Self::Create { .. } => "directory.git.branch-create",
             Self::CreateHistorical { .. } => "directory.git.branch-create-history",
             Self::Checkout { .. } => "directory.git.checkout",
@@ -82,6 +95,14 @@ impl DirectoryRequest {
     }
     fn input(&self) -> Value {
         match self {
+            Self::Rename {
+                repository_id,
+                directory_branch_id,
+                name,
+            } => json!({
+                "repository_id":repository_id, "directory_branch_id":directory_branch_id,
+                "name":name.as_str(),
+            }),
             Self::Create {
                 source,
                 repository_path,
@@ -112,6 +133,9 @@ impl DirectoryRequest {
     }
     pub(super) fn validate(&self, display: &str) -> Result<(), api::Error> {
         match self {
+            // Typed fields already admit the original label request. Display
+            // paths identify the editor location, not a new server-side CAS.
+            Self::Rename { .. } => {}
             Self::Create {
                 source,
                 repository_path,
@@ -183,6 +207,17 @@ impl DirectoryRequest {
         operation: OperationId,
     ) -> (&'static str, String, Value) {
         match self {
+            Self::Rename {
+                repository_id,
+                directory_branch_id,
+                name,
+            } => (
+                "PATCH",
+                format!(
+                    "/api/repositories/{repository_id}/directory-branches/{directory_branch_id}"
+                ),
+                json!({"name":name.as_str(),"operation_id":operation}),
+            ),
             Self::Create { source, name, .. } => (
                 "POST",
                 format!(
@@ -221,11 +256,28 @@ impl DirectoryRequest {
         }
     }
     pub(super) fn matches_receipt(&self, receipt: &Value) -> bool {
-        if receipt["operation_kind"] != self.kind() || receipt["result"]["input"] != self.input() {
+        if receipt["operation_kind"] != self.kind() {
+            return false;
+        }
+        if !matches!(self, Self::Rename { .. }) && receipt["result"]["input"] != self.input() {
             return false;
         }
         let result = &receipt["result"];
         match self {
+            Self::Rename {
+                directory_branch_id,
+                name,
+                ..
+            } => {
+                // This existing endpoint has no result.input or CAS fields.
+                // Record binds repository, branch and name through the digest.
+                let Ok(result) = json_codec::from_value::<RenameReceipt>(result.clone()) else {
+                    return false;
+                };
+                result.directory_branch_id == *directory_branch_id
+                    && result.name.as_str() == name.as_str()
+                    && (result.path.is_empty() || PortablePath::parse(&result.path).is_ok())
+            }
             Self::Create {
                 source,
                 repository_path,
@@ -270,7 +322,48 @@ impl DirectoryRequest {
         }
     }
 }
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct RenameReceipt {
+    directory_branch_id: DirectoryBranchId,
+    name: BranchName,
+    path: String,
+    #[serialization(rename = "head_tree_id")]
+    _head_tree_id: DirectoryTreeId,
+}
+
 impl Record {
+    pub(in crate::files::mkdir) fn capture_directory_rename(
+        state: &State,
+        principal: &Principal,
+        operation: OperationId,
+        repository: &str,
+        branch: &str,
+        name: &str,
+    ) -> Result<Self, api::Error> {
+        // The editor carries the admitted row, which need not be the viewed
+        // branch or occur in the separate working-branch listing. Its live
+        // history/location gate is checked by the editor before submission.
+        if state.files.repository_id != repository {
+            return Err(failure(
+                "The edited directory repository is no longer displayed.",
+            ));
+        }
+        let repository_id = repository.parse().map_err(decode_error)?;
+        let directory_branch_id = branch.parse().map_err(decode_error)?;
+        let name = BranchName::parse(name).map_err(decode_error)?;
+        Self::capture_directory(
+            state,
+            principal,
+            operation,
+            DirectoryRequest::Rename {
+                repository_id,
+                directory_branch_id,
+                name,
+            },
+        )
+    }
+
     pub(in crate::files::mkdir) fn capture_historical_directory_branch(
         state: &State,
         principal: &Principal,

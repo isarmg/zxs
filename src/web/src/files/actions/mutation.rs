@@ -141,17 +141,7 @@ pub(crate) fn rename_directory_branch(
         set_notice(state, error.message());
         return None;
     }
-    record_mutation(
-        state,
-        MutationAccess::Current,
-        "PATCH",
-        format!(
-            "/api/repositories/{}/directory-branches/{}",
-            api::segment(&repository),
-            api::segment(&branch_id)
-        ),
-        json!({"name":name}),
-    )
+    crate::files::mkdir::start_directory_rename(state, &repository, &branch_id, &name)
 }
 pub(crate) fn rename_file_branch(
     state: RwSignal<State>,

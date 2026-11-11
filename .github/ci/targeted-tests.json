@@ -1698,6 +1698,60 @@
           "default_features": false
         }
       ]
+    },
+    "directory-rename-recovery": {
+      "reason": "Directory label edits retain the original PATCH, stable branch and name, server digest, account-bound recovery and explicit retry without checkout; verify existing server receipt and collision behavior",
+      "python_tests": [
+        "test_directory_rename_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "prefixes": [
+            "files::mkdir::storage::rename_tests::",
+            "files::actions::mutation::tests::",
+            "files::actions::operation::tests::",
+            "files::inline::tests::",
+            "files::directory_history::view::branches::tests::"
+          ],
+          "max_tests": 72,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "http_default_directory::tests::rename_ingress_binds_both_paths_and_keeps_operation_before_name_policy",
+            "engine_backend::read_projection::tests::default_directory_tests::typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_policy"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -3235,7 +3289,8 @@
     {
       "path": "src/web/src/files/actions/mutation.rs",
       "groups": [
-        "historical-directory-web"
+        "historical-directory-web",
+        "directory-rename-recovery"
       ]
     },
     {
@@ -3254,14 +3309,16 @@
       "path": "src/web/src/files/mkdir.rs",
       "groups": [
         "historical-directory-web",
-        "web-recovery-principals"
+        "web-recovery-principals",
+        "directory-rename-recovery"
       ]
     },
     {
       "path": "src/web/src/files/mkdir/storage/directory.rs",
       "groups": [
         "historical-directory-web",
-        "web-recovery-principals"
+        "web-recovery-principals",
+        "directory-rename-recovery"
       ]
     },
     {
@@ -3286,7 +3343,8 @@
       "path": "test/web/unit/files/directory_branch_recovery_tests.rs",
       "groups": [
         "historical-directory-web",
-        "web-recovery-principals"
+        "web-recovery-principals",
+        "directory-rename-recovery"
       ]
     },
     {
@@ -3444,7 +3502,8 @@
     {
       "path": "src/web/src/files/mkdir/storage.rs",
       "groups": [
-        "web-recovery-principals"
+        "web-recovery-principals",
+        "directory-rename-recovery"
       ]
     },
     {
@@ -4236,7 +4295,37 @@
       "groups": [
         "version-metadata-read"
       ]
+    },
+    {
+      "path": "src/web/src/files/mkdir/view.rs",
+      "groups": [
+        "directory-rename-recovery"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_rename_recovery_tests.rs",
+      "groups": [
+        "directory-rename-recovery"
+      ]
+    },
+    {
+      "path": "test/ci/test_directory_rename_targeted_ci.py",
+      "groups": [
+        "directory-rename-recovery"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_history/view/branches.rs",
+      "groups": [
+        "directory-rename-recovery"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_history/rename_tests.rs",
+      "groups": [
+        "directory-rename-recovery"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted. Directory rename recovery selects native request/receipt/editor behavior plus product native and WASM library compilation and existing server rename regressions. Live browser storage failures, refresh/cross-tab behavior and cold engine replay are not verified by those Web tests."
 }

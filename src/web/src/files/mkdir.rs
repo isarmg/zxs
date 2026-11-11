@@ -167,6 +167,25 @@ pub(super) fn start_historical_directory_branch(
     })
 }
 
+pub(super) fn start_directory_rename(
+    state: RwSignal<State>,
+    repository: &str,
+    branch: &str,
+    name: &str,
+) -> Option<String> {
+    if !state.with_untracked(|s| {
+        actions::write_allowed(s)
+            && s.files.loaded
+            && s.files.mkdir.ready(s)
+            && s.files.directory_branches_supported
+    }) {
+        return None;
+    }
+    capture_and_retain(state, |s, principal, operation| {
+        Record::capture_directory_rename(s, principal, operation, repository, branch, name)
+    })
+}
+
 pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
     if !state.with_untracked(|s| {
         actions::default_write_allowed(s)

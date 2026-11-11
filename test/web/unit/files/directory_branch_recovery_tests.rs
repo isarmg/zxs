@@ -82,6 +82,21 @@ fn receipt(record: &Record) -> Value {
         panic!("directory request");
     };
     let (kind, input, result) = match request {
+        DirectoryRequest::Rename {
+            repository_id,
+            directory_branch_id,
+            name,
+        } => (
+            "directory.branch.rename",
+            json!({
+                "repository_id":repository_id, "directory_branch_id":directory_branch_id,
+                "name":name.as_str(),
+            }),
+            json!({
+                "directory_branch_id":directory_branch_id, "name":name.as_str(),
+                "path":"folder", "head_tree_id":id("dtree", 8),
+            }),
+        ),
         DirectoryRequest::Create {
             source,
             repository_path,
@@ -143,7 +158,9 @@ fn receipt(record: &Record) -> Value {
         }
     };
     let mut result = result;
-    result["input"] = input;
+    if !matches!(request, DirectoryRequest::Rename { .. }) {
+        result["input"] = input;
+    }
     json!({
         "operation_id":record.operation(), "operation_kind":kind,
         "request_digest":record.digest, "result":result,

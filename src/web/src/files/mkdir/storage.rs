@@ -474,3 +474,7 @@ where
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/directory_branch_recovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../test/web/unit/files/directory_rename_recovery_tests.rs"]
+mod rename_tests;

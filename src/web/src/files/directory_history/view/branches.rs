@@ -103,6 +103,14 @@ pub(super) fn view(
     }
 }
 
+fn rename_target(target: &Target, branch: &DirectoryHistoryBranch) -> Option<inline::Target> {
+    (!branch.current).then(|| inline::Target::RenameDirectoryBranch {
+        repository: target.repository.clone(),
+        branch_id: branch.directory_branch_id.clone(),
+        name: branch.name.clone(),
+    })
+}
+
 fn row(operations: Operations, branch: DirectoryHistoryBranch) -> impl IntoView {
     let Operations {
         state,
@@ -114,6 +122,7 @@ fn row(operations: Operations, branch: DirectoryHistoryBranch) -> impl IntoView 
         working_heads,
         working_disabled,
     } = operations;
+    let rename = target.with_value(|target| rename_target(target, &branch));
     let tree = StoredValue::new(branch.committed_tree_id);
     let working_tree = StoredValue::new(branch.head_tree_id);
     let branch_id = StoredValue::new(branch.directory_branch_id);
@@ -122,16 +131,12 @@ fn row(operations: Operations, branch: DirectoryHistoryBranch) -> impl IntoView 
             branch_id.with_value(|id| working_tree.with_value(|tree| heads.get(id) == Some(tree)))
         })
     });
-    let rename = (!branch.current).then(|| {
+    let rename = rename.map(|target| {
         inline::control(
             state,
             t("重命名分支", "Rename branch"),
             Some("rename"),
-            inline::Target::RenameDirectoryBranch {
-                repository: target.with_value(|target| target.repository.clone()),
-                branch_id: branch_id.get_value(),
-                name: branch.name.clone(),
-            },
+            target,
             rename_disabled,
         )
     });
@@ -179,3 +184,8 @@ fn row(operations: Operations, branch: DirectoryHistoryBranch) -> impl IntoView 
         </div>
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/web/unit/files/directory_history/rename_tests.rs"]
+mod tests;
+
