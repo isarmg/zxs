@@ -8,7 +8,8 @@
         "test_workflows",
         "test_workflow_target_setup",
         "test_deletion_targeted_ci",
-        "test_layout_targeted_ci"
+        "test_layout_targeted_ci",
+        "test_offline_targeted_ci"
       ],
       "rust_targets": []
     },
@@ -890,8 +891,7 @@
       "path": "src/engine/src/lib.rs",
       "groups": [
         "held-directory-layout",
-        "typed-name-consumers",
-        "offline-chain-slots"
+        "typed-name-consumers"
       ]
     },
     {
@@ -1621,6 +1621,13 @@
     {
       "path": "test/server/unit/offline/foreign_chain_tests.rs",
       "groups": [
+        "offline-chain-slots"
+      ]
+    },
+    {
+      "path": "test/ci/test_offline_targeted_ci.py",
+      "groups": [
+        "ci-selection",
         "offline-chain-slots"
       ]
     }
