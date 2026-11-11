@@ -16,7 +16,6 @@
 
 - [ ] 按每批实际变更只运行相关定向测试，核对准确 main 提交的选择范围、当前二进制库存与逐项完成证据；继续处理已知失败。未选择的 static、quality、contracts、security、workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收仍未完成，不以定向通过替代完整覆盖。
 - [ ] 验证 13 片的当前产物／测试库存、分配并集与互斥、完整回执、11 个 I/O 门禁和三项显式 ignored 验收；验证参考配方不受分片环境污染、保存配方可达性及失败证据。完成各功能项仍待执行的原生、集成和浏览器测试。
-- [ ] 按《工程规范》§8.3 迁移 T02：14 个第一方范围的原始文本计数改为 watch 候选报告，blocking 仅采用已确认的语义／lint 规则；记录提交、脚本摘要、范围与日期，显式迁移旧基线。定向验证合法匹配、真实违规、缺失／错误基线及安全／来源门禁继续有效；本次文档修订未修改实际 CI 脚本。
 - [ ] GitHub CI 验证新版 T13 磁盘满映射：`ErrorKind::StorageFull` 保持 `NO_SPACE` 与来源，`QuotaExceeded` 继续 `IO_ERROR`；errno 28 回归仅 Linux，ErrorKind 回归覆盖所有目标。
 - [ ] GitHub CI 验证跨已提交目录的 `object.move` 恢复：双故障、原操作冷开重试、目标当前版本映射、两版本三盘独立容器、源 inode／正文与冻结视图、二次冷开无重复发布。
 - [ ] GitHub CI 验证保留移动意图的 source 身份改动返回 `IdempotencyKeyReused`，首次捕获漂移返回 `WorkspaceChanged`，失败保留原意图与完整 State。
@@ -58,7 +57,7 @@
 - [ ] 清点并逐类替换读取第一方源码或绑定测试名的 CI 门禁，改为行为验证；保留 foundation 依赖图、Cargo 元数据、来源与许可检查。
 - [ ] 按 §19 的新版 T04–T07 完成 contract／naming 类型地基：`Id<K>`、多前缀 ID、`Generation`／`Sequence`／`Principal`／`Timestamp`、名称构造器及路径去字符串退化；补齐 `Hash<D>`、`TrackedMap<K, V>` 与 `EncodedLen`。
 - [ ] 按新版 T08–T09 推进 HTTP 提取器、类型化备注目标、Web 操作号、会话 DTO 与 `SetupCall`，继续逐领域迁移 Web Endpoint／响应 DTO；保持现有未知字段错误、响应关联和凭据代数边界。
-- [ ] GitHub 定向验证 Web 会话主体使用点：`Authenticated`／`State`／恢复 owner／Attempt／持久记录传递 `Principal`，未登录主体为 `None`；核对原始 Unicode／空白、canonical 旧记录字节、空／缺／null 与 1024 字节上限、注销与旧会话／旧代次／迟到响应、同主体恢复及异主体清理。真实浏览器存储、跨标签页锁和恢复交互待验。
+- [ ] 完成 Web 会话主体与恢复的真实浏览器验收：存储旧记录、跨标签页锁、同主体恢复／异主体清理，以及注销／旧代次／迟到响应的交互闭环。
 - [ ] 按新版 T10–T11 保留并传递现有 `AdmittedState` 证明、提升本状态访问器；错误改 panic 前先完成 §5.15／§15 第 1 项的确认与定向故障验证，补准入性质／模糊／真实镜像语料；完成 `BusinessState`／类型化 `AuthState` 与授权收据读接口，逐领域迁移 server 的裸 State 读取。
 - [ ] 按新版 T12、T14–T16 推进错误显式映射、计数查询、`persist/layout` 句柄名字及确定性计划时间；迁移 serde 表示时完成真实快照／收据字节往返和摘要固定向量。
 - [ ] 逐 kind 完成 `Command → plan → linearize → publish`，收敛 `Activity`／`Availability`、`BranchScope`／`DirectoryComposition`／`PolicyScope` 与文件属性聚合；先核实可达状态及写集成本。
