@@ -10,7 +10,7 @@ pub(in crate::files::deletion) fn retained_view(request: &Request) -> impl IntoV
         format!("{} · {} · {}", node.path.as_str(), node.file_id, node.node_id)
     }).collect::<Vec<_>>();
     view! {
-        <details class="zxs-stack" open=true>
+        <details class="zxs-stack" {web_interface::attr::custom::custom_attribute("open", "")}>
             <summary>{t("完整原批次的文件与删除节点", "Files and deletion nodes of the complete original batch")}</summary>
             <p><code>{original}</code></p>
             <ul>{nodes.into_iter().map(|label| view! {<li><code>{label}</code></li>}).collect_view()}</ul>
