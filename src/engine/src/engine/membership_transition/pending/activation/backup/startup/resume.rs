@@ -2,7 +2,11 @@
 //! mismatches and replaced roots are loss, never instructions to initialize.
 use super::*;
 use crate::disk::{DiskResources, DiskWriter, FenceOwner, WriterLocks};
-use platform_io::fs_safety::linux::{AdvisoryLock, FileIdentity, SingleLinkRequirement};
+use crate::persist::layout;
+use platform_io::fs_safety::{
+    EntryName,
+    linux::{AdvisoryLock, FileIdentity, SingleLinkRequirement},
+};
 use std::path::PathBuf;
 
 pub(in crate::engine) struct PreparedBackupResume {
@@ -186,14 +190,14 @@ pub(in crate::engine) fn prepare_resume(
     let roots = open_fixed_roots(&locator, &plan.authority.effective_config()?)?;
     let selection = crate::authority_selection::SelectionGuard::legacy(root)?;
     let system_root = DiskRoot::open(root)?;
-    let system = lock_existing(&system_root, "writer.lock")?;
+    let system = lock_existing(&system_root, &layout::CONTROL_WRITER_LOCK)?;
     let mut writers = BTreeMap::new();
     for (disk, held) in &roots {
         let reservation = Arc::new(
             AdvisoryLock::directory(&held.directory(held.path())?)
                 .map_err(crate::disk::fs_error)?,
         );
-        let writer = lock_existing(held, ".writer.lock")?;
+        let writer = lock_existing(held, &layout::DISK_WRITER_LOCK)?;
         writers.insert(
             disk.disk_id.clone(),
             FenceOwner::with_advisory_reservation(writer, reservation),
@@ -213,8 +217,8 @@ pub(in crate::engine) fn prepare_resume(
     }))
 }
 
-fn lock_existing(root: &DiskRoot, name: &str) -> Result<File> {
-    let file = root.open_regular(&root.path().join(name))?;
+fn lock_existing(root: &DiskRoot, name: &EntryName) -> Result<File> {
+    let file = root.open_regular_entry(name)?;
     SingleLinkRequirement::check(&file).map_err(crate::disk::fs_error)?;
     if file.metadata()?.len() != 0 {
         return Err(invalid(
@@ -238,7 +242,7 @@ fn verify_owners(
     roots: &[(DiskConfig, DiskRoot)],
 ) -> Result<()> {
     let system_root = DiskRoot::open(root)?;
-    let named = system_root.open_regular(&system_root.path().join("writer.lock"))?;
+    let named = system_root.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
     SingleLinkRequirement::check(&named).map_err(crate::disk::fs_error)?;
     if FileIdentity::from_fd(&named)? != FileIdentity::from_fd(system)?
         || named.metadata()?.len() != 0
@@ -246,7 +250,7 @@ fn verify_owners(
         return Err(invalid("Backup SYSTEM writer was replaced"));
     }
     for (disk, held) in roots {
-        let named = held.open_regular(&held.path().join(".writer.lock"))?;
+        let named = held.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         SingleLinkRequirement::check(&named).map_err(crate::disk::fs_error)?;
         let owner = writers
             .get(&disk.disk_id)

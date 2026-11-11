@@ -2,6 +2,7 @@
 //! It identifies the already frozen candidate; it is never a planner, receipt,
 //! replacement State, or permission to publish a different operation.
 use super::*;
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
 
@@ -32,7 +33,7 @@ enum Format {
 
 fn system_root(engine: &Engine) -> Result<DiskRoot> {
     let root = DiskRoot::open(&engine.root)?;
-    let writer = root.open_regular(&root.path().join("writer.lock"))?;
+    let writer = root.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
     if FileIdentity::from_fd(&writer)? != engine._locks.system_identity()? {
         return Err(invalid("move completion SYSTEM writer identity changed"));
     }

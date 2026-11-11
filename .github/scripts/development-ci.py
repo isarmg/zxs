@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reviewed complete CI policy; automatic main pushes without Release restoration.
+"""Targeted automatic CI and explicitly requested full manual CI.
 
 The archived workflows are restoration recipes, not executable CI or evidence.
 Only the exact reviewed projection below is allowed in the active directory.
@@ -178,7 +178,7 @@ def development_workflow(name, original):
         source = source.replace('    timeout-minutes: 10\n', '    timeout-minutes: 5\n', 1)
     if name == 'ci.yml':
         source = source.replace('# Missing older push bases safely select the full matrix.',
-                                '# Every main push and manual run executes the complete matrix without reuse.')
+                                '# Explicit manual full runs execute the complete matrix without reuse.')
         source = source.replace('Select evidenced CI suites', 'Select all CI suites without reuse')
         source = source.replace('python3 .github/scripts/select-ci-suites.py',
                                 'python3 .github/scripts/development-ci.py select')
@@ -189,7 +189,67 @@ def development_workflow(name, original):
                                     '    if: ${{ false && (' + PUBLISH_CONDITION + ') }}\n')
         else:
             source = source.replace(f'  {job}:\n', f'  {job}:\n' + PAUSE, 1)
-    return workspace_projection(source) if name == 'ci.yml' else source
+    return targeted_projection(workspace_projection(source)) if name == 'ci.yml' else source
+
+
+FULL_CONDITION = "github.event_name == 'workflow_dispatch' && inputs.scope == 'full'"
+TARGETED_JOB = """
+  targeted:
+    name: Selected change tests
+    if: github.event_name == 'push' || inputs.scope == 'targeted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate change scope before building
+        run: bash .github/scripts/check.sh targeted-plan
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Run selected tests and retain exact execution evidence
+        run: bash .github/scripts/check.sh targeted
+      - name: Retain selected tests and unexecuted scope
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: targeted-tests-${{ github.sha }}
+          path: |
+            target/targeted-ci/summary.json
+            target/targeted-ci/*.log
+          if-no-files-found: error
+          retention-days: 7
+"""
+
+
+def targeted_projection(source):
+    source = source.replace(FULL_HEADER,
+        '# Main pushes run a reviewed change plan; full CI requires explicit manual selection.\n', 1)
+    source = source.replace('  workflow_dispatch:\n',
+        '  workflow_dispatch:\n'
+        '    inputs:\n'
+        '      scope:\n'
+        '        description: Explicitly select targeted tests or the complete CI workload\n'
+        '        type: choice\n'
+        '        required: true\n'
+        '        default: targeted\n'
+        '        options: [targeted, full]\n', 1)
+    for job in ('static', 'tests', 'web-production', 'browser-smoke', 'smb-sdk', 'phase-one-core'):
+        source = source.replace(f'  {job}:\n',
+            f'  {job}:\n    if: {FULL_CONDITION}\n', 1)
+    source = source.replace("    if: always() && needs.static.result == 'success'",
+        "    if: always() && (" + FULL_CONDITION + ") && needs.static.result == 'success'", 1)
+    source = source.replace('      - name: Retain workspace shard inventory and execution evidence\n',
+                            "      - name: Retain measured first-party Clippy warnings\n        if: always() && matrix.suite == 'quality'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: clippy-warnings-quality-${{ github.sha }}\n          path: target/clippy-warnings/quality.json\n          if-no-files-found: error\n          retention-days: 7\n"
+                            + '      - name: Retain workspace shard inventory and execution evidence\n', 1)
+    return source + TARGETED_JOB
 
 
 def check_workflows(root):
@@ -215,15 +275,15 @@ def check_workflows(root):
 def receipt():
     return {
         'mode': 'full-ci',
-        'automatic_triggers': True,
-        'push_branches': ['main'],
+        'automatic_triggers': False,
+        'push_branches': [],
         'suites': list(FULL_SUITES),
         'matrix': execution_matrix(),
         'workspace_shards': list(WORKSPACE_SHARDS),
         'paused_suites': [],
         'paused_jobs': {name: list(jobs) for name, jobs in PAUSED_JOBS.items()},
         'reused': [],
-        'reason': 'Full CI on main pushes and manual dispatch; Release remains paused. Selection is not execution evidence.',
+        'reason': 'Full CI only after explicit manual selection; Release remains paused. Selection is not execution evidence.',
         'static_minutes': 10,
         'suite_minutes': {suite: 120 if suite == 'workspace' else
                          60 if suite == 'foundation-crypto' else 30
@@ -258,6 +318,11 @@ def main():
     parser.add_argument('action', choices=('check', 'select'))
     args = parser.parse_args()
     check_workflows(ROOT)
+    if args.action == 'select':
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        if (os.environ['GITHUB_EVENT_NAME'] != 'workflow_dispatch'
+                or event.get('inputs', {}).get('scope') != 'full'):
+            raise ValueError('full matrix requires explicit manual scope=full')
     value = receipt()
     check_receipt(value)
     emit(value, output=os.environ['GITHUB_OUTPUT'] if args.action == 'select' else None,

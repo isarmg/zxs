@@ -1,10 +1,10 @@
 //! Local file identity is durable before a global completion. Cold inspection
 //! only reacquires the exact existing name; it never creates a missing lock.
 use super::*;
+use crate::persist::layout;
 
 const LOCAL_INTENT: &str = "backup-target-writer-intent.json";
 const BINDING: &str = "backup-target-writer-binding.json";
-const WRITER: &str = ".writer.lock";
 
 #[derive(Serialize, Deserialize)]
 #[serialization(rename_all = "kebab-case")]
@@ -85,7 +85,10 @@ pub(in super::super) fn resume_existing(targets: &[Target]) -> Result<()> {
         let root = &target.root;
         let selected = preparation_path_exists(root, &root.path().join(LOCAL_INTENT))?;
         let bound = preparation_path_exists(root, &root.path().join(BINDING))?;
-        let writer = preparation_path_exists(root, &root.path().join(WRITER))?;
+        let writer = preparation_path_exists(
+            root,
+            &root.path().join(layout::DISK_WRITER_LOCK.as_path()),
+        )?;
         if !selected {
             if writer || bound {
                 return Err(Error::new(
@@ -125,7 +128,7 @@ pub(super) fn preflight(
         if preparation_path_exists(root, &root.path().join(BINDING))? {
             read_binding(target, &saved)?;
         }
-    } else if preparation_path_exists(root, &root.path().join(WRITER))?
+    } else if preparation_path_exists(root, &root.path().join(layout::DISK_WRITER_LOCK.as_path()))?
         || preparation_path_exists(root, &root.path().join(BINDING))?
     {
         return Err(Error::new(
@@ -151,9 +154,9 @@ pub(super) fn install(
     }
     // Before a binding exists, an interrupted original empty-file publication
     // may be completed. Existing nonempty/unsafe files are never rewritten.
-    install_preparation_bytes(root, &root.path().join(WRITER), &[])?;
+    install_preparation_bytes(root, &root.path().join(layout::DISK_WRITER_LOCK.as_path()), &[])?;
     let writer = target.acquire_writer()?;
-    root.open_regular(&root.path().join(WRITER))?.sync_all()?;
+    root.open_regular_entry(&layout::DISK_WRITER_LOCK)?.sync_all()?;
     root.sync_dir(root.path())?;
     target.require_writer(&writer)?;
     let binding = bounded(&Binding {

@@ -1,5 +1,6 @@
 //! Read-only generation discovery/admission and explicit crash resume.
 use super::*;
+use crate::persist::layout;
 
 mod restricted;
 pub(crate) use restricted::{discover_startup, discover_startup_in_store};
@@ -182,10 +183,13 @@ fn append_fence_hints(
     // journal namespaces, with the complete authenticated batch lineage.
     let mut paths = vec![crate::journal::log_path(disk)];
     if let Ok(seal) =
-        root.read_json_observed::<DiskSeal>(&disk.root.join("disk.json"), &mut |_| Ok(()))
+        root.read_json_observed::<DiskSeal>(
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
+            &mut |_| Ok(()),
+        )
         && let DiskSealFormat::MembershipGeneration { authority_hash } = seal.format
     {
-        paths.push(generation_directory(disk, &authority_hash).join("journal.bin"));
+        paths.push(generation_directory(disk, &authority_hash).join(layout::JOURNAL.as_path()));
     }
     for path in paths {
         if let Ok(scan) = crate::journal::scan_path_at(root, &path) {
@@ -236,7 +240,9 @@ fn marker_path_at(
         None
     };
     let Some(file) = file else {
-        if let Some(file) = root.open_optional_read_regular(&path.join("disk.json"))? {
+        if let Some(file) =
+            root.open_optional_read_regular(&path.join(layout::DISK_IDENTITY.as_path()))?
+        {
             let bytes = read_file_bytes(file, MAX_METADATA)?;
             // This is the disk identity, not a generation marker. Preserve its
             // concrete decode error so discovery cannot isolate it as a damaged
@@ -656,7 +662,7 @@ impl Engine {
 fn require_abort_journal(root: &DiskRoot, disk: &DiskConfig, hash: &str) -> Result<()> {
     // Abort and Exit install this durable empty leaf before their active marker.
     // A healthy frozen archive cannot recreate a lost current-generation log.
-    root.open_read_regular(&generation_directory(disk, hash).join("journal.bin"))
+    root.open_read_regular(&generation_directory(disk, hash).join(layout::JOURNAL.as_path()))
         .map(|_| ())
         .map_err(|source| {
             source.context(
@@ -687,7 +693,7 @@ fn activation_namespace_present(
         && (!(generation.portable.is_abort() || generation.registry().is_some())
             || root
                 .open_optional_read_regular(
-                    &generation_directory(disk, &generation.hash).join("journal.bin"),
+                    &generation_directory(disk, &generation.hash).join(layout::JOURNAL.as_path()),
                 )?
                 .is_some())
     {
@@ -696,7 +702,7 @@ fn activation_namespace_present(
     // An unmarked staging directory may precede the first durable leaf.
     // A current marker or active seal below makes absence corruption, not
     // permission to reconstruct an empty journal from the frozen base.
-    let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+    let bytes = root.read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
     let expected = identity_at(config, disk, &root.directory(root.path())?)?;
     predecessor_seal_matches(config, disk, root, &bytes, &expected)?;
     let value: json_codec::Value = decode_strict(&bytes)?;

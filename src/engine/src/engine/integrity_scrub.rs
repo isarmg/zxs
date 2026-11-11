@@ -4,6 +4,7 @@
 //! admitted baseline and acquire short per-version leases. Neither is a disk snapshot.
 use super::Engine;
 use crate::{disk::*, journal::*, *};
+use crate::persist::layout;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
@@ -770,7 +771,7 @@ impl IntegrityScrubPlan {
     ) -> Result<&DiskHandle> {
         let handle = self.disk_resources.get(disk)?;
         let stored = decode_seal(&handle.root.read_bytes_observed(
-            &disk.root.join("disk.json"),
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
             MAX_METADATA,
             observe,
         )?)?;

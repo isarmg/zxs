@@ -3,6 +3,7 @@
 use super::core::Proposal;
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::runtime::{management_error, open_store};
+use crate::persist::layout;
 
 impl Engine {
     /// Read the retained registration's original role without opening its root.
@@ -165,8 +166,10 @@ impl Engine {
         }
         let root = DiskRoot::from_directory(disk.root.clone(), directory.directory)?;
         let physical = pending::admission::verify_named_root(&root)?;
-        let original_seal =
-            decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
+        let original_seal = decode_seal(&root.read_bytes(
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
+            MAX_METADATA,
+        )?)?;
         let mut expected = identity_at(&self.config, disk, &root.directory(root.path())?)?;
         expected.format = original_seal.format.clone();
         validate_stored_seal(&original_seal, &expected)?;
@@ -485,7 +488,10 @@ fn hold_directory(
     pending::reservation::lock(&writer)?;
     let writer = FenceOwner::new(writer, Some(directory_lock));
     pending::reservation::verify_writer(&root, &writer)?;
-    let seal = decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
+    let seal = decode_seal(&root.read_bytes(
+        &disk.root.join(layout::DISK_IDENTITY.as_path()),
+        MAX_METADATA,
+    )?)?;
     validate_stored_seal(&seal, &request.original_seal)?;
     Ok((root, writer))
 }

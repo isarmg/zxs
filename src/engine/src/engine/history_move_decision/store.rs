@@ -2,6 +2,7 @@
 //! no overwrite of damaged inputs, and no online container/catalog installation.
 use super::materials::{DiskScope, Role};
 use super::*;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ impl Owner {
         }
         match self {
             Self::System { writer, .. } => {
-                let named_writer = named.open_regular(&named.path().join("writer.lock"))?;
+                let named_writer = named.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
                 if FileIdentity::from_fd(&named_writer)? != *writer {
                     return Err(invalid("joint move system writer changed"));
                 }

@@ -7,6 +7,7 @@ use crate::engine::disk_lifecycle::bootstrap::{
 };
 use crate::engine::membership_transition::archive::persistent::PendingControlArchive;
 use crate::engine::membership_transition::readmission::{AdmittedReadmission, request, status};
+use crate::persist::layout;
 
 const PLAN: &str = "readmission-activation.json";
 
@@ -331,12 +332,12 @@ impl Engine {
                 &handle.root,
                 &handle
                     .root
-                    .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?,
+                    .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?,
                 &handle.seal,
             )?;
             handle
                 .root
-                .write_json(&disk.root.join("disk.json"), &handle.seal, true)?;
+                .write_json(&disk.root.join(layout::DISK_IDENTITY.as_path()), &handle.seal, true)?;
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_readmission_seal_{}", disk.disk_id))?;
         }

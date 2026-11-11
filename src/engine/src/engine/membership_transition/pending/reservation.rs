@@ -4,6 +4,7 @@
 pub(in crate::engine::membership_transition) mod terminal_resume;
 
 use super::*;
+use crate::persist::layout;
 use std::collections::BTreeSet;
 
 const PREFIX: &str = ".membership-reservation-";
@@ -126,7 +127,7 @@ pub(in crate::engine::membership_transition) fn verify_writer(
     root: &DiskRoot,
     held: &crate::disk::FenceOwner,
 ) -> Result<()> {
-    let named = root.open_regular(&root.path().join(".writer.lock"))?;
+    let named = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
     if FileIdentity::from_fd(&named)? != held.writer_identity()? || named.metadata()?.len() != 0 {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
@@ -171,9 +172,8 @@ fn inspect_unsealed(root: &DiskRoot, name: &str, empty_allowed: bool) -> Result<
     for entry in entries {
         match entry.as_os_str().to_str() {
             Some(value) if value == name => (),
-            Some(".writer.lock") => {
-                if root
-                    .open_regular(&root.path().join(".writer.lock"))?
+            Some(_) if entry == *layout::DISK_WRITER_LOCK => {
+                if root.open_regular_entry(&layout::DISK_WRITER_LOCK)?
                     .metadata()?
                     .len()
                     != 0

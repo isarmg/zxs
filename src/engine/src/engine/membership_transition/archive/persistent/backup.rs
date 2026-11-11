@@ -5,6 +5,7 @@ use super::*;
 use crate::engine::backup_preparation::BackupNativeObjects;
 use crate::engine::membership_transition::BackupFrozenControl;
 use crate::history_package::preparation_checkpoint;
+use crate::persist::layout;
 use std::sync::atomic::AtomicBool;
 
 const MAX_FILES: usize = 32768;
@@ -132,8 +133,8 @@ impl PreparedBackupControl {
                 json_codec::to_value(&metadata)?,
             );
             files.insert(path.join("config.json"), member.config.clone())?;
-            files.insert(path.join("disk.json"), member.seal.clone())?;
-            files.insert(path.join("journal.bin"), member.journal.clone())?;
+            files.insert(path.join(layout::DISK_IDENTITY.as_path()), member.seal.clone())?;
+            files.insert(path.join(layout::JOURNAL.as_path()), member.journal.clone())?;
             journals.push(member.inspection.clone());
         }
         journals.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));

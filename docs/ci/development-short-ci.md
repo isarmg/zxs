@@ -1,33 +1,47 @@
-# 全量 CI 与暂停边界
+# 按变更定向 CI
 
-[CI 入口](../ci.md) · [固定策略与校验器](../../.github/scripts/development-ci.py) · [完整工作流恢复快照](../../.github/ci/full-workflows/ci.yml)
+main push 自动执行 `targeted`，手动入口默认 `targeted`。只有明确选择
+`scope=full` 才运行原完整静态检查、13 套件矩阵、workspace 分片验收、Web、
+浏览器、SMB SDK 与 phase-one-core。Release、PR、schedule 保持原暂停状态。
 
-2026-11-10 用户先要求“现在跑全量ci”，随后要求“跑自动ci”。`ci.yml` 的全部检查及可复用 `smb-sdk.yml` 已恢复；main 分支 push 自动全量执行，并保留 `workflow_dispatch`。pull_request、schedule、标签发布与 Release 仍暂停，不部署、不访问真实运行池。
+## 选择方式
 
-## 本轮完整范围
+`.github/ci/targeted-tests.json` 保存持久的路径与行为模块映射。
+push 使用事件的 before 到当前 HEAD，包含整个 push 中全部提交及删除路径；
+手动 targeted 检查 HEAD 的一个父提交到 HEAD。映射按路径取并集，重复组只运行一次，
+不依赖旧产物或固定基线，也不要求每次提交重写计划。新增未登记路径、无法读取的
+历史、非祖先基线、空选择均会失败，需补充相关定向映射再运行。TASKS、说明文档与指标文件单独变化只运行轻量 CI 策略回归。
 
-- `static` 执行全部既有静态门禁，执行上限恢复为 10 分钟。
-- 矩阵固定为全部 13 套：`rust-sources`、`quality`、`security`、`workspace`、`foundation-platform`、`foundation-crypto`、`foundation-data`、`foundation-language`、`foundation-async`、`web`、`contracts`、`build-tools`、`smb-protocol`。
-- `workspace` 保留原 120 分钟预算，`foundation-crypto` 为 60 分钟，其余矩阵为 30 分钟。所有原命令完整执行，不按有无改动、缓存或历史结果跳过，不把超时、零测试或部分结果当成功。
-- `web-production`、`browser-smoke`、`smb-sdk`、`phase-one-core` 恢复，分别保留原 job 体与预算。实际 Chrome 验收仍依赖 static、生产 WASM 与同 commit SDK；一期 core 独立等待 static，不等待 workspace 长测。
-- `release.yml` 原样保持暂停：人工入口仅可执行原 5 分钟 static；版本、完整验证、Linux/Web、SDK、组装与发布六个 job 仍固定暂停。本次全量 CI 不等于恢复 Release 演练或发布。
+映射由维护者随职责变化审阅，表示已审阅的覆盖范围，不是完整的跨模块依赖分析。
+engine.rs/lib.rs 等公共入口当前映射到本轮恢复、journal 与 IO 模块；未来修改这些入口
+的其他语义时必须同步扩展映射，路径匹配本身无法判断语义。修改 Cargo 清单、特性或
+新的子系统时应扩展相应的定向行为组，而不是自动启动全量。完整工作流与安全门禁
+保留，可由明确的人工 full 请求执行。
 
-执行预算包含 checkout、安装、缓存及 job 内全部步骤，不包含 GitHub 排队或 runner 回收；它不是完成时间承诺。矩阵 `fail-fast: false`，保留完整失败与未执行证据。
+## layout 与持句柄 IO 的定向范围
 
-`development-ci.py select` 输出完整 13 套、`automatic_triggers: true`、`push_branches: [main]`、空 `paused_suites`、仅 Release 的暂停清单与空 `reused`。任何 event、input 或 env 均不能缩短矩阵或恢复发布。旧 `select-ci-suites.py` 与其证据复用回归保留，但活动 CI 不调用它；本轮明确要求全跑，不使用历史复用。
+- engine persist/layout：初始化后冷打开、已有盘上文件名与字节、独立 writer 锁、
+  目录改名后的持句柄读写、缺失/链接/读上限。
+- disk owned/root_operation、directory_entries 与 admission：撤销与 quiesce、
+  描述符释放、目录替换、边界读写；ignored 的隔离挂载测试单独列为未执行。
+- journal writer 与生命周期：日志写入、writer 持有期及相关恢复行为。
+- readmission、terminal_resume、backup startup resume、backup preparation、
+  recovery checkpoint、history move choice：本次 layout 路径迁移涉及的恢复链行为。
+- platform fs_safety：原子替换、已有句柄身份、锁、路径与字节上限。
 
-## 工作流与证据保证
+每个模块从本次 Cargo 生成的测试二进制枚举，名称变化无需维护固定测试名。
+每个选择前缀至少有一个非 ignored 测试；engine 最多 160 项，platform 最多 100 项。
+超过预算需审阅分批，不能静默截断。每项以 `--exact` 执行并核对一项通过，零项、
+ignored、最终父测试摘要不匹配、执行失败均无法完成本批。构建仅针对两个包的 lib 测试目标；
+其依赖仍需正常编译。
 
-`.github/ci/full-workflows/` 保留原三个快照字节与 SHA-256，不直接作为 Actions 入口。活动 CI/SDK 仅施加已审阅的 main push／人工触发、独立并发和固定全矩阵选择差异，不改原检查命令、Action SHA、环境初始化、缓存边界、同 commit SDK、失败材料或产物验收。Release 继续使用原暂停投影。
+## 结果
 
-策略校验仍是 static 的第一个命令，必须同步核对活动 YAML 与固定投影。正负回归拒绝额外入口、扩大 push 分支／标签范围、缩小矩阵、隐藏 job、修改预算、吞错、去掉依赖或缺失产物门禁。恢复定义与这些静态回归通过不等于长套件实际通过。
+`targeted-tests-<sha>` artifact 记录比较基线、当前提交、映射摘要、完整当前库存、
+选中及未执行名称、二进制 SHA-256、逐命令日志与逐项结果。状态
+`selected-tests-passed` 只结算选中项。构建或执行中断时保留 incomplete/failed 记录。
+全 workspace、其他恢复场景、ignored 外部 IO 场景、跨特性、Web/浏览器、SMB、
+foundation、quality、security 都保持未执行，不能用本批替代发行或全量验收。
 
-并发组仍为 workflow／SHA／run ID，`cancel-in-progress: false`；本轮不取消或覆盖其他运行，不删除 workflow、历史运行或 artifacts，不改分支保护或 required checks。原 SQLite 两个固定维护入口不变，本次不触发。
-
-## 执行与结果记录
-
-本次提交进入 main 后核实对应 push run，记录 run URL、实际 `head_sha`、每个 job 的最终结论及失败原因；不另行重复 dispatch。触发结果不确定时先查新 run，不能重复触发。已经启动的短 CI 仍按旧提交和旧配方结算，不能冒充这次全量证据。
-
-只把准确源码、实际完成的检查记为通过；明确分列失败、跳过、未执行和环境限制。CI 的安装候选 artifact 只有该 job 完成打包、浏览器和组装后才算候选，不代表其他并行 job 或整个发行验收通过，也不会创建标签或 GitHub Release。
-
-后续 PR／schedule 触发、Release 演练或发布仍须另行明确安排；自动 main push CI 不构成发布或操作真实用户数据的授权。
+CI 路由和证据脚本变化只选择对应 Python 回归，自动入口不会先执行整个 static。
+并发组仍按 run ID 隔离；已有运行的取消由用户单独决定。

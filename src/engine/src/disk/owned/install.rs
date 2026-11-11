@@ -22,8 +22,14 @@ pub(crate) struct HeldRegular {
 }
 impl HeldRegular {
     pub(crate) fn capture(root: &DiskRoot, leaf: &str, maximum: usize) -> Result<Option<Self>> {
-        EntryName::new(leaf).map_err(fs_error)?;
-        let Some(file) = root.open_optional_read_regular(&root.path().join(leaf))? else {
+        Self::capture_entry(root, &EntryName::new(leaf).map_err(fs_error)?, maximum)
+    }
+    pub(crate) fn capture_entry(
+        root: &DiskRoot,
+        name: &EntryName,
+        maximum: usize,
+    ) -> Result<Option<Self>> {
+        let Some(file) = root.open_optional_read_entry(name)? else {
             return Ok(None);
         };
         let metadata = file.metadata()?;
@@ -137,7 +143,7 @@ impl DiskRoot {
     pub(crate) fn publish_install_preserving(
         &self,
         stage: &DiskRoot,
-        target: &str,
+        target: &EntryName,
         expected: InstallExchange<'_>,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<()> {
@@ -152,7 +158,6 @@ impl DiskRoot {
         {
             return Err(collision("database installation crosses devices"));
         }
-        let target = EntryName::new(target).map_err(fs_error)?;
         let new = inspect(&source, "payload", expected.maximum)?
             .ok_or_else(|| collision("database stage is absent"))?;
         if &new.0 != expected.staged {
@@ -160,11 +165,7 @@ impl DiskRoot {
                 "database stage identity or complete bytes changed",
             ));
         }
-        let old = inspect(
-            &destination,
-            target.as_os_str().to_str().expect("fixed database leaf"),
-            expected.maximum,
-        )?;
+        let old = inspect_entry(&destination, target, expected.maximum)?;
         if old.as_ref().map(|value| &value.0) != expected.old {
             return Err(collision("database target changed after preparation"));
         }
@@ -192,11 +193,7 @@ impl DiskRoot {
         let synced = preserve_error(renamed.map_err(Error::from), destination_sync);
         preserve_error(synced, source_sync)?;
         observe("after_database_publish")?;
-        let installed = inspect(
-            &destination,
-            target.as_os_str().to_str().expect("fixed database leaf"),
-            expected.maximum,
-        )?;
+        let installed = inspect_entry(&destination, target, expected.maximum)?;
         let displaced = inspect(&source, "payload", expected.maximum)?;
         if installed.as_ref().map(|value| &value.0) != Some(expected.staged)
             || displaced.as_ref().map(|value| &value.0) != expected.old
@@ -227,7 +224,15 @@ fn inspect(
     leaf: &str,
     maximum: usize,
 ) -> Result<Option<(FileStamp, File)>> {
-    let Some(file) = operation.open_optional_regular(&operation.root.path().join(leaf))? else {
+    inspect_entry(operation, &EntryName::new(leaf).map_err(fs_error)?, maximum)
+}
+
+fn inspect_entry(
+    operation: &RootOperation<'_>,
+    name: &EntryName,
+    maximum: usize,
+) -> Result<Option<(FileStamp, File)>> {
+    let Some(file) = operation.open_optional_relative_regular(&name.as_relative())? else {
         return Ok(None);
     };
     let identity = SingleLinkRequirement::check(&file).map_err(fs_error)?;

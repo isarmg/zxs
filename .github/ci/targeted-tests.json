@@ -1,0 +1,585 @@
+{
+  "groups": {
+    "ci-selection": {
+      "reason": "CI routing, scope admission and execution evidence",
+      "python_tests": [
+        "test_development_ci",
+        "test_targeted_ci",
+        "test_workflows",
+        "test_workflow_target_setup"
+      ],
+      "rust_targets": []
+    },
+    "held-directory-layout": {
+      "reason": "Disk layout bytes, held directory identity, lease revocation and atomic replacement",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "persist::layout::tests::",
+            "disk::owned::root_operation_tests::",
+            "disk::owned::directory_entries_tests::",
+            "disk::admission_tests::",
+            "journal::writer_lifecycle_tests::",
+            "journal::writer_tests::",
+            "engine::membership_transition::readmission::",
+            "engine::membership_transition::pending::terminal_resume::",
+            "engine::membership_transition::pending::activation::backup::startup::resume::",
+            "engine::backup_preparation::tests::",
+            "engine::recovery_checkpoint::tests::",
+            "engine::history_move_decision::choice::tests::"
+          ],
+          "max_tests": 160
+        },
+        {
+          "package": "platform-io",
+          "manifest": "src/platform/Cargo.toml",
+          "prefixes": [
+            "fs_safety::tests::",
+            "fs_safety::unix::tests::"
+          ],
+          "max_tests": 100
+        }
+      ]
+    }
+  },
+  "rules": [
+    {
+      "path": ".github/ci/*",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/scripts/development-ci.py",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-targeted-ci.py",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/scripts/check.sh",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "test/ci/test_development_ci.py",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "test/ci/test_targeted_ci.py",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "docs/ci/development-short-ci.md",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "src/engine/src/database_install.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_conversion/source.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/admission/observation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/discovery.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/fencing.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/install.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk_authority/storage.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/archive.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/common_databases/sources.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/original_control.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/root_databases/admission.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/recovery.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation/roots.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_locator/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_seals/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/target_writers/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/target_resources.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/offline.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/terminal/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/choice/discovery.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/execution/archive.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_recovery/persist.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/integrity_scrub.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/abort.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/abort/archive_view.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/archive/persistent.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/archive/persistent/backup.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/control.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/backup/registry/payloads.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/decision.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/locator.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup/native.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup/resume.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup/store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/cancellation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/exit/runtime.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/plan_store.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/publication.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery/restricted.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/terminal_resume.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/admission.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/cancellation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/data.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/terminal_resume/retained.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/readmission/activation.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/readmission/core.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/readmission/probe.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/readmission/runtime.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/terminal_chain/current.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/terminal_chain/generation_log.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/terminal_chain/target.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/terminal_resume/retained.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/move_execution/completion.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/provenance.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery_checkpoint.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/verified_payloads.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/inspect.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/backup_first.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/mod.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/root_operation_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/persist/layout_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/platform/src/fs_safety/*",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/platform/unit/fs_safety/*",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "TASKS.md",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/metrics-baseline.json",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "docs/*",
+      "groups": [
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "README.md",
+      "groups": [
+        "ci-selection"
+      ]
+    }
+  ],
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI."
+}

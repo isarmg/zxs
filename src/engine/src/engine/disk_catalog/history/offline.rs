@@ -3,6 +3,8 @@
 //! never authorizes restore, registration, content access, or authority selection.
 use super::*;
 use crate::disk::{DiskRoot, HeldRegular, MAX_METADATA};
+use crate::persist::layout;
+use platform_io::fs_safety::EntryName;
 use std::{fs::File, path::PathBuf};
 
 mod archive;
@@ -87,7 +89,7 @@ pub fn inspect_disk_database_material(
     scope: DiskDatabaseReadScope,
 ) -> Result<DiskDatabaseMaterial> {
     let root = DiskRoot::from_directory(path, directory)?;
-    let mut seal = HeldRegular::capture(&root, "disk.json", MAX_METADATA)?
+    let mut seal = HeldRegular::capture_entry(&root, &layout::DISK_IDENTITY, MAX_METADATA)?
         .ok_or_else(|| invalid("disk database inspection requires an existing disk seal"))?;
     seal.release_bytes();
     let recognized =
@@ -146,11 +148,12 @@ pub fn inspect_disk_database_material(
     };
     // Keep the original FDs alive while checking names, bytes, and absence. A
     // replaced named file cannot recycle its inode into the previous stamp.
-    recheck(&root, "disk.json", Some(&seal), MAX_METADATA)?;
+    recheck(&root, &layout::DISK_IDENTITY, Some(&seal), MAX_METADATA)?;
     if scope.current() {
         recheck(
             &root,
-            DISK_DATABASE_NAME,
+            &EntryName::new(DISK_DATABASE_NAME)
+                .expect("invariant: disk database uses one canonical entry"),
             current_file.as_ref(),
             MAX_DATABASE_BYTES,
         )?;
@@ -158,7 +161,8 @@ pub fn inspect_disk_database_material(
     if scope.history() {
         recheck(
             &root,
-            DISK_HISTORY_DATABASE_NAME,
+            &EntryName::new(DISK_HISTORY_DATABASE_NAME)
+                .expect("invariant: disk history database uses one canonical entry"),
             history_file.as_ref(),
             MAX_DATABASE_BYTES,
         )?;
@@ -206,11 +210,11 @@ fn no_sidecars(root: &DiskRoot, scope: DiskDatabaseReadScope) -> Result<()> {
 
 fn recheck(
     root: &DiskRoot,
-    leaf: &str,
+    leaf: &EntryName,
     original: Option<&HeldRegular>,
     maximum: usize,
 ) -> Result<()> {
-    let current = HeldRegular::capture(root, leaf, maximum)?;
+    let current = HeldRegular::capture_entry(root, leaf, maximum)?;
     if current.as_ref().map(HeldRegular::stamp) != original.map(HeldRegular::stamp) {
         return Err(invalid(
             "disk database material changed during the frozen offline read",

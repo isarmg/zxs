@@ -9,6 +9,7 @@ use crate::journal::{
     verify_publication_seal,
 };
 use crate::publication_evidence::{verified_graph_object_at, verified_publication_seal_at};
+use crate::persist::layout;
 use data_serialization::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -304,7 +305,10 @@ impl PreparedArchive {
         let mut journal_bytes = 0usize;
         for disk in &members {
             let root = &engine.disk_resources.get(disk)?.root;
-            let seal_bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_MANIFEST)?;
+            let seal_bytes = root.read_bytes(
+                &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                MAX_MANIFEST,
+            )?;
             let seal: DiskSeal = decode_proof(&seal_bytes)?;
             let identity = PhysicalBinding::of(root)?;
             if (seal.device, seal.inode) != (identity.device, identity.inode) {

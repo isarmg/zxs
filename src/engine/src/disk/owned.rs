@@ -2,6 +2,7 @@
 use super::admission::DiskIoResource;
 use super::admission::FinalResource;
 use super::*;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::DirectoryEntries;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -495,6 +496,44 @@ impl DiskRoot {
         self.operation()?.open_regular(path)
     }
 
+    pub(crate) fn open_regular_entry(&self, name: &EntryName) -> Result<File> {
+        self.operation()?.open_relative_regular(&name.as_relative())
+    }
+
+    pub(crate) fn open_read_entry(&self, name: &EntryName) -> Result<ReadFile> {
+        let operation = self.operation()?;
+        let file = operation.open_relative_regular(&name.as_relative())?;
+        operation.into_read_file(file)
+    }
+
+    pub(crate) fn open_optional_read_entry(&self, name: &EntryName) -> Result<Option<ReadFile>> {
+        let operation = self.operation()?;
+        let file = operation.open_optional_relative_regular(&name.as_relative())?;
+        file.map(|file| operation.into_read_file(file)).transpose()
+    }
+
+    pub(crate) fn read_entry_bytes(&self, name: &EntryName, maximum: usize) -> Result<Vec<u8>> {
+        let operation = self.operation()?;
+        read_file_bytes_observed(
+            operation.open_relative_regular(&name.as_relative())?,
+            maximum,
+            &mut |_| operation.check_running(),
+        )
+    }
+
+    pub(crate) fn write_entry_json<T: Serialize + ?Sized>(
+        &self,
+        name: &EntryName,
+        value: &T,
+        replace: bool,
+    ) -> Result<()> {
+        self.operation()?.write_relative_atomic(
+            &name.as_relative(),
+            &encode_metadata(value, MAX_METADATA)?,
+            replace,
+        )
+    }
+
     pub(crate) fn private_directory(&self, path: &Path) -> Result<PrivateDirectory> {
         self.operation()?.private_directory(path)
     }
@@ -764,14 +803,21 @@ impl RootOperation<'_> {
     }
 
     fn open_regular(&self, path: &Path) -> Result<File> {
-        self.held()
-            .open_file(&self.root.relative(path)?, false)
-            .map_err(fs_error)
+        self.open_relative_regular(&self.root.relative(path)?)
+    }
+
+    fn open_relative_regular(&self, path: &RelativePath) -> Result<File> {
+        self.held().open_file(path, false).map_err(fs_error)
     }
 
     /// Absence belongs to the leaf only; open the safe parent before the leaf.
     fn open_optional_regular(&self, path: &Path) -> Result<Option<File>> {
-        let (parent, name) = self.parent(path)?;
+        self.open_optional_relative_regular(&self.root.relative(path)?)
+    }
+
+    fn open_optional_relative_regular(&self, path: &RelativePath) -> Result<Option<File>> {
+        let (parent, name) = path.split_parent();
+        let parent = self.open_relative_directory(parent.as_ref())?;
         match rustix::fs::openat2(
             &parent,
             name.as_os_str(),
@@ -943,13 +989,24 @@ impl RootOperation<'_> {
     }
 
     fn write_atomic(&self, path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
-        let (parent, name) = self.root.relative(path)?.split_parent();
+        self.write_relative_atomic(&self.root.relative(path)?, bytes, replace)
+    }
+
+    fn write_relative_atomic(
+        &self,
+        path: &RelativePath,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        let (parent, name) = path.split_parent();
         self.private_relative_dir(parent.as_ref())?;
+        let diagnostic_parent = match &parent {
+            Some(parent) => self.root.path.join(parent.as_path()),
+            None => self.root.path.clone(),
+        };
         let directory = PrivateDirectory::from_directory(
             self.open_relative_directory(parent.as_ref())?,
-            path.parent()
-                .expect("invariant: a relative child has a parent")
-                .to_path_buf(),
+            diagnostic_parent,
         )
         .map_err(fs_error)?;
         write_atomic_in(&directory, &name, bytes, replace)
@@ -1064,7 +1121,7 @@ impl RootOperation<'_> {
         let file = File::from(
             rustix::fs::openat2(
                 self.held().directory(),
-                ".writer.lock",
+                layout::DISK_WRITER_LOCK.as_os_str(),
                 rustix::fs::OFlags::CREATE
                     | rustix::fs::OFlags::RDWR
                     | rustix::fs::OFlags::NOFOLLOW
@@ -1123,7 +1180,10 @@ impl DiskHandle {
         let root = DiskRoot::open(&disk.root)?;
         let seal = identity_at(config, disk, root.operation()?.held().directory())?;
         if sealed {
-            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            let bytes = root.read_bytes(
+                &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                MAX_METADATA,
+            )?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
         }
         Self::new(root, seal, config)
@@ -1170,7 +1230,10 @@ impl DiskResources {
         for disk in config.io_disks() {
             let root = DiskRoot::open(&disk.root)?;
             let seal = identity_at(config, disk, &root.directory(root.path())?)?;
-            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            let bytes = root.read_bytes(
+                &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                MAX_METADATA,
+            )?;
             crate::engine::membership_transition::pending::activation::predecessor_seal_matches(
                 config, disk, &root, &bytes, &seal,
             )?;
@@ -1236,7 +1299,10 @@ impl DiskResources {
                 ));
             }
             let seal = identity_at(config, disk, root.operation()?.held().directory())?;
-            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            let bytes = root.read_bytes(
+                &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                MAX_METADATA,
+            )?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
             disks.insert(
                 disk.disk_id.clone(),

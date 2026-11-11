@@ -3,6 +3,7 @@
 use super::*;
 use crate::disk::{decode_seal, identity_at, validate_stored_seal};
 use crate::journal::{load_authenticated_object_at, publication_seal_path};
+use crate::persist::layout;
 
 pub(super) struct Native {
     pub(super) first: PreparedBackupFirstCandidate,
@@ -136,7 +137,7 @@ pub(super) fn require_selector(
     completed: bool,
 ) -> Result<()> {
     let held = root.directory(root.path())?;
-    let stored = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+    let stored = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
     let selected = identity_at(config, disk, &held)?;
     let original = plan.authority.genesis_config()?;
     let old = original

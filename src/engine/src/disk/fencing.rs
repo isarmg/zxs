@@ -1,6 +1,7 @@
 //! Typed ownership of acquired writer locks. Cloning never duplicates an FD.
 use super::{ClosedDiskIo, DiskIoBinding, DiskIoLease, DiskRoot};
 use crate::{Error, ErrorCode, Result};
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::{
     collections::BTreeMap,
@@ -217,7 +218,7 @@ impl WriterLocks {
         })?;
         let _activity = root.io_binding()?.admit()?;
         writer.held()?;
-        let named = root.open_regular(&root.path().join(".writer.lock"))?;
+        let named = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         if FileIdentity::from_fd(&named)? != writer.fence.writer_identity()?
             || named.metadata()?.len() != 0
         {

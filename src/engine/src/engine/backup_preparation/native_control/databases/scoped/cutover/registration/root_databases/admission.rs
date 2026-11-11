@@ -2,6 +2,7 @@
 //! Only an already admitted serving Engine may interpret it as that operation's
 //! completed installation. No selector bytes construct authority or a writer.
 use super::*;
+use crate::persist::layout;
 
 fn digest(value: &str) -> Result<()> {
     if value.len() != 64
@@ -98,7 +99,7 @@ impl Engine {
         }
         manifest.require_original_bindings(self)?;
         let system = DiskRoot::open(&self.root)?;
-        let writer = system.open_read_regular(&system.path().join("writer.lock"))?;
+        let writer = system.open_read_entry(&layout::CONTROL_WRITER_LOCK)?;
         if platform_io::fs_safety::linux::FileIdentity::from_metadata(&writer.metadata()?)
             != self._locks.system_identity()?
         {

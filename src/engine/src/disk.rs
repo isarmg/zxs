@@ -1,4 +1,5 @@
 use crate::*;
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{
     AtomicFile, EntryName, PrivateDirectory, RelativePath,
@@ -1111,7 +1112,7 @@ pub(crate) fn validate_seal_observed(
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<DiskSeal> {
     let stored = decode_seal(&read_bytes_observed(
-        &disk.root.join("disk.json"),
+        &disk.root.join(layout::DISK_IDENTITY.as_path()),
         MAX_METADATA,
         observe,
     )?)?;
@@ -1146,8 +1147,8 @@ pub(crate) fn offline_check_in_context(
     root: &Path,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<CheckReport> {
-    let loaded =
-        read_bytes(&root.join("disk.json"), MAX_METADATA).and_then(|bytes| decode_seal(&bytes));
+    let loaded = read_bytes(&root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)
+        .and_then(|bytes| decode_seal(&bytes));
     let _seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
@@ -1213,7 +1214,10 @@ pub(crate) fn offline_check_in_context(
 }
 pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Result<()> {
     validate_id(version_id, "ver")?;
-    let _seal = decode_seal(&read_bytes(&root.join("disk.json"), MAX_METADATA)?)?;
+    let _seal = decode_seal(&read_bytes(
+        &root.join(layout::DISK_IDENTITY.as_path()),
+        MAX_METADATA,
+    )?)?;
     for h in fs::read_dir(root.join("histories"))? {
         let h = h?;
         if !h.file_type()?.is_dir() {

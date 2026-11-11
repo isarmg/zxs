@@ -6,6 +6,7 @@ use crate::engine::disk_lifecycle::terminal::TerminalManagement;
 use crate::engine::disk_registry::published::terminal::TerminalRegistry;
 use crate::engine::disk_registry::{DiskRegistrationIdentity, PreparedDiskRegistry};
 use crate::engine::membership_transition::readmission::{ReadmissionRequest, ReadmissionRole};
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::PathBuf;
 
@@ -355,7 +356,7 @@ impl ResumeCore {
         else {
             return Ok(());
         };
-        let stored = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let stored = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         let mut expected = request.original_seal.clone();
         if stored.format != expected.format {
             expected.format = DiskSealFormat::MembershipGeneration {

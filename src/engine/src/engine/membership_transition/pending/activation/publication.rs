@@ -1,5 +1,6 @@
 //! Explicit generation resource promotion and prescribed publication.
 use super::*;
+use crate::persist::layout;
 
 /// Retained roots already have their immutable Genesis anchor. Its original
 /// addresses can differ after authenticated relocation; stricter local retained
@@ -100,7 +101,10 @@ pub(in crate::engine::membership_transition) fn install_marker(
                 }
                 None => false,
             };
-        let seal_bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+        let seal_bytes = root.read_bytes(
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
+            MAX_METADATA,
+        )?;
         let value: json_codec::Value = decode_strict(&seal_bytes)?;
         let current_seal = if value.get("format").and_then(json_codec::Value::as_str)
             == Some("membership-pending")
@@ -134,7 +138,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
             let seal = decode_seal(&seal_bytes)?;
             matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == &generation.hash)
         };
-        let journal = directory.join("journal.bin");
+        let journal = directory.join(layout::JOURNAL.as_path());
         if root.open_optional_read_regular(&journal)?.is_none() {
             if current_marker || current_seal {
                 return Err(Error::new(
@@ -701,7 +705,7 @@ impl Engine {
             admission::verify_named_root(&handle.root)?;
             let bytes = handle
                 .root
-                .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+                .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
             predecessor_seal_matches(&self.config, disk, &handle.root, &bytes, &handle.seal)?;
             install_marker(&handle.root, disk, &generation)?;
             handle
@@ -709,7 +713,7 @@ impl Engine {
                 .private_dir(&generation_directory(disk, &generation.hash))?;
             handle
                 .root
-                .write_json(&disk.root.join("disk.json"), &handle.seal, true)?;
+                .write_json(&disk.root.join(layout::DISK_IDENTITY.as_path()), &handle.seal, true)?;
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!(
                 "after_membership_activation_seal_{}",

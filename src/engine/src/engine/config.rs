@@ -1,5 +1,6 @@
 //! Disk topology, resource admission configuration and OS writer locks.
 use crate::{disk::*, *};
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -417,7 +418,7 @@ pub(super) fn acquire_locks_selected(
     selection.require_legacy()?;
     let system = File::from(
         rustix::fs::open(
-            root.join("writer.lock"),
+            root.join(layout::CONTROL_WRITER_LOCK.as_path()),
             rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::RDWR
                 | rustix::fs::OFlags::NOFOLLOW

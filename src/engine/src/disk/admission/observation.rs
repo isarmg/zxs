@@ -7,10 +7,8 @@ use crate::{
         read_file_bytes_observed, validate_stored_seal,
     },
 };
-use platform_io::fs_safety::{
-    RelativePath,
-    linux::{MountPolicy, OpenAt2Root},
-};
+use crate::persist::layout;
+use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::fs::Metadata;
 
 /// A verified registered directory with revocable, read-only ownership.
@@ -205,7 +203,7 @@ impl DiskObservationAccess<'_> {
         self.check_running()?;
         let identity = identity_at(config, disk, self.directory.directory())?;
         validate_stored_seal(expected, &identity)?;
-        let seal_path = RelativePath::new("disk.json").map_err(fs_error)?;
+        let seal_path = layout::DISK_IDENTITY.as_relative();
         self.check_running()?;
         let seal = self
             .directory

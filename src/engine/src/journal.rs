@@ -1,4 +1,5 @@
 use crate::{disk::*, *};
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 #[cfg(test)]
 use std::io::Write;
@@ -109,7 +110,8 @@ pub(crate) struct Scan {
     pub torn_tail: bool,
 }
 pub(crate) fn log_path(d: &DiskConfig) -> PathBuf {
-    d.root.join("metadata/application-log/journal.bin")
+    d.root.join("metadata/application-log")
+        .join(layout::JOURNAL.as_path())
 }
 #[cfg(test)]
 pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
@@ -433,8 +435,7 @@ pub(crate) enum OpeningFault {
 }
 
 pub(crate) fn journal_name() -> platform_io::fs_safety::EntryName {
-    platform_io::fs_safety::EntryName::new("journal.bin")
-        .expect("invariant: journal has one fixed entry name")
+    layout::JOURNAL.clone()
 }
 
 impl JournalWriter {
@@ -1425,7 +1426,8 @@ fn verify_tombstone_content_with(
             "invalid version location",
         )
     })?;
-    let loaded = read(&root.join("disk.json")).and_then(|bytes| decode_seal(&bytes));
+    let loaded =
+        read(&root.join(layout::DISK_IDENTITY.as_path())).and_then(|bytes| decode_seal(&bytes));
     let seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
@@ -1612,7 +1614,8 @@ fn verify_local_version_publication(
             "version is outside disk layout",
         )
     })?;
-    let loaded = read(&root.join("disk.json")).and_then(|bytes| decode_seal(&bytes));
+    let loaded =
+        read(&root.join(layout::DISK_IDENTITY.as_path())).and_then(|bytes| decode_seal(&bytes));
     let seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,

@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::disk_lifecycle::bootstrap::runtime::{management_error, open_store};
 use crate::engine::membership_transition::readmission::{ReadmissionRequest, ReadmissionRole};
 use crate::engine::membership_transition::terminal_resume::{ResumeAdmission, stopped_source};
+use crate::persist::layout;
 
 impl TerminalManagement {
     pub fn prepare_disk_readmission(
@@ -39,12 +40,12 @@ impl TerminalManagement {
         drop(store);
         let directory_lock = root.directory(root.path())?;
         reservation::lock(&directory_lock)?;
-        let writer = root.open_regular(&root.path().join(".writer.lock"))?;
+        let writer = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&writer).map_err(fs_error)?;
         reservation::lock(&writer)?;
         let writer = crate::disk::FenceOwner::new(writer, Some(directory_lock));
         reservation::verify_writer(&root, &writer)?;
-        let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         let authority = &self.verified_authority().authority;
         let (stopped_operation, stopped_transition, expected_format) =
             stopped_source(authority, &preview.target)?;
@@ -165,7 +166,10 @@ impl TerminalMetadataResume {
                 let seal = decode_seal(
                     &member
                         .root
-                        .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?,
+                        .read_bytes(
+                            &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                            MAX_METADATA,
+                        )?,
                 )?;
                 validate_stored_seal(&seal, &request.original_seal)
             }
@@ -173,7 +177,11 @@ impl TerminalMetadataResume {
                 admission::inspect_new_root(&member.root, &member.seal, &member.reservation_name)?;
                 member
                     .root
-                    .write_json(&disk.root.join("disk.json"), &member.seal, false)
+                    .write_json(
+                        &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                        &member.seal,
+                        false,
+                    )
             }
         }
     }

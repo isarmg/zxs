@@ -1,6 +1,7 @@
 //! Read-only recognition of a held current-format disk directory and its recorded
 //! role. This is not registration, a complete history proof or permission to write.
 use super::*;
+use crate::persist::layout;
 
 /// Strength of the local configuration evidence, never an import permit.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +61,7 @@ impl RecognizedDisk {
 pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> {
     let metadata = directory.metadata()?;
     let root = DiskRoot::from_directory(path.clone(), directory)?;
-    let bytes = root.read_bytes(&path.join("disk.json"), MAX_METADATA)?;
+    let bytes = root.read_bytes(&path.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
     let seal = decode_seal(&bytes)?;
     validate_id(&seal.pool_id, "pool")?;
     validate_id(&seal.disk_id, "disk")?;
@@ -114,7 +115,7 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
             }
         },
     };
-    if root.read_bytes(&path.join("disk.json"), MAX_METADATA)? != bytes {
+    if root.read_bytes(&path.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)? != bytes {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
             "disk seal changed during role discovery",

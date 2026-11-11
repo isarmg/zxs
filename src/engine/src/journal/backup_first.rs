@@ -4,6 +4,7 @@
 //! extract its writer, install an active marker, or clear the source fence.
 use super::*;
 use crate::engine::membership_transition::{PreparedBackupFirstCandidate, pending::activation};
+use crate::persist::layout;
 
 const MAX_SLOT_BYTES: usize = 16 * 1024;
 
@@ -49,8 +50,8 @@ impl<'a> BackupFirstJournal<'a> {
                 "cold Backup journal has another original binding",
             ));
         }
-        let path =
-            activation::generation_directory(disk, candidate.authority_hash()).join("journal.bin");
+        let path = activation::generation_directory(disk, candidate.authority_hash())
+            .join(layout::JOURNAL.as_path());
         let mut file = root.open_read_regular(&path)?;
         let before = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
         if file.metadata()?.nlink() != 1 || seal.candidate_hash != candidate.hash() {
@@ -128,8 +129,8 @@ impl<'a> BackupFirstJournal<'a> {
                 "observed Backup journal seal names another first candidate",
             ));
         }
-        let path =
-            activation::generation_directory(disk, candidate.authority_hash()).join("journal.bin");
+        let path = activation::generation_directory(disk, candidate.authority_hash())
+            .join(layout::JOURNAL.as_path());
         let mut file = root.open_read_regular(&path)?;
         let metadata = file.metadata()?;
         let identity = FileIdentity::from_metadata(&metadata);

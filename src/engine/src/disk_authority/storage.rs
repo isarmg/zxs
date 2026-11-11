@@ -4,10 +4,10 @@ use super::{
     verify::{self, ReadStore},
     *,
 };
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, InventoryLimits, PayloadOpenMode, PrivateDirectory,
-    RelativePath,
 };
 use std::{
     collections::BTreeMap,
@@ -158,7 +158,7 @@ impl Disk {
             &codec::encode(&intent)?,
         )?;
         fault::after(fault::Boundary::InitializationIntent)?;
-        let lock = AdvisoryLock::acquire(&root, &RelativePath::new("writer.lock")?)?;
+        let lock = AdvisoryLock::acquire(&root, &layout::CONTROL_WRITER_LOCK.as_relative())?;
         save_exact(
             &root,
             &name("initialization.json")?,
@@ -487,7 +487,7 @@ impl Disk {
     }
     pub fn writer(&self) -> Result<WriteSession<'_>> {
         self.check_identity()?;
-        let lock = AdvisoryLock::acquire(&self.root, &RelativePath::new("writer.lock")?)?;
+        let lock = AdvisoryLock::acquire(&self.root, &layout::CONTROL_WRITER_LOCK.as_relative())?;
         Ok(WriteSession {
             disk: self,
             _lock: lock,

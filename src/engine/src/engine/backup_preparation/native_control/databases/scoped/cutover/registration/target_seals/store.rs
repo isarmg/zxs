@@ -1,11 +1,11 @@
 //! No-clobber task-local seal installation. The intent permits only matching
 //! frozen reads before a selector exists; it cannot construct an I/O capability.
 use super::*;
+use crate::persist::layout;
 use std::os::unix::fs::MetadataExt;
 
 const LOCAL_INTENT: &str = "backup-target-seal-intent.json";
 const BINDING: &str = "backup-target-seal-binding.json";
-const SEAL: &str = "disk.json";
 const MAX_LOCAL: usize = 8 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -109,7 +109,7 @@ fn require_seal(root: &DiskRoot, expected: &[u8]) -> Result<PhysicalBinding> {
     // Keep bound I/O ownership through metadata, bytes and the error tail.
     // This opener also enforces single-link regular-file semantics.
     let file = root
-        .open_optional_read_regular(&root.path().join(SEAL))?
+        .open_optional_read_entry(&layout::DISK_IDENTITY)?
         .ok_or_else(|| {
             Error::from(std::io::Error::from(std::io::ErrorKind::NotFound)).context(
                 ErrorCode::DiskIdentityMismatch,
@@ -157,7 +157,7 @@ pub(in super::super) fn require_staging(root: &DiskRoot, native: Option<&str>) -
 fn read_staging(root: &DiskRoot, native: Option<&str>) -> Result<Option<Vec<u8>>> {
     let selected = preparation_path_exists(root, &root.path().join(LOCAL_INTENT))?;
     let bound = preparation_path_exists(root, &root.path().join(BINDING))?;
-    let sealed = preparation_path_exists(root, &root.path().join(SEAL))?;
+    let sealed = preparation_path_exists(root, &root.path().join(layout::DISK_IDENTITY.as_path()))?;
     if !selected {
         if sealed || bound {
             return Err(Error::new(
@@ -231,7 +231,11 @@ impl PreparedSeal {
         }
         // No replacement and no Genesis fallback. The actual writer gate lease
         // is held by the caller through this complete write/sync/error tail.
-        install_preparation_bytes(root, &root.path().join(SEAL), &self.seal)?;
+        install_preparation_bytes(
+            root,
+            &root.path().join(layout::DISK_IDENTITY.as_path()),
+            &self.seal,
+        )?;
         let file = require_seal(root, &self.seal)?;
         let binding = local_bytes(&Binding {
             format: BindingFormat::BackupTargetSealBinding,

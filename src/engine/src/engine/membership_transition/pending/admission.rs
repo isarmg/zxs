@@ -1,4 +1,5 @@
 use super::*;
+use crate::persist::layout;
 use std::collections::BTreeSet;
 
 impl Engine {
@@ -154,7 +155,7 @@ impl Engine {
                     let directory_lock = root.directory(root.path())?;
                     reservation::lock(&directory_lock)?;
                     // A fence is never issued before this name is synchronized.
-                    let lock = root.open_regular(&root.path().join(".writer.lock"))?;
+                    let lock = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
                     reservation::lock(&lock)?;
                     let lock = crate::disk::FenceOwner::new(lock, Some(directory_lock));
                     reservation::verify_writer(&root, &lock)?;
@@ -276,7 +277,10 @@ impl Engine {
                 let seal = decode_seal(
                     &handle
                         .root
-                        .read_bytes(&member.disk.root.join("disk.json"), MAX_METADATA)?,
+                        .read_bytes(
+                            &member.disk.root.join(layout::DISK_IDENTITY.as_path()),
+                            MAX_METADATA,
+                        )?,
                 )?;
                 validate_stored_seal(&seal, &handle.seal)
             }
@@ -298,7 +302,7 @@ pub(super) fn inspect_new_root(
         .entries(root.path())?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(fs_error)?;
-    let stored = root.open_optional_read_regular(&root.path().join("disk.json"))?;
+    let stored = root.open_optional_read_entry(&layout::DISK_IDENTITY)?;
     let bound = match stored {
         None => false,
         Some(file) => {
@@ -327,9 +331,8 @@ pub(super) fn inspect_new_root(
         } else {
             match name.as_os_str().to_str() {
                 Some(value) if value == reservation_name => (),
-                Some(".writer.lock") => {
-                    if root
-                        .open_regular(&root.path().join(".writer.lock"))?
+                Some(_) if name == *layout::DISK_WRITER_LOCK => {
+                    if root.open_regular_entry(&layout::DISK_WRITER_LOCK)?
                         .metadata()?
                         .len()
                         != 0
@@ -340,7 +343,7 @@ pub(super) fn inspect_new_root(
                         ));
                     }
                 }
-                Some("disk.json") if bound => (),
+                Some(_) if name == *layout::DISK_IDENTITY && bound => (),
                 Some("metadata") if bound => (),
                 _ => {
                     return Err(Error::new(

@@ -1,6 +1,7 @@
 //! Pending control metadata is deliberately outside normal disk resources and
 //! active journals. These receipts grant neither joint authority nor readiness.
 use super::*;
+use crate::persist::layout;
 use archive::PendingControlArchive;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::{
@@ -307,7 +308,11 @@ impl Engine {
             self.failpoint(&format!("before_membership_pending_seal_{}", sealed + 1))?;
             resource
                 .root
-                .write_json(&disk.root.join("disk.json"), &resource.seal, false)?;
+                .write_json(
+                    &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                    &resource.seal,
+                    false,
+                )?;
             #[cfg(feature = "fault-injection")]
             {
                 sealed += 1;
@@ -399,8 +404,9 @@ fn admit_member_directory(
                 root.open_read_regular(&path.join(name.as_path()))?;
             } else if !matches!(
                 name.as_os_str().to_str(),
-                Some("member.json" | "control-archive" | "objects" | "journal.bin" | "joint")
-            ) {
+                Some("member.json" | "control-archive" | "objects" | "joint")
+            ) && name != *layout::JOURNAL
+            {
                 return Err(Error::new(
                     ErrorCode::UnsafePath,
                     "pending member contains unrelated entries",

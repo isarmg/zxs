@@ -3,6 +3,7 @@
 //! a target-only DiskWriter; no ordinary Engine or source authority is changed.
 use super::*;
 use crate::engine::membership_transition::pending::activation::BackupWriterIoConfig;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 
 struct WriterIo {
@@ -44,7 +45,7 @@ impl Target {
     fn named_writer(&self) -> Result<File> {
         let file = self
             .root
-            .open_regular(&self.root.path().join(".writer.lock"))?;
+            .open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&file).map_err(fs_error)?;
         if file.metadata()?.len() != 0 {
             return Err(Error::new(

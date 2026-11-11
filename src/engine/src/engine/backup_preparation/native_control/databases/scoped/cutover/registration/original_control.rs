@@ -5,6 +5,7 @@ use crate::engine::membership_transition::{
     AdmittedBackupDecision, BackupFirstPublicationHash, PreparedBackupFirstCandidate,
     PreparedBackupFirstPublication, pending::activation::PreparedBackupTargetLocator,
 };
+use crate::persist::layout;
 use target_locator::store::{Inventory, Presence};
 
 const INTENT: &str = "backup-preparation/original-generation-control.json";
@@ -164,7 +165,7 @@ impl Plan {
     ) -> Result<BackupOriginalControlMemberReport> {
         let disk = self.material.original_disk(identity)?;
         let physical = PhysicalBinding::of(root)?;
-        let seal = root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?;
+        let seal = root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?;
         let anchor = root.read_bytes(
             &root.path().join("metadata/pool-membership/config.json"),
             MAX_METADATA,
@@ -187,7 +188,7 @@ impl Plan {
                     disk,
                     self.material.authority_hash(),
                 )
-                .join("journal.bin");
+                .join(layout::JOURNAL.as_path());
             if preparation_path_exists(root, &journal)? {
                 return Err(invalid(
                     "original data-only Backup root cannot acquire a metadata journal",
@@ -259,7 +260,7 @@ impl Plan {
             ));
         }
         let existing = if member.journal.is_some() {
-            vec![self.material.original_scopes()[1].join("journal.bin")]
+            vec![self.material.original_scopes()[1].join(layout::JOURNAL.as_path())]
         } else {
             Vec::new()
         };

@@ -1,6 +1,7 @@
 //! Immutable same-operation SYSTEM selection. These bytes only restrict native
 //! re-verification; neither a selected plan nor a completion is an authority.
 use super::*;
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
 
@@ -232,7 +233,7 @@ impl PlanStore {
     }
 }
 fn require_writer(system: &DiskRoot, engine: &Engine) -> Result<()> {
-    let named = system.open_regular(&system.path().join("writer.lock"))?;
+    let named = system.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
     if FileIdentity::from_fd(&named)? != engine._locks.system_identity()? {
         return Err(invalid("Backup expansion lost its original SYSTEM writer"));
     }

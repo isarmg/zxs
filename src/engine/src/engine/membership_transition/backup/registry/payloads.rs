@@ -4,6 +4,7 @@
 use super::*;
 use crate::engine::membership_transition::PreparedBackupFirstCandidate;
 use crate::file_stamp::FileStamp;
+use crate::persist::layout;
 use std::path::PathBuf;
 
 const MAX_RECEIPTS: usize = 65_536;
@@ -23,7 +24,7 @@ impl PayloadSource {
         engine._locks.verify_disk(disk, root)?;
         let identity =
             admission::member_identity(&engine.config, disk, admission::verify_named_root(root)?);
-        let seal = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+        let seal = root.read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
         validate_stored_seal(&decode_seal(&seal)?, &handle.seal)?;
         Ok(Self {
             root: root.private_child(root.path())?,
@@ -38,7 +39,7 @@ impl PayloadSource {
         self.identity.verify_physical_root(&self.root)?;
         if self
             .root
-            .read_bytes(&self.disk.root.join("disk.json"), MAX_METADATA)?
+            .read_bytes(&self.disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?
             != self.seal
         {
             return Err(Error::new(

@@ -1,6 +1,7 @@
 //! One immutable choice per intent and actual member root. Joint, certified
 //! Abort and backup registry/placement share this name; staging objects and status caches never vote.
 use super::*;
+use crate::persist::layout;
 use pending::MemberIdentity;
 use platform_io::fs_safety::{AtomicFile, EntryName, linux::FileIdentity};
 use std::path::PathBuf;
@@ -920,7 +921,7 @@ fn reject_legacy_joint(disk: &DiskRoot, transition: &str) -> Result<()> {
         }
         disk.directory_identity(&path)?;
     }
-    if disk.optional_metadata(&path.join("journal.bin"))?.is_some() {
+    if disk.optional_metadata(&path.join(layout::JOURNAL.as_path()))?.is_some() {
         return Err(Error::new(
             ErrorCode::RecoveryRequired,
             "legacy joint journal cannot authorize or coexist with a shared decision slot",

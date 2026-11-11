@@ -3,6 +3,7 @@
 use crate::engine::provenance::MetadataIntegrity;
 use crate::file_stamp::FileStamp;
 use crate::{disk::*, journal::*, *};
+use crate::persist::layout;
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -157,7 +158,7 @@ impl PayloadPreparation {
             }
             let identity = (|| {
                 let handle = resources.get(disk)?;
-                let path = disk.root.join("disk.json");
+                let path = disk.root.join(layout::DISK_IDENTITY.as_path());
                 let seal = HeldFile::open(&handle.root, &path)?;
                 let stored = decode_seal(&handle.root.read_bytes(&path, MAX_METADATA)?)?;
                 validate_stored_seal(&stored, &handle.seal)?;

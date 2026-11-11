@@ -1,5 +1,6 @@
 //! Original roots admitted by the live frozen Engine, not by target JSON.
 use super::*;
+use crate::persist::layout;
 
 struct OriginalRoot {
     root: DiskRoot,
@@ -14,7 +15,7 @@ impl OriginalRoot {
         if PhysicalBinding::of(&DiskRoot::open(self.root.path())?)? != self.physical
             || self
                 .root
-                .read_bytes(&self.root.path().join("disk.json"), MAX_METADATA)?
+                .read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?
                 != self.seal
         {
             return Err(Error::new(
@@ -44,7 +45,7 @@ impl Sources {
             ));
         }
         let writer = engine._locks.system_identity()?;
-        let named = system.open_read_regular(&system.path().join("writer.lock"))?;
+        let named = system.open_read_entry(&layout::CONTROL_WRITER_LOCK)?;
         if platform_io::fs_safety::linux::FileIdentity::from_metadata(&named.metadata()?) != writer
         {
             return Err(Error::new(
@@ -63,7 +64,7 @@ impl Sources {
             let lease = root.io_binding()?.admit()?;
             engine._locks.verify_disk(disk, root)?;
             let physical = PhysicalBinding::of(root)?;
-            let seal = root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?;
+            let seal = root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&seal)?, &handle.seal)?;
             let source = OriginalRoot {
                 root: root.private_child(root.path())?,
@@ -112,7 +113,7 @@ impl Sources {
                 "SYSTEM common-database root changed",
             ));
         }
-        let named = system.open_read_regular(&system.path().join("writer.lock"))?;
+        let named = system.open_read_entry(&layout::CONTROL_WRITER_LOCK)?;
         let writer = platform_io::fs_safety::linux::FileIdentity::from_metadata(&named.metadata()?);
         if self.system_writer
             != (PhysicalBinding {

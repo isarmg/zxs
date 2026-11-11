@@ -1,4 +1,4 @@
-"""Exercise actual full-matrix output and preserve main-push and manual, non-publishing CI.
+"""Exercise targeted main pushes and explicit manual full CI.
 
 These are policy and retained-recipe regressions, not Rust/browser/SDK execution.
 """
@@ -65,8 +65,8 @@ class DevelopmentCiPolicy(unittest.TestCase):
             crons = re.findall(r"^    - cron: '([^']+)'$", events, flags=re.MULTILINE)
             self.assertEqual(crons, [])
         receipt = POLICY.receipt()
-        self.assertTrue(receipt['automatic_triggers'])
-        self.assertEqual(receipt['push_branches'], ['main'])
+        self.assertFalse(receipt['automatic_triggers'])
+        self.assertEqual(receipt['push_branches'], [])
         self.assertIn('  push:\n    branches: [main]\n', (ROOT / '.github/workflows/ci.yml').read_text())
         self.assertNotIn('scheduled_workflow', receipt)
         self.assertNotIn('schedule', receipt)
@@ -97,13 +97,13 @@ class DevelopmentCiPolicy(unittest.TestCase):
         self.assertIn('id: suites\n        run: python3 .github/scripts/development-ci.py select', static)
         command = [sys.executable, str(SCRIPT), 'select']
         # Inputs/environment/event data cannot shrink or reuse the complete matrix.
-        for event in ('schedule', 'push', 'pull_request', 'workflow_dispatch', 'workflow_call', ''):
+        for event in ('workflow_dispatch',):
             with self.subTest(event=event):
                 output = self.root / f'{event or "missing"}.out'
                 summary = self.root / f'{event or "missing"}.summary'
                 event_path = self.root / 'event.json'
                 event_path.write_text(json.dumps({'schedule': '17 * * * *',
-                                                  'inputs': {'full_ci': True, 'suite': 'workspace'}}))
+                                                  'inputs': {'scope': 'full'}}))
                 env = dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary),
                            GITHUB_EVENT_NAME=event, GITHUB_EVENT_PATH=str(event_path),
                            INPUT_FULL_CI='true', ZXS_FULL_CI='1', CI_SUITES=json.dumps(['web']))
@@ -119,6 +119,19 @@ class DevelopmentCiPolicy(unittest.TestCase):
                                  + 'matrix=' + json.dumps(POLICY.execution_matrix(), separators=(',', ':')) + '\n')
                 self.assertIn('selected, not yet passed; Release paused', summary.read_text())
                 POLICY.check_receipt(actual)
+
+    def test_automatic_and_default_manual_events_cannot_emit_full_matrix(self):
+        event_path = self.root / 'event.json'
+        output = self.root / 'matrix.out'
+        for event, inputs in [('push', {'scope': 'full'}), ('workflow_dispatch', {}),
+                              ('workflow_dispatch', {'scope': 'targeted'})]:
+            event_path.write_text(json.dumps({'inputs': inputs}))
+            env = dict(os.environ, GITHUB_OUTPUT=str(output),
+                       GITHUB_EVENT_PATH=str(event_path), GITHUB_EVENT_NAME=event)
+            result = subprocess.run([sys.executable, str(SCRIPT), 'select'],
+                                    env=env, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
 
     def test_unrecognized_full_mode_fails_without_any_matrix_output(self):
         output = self.root / 'forbidden.out'
@@ -145,13 +158,16 @@ class DevelopmentCiPolicy(unittest.TestCase):
     def test_all_ci_jobs_run_with_original_full_budgets(self):
         ci = jobs((ROOT / '.github/workflows/ci.yml').read_text())
         self.assertEqual(set(ci), {'static', 'tests', 'web-production', 'browser-smoke',
-                                   'smb-sdk', 'phase-one-core', 'workspace-coverage'})
+                                   'smb-sdk', 'phase-one-core', 'workspace-coverage', 'targeted'})
         for name, body in ci.items():
             if name == 'workspace-coverage':
-                self.assertIn("    if: always() && needs.static.result == 'success'\n", body)
+                self.assertIn("    if: always() && (" + POLICY.FULL_CONDITION + ") && needs.static.result == 'success'\n", body)
                 self.assertNotIn('continue-on-error:', body)
+            elif name == 'targeted':
+                self.assertIn("    if: github.event_name == 'push' || inputs.scope == 'targeted'\n", body)
             else:
-                self.assertNotRegex(body, r'(?m)^    (if|continue-on-error):')
+                self.assertIn('    if: ' + POLICY.FULL_CONDITION + '\n', body)
+                self.assertNotIn('continue-on-error:', body)
         self.assertIn('    timeout-minutes: 10\n', ci['static'])
         self.assertIn("    timeout-minutes: ${{ matrix.suite == 'workspace' && 120 || "
                       "matrix.suite == 'foundation-crypto' && 60 || 30 }}\n", ci['tests'])
@@ -203,7 +219,7 @@ class DevelopmentCiPolicy(unittest.TestCase):
             ('  tests:\n', '  tests:\n    continue-on-error: true\n'),
             ('  static:\n', '  static:\n    if: false\n'),
             ('  static:\n', "  static:\n    if: github.event_name == 'workflow_dispatch'\n"),
-            ('  tests:\n', "  tests:\n    if: github.event_name == 'workflow_dispatch'\n"),
+            ('  targeted:\n', '  targeted:\n    if: false\n'),
             ('      fail-fast: false\n', '      fail-fast: false\n      max-parallel: 1\n'),
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"', '        run: true'),
             ('        run: bash .github/scripts/check.sh "${{ matrix.suite }}"',

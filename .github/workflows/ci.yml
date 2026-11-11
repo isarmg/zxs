@@ -1,10 +1,17 @@
-# Full CI: main pushes and manual runs; pull requests, schedules and Release remain paused.
+# Main pushes run a reviewed change plan; full CI requires explicit manual selection.
 name: CI
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Explicitly select targeted tests or the complete CI workload
+        type: choice
+        required: true
+        default: targeted
+        options: [targeted, full]
 
 permissions:
   contents: read
@@ -20,6 +27,7 @@ env:
 
 jobs:
   static:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     name: Static workflow and tooling regressions (no Rust)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -30,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Every main push and manual run executes the complete matrix without reuse.
+          # Explicit manual full runs execute the complete matrix without reuse.
           fetch-depth: 2
       - name: Check workflows, source governance and script regressions
         run: bash .github/scripts/check.sh static
@@ -39,6 +47,7 @@ jobs:
         run: python3 .github/scripts/development-ci.py select
 
   tests:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     name: Tests (${{ matrix.suite }}, ${{ matrix.shard }})
     needs: static
     runs-on: ubuntu-24.04
@@ -137,6 +146,7 @@ jobs:
           retention-days: 7
 
   web-production:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     name: Production WASM build
     # Compile in parallel with preflight. Browser acceptance still requires
     # static checks, this build and the same-commit Samba SDK job to succeed.
@@ -179,6 +189,7 @@ jobs:
           retention-days: 7
 
   browser-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     name: "Standalone ELF: Debian 13 server + host Chrome"
     needs: [static, web-production, smb-sdk]
     runs-on: ubuntu-24.04
@@ -347,10 +358,12 @@ jobs:
           retention-days: 7
 
   smb-sdk:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     needs: static
     uses: ./.github/workflows/smb-sdk.yml
 
   phase-one-core:
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full'
     name: Phase-one core admission and persistence
     # Run independently of the long Engine workspace shard and browser jobs.
     needs: static
@@ -387,7 +400,7 @@ jobs:
   workspace-coverage:
     name: Complete workspace shard coverage
     needs: [static, tests]
-    if: always() && needs.static.result == 'success'
+    if: always() && (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') && needs.static.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -401,3 +414,36 @@ jobs:
           path: target/workspace-shards/collected
       - name: Prove complete non-overlapping workspace execution
         run: python3 .github/scripts/check-workspace-shards.py verify target/workspace-shards/collected
+
+  targeted:
+    name: Selected change tests
+    if: github.event_name == 'push' || inputs.scope == 'targeted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate change scope before building
+        run: bash .github/scripts/check.sh targeted-plan
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Run selected tests and retain exact execution evidence
+        run: bash .github/scripts/check.sh targeted
+      - name: Retain selected tests and unexecuted scope
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: targeted-tests-${{ github.sha }}
+          path: |
+            target/targeted-ci/summary.json
+            target/targeted-ci/*.log
+          if-no-files-found: error
+          retention-days: 7

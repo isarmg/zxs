@@ -1,6 +1,7 @@
 //! Read-only, complete frozen-archive admission for the abort evidence candidate.
 //! No original or target device path is opened, and no archive bytes are changed.
 use super::*;
+use crate::persist::layout;
 
 pub(in crate::engine::membership_transition) struct ArchivedAbortMember {
     pub(in crate::engine::membership_transition) seal: DiskSeal,
@@ -61,7 +62,7 @@ impl VerifiedAbortArchive {
         for disk in intent.origin.config().metadata_members() {
             let member: ArchivedMember = json_codec::from_value(entries[&disk.disk_id].clone())?;
             let bytes = store.root.read_bytes(
-                &store.member_directory(disk, namespace).join("disk.json"),
+                &store.member_directory(disk, namespace).join(layout::DISK_IDENTITY.as_path()),
                 MAX_METADATA,
             )?;
             // This read follows complete F admission; authenticate it again
@@ -162,7 +163,7 @@ impl PortableAbortArchive {
             },
         );
         identity.verify_physical_root(root)?;
-        let stored = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let stored = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         let mut expected = original.seal.clone();
         if stored.format != expected.format {
             expected.format = DiskSealFormat::MembershipGeneration {
@@ -174,7 +175,7 @@ impl PortableAbortArchive {
             && root
                 .open_optional_read_regular(
                     &pending::activation::generation_directory(disk, generation)
-                        .join("journal.bin"),
+                        .join(layout::JOURNAL.as_path()),
                 )?
                 .is_none()
         {
@@ -194,7 +195,10 @@ impl PortableAbortArchive {
         })?;
         let member: ArchivedMember = json_codec::from_value(entries[&disk.disk_id].clone())?;
         let path = match intent.origin.predecessor() {
-            Some(hash) => pending::activation::generation_directory(disk, hash).join("journal.bin"),
+            Some(hash) => {
+                pending::activation::generation_directory(disk, hash)
+                    .join(layout::JOURNAL.as_path())
+            }
             None => crate::journal::log_path(disk),
         };
         let (bytes, hash) =
@@ -337,7 +341,9 @@ impl PortableAbortArchive {
                 Ok((
                     disk.disk_id.clone(),
                     store.root.read_bytes(
-                        &store.member_directory(disk, namespace).join("disk.json"),
+                        &store
+                            .member_directory(disk, namespace)
+                            .join(layout::DISK_IDENTITY.as_path()),
                         MAX_METADATA,
                     )?,
                 ))

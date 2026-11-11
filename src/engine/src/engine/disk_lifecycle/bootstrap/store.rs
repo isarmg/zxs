@@ -4,6 +4,7 @@ pub(in crate::engine) use root_extension::ChainRootPlanInfo;
 pub(crate) use root_extension::PreparedRootExtension;
 
 use super::*;
+use crate::persist::layout;
 #[path = "readmission.rs"]
 mod readmission;
 #[path = "stop_publication.rs"]
@@ -17,7 +18,6 @@ use std::{io::Read, os::unix::fs::MetadataExt};
 pub(in crate::engine) use stop_publication::{PreparedStop, RetirementStopSnapshot};
 
 const HEAD_FILE: &str = "head.json";
-const LOCK_FILE: &str = "writer.lock";
 
 /// The supplied descriptor must belong to protected SYSTEM state, not a storage
 /// root. No method reopens its diagnostic pathname. The caller establishes the
@@ -63,8 +63,7 @@ impl BootstrapStore {
             .map_err(|e| BootstrapError::fs("held control directory", e))?;
         let reader = OpenAt2Root::from_directory(reader, MountPolicy::SameMount)
             .map_err(|e| BootstrapError::fs("held control reader", e))?;
-        let name = name(LOCK_FILE)?;
-        let lock = AdvisoryLock::acquire(&directory, &name.as_relative())
+        let lock = AdvisoryLock::acquire(&directory, &layout::CONTROL_WRITER_LOCK.as_relative())
             .map_err(|e| BootstrapError::fs("control lock", e))?;
         Ok(Self {
             directory,
@@ -219,7 +218,8 @@ impl BootstrapStore {
                 .to_str()
                 .ok_or(BootstrapError::ManagementOnly("non-UTF-8 control entry"))?;
             match value {
-                HEAD_FILE | LOCK_FILE => (),
+                HEAD_FILE => (),
+                _ if entry == *layout::CONTROL_WRITER_LOCK => (),
                 _ => {
                     if AtomicFile::is_temporary_name(&entry) {
                         return Err(BootstrapError::ManagementOnly(

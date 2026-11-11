@@ -9,6 +9,7 @@ use crate::engine::membership_transition::decision::DecisionKind;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
 };
+use crate::persist::layout;
 use decision::{DecisionReceipt, DecisionStore};
 use pending::{MemberIdentity, admission};
 use std::{io::Read, sync::atomic::AtomicBool};
@@ -94,7 +95,7 @@ impl Engine {
                 &disk,
                 admission::verify_named_root(admitted)?,
             );
-            let seal = admitted.read_bytes(&admitted.path().join("disk.json"), MAX_METADATA)?;
+            let seal = admitted.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&seal)?, &handle.seal)?;
             let evidence = OriginalMember {
                 identity,
@@ -368,7 +369,7 @@ impl Source {
         self.evidence.identity.verify_physical_root(&self.root)?;
         if self
             .root
-            .read_bytes(&self.root.path().join("disk.json"), MAX_METADATA)?
+            .read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?
             != self.seal
         {
             return Err(Error::new(

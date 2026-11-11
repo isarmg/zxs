@@ -1,6 +1,7 @@
 //! Preserve the actual published log at its generation address, and consume
 //! Current from ordinary immutable objects. No active selector or Stop changes.
 use super::*;
+use crate::persist::layout;
 const SELECTED: &str = "chain-generation-log-selected.json";
 const COMPLETE: &str = "chain-generation-log.json";
 const OWNER: &str = "chain-log-owner.json";
@@ -214,8 +215,9 @@ impl<'a, 'm> Install<'a, 'm> {
                 selector::verify_generation_entry(self.management, generation, &self.manifest)?;
             } else if !matches!(
                 name.as_os_str().to_str(),
-                Some(OWNER | INSTALLED | "journal.bin")
-            ) {
+                Some(OWNER | INSTALLED)
+            ) && name != *layout::JOURNAL
+            {
                 return Err(Error::new(
                     ErrorCode::UnsafePath,
                     "generation log directory contains unrelated material",
@@ -244,7 +246,10 @@ impl<'a, 'm> Install<'a, 'm> {
                 "generation log lost its original owner selection",
             ));
         }
-        let bytes = generation.read_bytes(&self.generation_path.join("journal.bin"), 16 * 1024)?;
+        let bytes = generation.read_bytes(
+            &self.generation_path.join(layout::JOURNAL.as_path()),
+            16 * 1024,
+        )?;
         if bytes != self.manifest.journal {
             return Err(Error::new(
                 ErrorCode::LogFork,
@@ -335,7 +340,7 @@ impl<'a, 'm> Install<'a, 'm> {
                 .install_generation_objects(root, self.prepared.disk())?;
             self.reader.install_generation_publication()?;
             generation.write_atomic(
-                &self.generation_path.join("journal.bin"),
+                &self.generation_path.join(layout::JOURNAL.as_path()),
                 &self.manifest.journal,
                 false,
             )?;

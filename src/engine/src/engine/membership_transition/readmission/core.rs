@@ -4,6 +4,7 @@ use super::super::archive::persistent::abort_view::ArchivedAbortMember;
 use super::*;
 use crate::engine::disk_registry::objects::{GraphObjects, add_objects, read_objects};
 use crate::engine::membership_transition::decision::DecisionKind;
+use crate::persist::layout;
 
 const PROPOSAL_KIND: &str = "disk-readmission-proposal";
 const ACCEPTANCE_KIND: &str = "disk-readmission-acceptance";
@@ -398,7 +399,7 @@ impl ReadmissionCore {
         let expected = if disk.disk_id == request.target.disk_id {
             request.directory.verify_physical_root(root)?;
             let stored =
-                decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+                decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
             let mut expected = request.original_seal.clone();
             if stored.format != expected.format {
                 expected.format = DiskSealFormat::MembershipGeneration {

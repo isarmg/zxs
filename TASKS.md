@@ -4,11 +4,13 @@
 
 ## 当前 CI 与失败闭环
 
+- [ ] 验证按实际变更选择的 GitHub 定向 CI：本批 engine 的 12 个模块前缀、platform 的 2 个模块和 4 组 CI 回归，核对当前编译库存、非空选择、逐测试完成与未执行清单。完整 workspace、ignored、跨特性及其余恢复场景尚未验证；后续语义变化须审阅并扩展持久路径映射。
+
 - [ ] GitHub CI 与浏览器验证 D 审阅的准确页面／节点／读取代数／会话绑定：旧行及旧续页回调不得改写替换后的面板，分页范围完整，恢复完成后保持第一页重读与原未知结果围栏。超预算 D 的分页／紧凑恢复另行实现，尚未完成。
 
 - [ ] GitHub CI 验证合法同 scope alias 逐路径审计与全文件 D 生命周期，并验证四类软删除／恢复全局活动投影：原路径、不同主体、准确序号／节点、整批每文件一事件、精确重放与跨仓移动后冷开保留。
 
-- [ ] 核对当前 main 准确提交的全量 CI，继续处理 #1170 及后继运行的失败；完成 static、quality、contracts、security、全部 13 个 workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收。
+- [ ] 按每批实际变更只运行相关定向测试，核对准确 main 提交的选择范围、当前二进制库存与逐项完成证据；继续处理已知失败。未选择的 static、quality、contracts、security、workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收仍未完成，不以定向通过替代完整覆盖。
 - [ ] 验证 13 片的当前产物／测试库存、分配并集与互斥、完整回执、11 个 I/O 门禁和三项显式 ignored 验收；验证参考配方不受分片环境污染、保存配方可达性及失败证据。完成各功能项仍待执行的原生、集成和浏览器测试。
 - [ ] GitHub CI 验证新版 T02 计数棘轮：14 个第一方范围、24 项指标、新基线、接线与排除范围；增长和未更新基线的下降均拒绝。核对旧六目录口径的待验记录由新版覆盖。
 - [ ] GitHub CI 验证新版 T13 磁盘满映射：`ErrorKind::StorageFull` 保持 `NO_SPACE` 与来源，`QuotaExceeded` 继续 `IO_ERROR`；errno 28 回归仅 Linux，ErrorKind 回归覆盖所有目标。
@@ -25,6 +27,8 @@
 - [ ] 复验待验的格式／Clippy／类型及接线修复，覆盖 SQLite 新来源与特性图、安全公告、依赖／许可材料、CLI golden、私有目录夹具、独立 mount namespace、helper publication 故障与真实 SDK 编译诊断。
 
 ## 新版规范的底层重构
+
+- [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。
 
 - [ ] GitHub CI 验证 T05 Generation／Sequence／Principal／Timestamp 定义和既有固定字节向量：完整 u64 字符串、MAX 耗尽、主体非空及原 Unicode／空白、Unix 整秒和 epoch 前错误来源。两个集中 next 保留可失败 checked_add；尚未迁移使用点或执行 T16 时钟迁移。
 

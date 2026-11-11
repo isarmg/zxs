@@ -1,5 +1,6 @@
 //! Identical immutable envelopes on held system and metadata-member roots.
 use super::*;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::{fs::File, os::unix::fs::FileExt, sync::Arc};
 
@@ -96,7 +97,7 @@ impl Store {
             Owner::System {
                 writer_identity, ..
             } => {
-                let writer = named.open_regular(&named.path().join("writer.lock"))?;
+                let writer = named.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
                 if FileIdentity::from_fd(&writer)? != *writer_identity {
                     return Err(Error::new(
                         ErrorCode::DiskIdentityMismatch,

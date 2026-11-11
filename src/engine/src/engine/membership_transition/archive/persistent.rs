@@ -2,6 +2,7 @@
 //! target readiness, complete evacuation archive, or a grant of write authority.
 use super::*;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use platform_io::fs_safety::{AdvisoryLock, RelativePath};
 use std::path::{Path, PathBuf};
@@ -360,12 +361,12 @@ impl ArchiveStore {
         }
         let seal = handle
             .root
-            .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
         validate_stored_seal(&decode_seal(&seal)?, &handle.seal)?;
         self.root
             .write_atomic(&directory.join("config.json"), &config, false)?;
         self.root
-            .write_atomic(&directory.join("disk.json"), &seal, false)?;
+            .write_atomic(&directory.join(layout::DISK_IDENTITY.as_path()), &seal, false)?;
         self.copy_journal(
             &directory,
             handle
@@ -394,7 +395,7 @@ impl ArchiveStore {
         let digest = blake3::Hash::from_hex(&expected.content_hash)
             .expect("invariant: journal inspection produced BLAKE3 hex");
         self.root.copy_verified_bytes_synced(
-            &directory.join("journal.bin"),
+            &directory.join(layout::JOURNAL.as_path()),
             &mut input,
             platform_io::payload::Expectation {
                 bytes: expected.bytes,
@@ -503,7 +504,7 @@ impl ControlSource for ArchivedSource<'_> {
             &self
                 .store
                 .member_directory(disk, self.namespace.as_deref())
-                .join("journal.bin"),
+                .join(layout::JOURNAL.as_path()),
         )
     }
 }
@@ -557,7 +558,8 @@ impl Engine {
         let path = self.managed_control_archive_path(&fence.intent);
         self.require_control_archive_location(&path, &fence.intent)?;
         let system = DiskRoot::open(&self.root)?;
-        let named_lock = system.open_read_regular(&self.root.join("writer.lock"))?;
+        let named_lock =
+            system.open_read_regular(&self.root.join(layout::CONTROL_WRITER_LOCK.as_path()))?;
         if FileIdentity::from_metadata(&named_lock.metadata()?) != self._locks.system_identity()? {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
@@ -585,7 +587,8 @@ impl Engine {
             ));
         }
         let system = DiskRoot::open(&self.root)?;
-        let lock = system.open_read_regular(&self.root.join("writer.lock"))?;
+        let lock =
+            system.open_read_regular(&self.root.join(layout::CONTROL_WRITER_LOCK.as_path()))?;
         if FileIdentity::from_metadata(&lock.metadata()?) != self._locks.system_identity()?
             || identity == FileIdentity::from_fd(system.directory(system.path())?)?
         {
@@ -626,7 +629,8 @@ impl Engine {
             // `named` drops before its activity on success and every error.
         }
         let system = DiskRoot::open(&self.root)?;
-        let named_lock = system.open_regular(&self.root.join("writer.lock"))?;
+        let named_lock =
+            system.open_regular(&self.root.join(layout::CONTROL_WRITER_LOCK.as_path()))?;
         if FileIdentity::from_fd(named_lock)? != self._locks.system_identity()?
             || destination_identity == FileIdentity::from_fd(system.directory(system.path())?)?
         {
@@ -976,13 +980,13 @@ impl ArchiveStore {
     ) -> Result<()> {
         let from = source.member_directory(disk, namespace);
         let to = self.member_directory(disk, namespace);
-        for name in ["config.json", "disk.json"] {
+        for name in [Path::new("config.json"), layout::DISK_IDENTITY.as_path()] {
             let bytes = source.root.read_bytes(&from.join(name), MAX_METADATA)?;
             self.root.write_atomic(&to.join(name), &bytes, false)?;
         }
         self.copy_journal(
             &to,
-            source.root.open_read_regular(&from.join("journal.bin"))?,
+            source.root.open_read_regular(&from.join(layout::JOURNAL.as_path()))?,
             &member.journal,
         )
     }
@@ -1186,7 +1190,7 @@ fn verify_member(
         &mut |bytes| observe(bytes),
     )?;
     let seal_bytes = store.root.read_bytes_observed(
-        &directory.join("disk.json"),
+        &directory.join(layout::DISK_IDENTITY.as_path()),
         MAX_METADATA,
         &mut |bytes| observe(bytes),
     )?;
@@ -1455,7 +1459,7 @@ impl ControlSource for ActiveObjects<'_> {
             &self
                 .store
                 .member_directory(disk, self.namespace.as_deref())
-                .join("journal.bin"),
+                .join(layout::JOURNAL.as_path()),
         )
     }
 }

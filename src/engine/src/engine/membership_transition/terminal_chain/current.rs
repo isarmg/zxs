@@ -2,6 +2,7 @@
 //! Ownership remains stopped management plus the exact original target lock.
 use super::*;
 use crate::engine::disk_registry::current::CurrentNamespaces;
+use crate::persist::layout;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -275,7 +276,8 @@ impl TerminalChainPublishedCurrent<'_> {
             &self.selection.hash()?,
         )
         .join(activation::TARGET_DIRECTORY)
-        .join("first-publication/journal.bin");
+        .join("first-publication")
+        .join(layout::JOURNAL.as_path());
         let bytes = self.held.root.read_bytes(&path, 16 * 1024)?;
         self.proof.verify_log_image(&bytes)?;
         self.recheck()?;

@@ -12,6 +12,7 @@ pub(in crate::engine::membership_transition::pending::activation) use exit_stop:
 
 #[cfg(test)]
 use crate::engine::disk_lifecycle::bootstrap::BootstrapError;
+use crate::persist::layout;
 
 #[cfg(test)]
 #[derive(Debug, error_definition::Error)]
@@ -581,7 +582,7 @@ fn verify_held_generation_from(
             let expected = identity_at(config, &disk, &held.root.directory(held.root.path())?)?;
             let seal = held
                 .root
-                .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+                .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
             predecessor_seal_matches(config, &disk, &held.root, &seal, &expected)?;
             if portable.exit_registry().is_some()
                 || matches!(source, GenerationEvidenceSource::CertifiedAbort)
@@ -758,7 +759,10 @@ fn verify_held_genesis(
             let stored = decode_seal(
                 &held
                     .root
-                    .read_bytes(&held.disk.root.join("disk.json"), MAX_METADATA)?,
+                    .read_bytes(
+                        &held.disk.root.join(layout::DISK_IDENTITY.as_path()),
+                        MAX_METADATA,
+                    )?,
             )?;
             validate_stored_seal(&stored, &expected)?;
             if selected.is_none() {

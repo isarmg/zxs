@@ -1,5 +1,6 @@
 //! Actual original-member bytes at the chosen fence, never reconstructed logs.
 use super::*;
+use crate::persist::layout;
 use std::path::{Path, PathBuf};
 
 const MAX_MEMBER_JOURNAL: usize = 16 * 1024 * 1024;
@@ -55,11 +56,11 @@ impl BackupFrozenControl {
             if expected.journal.bytes > MAX_MEMBER_JOURNAL as u64 {
                 return Err(budget());
             }
-            let mut read = |name: &str, maximum: usize| -> Result<Vec<u8>> {
+            let mut read = |name: &Path, maximum: usize| -> Result<Vec<u8>> {
                 preparation_checkpoint(stop)?;
                 let data = bytes(
                     disk,
-                    Path::new(name),
+                    name,
                     maximum.min(MAX_ORIGINAL_BYTES - used),
                 )?;
                 used = used.checked_add(data.len()).ok_or_else(budget)?;
@@ -68,11 +69,11 @@ impl BackupFrozenControl {
                 }
                 Ok(data)
             };
-            let config = read("config.json", MAX_METADATA)?;
+            let config = read(Path::new("config.json"), MAX_METADATA)?;
             let saved: ValidatedConfig = crate::journal::decode_proof(&config)?;
             original.verify_saved_metadata_membership(&saved)?;
-            let seal = read("disk.json", MAX_METADATA)?;
-            let journal = read("journal.bin", MAX_MEMBER_JOURNAL)?;
+            let seal = read(layout::DISK_IDENTITY.as_path(), MAX_METADATA)?;
+            let journal = read(layout::JOURNAL.as_path(), MAX_MEMBER_JOURNAL)?;
             if blake3::hash(&seal).to_hex().as_str() != expected.seal_hash
                 || journal.len() as u64 != expected.journal.bytes
                 || blake3::hash(&journal).to_hex().as_str() != expected.journal.content_hash
@@ -130,8 +131,10 @@ impl BackupChoiceContext {
             source.lease.check_running()?;
             let path = match name.to_str() {
                 Some("config.json") => disk.root.join("metadata/pool-membership/config.json"),
-                Some("disk.json") => disk.root.join("disk.json"),
-                Some("journal.bin") => crate::journal::log_path(disk),
+                Some(_) if name == layout::DISK_IDENTITY.as_path() => {
+                    disk.root.join(layout::DISK_IDENTITY.as_path())
+                }
+                Some(_) if name == layout::JOURNAL.as_path() => crate::journal::log_path(disk),
                 _ => unreachable!("invariant: fixed original control filenames"),
             };
             let data = source.root.read_bytes(&path, maximum)?;

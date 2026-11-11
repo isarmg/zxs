@@ -1,6 +1,7 @@
 //! Abort promotion retains only the effective original roots and locks.
 use super::*;
 use crate::engine::membership_transition::archive::persistent::PendingControlArchive;
+use crate::persist::layout;
 
 impl Engine {
     pub(in crate::engine::membership_transition) fn install_certified_abort(
@@ -66,7 +67,7 @@ impl Engine {
             self._locks.verify_disk(disk, &handle.root)?;
             let bytes = handle
                 .root
-                .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+                .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;
             let expected = identity_at(&config, disk, &handle.root.directory(handle.root.path())?)?;
             predecessor_seal_matches(&config, disk, &handle.root, &bytes, &expected)?;
             let path = member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY);

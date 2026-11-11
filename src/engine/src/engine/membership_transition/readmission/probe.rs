@@ -2,6 +2,7 @@
 //! It never supplies a voter or permits serving: recovery still reads actual
 //! independent roots and verifies the current configuration's fixed quorum.
 use super::*;
+use crate::persist::layout;
 
 const DIRECTORY: &str = "readmission-probe-admissions";
 
@@ -238,7 +239,7 @@ pub(in crate::engine) fn persist_recovered_admissions(
         let stored = decode_seal(
             &handle
                 .root
-                .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?,
+                .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?,
         )?;
         validate_stored_seal(&stored, &expected)?;
         let certificate = RecoveredProbe {

@@ -1,6 +1,7 @@
 //! Ordinary input is an immutable inventory, admitted through one held root.
 use super::{invalid, io};
 use crate::Result;
+use crate::persist::layout;
 use name_policy::PortablePath;
 use platform_io::fs_safety::{
     RelativePath,
@@ -315,7 +316,7 @@ fn reject_zxs_root(root: &OpenAt2Root, entry_limit: usize) -> Result<()> {
                 || error.raw_os_error() == Some(rustix::io::Errno::NOTDIR.raw_os_error()) => {}
         Err(error) => return Err(error.into()),
     }
-    let file = match root.open_file(&RelativePath::new("disk.json")?, false) {
+    let file = match root.open_file(&layout::DISK_IDENTITY.as_relative(), false) {
         Ok(file) => file,
         Err(platform_io::fs_safety::Error::Io(error))
             if error.kind() == std::io::ErrorKind::NotFound =>

@@ -41,6 +41,7 @@ pub use directory_conversion::{
     PreparedOrdinaryDirectory,
 };
 mod disk;
+mod persist;
 pub mod disk_authority;
 mod engine;
 pub use engine::DetachedHistoryRead;

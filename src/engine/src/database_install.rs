@@ -6,7 +6,7 @@ use crate::{
     disk::{DiskRoot, FileStamp, HeldRegular, InstallExchange},
 };
 use data_serialization::{Deserialize, Serialize};
-use platform_io::fs_safety::linux::FileIdentity;
+use platform_io::fs_safety::{EntryName, linux::FileIdentity};
 use std::path::{Path, PathBuf};
 
 pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
@@ -444,7 +444,8 @@ impl PreparedInstall {
         }
         self.entity.publish_install_preserving(
             &stage,
-            self.source.scope.leaf(),
+            &EntryName::new(self.source.scope.leaf())
+                .expect("invariant: every database scope selects one canonical entry"),
             InstallExchange {
                 staged: &envelope.new,
                 old: envelope.old.as_ref(),

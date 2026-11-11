@@ -1,4 +1,5 @@
 use crate::{disk::*, *};
+use crate::persist::layout;
 use json_codec::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -515,7 +516,7 @@ impl Engine {
         for disk in &config.disks {
             private_dir(&disk.root)?;
             let path = disk.root.canonicalize()?;
-            if path.join("disk.json").try_exists()? {
+            if path.join(layout::DISK_IDENTITY.as_path()).try_exists()? {
                 return Err(Error::new(
                     storage_contract::ErrorCode::DiskAlreadyEnrolled,
                     "disk already contains a managed identity",
@@ -603,7 +604,7 @@ impl Engine {
         for d in &config.disks {
             let disk = disk_resources.get(d)?;
             disk.root
-                .write_json(&d.root.join("disk.json"), &disk.seal, false)?;
+                .write_json(&d.root.join(layout::DISK_IDENTITY.as_path()), &disk.seal, false)?;
             disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
             for p in [
                 "histories",
@@ -979,7 +980,10 @@ impl Engine {
         let mut seals = BTreeMap::new();
         let mut anchor_failure = None;
         for path in disks {
-            let seal = decode_seal(&read_bytes(&path.join("disk.json"), MAX_METADATA)?)?;
+            let seal = decode_seal(&read_bytes(
+                &path.join(layout::DISK_IDENTITY.as_path()),
+                MAX_METADATA,
+            )?)?;
             let path = path.canonicalize()?;
             // Keep every input identity, including rejected anchors. A bad
             // anchor cannot hide a duplicate or a foreign/nonmember disk.
@@ -1096,7 +1100,7 @@ impl Engine {
             }
             let held = DiskRoot::open(&expected.root)?;
             let stored =
-                decode_seal(&held.read_bytes(&held.path().join("disk.json"), MAX_METADATA)?)?;
+                decode_seal(&held.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
             let mut disk = registered.clone();
             disk.root = held.path().to_path_buf();
             let live = identity_at(&config, &disk, &held.directory(held.path())?)?;

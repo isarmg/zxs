@@ -1,5 +1,6 @@
 //! Held SYSTEM storage for immutable activation plans and their selected heads.
 use super::*;
+use crate::persist::layout;
 
 const HEAD: &str = "head.json";
 pub(super) const PLAN: &str = "plan.json";
@@ -125,7 +126,7 @@ impl<P: Plan> PlanStore<P> {
     }
 
     fn verify_writer(system: &DiskRoot, engine: &Engine) -> Result<()> {
-        let named = system.open_regular(&system.path().join("writer.lock"))?;
+        let named = system.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
         if FileIdentity::from_fd(&named)? != engine._locks.system_identity()? {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,

@@ -2,6 +2,7 @@
 //! Saved descriptors never supply filesystem paths or a writer capability.
 use super::*;
 use crate::engine::backup_preparation::native_control::databases::materials::FileReference;
+use crate::persist::layout;
 use std::{collections::BTreeSet, ffi::OsStr, path::Path};
 
 const SELECTED: &str = "backup-target-generation-selected.json";
@@ -94,7 +95,7 @@ pub(in super::super) fn require_staging(root: &DiskRoot, native: Option<&str>) -
             "Backup target locator changed its exact native stage or physical root",
         ));
     }
-    let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+    let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
     if !matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash }
         if authority_hash == &selected.authority_hash)
         || seal.device != selected.physical.device

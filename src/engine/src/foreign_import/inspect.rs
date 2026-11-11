@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::membership_transition::pending::activation;
+use crate::persist::layout;
 use data_serialization::{Serialize, de::DeserializeOwned};
 use std::{collections::BTreeSet, os::unix::fs::MetadataExt, path::Path};
 
@@ -244,7 +245,7 @@ impl ForeignImportPreview {
         )?;
         if self
             .root
-            .read_bytes(&self.root.path().join("disk.json"), MAX_METADATA)?
+            .read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?
             != self.seal_bytes
             || ForeignEvidenceDigest::from_digest(blake3::hash(
                 &self
@@ -289,10 +290,11 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
         inode: local_metadata.ino(),
     };
     let root = DiskRoot::from_directory(path, directory)?;
-    let seal_bytes =
-        root.read_bytes_observed(&root.path().join("disk.json"), MAX_METADATA, &mut |n| {
-            budget.observe(n)
-        })?;
+    let seal_bytes = root.read_bytes_observed(
+        &root.path().join(layout::DISK_IDENTITY.as_path()),
+        MAX_METADATA,
+        &mut |n| budget.observe(n),
+    )?;
     let seal = decode_seal(&seal_bytes)?;
     validate_id(&seal.pool_id, "pool")?;
     validate_id(&seal.disk_id, "disk")?;
@@ -334,7 +336,7 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
             authority_hash
                 .parse::<ForeignEvidenceDigest>()
                 .map_err(|error| Error::from(std::io::Error::other(error)))?;
-            activation::generation_directory(&disk, authority_hash).join("journal.bin")
+            activation::generation_directory(&disk, authority_hash).join(layout::JOURNAL.as_path())
         }
     };
     Ok(OpenedSource {

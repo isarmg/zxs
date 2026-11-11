@@ -10,6 +10,7 @@
 use super::Engine;
 use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -128,7 +129,7 @@ fn path(d: &DiskConfig) -> std::path::PathBuf {
 fn checkpoint_disk<'a>(engine: &'a Engine, disk: &DiskConfig) -> Result<&'a DiskHandle> {
     let held = engine.disk_resources.get(disk)?;
     let stored = decode_seal(&held.root.read_bytes_observed(
-        &disk.root.join("disk.json"),
+        &disk.root.join(layout::DISK_IDENTITY.as_path()),
         MAX_METADATA,
         &mut |_| Ok(()),
     )?)?;

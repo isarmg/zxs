@@ -8,6 +8,7 @@ use crate::{
     decode_strict, disk::MAX_METADATA, engine::membership_transition::terminal::AUTHORITY_KIND,
     journal::AuthenticatedMetadataObject,
 };
+use crate::persist::layout;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::linux::FileIdentity;
 use std::io::Read;
@@ -43,7 +44,7 @@ impl TerminalStore {
     pub(super) fn prepare(engine: &Engine, authority: &TerminalAuthority) -> Result<Self> {
         let system = DiskRoot::open(&engine.root)?;
         system.private_directory(system.path())?;
-        let named = system.open_regular(&system.path().join("writer.lock"))?;
+        let named = system.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
         if FileIdentity::from_fd(&named)? != engine._locks.system_identity()? {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
@@ -116,7 +117,7 @@ impl TerminalStore {
         system.private_directory(system.path())?;
         // Use the existing system writer, never create a replacement lock for a
         // missing/damaged protected directory. No data root is consulted.
-        let lock = system.open_regular(&system.path().join("writer.lock"))?;
+        let lock = system.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&lock)
             .map_err(crate::disk::fs_error)?;
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
@@ -176,7 +177,7 @@ impl TerminalStore {
     pub(super) fn verify_writer(&self, locks: &WriterLocks) -> Result<()> {
         let named = self
             .system
-            .open_regular(&self.system.path().join("writer.lock"))?;
+            .open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
         if FileIdentity::from_fd(&named)? != locks.system_identity()? {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,

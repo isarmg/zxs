@@ -2,6 +2,8 @@
 //! generation. Every exchange is classified from its exact old/new inode pair.
 use super::*;
 use crate::disk::{FileStamp, HeldRegular, InstallExchange};
+use crate::persist::layout;
+use platform_io::fs_safety::{EntryName, RelativePath};
 
 const DIRECTORY: &str = "backup-serving-seals";
 const GENERATION: &str = "metadata/pool-membership/generation.json";
@@ -57,7 +59,7 @@ impl Original {
             .expect("invariant: native Backup retains every original disk");
         let seal = identity_at(config, disk, &root.directory(root.path())?)?;
         let bytes = canonical_json(&seal)?;
-        let old = HeldRegular::capture(root, "disk.json", MAX_METADATA)?
+        let old = HeldRegular::capture_entry(root, &layout::DISK_IDENTITY, MAX_METADATA)?
             .ok_or_else(|| invalid("original disk seal disappeared before Backup selection"))?;
         validate_stored_seal(&decode_seal(old.bytes())?, &handle.seal)?;
         if root
@@ -101,7 +103,11 @@ impl Original {
                     "retained Backup seal attempt differs from the actual native selection",
                 ));
             }
-            require_stamp(&stage, "payload", &envelope.new)?;
+            require_stamp(
+                &stage,
+                &EntryName::new("payload").expect("invariant: staged payload uses one entry"),
+                &envelope.new,
+            )?;
             if selected.replace((stage, envelope)).is_some() {
                 return Err(invalid(
                     "multiple completed seal intents claim this Backup operation",
@@ -168,8 +174,12 @@ impl Original {
             &canonical_json(&self.envelope)?,
             MAX_ENVELOPE,
         )?;
-        require_stamp(root, "disk.json", &self.envelope.new)?;
-        require_stamp(&self.stage, "payload", &self.envelope.old)
+        require_stamp(root, &layout::DISK_IDENTITY, &self.envelope.new)?;
+        require_stamp(
+            &self.stage,
+            &EntryName::new("payload").expect("invariant: staged payload uses one entry"),
+            &self.envelope.old,
+        )
     }
 
     fn apply(&self, common: &[u8], authority: &[u8]) -> Result<()> {
@@ -182,12 +192,12 @@ impl Original {
             &canonical_json(&self.envelope)?,
             MAX_ENVELOPE,
         )?;
-        let actual = HeldRegular::capture(root, "disk.json", MAX_METADATA)?
+        let actual = HeldRegular::capture_entry(root, &layout::DISK_IDENTITY, MAX_METADATA)?
             .ok_or_else(|| invalid("original seal disappeared during Backup cutover"))?;
         if actual.stamp() == &self.envelope.old {
             root.publish_install_preserving(
                 &self.stage,
-                "disk.json",
+                &layout::DISK_IDENTITY,
                 InstallExchange {
                     staged: &self.envelope.new,
                     old: Some(&self.envelope.old),
@@ -212,8 +222,8 @@ impl Original {
     }
 }
 
-fn require_stamp(root: &DiskRoot, leaf: &str, expected: &FileStamp) -> Result<()> {
-    let held = HeldRegular::capture(root, leaf, MAX_METADATA)?
+fn require_stamp(root: &DiskRoot, leaf: &EntryName, expected: &FileStamp) -> Result<()> {
+    let held = HeldRegular::capture_entry(root, leaf, MAX_METADATA)?
         .ok_or_else(|| invalid("Backup cutover lost a selected native file"))?;
     if held.stamp() != expected {
         return Err(invalid(
@@ -297,7 +307,7 @@ impl Roots {
             let stored = decode_seal(
                 &target
                     .root
-                    .read_bytes(&target.root.path().join("disk.json"), MAX_METADATA)?,
+                    .read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?,
             )?;
             validate_stored_seal(&stored, &target.seal)?;
         }
@@ -310,19 +320,19 @@ impl Roots {
         self.verify()?;
         let mut stamps = Vec::new();
         self.visit(|root| {
-            for path in ["disk.json", GENERATION] {
+            for path in [
+                layout::DISK_IDENTITY.as_relative(),
+                RelativePath::new(GENERATION)
+                    .expect("invariant: native generation uses one canonical relative path"),
+            ] {
                 let parent = root.private_child(
                     root.path()
-                        .join(path)
+                        .join(path.as_path())
                         .parent()
                         .expect("invariant: native file has a parent"),
                 )?;
-                let leaf = Path::new(path)
-                    .file_name()
-                    .expect("invariant: fixed file name")
-                    .to_str()
-                    .expect("invariant: ASCII file name");
-                let file = HeldRegular::capture(&parent, leaf, MAX_METADATA)?
+                let (_, leaf) = path.split_parent();
+                let file = HeldRegular::capture_entry(&parent, &leaf, MAX_METADATA)?
                     .ok_or_else(|| invalid("completed Backup native file vanished"))?;
                 stamps.push(file.stamp().clone());
             }
@@ -395,7 +405,7 @@ pub(super) fn recover_originals(
             &canonical_json(&recipe.pair)?,
             MAX_ENVELOPE,
         )?;
-        let current = HeldRegular::capture(root, "disk.json", MAX_METADATA)?
+        let current = HeldRegular::capture_entry(root, &layout::DISK_IDENTITY, MAX_METADATA)?
             .ok_or_else(|| invalid("Backup resume disk seal is absent"))?;
         let old = if current.stamp() == &recipe.pair.old {
             if verify_only {
@@ -442,23 +452,23 @@ pub(super) fn completed_files(
     let authority = canonical_json(&generation.portable)?;
     let mut files = Vec::with_capacity(2 * roots.len());
     for (disk, root) in roots {
-        let actual = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let actual = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         validate_stored_seal(
             &actual,
             &identity_at(config, disk, &root.directory(root.path())?)?,
         )?;
         require_bytes(root, GENERATION, &authority, MAX_METADATA)?;
-        for path in ["disk.json", GENERATION] {
-            let full = root.path().join(path);
+        for path in [
+            layout::DISK_IDENTITY.as_relative(),
+            RelativePath::new(GENERATION)
+                .expect("invariant: native generation uses one canonical relative path"),
+        ] {
+            let full = root.path().join(path.as_path());
             let parent =
                 root.private_child(full.parent().expect("invariant: native file parent"))?;
-            let leaf = full
-                .file_name()
-                .expect("invariant: native file leaf")
-                .to_str()
-                .expect("invariant: ASCII leaf");
+            let (_, leaf) = path.split_parent();
             files.push(
-                HeldRegular::capture(&parent, leaf, MAX_METADATA)?
+                HeldRegular::capture_entry(&parent, &leaf, MAX_METADATA)?
                     .ok_or_else(|| invalid("Backup completion lost a native selected file"))?
                     .stamp()
                     .clone(),

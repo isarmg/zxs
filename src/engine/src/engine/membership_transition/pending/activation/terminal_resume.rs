@@ -13,6 +13,7 @@ use crate::engine::membership_transition::{
     terminal::{TerminalAuthority, VerifiedTerminalAuthority},
     terminal_resume::{ResumeCore, ResumeProposal, cancellation::attempts},
 };
+use crate::persist::layout;
 
 const PREPARED_FILE: &str = "resume-generation.json";
 const COMPLETE_FILE: &str = "resume-complete.json";
@@ -304,14 +305,17 @@ fn hold_resources(
         } else {
             let root = DiskRoot::open(&disk.root)?;
             admission::verify_named_root(&root)?;
-            let writer = root.open_regular(&root.path().join(".writer.lock"))?;
+            let writer = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
             platform_io::fs_safety::linux::SingleLinkRequirement::check(&writer)
                 .map_err(fs_error)?;
             reservation::lock(&writer)?;
             (root, crate::disk::FenceOwner::new(writer, None))
         };
         let seal = crate::disk::identity_at(config, disk, &root.directory(root.path())?)?;
-        let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+        let bytes = root.read_bytes(
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
+            MAX_METADATA,
+        )?;
         publication::predecessor_seal_matches(config, disk, &root, &bytes, &seal)?;
         let handle = Arc::new(DiskHandle::new(root, seal, config)?);
         locks.insert(
@@ -406,7 +410,7 @@ pub(in crate::engine::membership_transition) fn reopen_held(
         identity.verify_physical_root(&root)?;
         let directory = root.directory(root.path())?;
         reservation::lock(&directory)?;
-        let writer = root.open_regular(&root.path().join(".writer.lock"))?;
+        let writer = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&writer).map_err(fs_error)?;
         reservation::lock(&writer)?;
         let owner = crate::disk::FenceOwner::new(writer, Some(directory));

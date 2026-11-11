@@ -39,6 +39,12 @@ fn every_bound_root_entry_rejects_before_opening_or_mutating() {
     unavailable(root.directory(directory.path()));
     unavailable(root.entries(&child));
     unavailable(root.open_regular(&file));
+    unavailable(root.open_regular_entry(&crate::persist::layout::DISK_IDENTITY));
+    unavailable(root.open_read_entry(&crate::persist::layout::DISK_IDENTITY));
+    unavailable(root.open_optional_read_entry(&crate::persist::layout::DISK_IDENTITY));
+    unavailable(root.read_entry_bytes(&crate::persist::layout::DISK_IDENTITY, 64));
+    unavailable(root.write_entry_json(&crate::persist::layout::DISK_IDENTITY, &18u64, false));
+    unavailable(HeldRegular::capture_entry(root, &crate::persist::layout::DISK_IDENTITY, 64));
     unavailable(root.open_optional_read_regular(&file));
     unavailable(root.open_leased_regular(&file));
     unavailable(root.open_read_regular(&file));

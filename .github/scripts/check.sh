@@ -4,6 +4,13 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 case "${1:-}" in
+  targeted-plan)
+    python3 .github/scripts/development-ci.py check
+    python3 .github/scripts/check-targeted-ci.py plan
+    ;;
+  targeted)
+    python3 .github/scripts/check-targeted-ci.py run
+    ;;
   static)
     # Fast preflight only; full source-tool regressions run in rust-sources.
     # No Rust toolchain, registry, package installer or live browser required.

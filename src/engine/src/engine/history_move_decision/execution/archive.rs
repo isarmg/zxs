@@ -1,6 +1,7 @@
 //! Retire singleton preparation names only after actual publication and every
 //! serving scope. No file is deleted: exact old material stays under its op ID.
 use super::*;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::Path;
 
@@ -26,7 +27,7 @@ impl Owner {
         } else {
             let writer = self
                 .root
-                .open_regular(&self.root.path().join("writer.lock"))?;
+                .open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
             if FileIdentity::from_fd(&writer)? != engine._locks.system_identity()? {
                 return Err(invalid("move completion SYSTEM writer changed"));
             }

@@ -3,6 +3,7 @@
 //! An epoch is not a health or durability certificate. Only successful complete
 //! publication can bind one to PublishedStateBase. It never survives reopen.
 use crate::{Error, ErrorCode, Result};
+use crate::persist::layout;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Default)]
@@ -177,7 +178,7 @@ pub(crate) fn validate_owned_seal_observed(
     let result = (|| {
         let handle = resources.get(disk)?;
         let stored = crate::disk::decode_seal(&handle.root.read_bytes_observed(
-            &disk.root.join("disk.json"),
+            &disk.root.join(layout::DISK_IDENTITY.as_path()),
             crate::disk::MAX_METADATA,
             observe,
         )?)?;

@@ -5,6 +5,7 @@ use super::*;
 use crate::engine::membership_transition::pending::activation::backup::startup::{
     self, BackupStartupAdmission,
 };
+use crate::persist::layout;
 
 fn selected(system: &DiskRoot, admitted: &BackupStartupAdmission) -> Result<(Selection, Vec<u8>)> {
     let bytes = system.read_bytes(&system.path().join(INTENT), MAX_PLAN)?;
@@ -26,7 +27,7 @@ fn selected(system: &DiskRoot, admitted: &BackupStartupAdmission) -> Result<(Sel
             "Backup final switch is not its complete original native operation",
         ));
     }
-    let named = system.open_read_regular(&system.path().join("writer.lock"))?;
+    let named = system.open_read_entry(&layout::CONTROL_WRITER_LOCK)?;
     let writer = platform_io::fs_safety::linux::FileIdentity::from_metadata(&named.metadata()?);
     if plan.system_writer
         != (PhysicalBinding {
@@ -63,7 +64,7 @@ fn selected(system: &DiskRoot, admitted: &BackupStartupAdmission) -> Result<(Sel
         .zip(&plan.target_writers)
         .zip(first.targets())
     {
-        let writer = root.open_read_regular(&root.path().join(".writer.lock"))?;
+        let writer = root.open_read_entry(&layout::DISK_WRITER_LOCK)?;
         let actual =
             platform_io::fs_safety::linux::FileIdentity::from_metadata(&writer.metadata()?);
         if expected.identity != native.identity

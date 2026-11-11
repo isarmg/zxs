@@ -3,6 +3,7 @@
 //! an independently mutable second identity map.
 use super::super::data::{self, DataDependency};
 use super::*;
+use crate::persist::layout;
 
 fn dependency(
     intent: &TransitionIntent,
@@ -45,7 +46,11 @@ impl TerminalMetadataResume {
             )?;
             resource
                 .root
-                .write_json(&disk.root.join("disk.json"), &resource.seal, false)?;
+                .write_json(
+                    &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                    &resource.seal,
+                    false,
+                )?;
             data::synchronize_resource(disk, resource, &dependency)?;
             self.ready_data_disks.insert(disk.disk_id.clone());
         }

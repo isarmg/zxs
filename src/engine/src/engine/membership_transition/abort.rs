@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::membership_transition::decision::DecisionKind;
 use crate::metadata_map::Reference;
 use crate::metadata_map::{Encoder, ProofMeasure};
+use crate::persist::layout;
 use archive::persistent::abort_view::VerifiedAbortArchive;
 use archive::persistent::{
     ArchiveRoot,
@@ -446,7 +447,7 @@ struct ObservedAbortVote {
 }
 
 fn verify_original_seal(root: &DiskRoot, acceptance: &AbortAcceptance) -> Result<()> {
-    let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+    let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
     if object_hash("membership-original-seal", &seal)? != acceptance.original_seal_hash {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,

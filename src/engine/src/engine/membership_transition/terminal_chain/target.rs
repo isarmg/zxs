@@ -3,6 +3,7 @@
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::runtime::{management_error, open_store};
 use crate::engine::membership_transition::decision::DecisionKind;
+use crate::persist::layout;
 pub(super) struct Held {
     pub(super) root: DiskRoot,
     writer: std::sync::Arc<crate::disk::FenceOwner>,
@@ -27,12 +28,12 @@ impl Held {
             .map_err(management_error)?;
         let directory_lock = root.directory(root.path())?;
         reservation::lock(&directory_lock)?;
-        let writer = root.open_regular(&root.path().join(".writer.lock"))?;
+        let writer = root.open_regular_entry(&layout::DISK_WRITER_LOCK)?;
         platform_io::fs_safety::linux::SingleLinkRequirement::check(&writer).map_err(fs_error)?;
         reservation::lock(&writer)?;
         let writer = crate::disk::FenceOwner::new(writer, Some(directory_lock));
         reservation::verify_writer(&root, &writer)?;
-        let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         let identity = admission::member_identity(proposal.configuration(), disk, physical);
         let held = Self {
             root,
@@ -49,7 +50,7 @@ impl Held {
         let actual = decode_seal(
             &self
                 .root
-                .read_bytes(&self.root.path().join("disk.json"), MAX_METADATA)?,
+                .read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?,
         )?;
         validate_stored_seal(&actual, &self.seal)?;
         if &actual.format != proposal.seal_format() {

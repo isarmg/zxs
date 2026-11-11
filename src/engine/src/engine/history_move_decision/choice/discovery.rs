@@ -1,6 +1,7 @@
 //! Cold discovery only adds denial. Missing replicas do not authorize a vote,
 //! clear the selection, select a different operation or reconstruct lost inputs.
 use super::*;
+use crate::persist::layout;
 use platform_io::fs_safety::linux::FileIdentity;
 
 fn read_at(root: &DiskRoot, config: &ValidatedConfig) -> Result<Option<Choice>> {
@@ -62,7 +63,7 @@ impl Engine {
         root.private_directory(root.path())?;
         let writer = self._locks.system_identity()?;
         let check_writer = || -> Result<()> {
-            let named = root.open_regular(&root.path().join("writer.lock"))?;
+            let named = root.open_regular_entry(&layout::CONTROL_WRITER_LOCK)?;
             if FileIdentity::from_fd(&named)? != writer {
                 return Err(invalid(
                     "system writer identity changed during move choice discovery",

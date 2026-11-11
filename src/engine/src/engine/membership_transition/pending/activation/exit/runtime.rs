@@ -1,6 +1,7 @@
 //! Retained-only activation. The stopped directory is never used to finish a
 //! marker, result, archive or cleanup after its gate begins quiescing.
 use super::*;
+use crate::persist::layout;
 
 /// Retains the original physical gate across retries and after completion. A
 /// closed descriptor set cannot disappear from the process registry while this
@@ -417,10 +418,13 @@ impl Engine {
             )?;
             publication::sync_retained_genesis_anchor(root, disk, &generation.original)?;
             publication::install_marker(root, disk, &generation)?;
-            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            let bytes = root.read_bytes(
+                &disk.root.join(layout::DISK_IDENTITY.as_path()),
+                MAX_METADATA,
+            )?;
             let expected = identity_at(&self.config, disk, &root.directory(root.path())?)?;
             predecessor_seal_matches(&self.config, disk, root, &bytes, &expected)?;
-            root.write_json(&disk.root.join("disk.json"), &expected, true)?;
+            root.write_json(&disk.root.join(layout::DISK_IDENTITY.as_path()), &expected, true)?;
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_disk_exit_marker_{}", disk.disk_id))?;
         }

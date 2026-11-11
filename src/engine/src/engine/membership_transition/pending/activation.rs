@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::membership_transition::archive::persistent::{
     ArchiveRoot, install_generation_archive, read_generation_base,
 };
+use crate::persist::layout;
 use joint::store::PortableJoint;
 use std::collections::BTreeSet;
 
@@ -277,7 +278,7 @@ pub(crate) fn generation_directory(disk: &DiskConfig, hash: &str) -> PathBuf {
 }
 pub(crate) fn log_path(config: &ValidatedConfig, disk: &DiskConfig) -> PathBuf {
     match config.generation_hash() {
-        Some(hash) => generation_directory(disk, hash).join("journal.bin"),
+        Some(hash) => generation_directory(disk, hash).join(layout::JOURNAL.as_path()),
         None => crate::journal::log_path(disk),
     }
 }

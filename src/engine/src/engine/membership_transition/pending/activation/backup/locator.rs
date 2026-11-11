@@ -3,6 +3,7 @@
 use super::*;
 use crate::engine::membership_transition::PreparedBackupControl;
 use crate::history_package::preparation_checkpoint;
+use crate::persist::layout;
 
 const MAX_FILES: usize = 65_536;
 const MAX_BYTES: usize = 512 * 1024 * 1024;
@@ -162,7 +163,7 @@ impl PreparedBackupTargetLocator {
                 "original Backup control cannot relocate its held source root",
             ));
         }
-        let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         validate_stored_seal(
             &seal,
             &identity_at(original, disk, &root.directory(root.path())?)?,
@@ -232,7 +233,7 @@ impl PreparedBackupTargetLocator {
                 "Backup locator cannot relocate the original target address",
             ));
         }
-        let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let seal = decode_seal(&root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?)?;
         validate_stored_seal(
             &seal,
             &identity_at(&self.config, disk, &root.directory(root.path())?)?,
