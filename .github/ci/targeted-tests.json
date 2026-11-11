@@ -132,6 +132,9 @@
             "business::namespace::",
             "business::composition_tests::",
             "business::file_tags::tests::"
+          ],
+          "exact": [
+            "tests::detached_preparation_fences_physical_namespace_writes_but_not_reads"
           ]
         },
         {

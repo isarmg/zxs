@@ -3981,7 +3981,7 @@ fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
         .unwrap();
     assert_eq!(bytes(&engine, &version), b"published");
     assert_eq!(
-        engine.list_tree(&repo.main_branch_id).unwrap()[0].path,
+        engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),
         "renamed.txt"
     );
 }
