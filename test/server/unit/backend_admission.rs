@@ -2201,3 +2201,73 @@ async fn history_source_cancellation_reaches_the_admitted_backend() {
         .unwrap()
         .forget();
 }
+
+#[tokio::test]
+async fn shared_history_defers_contract_errors_until_after_query_and_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    let malformed = "/api/file-manager/files/malformed/shared-history?history_root=malformed";
+    overloaded(app.clone(), malformed).await;
+    for route in [
+        format!("{malformed}&unexpected=true"),
+        format!("{malformed}&history_root=duplicate"),
+        "/api/file-manager/files/malformed/shared-history".into(),
+        "/api/file-manager/files/%FF/shared-history?history_root=malformed".into(),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &route))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn shared_history_calls_backend_only_for_original_file_and_root_domains() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let file = "file_00000000000000000000000000000000";
+    let root = "a".repeat(64);
+    for (file_id, digest) in [
+        ("malformed", root.as_str()),
+        ("ver_00000000000000000000000000000000", root.as_str()),
+        ("file_0000000000000000000000000000000A", root.as_str()),
+        (file, "malformed"),
+        (file, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ] {
+        let route = format!(
+            "/api/file-manager/files/{file_id}/shared-history?history_root={digest}"
+        );
+        let response = request(app.clone(), &route).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(result["error"].get("source").is_none());
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    let route = format!("/api/file-manager/files/{file}/shared-history?history_root={root}");
+    assert_eq!(request(app, &route).await.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+}

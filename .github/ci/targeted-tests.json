@@ -1056,6 +1056,51 @@
           "default_features": false
         }
       ]
+    },
+    "shared-history-http-boundary": {
+      "reason": "Typed shared-history path and query preserve query/capacity admission, identifier domains, authorization, cancellation and original graph response.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_shared_history::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::shared_history_defers_contract_errors_until_after_query_and_capacity",
+            "backend_admission_tests::shared_history_calls_backend_only_for_original_file_and_root_domains",
+            "backend_admission_tests::shared_history_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::shared_history_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "exact": [
+            "shared_history::shared_history_real_router_automatically_joins_transitive_files_with_exact_auth_and_root"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3159,6 +3204,36 @@
       "path": "test/server/integration/http_engine/file_metadata_operations.rs",
       "groups": [
         "history-source-http-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/http_shared_history.rs",
+      "groups": [
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_shared_history.rs",
+      "groups": [
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/authorized_backend.rs",
+      "groups": [
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/shared_history.rs",
+      "groups": [
+        "shared-history-http-boundary"
       ]
     }
   ],
