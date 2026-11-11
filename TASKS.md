@@ -39,6 +39,8 @@
 
 - [ ] 定向 CI 验证 T07 Web recursive-backup capture 名称边界：Disk.name 在原字段解码位置构造并持有 Name，移除私有校验后回传 String 的 helper；验证既有 capture 的 canonical 原字节、Unicode／240 字节展示前缀、保留名／NFD／超长拒绝及原递归保护 UI 行为，并编译 WASM 产品。web 文本 validate_fn 87→86，其余指标不变；其余名称与槽位消费者及 manifest 准入仍待逐域迁移。
 
+- [ ] 定向 CI 验证 T07 Web foreign-plan 本地意图：持有 SlotId／Name／可空 PortablePath，名称借用已准入的 ForeignHistorySummary，仅请求边界恢复原 DTO；保留 Slot／Name／Parent 错误源至 api::Error，UI 文本保持。验证槽位→覆盖→名称／碰撞→parent 的顺序、空 parent 显式 null、原 JSON／canonical 字节和 admission 模式拒绝生成请求；运行既有 plan／recovery 行为及 WASM 编译。web 文本 validate_fn 86→83、parse_discard 12→14（持有结果）、string_key_map 33→31、erase_error 4→2；计数规则保持不变，其余 T07 迁移继续保留。
+
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。

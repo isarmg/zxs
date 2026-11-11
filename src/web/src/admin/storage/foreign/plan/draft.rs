@@ -1,4 +1,5 @@
 use super::*;
+use name_policy::{Name, PortablePath, SlotId};
 use storage_contract::storage_directories::CandidateSelection;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -22,28 +23,41 @@ pub(super) struct Draft {
     pub(super) empty_target: Option<CandidateSelection>,
     pub(super) primary: Option<PrimaryChoice>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NamedHistory<'a> {
+    pub(super) history: &'a storage_contract::storage_foreign::ForeignHistorySummary,
+    pub(super) name: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReconstructionTarget<'a> {
+    slot: SlotId,
+    parent: Option<PortablePath>,
+    names: Vec<NamedHistory<'a>>,
+}
+
 /// Local design intents.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Intent {
-    ReconstructExistingPrimary(ForeignPlanTarget),
+pub(super) enum Intent<'a> {
+    ReconstructExistingPrimary(ReconstructionTarget<'a>),
     AdmitNewPrimary {
         copy_target: Option<CandidateSelection>,
-        slot: String,
-        names: BTreeMap<String, String>,
+        slot: SlotId,
+        names: Vec<NamedHistory<'a>>,
     },
     AdmitSecondary {
         copy_target: Option<CandidateSelection>,
-        slot: String,
+        slot: SlotId,
         primary: PrimaryChoice,
-        names: BTreeMap<String, String>,
+        names: Vec<NamedHistory<'a>>,
     },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum DraftError {
-    Slot,
-    Parent,
+    Slot(name_policy::Error),
+    Parent(name_policy::Error),
     CompleteMapping,
-    Name,
+    Name(name_policy::Error),
     Collision,
     SourceTargetAlias,
     SourceTier,
@@ -52,39 +66,44 @@ pub(super) enum DraftError {
     PreviewUnavailable,
 }
 impl Draft {
-    pub(super) fn intent(
+    pub(super) fn intent<'a>(
         &self,
-        source: &ForeignDiskPreview,
+        source: &'a ForeignDiskPreview,
         primaries: &[PrimaryChoice],
-    ) -> Result<Intent, DraftError> {
-        name_policy::validate_slot(&self.slot).map_err(|_| DraftError::Slot)?;
-        let groups: BTreeSet<_> = source
+    ) -> Result<Intent<'a>, DraftError> {
+        let slot = SlotId::parse(&self.slot).map_err(DraftError::Slot)?;
+        let groups: BTreeMap<_, _> = source
             .histories
             .iter()
-            .map(|history| &history.group_id)
+            .map(|history| (&history.group_id, history))
             .collect();
-        if groups.is_empty() || self.names.keys().collect::<BTreeSet<_>>() != groups {
+        if groups.is_empty()
+            || self.names.keys().collect::<BTreeSet<_>>()
+                != groups.keys().copied().collect::<BTreeSet<_>>()
+        {
             return Err(DraftError::CompleteMapping);
         }
         let mut keys = BTreeSet::new();
-        for name in self.names.values() {
-            name_policy::validate_name(name).map_err(|_| DraftError::Name)?;
-            if !keys.insert(name_policy::lookup_key(name)) {
+        let mut names = Vec::with_capacity(self.names.len());
+        for (group, name) in &self.names {
+            let name = Name::parse(name).map_err(DraftError::Name)?;
+            if !keys.insert(name.key()) {
                 return Err(DraftError::Collision);
             }
+            names.push(NamedHistory {
+                history: groups[&group],
+                name,
+            });
         }
         if self.mode == Mode::ReconstructExistingPrimary {
-            let parent = (!self.parent.is_empty()).then(|| self.parent.clone());
-            if parent
-                .as_ref()
-                .is_some_and(|path| name_policy::validate_path(path).is_err())
-            {
-                return Err(DraftError::Parent);
-            }
-            return Ok(Intent::ReconstructExistingPrimary(ForeignPlanTarget {
-                slot_id: self.slot.clone(),
+            let parent = (!self.parent.is_empty())
+                .then(|| PortablePath::parse(&self.parent))
+                .transpose()
+                .map_err(DraftError::Parent)?;
+            return Ok(Intent::ReconstructExistingPrimary(ReconstructionTarget {
+                slot,
                 parent,
-                history_names: self.names.clone(),
+                names,
             }));
         }
         if self.empty_target.as_ref().is_some_and(|target| {
@@ -97,8 +116,8 @@ impl Draft {
         if self.mode == Mode::AdmitNewPrimary {
             return Ok(Intent::AdmitNewPrimary {
                 copy_target: self.empty_target.clone(),
-                slot: self.slot.clone(),
-                names: self.names.clone(),
+                slot,
+                names,
             });
         }
         if source.source_level != 3 {
@@ -107,15 +126,15 @@ impl Draft {
         let primary = self.primary.as_ref().ok_or(DraftError::ExplicitPrimary)?;
         if !primaries.contains(primary)
             || !super::super::identity_valid(&primary.identity)
-            || primary.identity.slot_id.eq_ignore_ascii_case(&self.slot)
+            || primary.identity.slot_id.eq_ignore_ascii_case(slot.as_str())
         {
             return Err(DraftError::PrimaryChanged);
         }
         Ok(Intent::AdmitSecondary {
             copy_target: self.empty_target.clone(),
-            slot: self.slot.clone(),
+            slot,
             primary: primary.clone(),
-            names: self.names.clone(),
+            names,
         })
     }
     pub(super) fn request(
@@ -131,7 +150,14 @@ impl Draft {
             operation_id,
             source: source.source.clone(),
             source_review_digest: source.review_digest.clone(),
-            target,
+            target: ForeignPlanTarget {
+                slot_id: target.slot.to_string(),
+                parent: target.parent.map(|path| path.as_str().to_owned()),
+                history_names: target.names
+                    .into_iter()
+                    .map(|named| (named.history.group_id.clone(), named.name.to_string()))
+                    .collect(),
+            },
         })
     }
 }

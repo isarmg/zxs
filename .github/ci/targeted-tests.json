@@ -467,6 +467,26 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "foreign-draft-names": {
+      "reason": "Typed foreign-plan draft intents retain slot, names and reconstruction parent through validation; preserve request bytes, explicit root null and mode-specific rejection order with native behaviour and WASM compilation",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "admin::storage::foreign::plan::tests::"
+          ],
+          "max_tests": 48
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        }
+      ]
     }
   },
   "rules": [
@@ -1637,7 +1657,8 @@
       "path": "src/web/src/api.rs",
       "groups": [
         "setup-request-boundary",
-        "browser-identity-generation"
+        "browser-identity-generation",
+        "foreign-draft-names"
       ]
     },
     {
@@ -1718,6 +1739,36 @@
       "path": "test/web/unit/files/backup/recursive_tests.rs",
       "groups": [
         "recursive-capture-names"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/foreign/plan/draft.rs",
+      "groups": [
+        "foreign-draft-names"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/storage_foreign_plan_tests.rs",
+      "groups": [
+        "foreign-draft-names"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/storage_foreign_plan/recovery_tests.rs",
+      "groups": [
+        "foreign-draft-names"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/foreign/plan.rs",
+      "groups": [
+        "foreign-draft-names"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/foreign/plan/messages.rs",
+      "groups": [
+        "foreign-draft-names"
       ]
     }
   ],

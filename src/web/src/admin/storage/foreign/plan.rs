@@ -199,7 +199,20 @@ fn editable(state: &State) -> bool {
         && state.admin_console.storage.foreign.preview.is_some()
 }
 fn input_error(error: DraftError) -> api::Error {
-    api::error(storage_contract::ErrorCode::ConfigInvalid, error.message())
+    let mut failure = api::error(storage_contract::ErrorCode::ConfigInvalid, error.message());
+    failure.source = match error {
+        DraftError::Slot(source) | DraftError::Parent(source) | DraftError::Name(source) => {
+            Some(std::sync::Arc::new(api::ErrorSource::ForeignPlanInput(source)))
+        }
+        DraftError::CompleteMapping
+        | DraftError::Collision
+        | DraftError::SourceTargetAlias
+        | DraftError::SourceTier
+        | DraftError::ExplicitPrimary
+        | DraftError::PrimaryChanged
+        | DraftError::PreviewUnavailable => None,
+    };
+    failure
 }
 
 #[cfg(test)]

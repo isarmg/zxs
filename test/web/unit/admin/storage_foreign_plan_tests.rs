@@ -174,15 +174,15 @@ fn invalid_name_parent_or_slot_stays_a_local_input_error() {
         let expected = match n {
             0 => {
                 draft.slot.clear();
-                DraftError::Slot
+                DraftError::Slot(name_policy::Error::InvalidSlot)
             }
             1 => {
                 draft.parent = "../existing".into();
-                DraftError::Parent
+                DraftError::Parent(name_policy::Error::EmptyOrDot)
             }
             _ => {
                 *draft.names.values_mut().next().unwrap() = "../escape".into();
-                DraftError::Name
+                DraftError::Name(name_policy::Error::UnsupportedCharacter('/' as u32))
             }
         };
         assert_eq!(draft.intent(&source, &[]), Err(expected));
@@ -686,4 +686,113 @@ fn slot_lookup_uses_backend_case_rules_but_the_saved_review_identity_stays_exact
     model.accept_preview(preview.clone());
     assert_eq!(model.known_primary.len(), 1);
     assert_eq!(model.known_primary[0].identity, preview.target.identity);
+}
+
+#[test]
+fn typed_reconstruction_intent_keeps_exact_request_bytes_and_explicit_root_null() {
+    let source = source();
+    for parent in ["", "Café", "folder/sub"] {
+        let mut draft = draft(&source);
+        draft.slot = "Disk_09-X".into();
+        draft.parent = parent.into();
+        for (name, raw) in draft.names.values_mut().zip(["Straße".into(), "a".repeat(240)]) {
+            *name = raw;
+        }
+        let expected = ForeignPlanRequest {
+            operation_id: operation(7),
+            source: source.source.clone(),
+            source_review_digest: source.review_digest.clone(),
+            target: ForeignPlanTarget {
+                slot_id: draft.slot.clone(),
+                parent: (!parent.is_empty()).then(|| parent.to_owned()),
+                history_names: draft.names.clone(),
+            },
+        };
+        let request = draft.request(&source, &[], operation(7)).unwrap();
+        assert_eq!(
+            json_codec::to_vec(&request).unwrap(),
+            json_codec::to_vec(&expected).unwrap()
+        );
+        assert_eq!(
+            storage_contract::canonical_json(&request).unwrap(),
+            storage_contract::canonical_json(&expected).unwrap()
+        );
+        let wire = json!(request);
+        assert_eq!(wire["target"]["parent"].is_null(), parent.is_empty());
+        assert!(wire["target"].as_object().unwrap().contains_key("parent"));
+    }
+}
+
+#[test]
+fn admission_intents_keep_typed_spellings_and_ignore_reconstruction_parent() {
+    let source = source();
+    let model = reviewed_model();
+    for mode in [Mode::AdmitNewPrimary, Mode::AdmitSecondary] {
+        let mut draft = draft(&source);
+        draft.mode = mode;
+        draft.slot = "B_09-X".into();
+        draft.parent = "../ignored-for-admission".into();
+        draft.primary = Some(model.known_primary[0].clone());
+        let intent = draft.intent(&source, &model.known_primary).unwrap();
+        let (slot, names) = match intent {
+            Intent::AdmitNewPrimary { slot, names, .. }
+            | Intent::AdmitSecondary { slot, names, .. } => (slot, names),
+            Intent::ReconstructExistingPrimary(_) => panic!("expected an admission intent"),
+        };
+        assert_eq!(slot.as_str(), draft.slot);
+        for named in names {
+            assert_eq!(named.name.as_str(), draft.names[&named.history.group_id]);
+            assert!(source.histories.iter().any(|history| std::ptr::eq(history, named.history)));
+        }
+        assert_eq!(
+            draft.request(&source, &model.known_primary, operation(8)),
+            Err(DraftError::PreviewUnavailable)
+        );
+    }
+}
+
+#[test]
+fn typed_draft_keeps_slot_coverage_name_collision_and_parent_error_priority() {
+    let source = source();
+    let mut invalid = draft(&source);
+    invalid.slot.clear();
+    invalid.names.clear();
+    invalid.parent = "../bad".into();
+    assert_eq!(
+        invalid.intent(&source, &[]),
+        Err(DraftError::Slot(name_policy::Error::InvalidSlot))
+    );
+    invalid.slot = "P09".into();
+    assert_eq!(invalid.intent(&source, &[]), Err(DraftError::CompleteMapping));
+    invalid.names = draft(&source).names;
+    *invalid.names.values_mut().next().unwrap() = "CON.txt".into();
+    assert_eq!(
+        invalid.intent(&source, &[]),
+        Err(DraftError::Name(name_policy::Error::ReservedName))
+    );
+    for name in invalid.names.values_mut() {
+        *name = "same".into();
+    }
+    assert_eq!(invalid.intent(&source, &[]), Err(DraftError::Collision));
+    invalid.names = draft(&source).names;
+    assert_eq!(
+        invalid.intent(&source, &[]),
+        Err(DraftError::Parent(name_policy::Error::EmptyOrDot))
+    );
+}
+
+#[test]
+fn foreign_draft_input_error_keeps_the_original_naming_source() {
+    let source = source();
+    let mut draft = draft(&source);
+    draft.parent = "Cafe\u{301}".into();
+    let error = draft.intent(&source, &[]).unwrap_err();
+    let expected_message = error.message();
+    let failure = input_error(error);
+    assert_eq!(failure.code, storage_contract::ErrorCode::ConfigInvalid);
+    assert_eq!(failure.message, expected_message);
+    let Some(api::ErrorSource::ForeignPlanInput(source)) = failure.source.as_deref() else {
+        panic!("expected the original naming source");
+    };
+    assert_eq!(source, &name_policy::Error::NotNormalized("Café".into()));
 }

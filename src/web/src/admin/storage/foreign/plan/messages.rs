@@ -1,12 +1,12 @@
 use super::*;
 impl DraftError {
-    pub(super) fn message(self) -> String {
+    pub(super) fn message(&self) -> String {
         match self {
-            Self::Slot => t(
+            Self::Slot(_) => t(
                 "请明确填写有效的目标槽位。",
                 "Enter an explicit valid target slot.",
             ),
-            Self::Parent => t(
+            Self::Parent(_) => t(
                 "目标必须是一级盘中的有效相对目录；留空表示盘根。",
                 "Use a valid relative directory in the primary; leave it empty for the disk root.",
             ),
@@ -14,7 +14,7 @@ impl DraftError {
                 "每份来源历史都必须明确一个目标名称，不能漏掉或合并来源组。",
                 "Give every source history its own destination name; do not omit or merge groups.",
             ),
-            Self::Name => t(
+            Self::Name(_) => t(
                 "目标子目录名不符合当前命名规则。",
                 "A destination child name violates the current naming rules.",
             ),
