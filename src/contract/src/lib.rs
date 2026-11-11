@@ -5,6 +5,7 @@ pub mod backup_transaction;
 pub mod client_protocol;
 mod content_hash;
 pub mod content_matches;
+mod counter;
 pub mod directory_git;
 pub mod directory_history;
 pub mod directory_staging;
@@ -33,6 +34,7 @@ pub mod storage_independent_topology;
 pub mod storage_lifecycle;
 pub mod storage_readmission;
 pub use content_hash::{ContentHash, ParseContentHashError};
+pub use counter::{Generation, GenerationExhausted, Sequence, SequenceExhausted};
 pub use id::{
     BranchId, CommitId, DirectoryBranchId, DirectoryTreeId, DiskId, EntryId, FileAnchorId,
     FileDeletionId, FileId, FileMergeId, FileMetadataId, FileNodeId, HistoryTreeId, Id, IdKind,
@@ -40,7 +42,9 @@ pub use id::{
 };
 mod operation_id;
 mod operation_outcome;
+mod principal;
 pub use operation_outcome::OperationOutcome;
+pub use principal::{EmptyPrincipal, Principal};
 mod public_commit;
 pub use operation_id::OperationId;
 pub use public_commit::{
@@ -74,6 +78,8 @@ mod tracked_events;
 pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedOperations, TrackedRecords};
 pub use tracked_events::{SequenceChanges, TrackedEvents};
 pub mod text;
+mod timestamp;
+pub use timestamp::{Timestamp, TimestampError};
 mod workspace_capacity;
 pub use api_path::validate_api_path;
 pub use encoding::*;

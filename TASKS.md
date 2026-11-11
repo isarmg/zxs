@@ -24,6 +24,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] GitHub CI 验证 T05 Generation／Sequence／Principal／Timestamp 定义和既有固定字节向量：完整 u64 字符串、MAX 耗尽、主体非空及原 Unicode／空白、Unix 整秒和 epoch 前错误来源。两个集中 next 保留可失败 checked_add；尚未迁移使用点或执行 T16 时钟迁移。
+
 - [ ] GitHub CI 验证 T14 两计数 ReadView：Engine／终态视图仅借用 sequence 和 topology_generation，16 处生产读取保持原鉴权、锁与事件迭代；验证真实发布、重放、冷开、终态与 ready／topology 快照及借用约束。其余实体／收据读取和测试投影钩子仍待分轮迁移。
 
 - [ ] GitHub CI 验证 T04 Id<K>／OperationId 的原编码、排序、serde 收据字节、解析错误与熵错误兼容；FileNodeId 五变体仅作基础类型，逐入口接入须保留原允许域。确定性 derive 尚须核实既有领域派生协议，不擅自引入新算法。

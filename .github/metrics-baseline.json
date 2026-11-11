@@ -82,7 +82,7 @@
     "assert_fn_def": 12,
     "cfg_not_test": 0,
     "cfg_test_item": 0,
-    "checked_add_1": 0,
+    "checked_add_1": 2,
     "clock_read": 0,
     "disk_name_const": 0,
     "erase_error": 2,
