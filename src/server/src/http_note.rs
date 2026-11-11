@@ -9,6 +9,40 @@ use http_routing::{Json, extract::State};
 use json_codec::{Map, Value};
 
 /// Keep path spelling through body binding and resolve failures at backend lookup.
+pub(crate) enum FileNotePath {
+    Canonical(storage_contract::FileId),
+    Malformed {
+        original: String,
+        source: storage_contract::Error,
+    },
+}
+
+impl<'de> Deserialize<'de> for FileNotePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let original = String::deserialize(deserializer)?;
+        Ok(match original.parse() {
+            Ok(id) => Self::Canonical(id),
+            Err(source) => Self::Malformed { original, source },
+        })
+    }
+}
+
+impl FileNotePath {
+    fn bind(self, body: &NoteBody) -> Result<crate::FileNoteTarget, ApiError> {
+        match self {
+            Self::Canonical(id) => {
+                body.matches_path("file_id", &id.to_string())?;
+                Ok(id.into())
+            }
+            Self::Malformed { original, source } => {
+                body.matches_path("file_id", &original)?;
+                Ok(crate::FileNoteTarget::malformed(source))
+            }
+        }
+    }
+}
+
+/// Keep path spelling through body binding and resolve failures at backend lookup.
 pub(crate) enum VersionNotePath {
     Canonical(storage_contract::VersionId),
     Malformed {
@@ -105,10 +139,10 @@ async fn submit(
 pub(crate) async fn file(
     State(state): State<AppState>,
     Authenticated(identity): Authenticated,
-    ApiPath(file): ApiPath<String>,
+    ApiPath(file): ApiPath<FileNotePath>,
     ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    body.matches_path("file_id", &file)?;
+    let file = file.bind(&body)?;
     submit(state, identity, body, NoteTarget::File(file)).await
 }
 pub(crate) async fn version(

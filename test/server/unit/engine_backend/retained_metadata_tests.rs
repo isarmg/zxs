@@ -61,7 +61,7 @@ fn saved_file(engine: &mut Engine, slot: &str, name: &str) -> (Entry, String) {
 }
 fn file_note(file: &str, operation_id: OperationId) -> UpdateNote {
     UpdateNote {
-        target: NoteTarget::File(file.into()),
+        target: NoteTarget::File(file.parse::<storage_contract::FileId>().unwrap().into()),
         note: Note::parse("current metadata".into()).unwrap(),
         operation_id,
     }

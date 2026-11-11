@@ -593,7 +593,9 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
         .update_note(
             &caller(),
             crate::UpdateNote {
-                target: crate::NoteTarget::File(entry.file_id.clone()),
+                target: crate::NoteTarget::File(
+                    entry.file_id.parse::<storage_contract::FileId>().unwrap().into(),
+                ),
                 note: storage_contract::Note::parse("updated".into()).unwrap(),
                 operation_id: storage_contract::OperationId::generate().unwrap(),
             },

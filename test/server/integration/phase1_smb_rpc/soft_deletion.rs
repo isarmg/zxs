@@ -558,7 +558,9 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     );
     for note in ["blocked edit", ""] {
         for target in [
-            storage_server::NoteTarget::File(a.file_id.clone()),
+            storage_server::NoteTarget::File(
+                a.file_id.parse::<storage_contract::FileId>().unwrap().into(),
+            ),
             storage_server::NoteTarget::Version(
                 a.version_id
                     .parse::<storage_contract::VersionId>()
@@ -590,7 +592,9 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         .update_note(
             &management,
             storage_server::UpdateNote {
-                target: storage_server::NoteTarget::File(b.file_id.clone()),
+                target: storage_server::NoteTarget::File(
+                    b.file_id.parse::<storage_contract::FileId>().unwrap().into(),
+                ),
                 note: storage_contract::Note::parse("B remains editable".into()).unwrap(),
                 operation_id: OperationId::generate().unwrap(),
             },

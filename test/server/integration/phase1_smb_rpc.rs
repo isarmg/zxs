@@ -176,7 +176,9 @@ impl Fixture {
             )
             .unwrap();
         for target in [
-            storage_server::NoteTarget::File(source.file_id.clone()),
+            storage_server::NoteTarget::File(
+                source.file_id.parse::<storage_contract::FileId>().unwrap().into(),
+            ),
             storage_server::NoteTarget::Version(
                 source
                     .version_id

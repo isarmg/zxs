@@ -1957,7 +1957,21 @@ impl Fixture {
                 backend.create_file_branch(identity,crate::CreateFileBranch {file_id:"file".into(),source_version_id:"version".into(),source_node_id:Some("node".into()),name:storage_contract::BranchName::parse("Café").unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"create_file_branch"));json!({"returned_by":"create_file_branch"})})
             }),
             ("update_note", {
-                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::File("file".into()),note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+                backend
+                    .update_note(
+                        identity,
+                        crate::UpdateNote {
+                            target: crate::NoteTarget::File(
+                                storage_contract::FileId::from_random([0; 16]).into(),
+                            ),
+                            note: storage_contract::Note::parse("".into()).unwrap(),
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(result, recorded_operation(operation_id, "update_note"));
+                        json!({"returned_by":"update_note"})
+                    })
             }),
             ("update_note", {
                 backend
@@ -2527,7 +2541,16 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository","source_commit_id":"source","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","source_version_id":"version","source_node_id":null,"name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","source_version_id":"version","source_node_id":"node","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
-        json!({"target":"File(\"file\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({
+            "target":format!(
+                "{:?}",
+                crate::NoteTarget::File(
+                    storage_contract::FileId::from_random([0; 16]).into(),
+                ),
+            ),
+            "note":"",
+            "operation_id":"op_00000000000000000000000000000000",
+        }),
         json!({
             "target":format!(
                 "{:?}",

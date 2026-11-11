@@ -904,6 +904,17 @@ impl Backend for EngineBackend {
         let (mut engine, current) = self.lock_current(identity)?;
         match request.target {
             crate::NoteTarget::File(file) => {
+                let file = file
+                    .into_id()
+                    .map_err(|source| {
+                        ApiError::new(
+                            ::http::StatusCode::NOT_FOUND,
+                            storage_contract::ErrorCode::FileNotFound,
+                            "file not found",
+                        )
+                        .with_source(source)
+                    })?
+                    .to_string();
                 file_manager::file_repo(&engine, &file)?;
                 engine.set_file_note(
                     &file,

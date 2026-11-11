@@ -857,6 +857,47 @@ fn version_note_lookup_preserves_revocation_and_replay_order() {
     assert_eq!(fixture.snapshot(), before);
 }
 
+#[test]
+fn file_note_lookup_preserves_revocation_and_replay_order() {
+    let fixture = Fixture::new(true);
+    let request = |operation_id| crate::UpdateNote {
+        target: crate::NoteTarget::File(crate::FileNoteTarget::malformed(
+            "malformed"
+                .parse::<storage_contract::FileId>()
+                .unwrap_err(),
+        )),
+        note: storage_contract::Note::parse("".into()).unwrap(),
+        operation_id,
+    };
+    let before = fixture.snapshot();
+    for operation in [
+        storage_contract::OperationId::from_random([1; 16]),
+        fixture.operation,
+    ] {
+        let error = fixture
+            .backend
+            .update_note(&fixture.identity, request(operation))
+            .unwrap_err();
+        assert_eq!(error.status, http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code, storage_contract::ErrorCode::FileNotFound);
+        let Some(crate::http_boundary::ApiErrorSource::Contract(source)) = error.source.as_deref()
+        else {
+            panic!("malformed file lookup must retain its parse failure");
+        };
+        assert_eq!(source.code(), storage_contract::ErrorCode::InvalidId);
+    }
+    assert_eq!(fixture.snapshot(), before);
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    let before = fixture.snapshot();
+    let error = fixture
+        .backend
+        .update_note(&fixture.identity, request(fixture.operation))
+        .unwrap_err();
+    assert_eq!(error.status, http::StatusCode::UNAUTHORIZED);
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    assert_eq!(fixture.snapshot(), before);
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Request {
     Operation,
@@ -1080,7 +1121,9 @@ impl Request {
                 .update_note(
                     identity,
                     crate::UpdateNote {
-                        target: crate::NoteTarget::File("file".into()),
+                        target: crate::NoteTarget::File(crate::FileNoteTarget::malformed(
+                            "file".parse::<storage_contract::FileId>().unwrap_err(),
+                        )),
                         note: storage_contract::Note::parse("".into()).unwrap(),
                         operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
