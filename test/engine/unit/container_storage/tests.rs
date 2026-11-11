@@ -169,6 +169,51 @@ fn version_creation_time_requires_the_current_whole_second_utc_form() {
 }
 
 #[test]
+fn version_calendar_admission_preserves_causes_bytes_and_storage_error_order() {
+    use std::error::Error as _;
+
+    let mut item = version(
+        &State::default(),
+        &new_id("history").unwrap(),
+        &new_id("file").unwrap(),
+        "file.txt",
+        b"body",
+    );
+    for timestamp in [
+        "1970-01-01T00:00:00Z",
+        "2024-02-29T23:59:59Z",
+        "9999-12-31T23:59:59Z",
+    ] {
+        item.created_at = timestamp.into();
+        let before = canonical_json(&item).unwrap();
+        validate_version(&item).unwrap();
+        assert_eq!(canonical_json(&item).unwrap(), before);
+    }
+    item.created_at = "2026-02-30T01:00:00Z".into();
+    let before = canonical_json(&item).unwrap();
+    let error = validate_version(&item).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
+    assert!(!error.is_retryable());
+    assert!(error.published_result().is_none());
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<date_time::error::Parse>()
+    );
+    assert_eq!(canonical_json(&item).unwrap(), before);
+
+    item.storage_name = "invalid".into();
+    let before = canonical_json(&item).unwrap();
+    let error = validate_version(&item).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
+    assert!(matches!(error, Error::Contract(_)));
+    assert_eq!(canonical_json(&item).unwrap(), before);
+}
+
+#[test]
 fn current_version_requires_storage_name_and_creation_time() {
     let item = version(
         &State::default(),

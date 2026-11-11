@@ -40,11 +40,11 @@ pub enum Error {
     #[error("CHECKSUM_MISMATCH: {0}")]
     Payload(#[from] platform_io::payload::Error),
     #[error("CONTAINER_LAYOUT_INVALID: {0}")]
-    Timestamp(#[from] date_time::error::Parse),
+    Timestamp(#[source] date_time::error::Parse),
     #[error("CONTAINER_LAYOUT_INVALID: {0}")]
-    DateFormat(#[from] date_time::error::Format),
+    DateFormat(#[source] date_time::error::Format),
     #[error("HISTORY_PACKAGE_INVALID: {0}")]
-    TimestampRange(#[from] date_time::error::ComponentRange),
+    TimestampRange(#[source] date_time::error::ComponentRange),
     #[error("CHECKSUM_MISMATCH: {0}")]
     Digest(#[from] blake3::HexError),
     #[error("CONTAINER_LAYOUT_INVALID: {0}")]

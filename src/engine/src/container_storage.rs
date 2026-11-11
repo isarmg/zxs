@@ -113,7 +113,7 @@ pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
         return Err(invalid("version creation time must be whole-second UTC"));
     }
     OffsetDateTime::parse(&version.created_at, &Rfc3339).map_err(|source| {
-        Error::from(source).context(
+        Error::Timestamp(source).context(
             ErrorCode::ContainerLayoutInvalid,
             "version creation time is not RFC3339",
         )

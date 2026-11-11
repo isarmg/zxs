@@ -1423,6 +1423,81 @@
           "default_features": false
         }
       ]
+    },
+    "engine-date-errors": {
+      "reason": "Explicit date-time errors at container and history-package admission and history-field projection preserve source, wire codes, error order and bytes. Engine test dependencies currently enable fault-injection; the separate check targets compile product configurations and do not claim product-test execution.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "error::tests::",
+            "engine::history_window::projection::tests::",
+            "history_package::manifest::timestamp_tests::"
+          ],
+          "exact": [
+            "container_storage::tests::version_creation_time_requires_the_current_whole_second_utc_form",
+            "container_storage::tests::version_calendar_admission_preserves_causes_bytes_and_storage_error_order",
+            "container_storage::tests::system_clock_version_time_validates_calendar_boundary",
+            "history_package::tests::namespace_deletion_facts_validate_without_snapshot_or_content_dependencies",
+            "history_package::tests::namespace_deletions_survive_export_restore_and_replay_without_operation_records"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "mode": "check"
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "mode": "check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "name": "perf-check",
+          "mode": "check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "name": "recovery-startup",
+          "mode": "check"
+        },
+        {
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke",
+          "mode": "check"
+        }
+      ]
     }
   },
   "rules": [
@@ -3778,6 +3853,54 @@
       "path": "test/server/unit/backend_admission.rs",
       "groups": [
         "listing-http-boundary"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/projection.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/error/tests.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/tests.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_window_projection_tests.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/timestamp_tests.rs",
+      "groups": [
+        "engine-date-errors"
       ]
     }
   ],

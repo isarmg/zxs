@@ -1,4 +1,8 @@
 //! Scoped logical history projection and closure validation, without storage I/O.
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/history_package/timestamp_tests.rs"]
+mod timestamp_tests;
+
 use crate::business::{validate_branch_name, validate_entries};
 use crate::directory_contents::DirectoryContents;
 use crate::{Error, ErrorCode, Result};
@@ -908,7 +912,7 @@ impl HistoryManifest {
                     )
                 })?;
                 date_time::OffsetDateTime::from_unix_timestamp(timestamp).map_err(|source| {
-                    Error::from(source).context(
+                    Error::TimestampRange(source).context(
                         ErrorCode::HistoryPackageInvalid,
                         "namespace deletion timestamp is invalid",
                     )

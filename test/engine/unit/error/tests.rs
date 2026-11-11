@@ -104,7 +104,7 @@ fn out_of_rfc3339_clock_range_preserves_format_cause() {
     let source = timestamp
         .format(&date_time::format_description::well_known::Rfc3339)
         .unwrap_err();
-    let error = Error::from(source);
+    let error = Error::DateFormat(source);
     assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
     assert!(error.source().unwrap().is::<date_time::error::Format>());
 }

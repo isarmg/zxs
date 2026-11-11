@@ -492,6 +492,8 @@ fn created_at(timestamp: u64) -> Result<String> {
             "file node creation timestamp is outside the UTC range",
         )
     })?;
-    Ok(date_time::OffsetDateTime::from_unix_timestamp(seconds)?
-        .format(&date_time::format_description::well_known::Rfc3339)?)
+    date_time::OffsetDateTime::from_unix_timestamp(seconds)
+        .map_err(Error::TimestampRange)?
+        .format(&date_time::format_description::well_known::Rfc3339)
+        .map_err(Error::DateFormat)
 }

@@ -7,6 +7,93 @@ use super::super::oracle_tests::{context, fixture, oracle_path, request};
 const FILE: &str = "file_00000000000000000000000000000001";
 const HISTORY: &str = "history_00000000000000000000000000000001";
 
+#[test]
+fn creation_time_fields_preserve_utc_text_range_errors_and_state_bytes() {
+    use std::error::Error as _;
+    use storage_contract::{ErrorCode, encoding::canonical_json};
+
+    const PATH: &str = "fnode_00000000000000000000000000000000";
+    const METADATA: &str = "fmeta_00000000000000000000000000000000";
+    for (timestamp, expected) in [
+        (0, Some("1970-01-01T00:00:00Z")),
+        (1_709_251_199, Some("2024-02-29T23:59:59Z")),
+        (253_402_300_799, Some("9999-12-31T23:59:59Z")),
+        (253_402_300_800, None),
+        (i64::MAX as u64, None),
+        (u64::MAX, None),
+    ] {
+        let mut view = fixture();
+        let state = Arc::make_mut(&mut view.state.0);
+        state.file_path_nodes.get_mut(PATH).unwrap().created_at = timestamp;
+        state.file_metadata_nodes.get_mut(METADATA).unwrap().created_at = timestamp;
+        let before = canonical_json(view.business_projection()).unwrap();
+        let context = context();
+        let request = request(HistoryCollection::Nodes, 64);
+        let cancel = HistoryWindowCancellation::new();
+        let query = Query::new(&view, &request, &context, &cancel).unwrap();
+        for node in [
+            Node::Path(&query.state.file_path_nodes[PATH]),
+            Node::Metadata(&query.state.file_metadata_nodes[METADATA]),
+        ] {
+            let actual = query.field(node, HistoryField::CreatedAt);
+            if let Some(expected) = expected {
+                assert_eq!(actual.unwrap(), expected);
+            } else {
+                let error = actual.unwrap_err();
+                assert!(!error.is_retryable());
+                assert!(error.published_result().is_none());
+                if timestamp == u64::MAX {
+                    assert_eq!(error.code(), ErrorCode::StateInvalid);
+                    assert!(
+                        error
+                            .source()
+                            .unwrap()
+                            .source()
+                            .unwrap()
+                            .is::<std::num::TryFromIntError>()
+                    );
+                } else {
+                    assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+                    assert!(
+                        error
+                            .source()
+                            .unwrap()
+                            .is::<date_time::error::ComponentRange>()
+                    );
+                }
+            }
+        }
+        assert_eq!(canonical_json(view.business_projection()).unwrap(), before);
+    }
+}
+
+#[test]
+fn creation_time_field_cancellation_precedes_calendar_conversion() {
+    use storage_contract::{ErrorCode, encoding::canonical_json};
+
+    const PATH: &str = "fnode_00000000000000000000000000000000";
+    let mut view = fixture();
+    Arc::make_mut(&mut view.state.0)
+        .file_path_nodes
+        .get_mut(PATH)
+        .unwrap()
+        .created_at = 253_402_300_800;
+    let before = canonical_json(view.business_projection()).unwrap();
+    let context = context();
+    let request = request(HistoryCollection::Nodes, 64);
+    let cancel = HistoryWindowCancellation::new();
+    let query = Query::new(&view, &request, &context, &cancel).unwrap();
+    cancel.cancel();
+    let error = query
+        .field(
+            Node::Path(&query.state.file_path_nodes[PATH]),
+            HistoryField::CreatedAt,
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::OperationAborted);
+    assert_eq!(canonical_json(view.business_projection()).unwrap(), before);
+}
+
 fn first_commit_oracle<'a>(state: &'a State, version: &FileVersion) -> Option<&'a Commit> {
     state
         .commits
