@@ -1152,6 +1152,14 @@ fn router_shared(
         .route("/api/versions/{version}", get(version))
         .route("/api/versions/{version}/placement", get(placement))
         .route("/api/versions/{version}/checksums", get(checksums))
+        .route(
+            "/api/file-deletion-batches/{operation}",
+            get(http_file_deletion::batch_preview),
+        )
+        .route(
+            "/api/file-deletion-batches/undo",
+            post(http_file_deletion::undo_batch),
+        )
         .route("/api/file-deletions", get(http_file_deletion::list))
         .route(
             "/api/files/{file}/deletion",

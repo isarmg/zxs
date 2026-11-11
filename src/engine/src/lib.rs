@@ -97,7 +97,8 @@ pub use engine::{
 };
 pub mod file_deletion;
 pub use file_deletion::{
-    DeleteFileRequest, FileDeletionNodeKind, FileDeletionTarget, UndoFileDeletionRequest,
+    BatchUndoActor, BatchUndoError, DeleteFileRequest, FileDeletionNodeKind, FileDeletionTarget,
+    UndoFileDeletionBatchRequest, UndoFileDeletionRequest,
 };
 mod file_stamp;
 mod foreign_import;

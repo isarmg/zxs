@@ -66,21 +66,26 @@ pub(crate) fn owner(receipt: &OperationResult) -> DeletionOwner<'_> {
             _ => DeletionOwner::Malformed,
         };
     }
-    if receipt.kind == crate::file_deletion::batch::KIND
+    if crate::file_deletion::batch::is_kind(&receipt.kind)
         || crate::file_deletion::directory::is_kind(&receipt.kind)
     {
         let Some(nodes) = receipt
             .result
-            .get(if receipt.kind == crate::file_deletion::directory::UNDO {
-                "removed_deletion_nodes"
-            } else {
-                "deletion_nodes"
-            })
+            .get(
+                if matches!(
+                    receipt.kind.as_str(),
+                    crate::file_deletion::directory::UNDO | crate::file_deletion::batch::UNDO
+                ) {
+                    "removed_deletion_nodes"
+                } else {
+                    "deletion_nodes"
+                },
+            )
             .and_then(json_codec::Value::as_array)
         else {
             return DeletionOwner::Malformed;
         };
-        if (nodes.is_empty() && receipt.kind == crate::file_deletion::batch::KIND)
+        if (nodes.is_empty() && crate::file_deletion::batch::is_kind(&receipt.kind))
             || nodes.len() > crate::file_deletion::batch::MAX_FILES
         {
             return DeletionOwner::Malformed;

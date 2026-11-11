@@ -215,6 +215,44 @@ impl EngineBackend {
         })
     }
 
+    pub(super) fn file_deletion_batch_undo_preview_admitted(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, ApiError> {
+        let (engine, current) = self.lock_current(identity)?;
+        if current.smb_binding.is_some() {
+            return Err(ApiError::forbidden());
+        }
+        let actor = storage_engine::BatchUndoActor::parse(&current.principal)
+            .map_err(storage_engine::Error::BatchUndo)
+            .map_err(error)?;
+        engine
+            .preflight_file_deletion_batch_undo(operation, actor)
+            .map_err(error)
+    }
+
+    pub(super) fn restore_deleted_file_batch_admitted(
+        &self,
+        identity: &Identity,
+        request: &storage_contract::file_deletion_batch::UndoFileDeletionBatchBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let (mut engine, current) = self.lock_current(identity)?;
+        if current.smb_binding.is_some() {
+            return Err(ApiError::forbidden());
+        }
+        let actor = storage_engine::BatchUndoActor::parse(&current.principal)
+            .map_err(storage_engine::Error::BatchUndo)
+            .map_err(error)?;
+        engine
+            .undo_file_deletion_batch(storage_engine::UndoFileDeletionBatchRequest {
+                deletion_operation_id: request.deletion_operation_id,
+                principal: actor,
+                operation_id: request.operation_id,
+            })
+            .map_err(error)
+    }
+
     pub(super) fn restore_deleted_file_admitted(
         &self,
         identity: &Identity,

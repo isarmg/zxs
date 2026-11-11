@@ -227,7 +227,7 @@ impl CurrentNamespaces {
             || kind == "workspace.namespace.admit"
             || kind == "directory.import.stop"
             || kind == "file.delete"
-            || kind == crate::file_deletion::batch::KIND
+            || crate::file_deletion::batch::is_kind(kind)
             || crate::file_deletion::directory::is_kind(kind)
             || kind == "file.delete.undo"
             || kind == "file.namespace"

@@ -58,7 +58,7 @@ pub(crate) fn verify(
         if before == after
             || !before.into_iter().chain(after).any(|receipt| {
                 matches!(receipt.kind.as_str(), "file.delete" | "file.delete.undo")
-                    || receipt.kind == super::batch::KIND
+                    || super::batch::is_kind(&receipt.kind)
             })
         {
             return Ok(());
@@ -103,6 +103,9 @@ pub(crate) fn verify(
     )?;
     if receipt.kind == super::batch::KIND {
         return super::batch::verify(previous, next, current, receipt, &changed);
+    }
+    if receipt.kind == super::batch::UNDO {
+        return super::batch::verify_undo(previous, next, current, receipt, &changed);
     }
     if changed.len() != 1 {
         return Err(invalid());

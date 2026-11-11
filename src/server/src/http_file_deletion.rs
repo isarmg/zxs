@@ -123,6 +123,43 @@ pub(crate) async fn undo(
     .await
 }
 
+pub(crate) async fn batch_preview(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiPath(operation): ApiPath<storage_contract::OperationId>,
+    ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
+) -> Result<Response, ApiError> {
+    if !query.is_empty() {
+        return Err(ApiError::invalid("batch restore preview does not accept query fields"));
+    }
+    crate::bounded_history_http::read(state, move |backend, _| {
+        crate::history_window_encode::encode_bounded(
+            &backend.file_deletion_batch_undo_preview(&identity, operation)?,
+            storage_contract::file_deletion_batch::MAX_RESPONSE_BYTES,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn undo_batch(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
+    request: Request,
+) -> Result<Json<json_codec::Value>, ApiError> {
+    if !query.is_empty() {
+        return Err(ApiError::invalid(
+            "file deletion batch undo does not accept query fields",
+        ));
+    }
+    let request: storage_contract::file_deletion_batch::UndoFileDeletionBatchBody =
+        body(request).await?;
+    mutate(state, move |backend| {
+        backend.restore_deleted_file_batch(&identity, &request)
+    })
+    .await
+}
+
 pub(crate) async fn mutate(
     state: AppState,
     work: impl FnOnce(&dyn crate::Backend) -> Result<storage_contract::OperationResult, ApiError>

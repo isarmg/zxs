@@ -35,7 +35,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <div class="zxs-row"><h2>{t("全部目录的已删除文件", "Deleted files across folders")}</h2>
                         <button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||s.files.deletion.loading) on:click=move |_|load(state,false)>{t("重新读取第一页", "Reload the first page")}</button>
                         <button class="zxs-button" on:click=move |_|state.update(|s|s.files.deletion.close())>{t("关闭", "Close")}</button></div>
-                    <p>{t("这里读取服务端当前全部软删除记录，不局限于正在浏览的目录。目录仓库内文件也按稳定 file_id 和准确 D 恢复；同名但不同身份的文件不能互相替代。普通文件批次可逐个核对准确 D 撤销；活动目录删除的成员须从上方目录恢复入口整体恢复。此文件入口不恢复整目录、不原子撤销整批，也不永久删除正文。", "This reads all current soft-deletion records, not only the folder being browsed. Files inside folder repositories are restored by their stable file_id and exact D; equal names never substitute for identity. Ordinary file batches can be restored one exact D at a time. Members of an active directory deletion must be restored together through the directory restore entrance above. This file entrance does not restore a whole folder, atomically undo a batch or permanently delete content.")}</p>
+                    <p>{t("这里读取服务端当前全部软删除记录，不局限于正在浏览的目录。目录仓库内文件也按稳定 file_id 和准确 D 恢复；同名但不同身份的文件不能互相替代。普通文件批次可逐个核对准确 D，或先核对原批次后原子撤销整批；活动目录删除的成员须从上方目录恢复入口整体恢复。此文件入口不恢复整目录，也不永久删除正文。", "This reads all current soft-deletion records, not only the folder being browsed. Files inside folder repositories are restored by their stable file_id and exact D; equal names never substitute for identity. Ordinary file batches can be restored one exact D at a time, or atomically after reviewing the complete original batch. Members of an active directory deletion must be restored together through the directory restore entrance above. This file entrance does not restore a whole folder or permanently delete content.")}</p>
                     <Show when=move ||state.with(|s|s.files.deletion.loading)><p role="status">{t("读取中…", "Reading…")}</p></Show>
                     {move ||state.with(|s|s.files.deletion.page.clone()).map(|page| {
                         let empty = page.entries.is_empty();
@@ -59,6 +59,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     </Show>
                     {move ||state.with(|s|s.files.deletion.node.clone()).map(|node| frontier(state,node))}
                     {restore::view(state)}
+                    {batch_restore::view(state)}
                     <Show when=move ||state.with(|s|!s.files.deletion.loading&&s.files.deletion.selected.is_some()&&s.files.deletion.node.is_none())>
                         <p>{t("删除记录已变化或未能确认。请重新读取列表，不使用旧记录恢复。", "The deletion changed or could not be confirmed. Reload the list before restoring.")}</p>
                     </Show>
@@ -75,6 +76,7 @@ fn frontier(
     let display = node.clone();
     let pages = node.branch_heads.len().div_ceil(FRONTIER_PAGE);
     let restore_button = restore::button(state, node.clone());
+    let batch_restore_button = batch_restore::button(state, node.clone());
     view! {
         <section class="zxs-stack" data-deletion-node=node.node_id.clone()>
             <h3>{format!("{} · {}",t("删除节点", "Deletion node"),node.path.as_str())}</h3>
@@ -105,6 +107,7 @@ fn frontier(
                 <button class="zxs-button" disabled=move ||state.with(|s|s.files.deletion.frontier_page+1>=pages) on:click=move |_|state.update(|s|{if s.files.deletion.frontier_page+1<pages{s.files.deletion.frontier_page+=1;}})>{t("下一页分支", "Next branches")}</button>
             </div></Show>
             {restore_button}
+            {batch_restore_button}
         </section>
     }
 }

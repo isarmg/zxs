@@ -9,6 +9,8 @@ pub use published::{
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    BatchUndo(crate::BatchUndoError),
     #[error("{}: {}", self.code(), self.message())]
     DirectoryLayout(#[source] Box<crate::DirectoryLayoutError>),
     #[error(transparent)]
@@ -95,7 +97,8 @@ impl Error {
                 retryable: true,
                 source,
             },
-            source @ (Self::DirectoryLayout(_)
+            source @ (Self::BatchUndo(_)
+            | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Checkpoint(_)
             | Self::Clock(_)
@@ -123,7 +126,8 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::DirectoryLayout(_)
+            Self::BatchUndo(_)
+            | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::PublishedWorkspaceReconciliation(_)
             | Self::PublishedRecoveryReconciliation(_)
@@ -145,6 +149,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::BatchUndo(error) => error.code(),
             Self::DirectoryLayout(error) => match error.as_ref() {
                 crate::DirectoryLayoutError::ResourceLimit => ErrorCode::ResourceLimit,
                 crate::DirectoryLayoutError::ExtraDirectoryCollision { .. }
@@ -193,6 +198,7 @@ impl Error {
     }
     pub fn message(&self) -> Cow<'_, str> {
         match self {
+            Self::BatchUndo(error) => error.to_string().into(),
             Self::DirectoryLayout(error) => error.to_string().into(),
             Self::DiskObservation(_) => "disk observation unavailable".into(),
             Self::PublishedWorkspaceReconciliation(error) => error.message().into(),
@@ -245,7 +251,8 @@ impl Error {
             Self::PublishedRecoveryReconciliation(error) => Some(error.result()),
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
-            Self::DirectoryLayout(_)
+            Self::BatchUndo(_)
+            | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Clock(_)
             | Self::ClockRange(_)

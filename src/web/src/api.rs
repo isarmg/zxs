@@ -53,6 +53,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("encoding HTTP request: {0}")]
+    RequestEncoding(#[source] json_codec::Error),
     #[error("invalid management status response: {0}")]
     ManagementStatus(#[source] json_codec::Error),
     #[error("invalid object move input: {0}")]
@@ -267,10 +269,10 @@ async fn fetch(method: &str, path: &str, body: Option<Value>) -> Result<Fetched,
     fetch_authorized(method, path, body, false, None).await
 }
 
-async fn fetch_authorized(
+async fn fetch_authorized<T: data_serialization::Serialize>(
     method: &str,
     path: &str,
-    body: Option<Value>,
+    body: Option<T>,
     public_setup: bool,
     cancellation: Option<ReadCancellation>,
 ) -> Result<Fetched, Error> {
@@ -284,7 +286,12 @@ async fn fetch_authorized(
     options.set_redirect(RequestRedirect::Error);
     options.set_signal(Some(&cancellation.signal()));
     if let Some(body) = body {
-        options.set_body(&JsValue::from_str(&body.to_string()));
+        let body = json_codec::to_string(&body).map_err(|source| {
+            let mut failure = error(storage_contract::ErrorCode::InvalidRequest, "The request could not be encoded.");
+            failure.source = Some(std::sync::Arc::new(ErrorSource::RequestEncoding(source)));
+            failure
+        })?;
+        options.set_body(&JsValue::from_str(&body));
     }
     let request = web_sys::Request::new_with_str_and_init(path, &options).map_err(js_error)?;
     request
@@ -444,6 +451,14 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
 
 pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
     decode(fetch(method, path, body).await?).await
+}
+
+pub(crate) async fn typed_request<T: data_serialization::Serialize>(
+    method: &str,
+    path: &str,
+    body: T,
+) -> Result<Value, Error> {
+    decode(fetch_authorized(method, path, Some(body), false, None).await?).await
 }
 
 /// Keep the actual HTTP status when endpoint-specific success decoding fails.

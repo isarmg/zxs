@@ -647,6 +647,22 @@ macro_rules! methods {
                     Err($crate::ApiError::unsupported())
                 }
 
+                fn file_deletion_batch_undo_preview(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _operation: storage_contract::OperationId,
+                ) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
+                fn restore_deleted_file_batch(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _request: &storage_contract::file_deletion_batch::UndoFileDeletionBatchBody,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
                 fn restore_deleted_file(
                     &self,
                     _identity: &$crate::Identity,

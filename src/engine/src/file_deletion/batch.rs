@@ -7,8 +7,13 @@ use json_codec::json;
 
 mod receipt;
 mod source;
+mod undo;
+mod undo_record;
+mod undo_error;
 pub(super) use receipt::{admit, node_for, verify};
 pub(super) use source::capture;
+pub use undo::{BatchUndoActor, BatchUndoError, UndoFileDeletionBatchRequest};
+pub(super) use undo::{admit_undo, verify_undo};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
@@ -23,9 +28,15 @@ pub(super) struct Captured {
 }
 
 pub(crate) const KIND: &str = "file.delete.batch";
+pub(crate) const UNDO: &str = storage_contract::file_deletion_batch::UNDO_KIND;
+
+pub(crate) fn is_kind(kind: &str) -> bool {
+    matches!(kind, KIND | UNDO)
+}
+
 pub(crate) const MAX_FILES: usize = 100;
 pub(super) const MAX_RESULT_BYTES: usize =
-    storage_contract::client_protocol::MAX_FILE_DELETION_RESPONSE_BYTES / 2;
+    storage_contract::file_deletion_batch::MAX_RESPONSE_BYTES;
 pub(super) const MAX_FRONTIER: usize =
     storage_contract::client_protocol::MAX_FILE_DELETION_FRONTIER_ENTRIES;
 

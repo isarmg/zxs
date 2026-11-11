@@ -11,6 +11,7 @@ fn is_lifecycle(kind: &str) -> bool {
             | crate::business::FILE_HISTORY_MOVE_KIND
             | storage_contract::file_relocation::OBJECT_MOVE_KIND
             | crate::file_deletion::batch::KIND
+            | crate::file_deletion::batch::UNDO
             | crate::file_deletion::directory::DELETE
             | crate::file_deletion::directory::UNDO
     )
@@ -141,6 +142,22 @@ pub(crate) fn admit_current(state: &State) -> Result<()> {
                     }
                 }
                 directories.insert(group.node.directory_id.clone(), group.node);
+            }
+            continue;
+        }
+        if receipt.kind == crate::file_deletion::batch::UNDO {
+            let nodes = crate::file_deletion::batch::admit_undo(state, receipt)?;
+            for node in &nodes {
+                if directories
+                    .values()
+                    .any(|directory| directory.files.contains_key(&node.file_id))
+                    || active.get(&node.file_id) != Some(node)
+                {
+                    return Err(invalid());
+                }
+            }
+            for node in nodes {
+                active.remove(&node.file_id);
             }
             continue;
         }

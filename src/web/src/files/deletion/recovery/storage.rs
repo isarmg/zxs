@@ -46,6 +46,10 @@ enum StoredIntent {
         #[serialization(deserialize_with = "stored_node")]
         deletion_node: storage_contract::FileDeletionNode,
     },
+    UndoBatch {
+        #[serialization(deserialize_with = "stored_batch_preview")]
+        preview: storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview,
+    },
     UndoDirectory {
         #[serialization(deserialize_with = "directory::wire::stored_node")]
         deletion_node: storage_contract::directory_git::DirectoryDeletionNode,
@@ -66,6 +70,37 @@ fn stored_node<'de, D: Deserializer<'de>>(
     }
     deserializer.deserialize_map(NodeObject)
 }
+fn stored_batch_preview<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, D::Error> {
+    #[derive(Deserialize)]
+    struct Member(
+        #[serialization(deserialize_with = "stored_node")]
+        storage_contract::FileDeletionNode,
+    );
+    #[derive(Deserialize)]
+    #[serialization(deny_unknown_fields)]
+    struct Preview {
+        deletion_operation_id: OperationId,
+        deletion_nodes: Vec<Member>,
+    }
+    struct PreviewObject;
+    impl<'de> Visitor<'de> for PreviewObject {
+        type Value = storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a named original-batch preview object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            let preview = Preview::deserialize(MapAccessDeserializer::new(map))?;
+            Ok(storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview {
+                deletion_operation_id: preview.deletion_operation_id,
+                deletion_nodes: preview.deletion_nodes.into_iter().map(|member| member.0).collect(),
+            })
+        }
+    }
+    deserializer.deserialize_map(PreviewObject)
+}
+
 fn decode_error(source: storage_contract::Error) -> api::Error {
     let mut error = failure("The local deletion recovery record is invalid; it was preserved.");
     error.source = Some(Arc::new(api::ErrorSource::FileDeletionRecovery(source)));
@@ -121,6 +156,11 @@ impl Record {
                 })?;
                 request::Intent::Undo(Arc::new(deletion_node))
             }
+            StoredIntent::UndoBatch { preview } => {
+                request::Intent::UndoBatch(Arc::new(batch_restore::Request::admit(
+                    preview.deletion_operation_id, preview.deletion_nodes,
+                )?))
+            }
             StoredIntent::UndoDirectory { deletion_node } => {
                 request::Intent::UndoDirectory(Arc::new(deletion_node))
             }
@@ -154,6 +194,9 @@ impl Record {
             },
             request::Intent::Undo(node) => StoredIntent::Undo {
                 deletion_node: node.as_ref().clone(),
+            },
+            request::Intent::UndoBatch(request) => StoredIntent::UndoBatch {
+                preview: request.preview().clone(),
             },
             request::Intent::UndoDirectory(node) => StoredIntent::UndoDirectory {
                 deletion_node: node.as_ref().clone(),
@@ -221,3 +264,7 @@ pub(super) fn verify(record: &Record) -> Result<(), api::Error> {
 pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
     Store::open()?.remove(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/web/unit/files/deletion/batch_restore_storage_tests.rs"]
+mod tests;

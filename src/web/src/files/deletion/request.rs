@@ -29,6 +29,7 @@ pub(super) enum Intent {
     DeleteBatch(Arc<batch::Request>),
     DeleteDirectory(Arc<directory::Request>),
     Undo(Arc<storage_contract::FileDeletionNode>),
+    UndoBatch(Arc<batch_restore::Request>),
     UndoDirectory(Arc<storage_contract::directory_git::DirectoryDeletionNode>),
 }
 #[derive(Clone)]
@@ -185,14 +186,42 @@ pub(super) fn submit_delete(state: RwSignal<State>, generation: u64) {
 pub(super) fn submit_undo(state: RwSignal<State>, node: Arc<storage_contract::FileDeletionNode>) {
     submit(state, Intent::Undo(node));
 }
+#[derive(data_serialization::Serialize)]
+#[serialization(untagged)]
+pub(super) enum Body {
+    Json(Value),
+    BatchUndo(storage_contract::file_deletion_batch::UndoFileDeletionBatchBody),
+}
+
+#[derive(data_serialization::Serialize)]
+struct DigestInput<'a, T> {
+    kind: &'a str,
+    principal: &'a str,
+    body: T,
+}
+pub(super) fn native_digest<T: data_serialization::Serialize>(
+    kind: &str,
+    principal: &str,
+    body: T,
+) -> Result<String, api::Error> {
+    storage_contract::object_hash("request", &DigestInput { kind, principal, body })
+        .map_err(identity_error)
+}
+
 impl Intent {
-    pub(super) fn request(&self, operation: &str) -> (String, Value) {
-        match self {
+    pub(super) fn request(&self, operation_id: storage_contract::OperationId) -> (String, Body) {
+        let operation = operation_id.to_string();
+        let operation = operation.as_str();
+        let (endpoint, body) = match self {
             Self::Delete(target) => (
                 format!("/api/files/{}/deletion", api::segment(target.file.as_str())),
                 json!({"repository_id":target.repository.as_str(),"path":target.path.as_str(),"operation_id":operation}),
             ),
             Self::DeleteBatch(request) => request.request(operation),
+            Self::UndoBatch(request) => return (
+                "/api/file-deletion-batches/undo".into(),
+                Body::BatchUndo(request.request(operation_id)),
+            ),
             Self::DeleteDirectory(request) => request.request(operation),
             Self::Undo(node) => (
                 format!("/api/files/{}/deletion/undo", api::segment(&node.file_id)),
@@ -205,7 +234,8 @@ impl Intent {
                 ),
                 json!({"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id,"operation_id":operation}),
             ),
-        }
+        };
+        (endpoint, Body::Json(body))
     }
     pub(super) fn digest(&self, principal: &str) -> Result<String, api::Error> {
         let (kind, body) = match self {
@@ -216,6 +246,7 @@ impl Intent {
                 }),
             ),
             Self::DeleteBatch(request) => ("file.delete.batch", request.input()),
+            Self::UndoBatch(request) => return request.digest(principal),
             Self::DeleteDirectory(request) => ("directory.delete", request.input()),
             Self::Undo(node) => (
                 "file.delete.undo",
@@ -228,11 +259,7 @@ impl Intent {
                 json!({"repository_id":node.repository_id,"owner_directory_id":node.owner_directory_id,"directory_id":node.directory_id,"deletion_node_id":node.node_id}),
             ),
         };
-        storage_contract::object_hash(
-            "request",
-            &json!({"kind":kind,"principal":principal,"body":body}),
-        )
-        .map_err(identity_error)
+        native_digest(kind, principal, body)
     }
     pub(super) fn receipt_matches(&self, id: &str, principal: &str, receipt: &Value) -> bool {
         match self {
@@ -262,6 +289,7 @@ impl Intent {
                 matches!(wire::node(value.clone(), &summary), Ok(Some(node)) if node.operation_id.to_string() == id && node.author == principal && node.sequence == sequence)
             }
             Self::DeleteBatch(request) => request.receipt_matches(id, principal, receipt),
+            Self::UndoBatch(request) => request.receipt_matches(receipt),
             Self::DeleteDirectory(request) => request.receipt_matches(id, principal, receipt),
             Self::Undo(node) => {
                 receipt["operation_kind"] == "file.delete.undo"
@@ -329,7 +357,8 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
     }
     let id = attempt.operation.clone();
     let epoch = attempt.epoch;
-    let (endpoint, body) = attempt.intent.request(&id);
+    let operation = id.parse().expect("invariant: the retained or generated operation ID is canonical");
+    let (endpoint, body) = attempt.intent.request(operation);
     attempt.in_flight = true;
     state.update(|s| {
         s.files.mutation_pending = true;
@@ -342,7 +371,7 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
         if !current_session(state, epoch) {
             return;
         }
-        let result = api::request("POST", &endpoint, Some(body)).await;
+        let result = api::typed_request("POST", &endpoint, body).await;
         if !current_session(state, epoch) {
             return;
         }

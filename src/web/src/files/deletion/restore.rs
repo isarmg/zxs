@@ -4,13 +4,13 @@ use super::*;
 use web_interface::i18n::t;
 
 #[derive(Clone)]
-struct Target {
-    epoch: u64,
-    generation: u64,
-    node: Arc<storage_contract::FileDeletionNode>,
+pub(super) struct Target {
+    pub(super) epoch: u64,
+    pub(super) generation: u64,
+    pub(super) node: Arc<storage_contract::FileDeletionNode>,
 }
 impl Target {
-    fn current(&self, state: &State) -> bool {
+    pub(super) fn current(&self, state: &State) -> bool {
         undo_allowed(state)
             && state.session_epoch == self.epoch
             && state.files.deletion.generation == self.generation
@@ -23,9 +23,29 @@ impl Target {
     }
 }
 #[derive(Clone)]
-pub(super) struct Review {
+pub(super) struct SingleReview {
     target: Target,
     generation: u64,
+}
+
+#[derive(Clone)]
+pub(super) enum Review {
+    Single(SingleReview),
+    Batch(crate::files::deletion::batch_restore::Review),
+}
+impl Review {
+    pub(super) fn single(&self) -> Option<&SingleReview> {
+        match self {
+            Self::Single(review) => Some(review),
+            Self::Batch(_) => None,
+        }
+    }
+    pub(super) fn batch(&self) -> Option<&crate::files::deletion::batch_restore::Review> {
+        match self {
+            Self::Single(_) => None,
+            Self::Batch(review) => Some(review),
+        }
+    }
 }
 
 fn begin(state: RwSignal<State>, target: Target) {
@@ -67,14 +87,14 @@ fn begin(state: RwSignal<State>, target: Target) {
             Ok(Some(node)) => state.update(|s| {
                 let node = Arc::new(node);
                 s.files.deletion.node = Some(node.clone());
-                s.files.deletion.restore_review = Some(Review {
+                s.files.deletion.restore_review = Some(Review::Single(SingleReview {
                     target: Target {
                         epoch: target.epoch,
                         generation,
                         node,
                     },
                     generation: review_generation,
-                });
+                }));
             }),
             Ok(None) => {}
             Err(error) => fail(state, error),
@@ -87,7 +107,7 @@ fn reviewed(
     epoch: u64,
     generation: u64,
 ) -> Option<Arc<storage_contract::FileDeletionNode>> {
-    let review = state.files.deletion.restore_review.as_ref()?;
+    let review = state.files.deletion.restore_review.as_ref()?.single()?;
     (review.target.epoch == epoch
         && review.generation == generation
         && state.files.deletion.review_generation == generation
@@ -124,7 +144,7 @@ pub(super) fn button(
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
-        {move ||state.with(|s|s.files.deletion.restore_review.clone()).map(|review| {
+        {move ||state.with(|s|s.files.deletion.restore_review.as_ref().and_then(Review::single).cloned()).map(|review| {
             let epoch = review.target.epoch;
             let generation = review.generation;
             let node = review.target.node;
@@ -141,7 +161,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                             {t("确认恢复这个文件", "Confirm restoring this file")}
                         </button>
                         <button class="zxs-button" on:click=move |_|state.update(|s| {
-                            if s.session_epoch==epoch && s.files.deletion.restore_review.as_ref().is_some_and(|review|review.generation==generation) {
+                            if s.session_epoch==epoch && s.files.deletion.restore_review.as_ref().and_then(Review::single).is_some_and(|review|review.generation==generation) {
                                 s.files.deletion.cancel_review();
                             }
                         })>{t("取消，不发送恢复请求", "Cancel without sending a restore request")}</button>

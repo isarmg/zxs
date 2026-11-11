@@ -904,3 +904,6 @@ fn disk_exit_current_batch_real_d3_restarts_without_reopening_or_rewriting_the_t
         assert_eq!(files(&disk.root), physical);
     }
 }
+
+#[path = "current_file_deletion_batch_undo_tests.rs"]
+mod file_deletion_batch_undo;

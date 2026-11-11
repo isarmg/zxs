@@ -1376,6 +1376,20 @@ impl Backend for EngineBackend {
     ) -> Result<crate::FileDeletionsPage, ApiError> {
         self.file_deletions_admitted(identity, request)
     }
+    fn file_deletion_batch_undo_preview(
+        &self,
+        identity: &Identity,
+        operation: storage_contract::OperationId,
+    ) -> Result<storage_contract::file_deletion_batch::FileDeletionBatchUndoPreview, ApiError> {
+        self.file_deletion_batch_undo_preview_admitted(identity, operation)
+    }
+    fn restore_deleted_file_batch(
+        &self,
+        identity: &Identity,
+        request: &storage_contract::file_deletion_batch::UndoFileDeletionBatchBody,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.restore_deleted_file_batch_admitted(identity, request)
+    }
     fn restore_deleted_file(
         &self,
         identity: &Identity,

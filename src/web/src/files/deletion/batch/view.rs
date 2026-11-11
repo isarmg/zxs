@@ -50,8 +50,8 @@ pub(in crate::files::deletion) fn view(state: RwSignal<State>) -> impl IntoView 
                         })>{t("关闭，不提交", "Close without submitting")}</button>
                     </div>
                     <p>{t(
-                        "结果未知时保留同一原请求并只查询其回执。成功后的恢复仍逐个选择准确 D，不冒充整批原子撤销，也不恢复目录容器。",
-                        "An unknown result retains this same request and queries its receipt. Restoration after success still selects each exact D individually; this does not atomically undo a batch or restore a folder container.",
+                        "结果未知时保留同一原请求并只查询其回执。成功后可核对准确 D 单独恢复，或重新核对原批次后原子恢复整批；不会恢复目录容器。",
+                        "An unknown result retains this same request and queries its receipt. After success, restore exact D nodes individually or review the original batch for atomic restoration. This does not restore a folder container.",
                     )}</p>
                 </section>
             }

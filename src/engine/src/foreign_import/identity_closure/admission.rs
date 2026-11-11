@@ -208,6 +208,7 @@ impl ForeignAdmissionRecipe {
                 receipt.kind.as_str(),
                 "file.delete"
                     | crate::file_deletion::batch::KIND
+                    | crate::file_deletion::batch::UNDO
                     | crate::file_deletion::directory::DELETE
                     | crate::file_deletion::directory::UNDO
                     | "file.delete.undo"

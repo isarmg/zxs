@@ -12,6 +12,7 @@ pub(crate) mod publication;
 pub(crate) mod retained;
 pub use lifecycle::{DeleteFileRequest, UndoFileDeletionRequest};
 pub(crate) mod batch;
+pub use batch::{BatchUndoActor, BatchUndoError, UndoFileDeletionBatchRequest};
 mod head;
 pub(crate) mod preflight;
 

@@ -73,14 +73,14 @@ fn direct(view: StateProjection<'_>, id: OperationId, file: &str) -> Result<Life
         | crate::business::FILE_HISTORY_MOVE_KIND
         | super::batch::KIND
         | super::directory::DELETE => (DeletionAction::Delete, "deletion_node"),
-        "file.delete.undo" | super::directory::UNDO => {
+        "file.delete.undo" | super::batch::UNDO | super::directory::UNDO => {
             (DeletionAction::Undo, "removed_deletion_node")
         }
         _ => return Err(invalid()),
     };
     let source: crate::FileDeletionNode = if super::directory::is_kind(&receipt.kind) {
         super::directory::node_for(state, receipt, file)?
-    } else if receipt.kind == super::batch::KIND {
+    } else if super::batch::is_kind(&receipt.kind) {
         super::batch::node_for(receipt, file)?
     } else if receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND {
         crate::business::retained_file_history_move_deletion(receipt, file)?

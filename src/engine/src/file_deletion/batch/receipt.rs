@@ -129,17 +129,13 @@ pub(in crate::file_deletion) fn admit(
     }
     let input_value = receipt.result.get("input").ok_or_else(invalid)?;
     let principal = super::super::publication::admit_envelope(state, receipt, input_value, 6)?;
-    let input: Input = json_codec::from_value(input_value.clone())?;
-    let source_values = receipt
-        .result
-        .get("sources")
-        .and_then(json_codec::Value::as_array)
-        .ok_or_else(invalid)?;
+    let input = Input::deserialize(input_value)?;
+    let source_record = receipt.result.get("sources").ok_or_else(invalid)?;
+    let source_values = source_record.as_array().ok_or_else(invalid)?;
     if source_values.len() > MAX_FILES {
         return Err(invalid());
     }
-    let sources: Vec<FrozenSource> =
-        json_codec::from_value(json_codec::Value::Array(source_values.to_vec()))?;
+    let sources = Vec::<FrozenSource>::deserialize(source_record)?;
     let expected = requested_files(state, &input, &sources)?;
     let values = receipt
         .result
@@ -158,7 +154,7 @@ pub(in crate::file_deletion) fn admit(
     let mut files = BTreeSet::new();
     let mut frontier = (0, 0);
     for value in values {
-        let node: FileDeletionNode = json_codec::from_value(value.clone())?;
+        let node = FileDeletionNode::deserialize(value)?;
         super::super::publication::admit_node_shape(&node)?;
         require_frontier((node.branch_heads.len(), node.parent_node_ids.len()))?;
         frontier.0 += node.branch_heads.len();
@@ -228,12 +224,17 @@ pub(in crate::file_deletion) fn node_for(
     receipt: &OperationResult,
     file: &str,
 ) -> Result<FileDeletionNode> {
+    let field = match receipt.kind.as_str() {
+        KIND => "deletion_nodes",
+        UNDO => "removed_deletion_nodes",
+        _ => return Err(invalid()),
+    };
     let nodes = receipt
         .result
-        .get("deletion_nodes")
+        .get(field)
         .and_then(json_codec::Value::as_array)
         .ok_or_else(invalid)?;
-    if receipt.kind != KIND || nodes.is_empty() || nodes.len() > MAX_FILES {
+    if nodes.is_empty() || nodes.len() > MAX_FILES {
         return Err(invalid());
     }
     let mut matches = nodes
@@ -243,5 +244,5 @@ pub(in crate::file_deletion) fn node_for(
     if matches.next().is_some() {
         return Err(invalid());
     }
-    Ok(json_codec::from_value(node.clone())?)
+    Ok(FileDeletionNode::deserialize(node)?)
 }

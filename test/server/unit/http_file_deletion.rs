@@ -35,3 +35,18 @@ fn undo_body_uses_the_same_strict_json_boundary() {
     );
     assert!(storage_contract::decode_strict::<Undo>(duplicate.as_bytes()).is_err());
 }
+
+#[test]
+fn batch_undo_accepts_only_original_batch_and_new_operation() {
+    use storage_contract::file_deletion_batch::UndoFileDeletionBatchBody;
+    let source = r#"{"deletion_operation_id":"op_11111111111111111111111111111111","operation_id":"op_22222222222222222222222222222222"}"#;
+    assert!(storage_contract::decode_strict::<UndoFileDeletionBatchBody>(source.as_bytes()).is_ok());
+    for changed in [
+        source.replace("\"operation_id\":", "\"file_ids\":[],\"operation_id\":"),
+        source.replace("\"operation_id\":", "\"force\":true,\"operation_id\":"),
+        source.replace("op_11111111111111111111111111111111", "file_11111111111111111111111111111111"),
+        source.replace("\"operation_id\":", "\"operation_id\":\"op_33333333333333333333333333333333\",\"operation_id\":"),
+    ] {
+        assert!(storage_contract::decode_strict::<UndoFileDeletionBatchBody>(changed.as_bytes()).is_err());
+    }
+}

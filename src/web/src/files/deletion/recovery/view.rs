@@ -22,6 +22,12 @@ fn description(record: &Record) -> String {
             request.label(),
             record.operation,
         ),
+        request::Intent::UndoBatch(request) => format!(
+            "{} · {} · {}",
+            t("原子恢复原删除批次", "Restore original deletion batch atomically"),
+            request.original(),
+            record.operation,
+        ),
         request::Intent::Undo(node) => format!(
             "{} · {} · {} · {} · {}",
             t("撤销准确删除节点", "Undo exact deletion node"),
@@ -44,6 +50,18 @@ fn batch_details(record: &Record) -> impl IntoView + use<> {
     match &record.intent {
         request::Intent::DeleteBatch(request) => Some(batch::retained_view(request)),
         request::Intent::Delete(_)
+        | request::Intent::DeleteDirectory(_)
+        | request::Intent::UndoBatch(_)
+        | request::Intent::Undo(_)
+        | request::Intent::UndoDirectory(_) => None,
+    }
+}
+
+fn batch_restore_details(record: &Record) -> impl IntoView + use<> {
+    match &record.intent {
+        request::Intent::UndoBatch(request) => Some(batch_restore::retained_view(request)),
+        request::Intent::Delete(_)
+        | request::Intent::DeleteBatch(_)
         | request::Intent::DeleteDirectory(_)
         | request::Intent::Undo(_)
         | request::Intent::UndoDirectory(_) => None,
@@ -96,7 +114,7 @@ fn directory_details(record: &Record) -> impl IntoView + use<> {
                 })
                 .collect(),
         )),
-        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) => {
+        request::Intent::Delete(_) | request::Intent::DeleteBatch(_) | request::Intent::Undo(_) | request::Intent::UndoBatch(_) => {
             None
         }
     };
@@ -135,6 +153,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         <section class="zxs-stack">
                             <p><code>{description(&record)}</code></p>
                             {batch_details(&record)}
+                            {batch_restore_details(&record)}
                             {directory_details(&record)}
                             <Show when=move ||state.with(|s|s.files.deletion.recovery.records.iter().any(|r|r.record.operation==operation&&r.settled.is_none()))>
                                 <p>{t("结果尚未确认。查询返回找不到或重试遭到拒绝，都不证明原操作未发布。", "The outcome is unconfirmed. A missing lookup or rejected retry does not prove the original operation never published.")}</p>
@@ -161,6 +180,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             <h3>{t("确认续发同一原请求", "Confirm the same original request")}</h3>
                             <p><code>{description(&review.record)}</code></p>
                             {batch_details(&review.record)}
+                            {batch_restore_details(&review.record)}
                             {directory_details(&review.record)}
                             <p>{t("仅使用原账号、文件或目录身份、路径、准确删除节点以及原 operation ID；批次与目录保留原所有者、分支和依据树，不重读当前选择替换任何项。恢复目录只移除该次真正创建的文件 D，此前已删除的文件保持删除。若原请求尚未发布，这会实际执行原删除或撤销；若已发布，只取回原收据。当前权限与状态仍由服务端决定，本机材料不是授权。", "Only the original account, file or folder identity, path, exact deletion node and operation ID are used. Batches and folders retain their original owner, branch and baseline; today's selection never replaces any item. Folder restoration removes only the file D nodes created by that directory operation; previously deleted files remain deleted. If it never published, this can perform the original deletion or restoration; otherwise it retrieves the original receipt. The server checks current permission and state; local material grants no authority.")}</p>
                             <button class="zxs-button" data-zxs-confirm-deletion-retry="" disabled=move ||state.with(|s|reviewed(s,epoch,generation).is_none()) on:click=move |_|retry(state,epoch,generation)>{t("确认续发原操作，不生成新 ID", "Retry original operation, without a new ID")}</button>
