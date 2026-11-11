@@ -1340,7 +1340,19 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         (
             "POST",
             "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
+            Some(json!({
+                "name": "Side",
+                "operation_id": "op_00000000000000000000000000000000",
+                "source": {
+                    "repository_id": "repo_00000000000000000000000000000000",
+                    "directory_id": "repo_00000000000000000000000000000000",
+                    "directory_branch_id": "dbr_00000000000000000000000000000000",
+                    "working_tree_id": "dtree_00000000000000000000000000000000",
+                    "head_tree_id": "dtree_00000000000000000000000000000000",
+                    "index_generation": "1",
+                    "namespace_head": "commit_00000000000000000000000000000000"
+                }
+            })),
         ),
         ("GET", "/api/commits/commit", None),
         ("GET", "/api/history-trees/history/graph", None),
