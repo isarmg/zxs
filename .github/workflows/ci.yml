@@ -12,6 +12,11 @@ on:
         required: true
         default: targeted
         options: [targeted, full]
+      comparison_base:
+        description: Optional full ancestor commit SHA for targeted retry (ignored by full scope)
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read

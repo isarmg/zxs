@@ -299,7 +299,11 @@ class Run:
         if event_name == 'push':
             before = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())['before']
         elif event_name == 'workflow_dispatch':
-            before = self.command(['git', 'rev-parse', 'HEAD^']).strip()
+            inputs = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()).get('inputs', {})
+            if inputs.get('scope') != 'targeted':
+                raise ValueError('targeted runner requires explicit targeted scope')
+            before = inputs.get('comparison_base') or self.command(
+                ['git', 'rev-parse', 'HEAD^']).strip()
         else:
             raise ValueError('targeted runner requires push or manual dispatch context')
         if not isinstance(before, str) or not re.fullmatch(r'[0-9a-f]{40}', before):

@@ -392,6 +392,96 @@ class TargetedSelection(unittest.TestCase):
             with self.assertRaises(ValueError):
                 CI.inventory(invalid)
 
+
+class TargetedBaseline(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        policy = self.root / CI.PLAN_PATH
+        policy.parent.mkdir(parents=True)
+        policy.write_text(json.dumps({
+            'groups': {'fixture': {'reason': 'bounded fixture', 'python_tests': ['test_fixture'],
+                                   'rust_targets': []}},
+            'rules': [{'path': 'changed.py', 'groups': ['fixture']}],
+            'unexecuted': 'All unrelated targets remain unexecuted.',
+        }))
+        self.event = self.root / 'event.json'
+        self.base = 'a' * 40
+        self.head = 'b' * 40
+        self.calls = []
+        self.ancestor = True
+        self.run = CI.Run(self.root)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.dict(CI.os.environ, {'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                                      'GITHUB_EVENT_PATH': str(self.event),
+                                      'GITHUB_STEP_SUMMARY': ''}).start()
+        mock.patch.object(self.run, 'command', side_effect=self.command).start()
+
+    def command(self, args, *unused):
+        self.calls.append(args)
+        if args[:2] == ['git', 'rev-parse']:
+            return self.head if args[2] == 'HEAD' else self.base
+        if args[:2] == ['git', 'merge-base']:
+            if not self.ancestor:
+                raise subprocess.CalledProcessError(1, args)
+            return ''
+        if args[:2] == ['git', 'diff']:
+            return 'changed.py\0'
+        self.fail(f'unexpected command: {args}')
+
+    def dispatch(self, base='', scope='targeted'):
+        self.event.write_text(json.dumps({'inputs': {'scope': scope, 'comparison_base': base}}))
+
+    def test_explicit_ancestor_selects_only_mapped_work_and_records_base(self):
+        self.dispatch(self.base)
+        plan = self.run.plan()
+        self.assertEqual(plan['groups'], ['fixture'])
+        self.assertEqual(plan['rust_targets'], [])
+        self.assertEqual(self.run.summary['base'], self.base)
+        self.assertIn(['git', 'merge-base', '--is-ancestor', self.base, 'HEAD'], self.calls)
+        self.assertNotIn(['git', 'rev-parse', 'HEAD^'], self.calls)
+
+    def test_empty_dispatch_base_keeps_previous_commit_default(self):
+        self.dispatch()
+        self.run.plan()
+        self.assertIn(['git', 'rev-parse', 'HEAD^'], self.calls)
+
+    def test_push_uses_original_event_base_not_dispatch_input(self):
+        self.dispatch('c' * 40)
+        self.event.write_text(json.dumps({'before': self.base,
+                                         'inputs': {'comparison_base': 'c' * 40}}))
+        with mock.patch.dict(CI.os.environ, {'GITHUB_EVENT_NAME': 'push'}):
+            self.run.plan()
+        self.assertEqual(self.run.summary['base'], self.base)
+
+    def test_invalid_sha_is_rejected_before_ancestor_or_diff(self):
+        for value in ['main', 'abc', '-HEAD', 'A' * 40, 'a' * 40 + '\n', 3]:
+            with self.subTest(value=value):
+                self.calls.clear()
+                self.dispatch(value)
+                with self.assertRaises(ValueError):
+                    self.run.plan()
+                self.assertEqual(self.calls, [['git', 'rev-parse', 'HEAD']])
+
+    def test_nonancestor_retains_failed_evidence_without_diff_or_build(self):
+        self.dispatch(self.base)
+        self.ancestor = False
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run.execute('plan')
+        summary = json.loads((self.run.directory / 'summary.json').read_text())
+        self.assertEqual(summary['status'], 'failed')
+        self.assertIn('CalledProcessError', summary['error'])
+        self.assertFalse(any(args[:2] == ['git', 'diff'] for args in self.calls))
+        self.assertEqual(summary['passed'], [])
+
+    def test_full_or_missing_scope_cannot_enter_targeted_runner(self):
+        for scope in ['full', '', None]:
+            with self.subTest(scope=scope):
+                self.dispatch(self.base, scope)
+                with self.assertRaises(ValueError):
+                    self.run.plan()
+
 class TargetedExecution(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
