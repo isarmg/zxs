@@ -228,7 +228,15 @@ fn revoke_response_credentials(generation: u64) {
     }
 }
 
-pub fn operation_id() -> Result<String, Error> {
+pub fn operation_id() -> Result<storage_contract::OperationId, Error> {
+    Ok(storage_contract::OperationId::from_random(random_bytes()?))
+}
+
+pub(crate) fn disk_id() -> Result<storage_contract::DiskId, Error> {
+    Ok(storage_contract::DiskId::from_random(random_bytes()?))
+}
+
+fn random_bytes() -> Result<[u8; 16], Error> {
     let window = web_sys::window().ok_or_else(|| {
         error(
             storage_contract::ErrorCode::NoWindow,
@@ -240,10 +248,7 @@ pub fn operation_id() -> Result<String, Error> {
     crypto
         .get_random_values_with_u8_array(&mut bytes)
         .map_err(js_error)?;
-    Ok(format!(
-        "op_{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ))
+    Ok(bytes)
 }
 
 fn validate_path(path: &str) -> Result<(), Error> {

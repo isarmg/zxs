@@ -119,12 +119,8 @@ pub(super) fn add_target(state: RwSignal<State>, selection: CandidateSelection) 
     if !state.with_untracked(editable) {
         return;
     }
-    let id = match api::operation_id() {
-        Ok(id) => format!(
-            "disk_{}",
-            id.strip_prefix("op_")
-                .expect("invariant: browser operation IDs carry the fixed prefix")
-        ),
+    let id = match api::disk_id() {
+        Ok(id) => id.to_string(),
         Err(error) => {
             fail(state, error);
             return;
@@ -175,9 +171,7 @@ pub(super) fn start(state: RwSignal<State>) {
         return;
     }
     let operation = match api::operation_id() {
-        Ok(id) => id
-            .parse()
-            .expect("invariant: the browser generated a canonical operation ID"),
+        Ok(id) => id,
         Err(error) => {
             fail(state, error);
             return;

@@ -362,7 +362,7 @@
             "api::tests::",
             "api::read_queue::tests::"
           ],
-          "max_tests": 46
+          "max_tests": 47
         },
         {
           "package": "web-app",
@@ -414,6 +414,37 @@
           "mode": "check",
           "kind": "bin",
           "name": "recovery-startup"
+        }
+      ]
+    },
+    "browser-identity-generation": {
+      "reason": "Browser identity byte preservation, backup original-input recovery, batch and file operation uncertainty, session fencing and entropy diagnostics",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "api::tests::",
+            "api::browser::tests::",
+            "admin::backup_transaction::tests::",
+            "admin::backup_transaction::recovery::tests::",
+            "files::batch::request::tests::",
+            "files::actions::operation::tests::"
+          ],
+          "exact": [
+            "ui::tests::content_and_account_completion_require_the_original_active_session",
+            "ui::tests::language_reload_waits_for_pending_or_uncertain_work",
+            "ui::tests::logout_supersedes_pending_login_and_settlement_reopens_admission"
+          ],
+          "max_tests": 101
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
         }
       ]
     }
@@ -1585,7 +1616,8 @@
     {
       "path": "src/web/src/api.rs",
       "groups": [
-        "setup-request-boundary"
+        "setup-request-boundary",
+        "browser-identity-generation"
       ]
     },
     {
@@ -1597,7 +1629,8 @@
     {
       "path": "test/web/unit/api/tests.rs",
       "groups": [
-        "setup-request-boundary"
+        "setup-request-boundary",
+        "browser-identity-generation"
       ]
     },
     {
@@ -1629,6 +1662,24 @@
       "groups": [
         "ci-selection",
         "offline-chain-slots"
+      ]
+    },
+    {
+      "path": "src/web/src/ui.rs",
+      "groups": [
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/backup_transaction/actions.rs",
+      "groups": [
+        "browser-identity-generation"
+      ]
+    },
+    {
+      "path": "src/web/src/files/batch/actions.rs",
+      "groups": [
+        "browser-identity-generation"
       ]
     }
   ],

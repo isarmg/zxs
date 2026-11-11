@@ -145,7 +145,7 @@ pub(crate) fn feedback(error: &api::Error) -> Feedback {
 /// Entropy failure prevents admission and is reported once at the UI boundary.
 pub(crate) fn operation_id(state: RwSignal<State>) -> Option<String> {
     match api::operation_id() {
-        Ok(id) => Some(id),
+        Ok(id) => Some(id.to_string()),
         Err(error) => {
             fail(state, error);
             None

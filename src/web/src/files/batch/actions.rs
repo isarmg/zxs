@@ -49,7 +49,7 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
             .filter(|branch| branch.summary().current())
             .map(branch_id)
             .collect::<BTreeSet<_>>();
-        let id = api::operation_id()?;
+        let id = api::operation_id()?.to_string();
         let repository = snapshot.files.repository_id.clone();
         let repository_path = snapshot.files.repository_path.clone();
         let disk_prefix = if repository_path.is_empty() {

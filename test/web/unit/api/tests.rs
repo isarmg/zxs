@@ -476,3 +476,29 @@ fn authentication_diagnostics_redact_response_values_and_unknown_field_names() {
         }
     }
 }
+
+#[test]
+fn random_identity_bytes_keep_operation_and_disk_wire_without_uuid_bit_rewriting() {
+    for (bytes, suffix) in [
+        ([0; 16], "00000000000000000000000000000000"),
+        ([u8::MAX; 16], "ffffffffffffffffffffffffffffffff"),
+        ([0x5a; 16], "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"),
+        (
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            "000102030405060708090a0b0c0d0e0f",
+        ),
+    ] {
+        let operation = storage_contract::OperationId::from_random(bytes);
+        let disk = storage_contract::DiskId::from_random(bytes);
+        assert_eq!(operation.to_string(), format!("op_{suffix}"));
+        assert_eq!(disk.to_string(), format!("disk_{suffix}"));
+        assert_eq!(
+            json_codec::to_string(&operation).unwrap(),
+            format!(r#""op_{suffix}""#)
+        );
+        assert_eq!(
+            json_codec::to_string(&disk).unwrap(),
+            format!(r#""disk_{suffix}""#)
+        );
+    }
+}
