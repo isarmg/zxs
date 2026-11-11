@@ -26,7 +26,7 @@ impl Inner {
                 .expect("invariant: held resume bound before cancellation")
                 .transition_hash
                 .clone();
-            self.with_resume_authorization(identity, || {
+            self.with_terminal_authorization(identity, || {
                 pending.cancel(&identity.principal, intent.status.operation_id, &transition)
             })
         })();

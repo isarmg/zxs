@@ -371,3 +371,90 @@ fn typed_forwarders_recheck_management_availability_before_required_and_optional
         }
     }
 }
+
+#[test]
+fn terminal_authorization_keeps_the_credential_owner_through_success_and_failure() {
+    let root = crate::tests::private_tempdir();
+    let management = root.path().join("management");
+    drop(AuthStore::initialize_management(&management, "admin", SECRET).unwrap());
+    let (backend, mut auth) = open_service(&root.path().join("data"), &management).unwrap();
+    let login = auth.login("admin", SECRET).unwrap();
+    let identity = auth.authenticate(&login.token).unwrap();
+    let auth = Arc::new(Mutex::new(auth));
+    *crate::lock(&backend.inner.auth) = Some(Arc::clone(&auth));
+
+    assert_eq!(
+        backend
+            .inner
+            .with_terminal_authorization(&identity, || {
+                assert!(matches!(
+                    auth.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                Ok(37)
+            })
+            .unwrap(),
+        37
+    );
+    assert!(auth.try_lock().is_ok());
+
+    let error = backend
+        .inner
+        .with_terminal_authorization::<()>(&identity, || {
+            assert!(matches!(
+                auth.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            Err(storage_engine::Error::new(
+                ErrorCode::IoError,
+                "original terminal publication failure",
+            ))
+        })
+        .unwrap_err();
+    let expected = crate::engine_backend::error(storage_engine::Error::new(
+        ErrorCode::IoError,
+        "original terminal publication failure",
+    ));
+    assert_eq!(error.code, expected.code);
+    assert_eq!(error.status, expected.status);
+    assert_eq!(error.message, expected.message);
+    assert_eq!(error.retryable, expected.retryable);
+    assert_eq!(
+        std::error::Error::source(&error).unwrap().to_string(),
+        std::error::Error::source(&expected).unwrap().to_string()
+    );
+    assert!(auth.try_lock().is_ok());
+}
+
+#[test]
+fn terminal_authorization_rejects_missing_and_revoked_sessions_before_the_action() {
+    let root = crate::tests::private_tempdir();
+    let management = root.path().join("management");
+    drop(AuthStore::initialize_management(&management, "admin", SECRET).unwrap());
+    let (backend, mut auth) = open_service(&root.path().join("data"), &management).unwrap();
+    let login = auth.login("admin", SECRET).unwrap();
+    let identity = auth.authenticate(&login.token).unwrap();
+    let auth = Arc::new(Mutex::new(auth));
+    let invoked = std::cell::Cell::new(false);
+    let rejected = |caller: &Identity, code| {
+        let error = backend
+            .inner
+            .with_terminal_authorization(caller, || {
+                invoked.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.code, code);
+        assert!(!invoked.get());
+        assert!(auth.try_lock().is_ok());
+    };
+    rejected(&identity, ErrorCode::Unauthorized);
+    *crate::lock(&backend.inner.auth) = Some(Arc::clone(&auth));
+    let mut unbound = identity.clone();
+    unbound.admission_session = None;
+    rejected(&unbound, ErrorCode::Unauthorized);
+    crate::lock(&auth).logout(&login.token).unwrap();
+    rejected(&identity, ErrorCode::Unauthorized);
+    backend.stop_management();
+    rejected(&identity, ErrorCode::ServiceStopping);
+}

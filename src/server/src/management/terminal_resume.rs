@@ -134,27 +134,6 @@ enum ResumeOwner {
 }
 
 impl Inner {
-    fn with_resume_authorization<T>(
-        &self,
-        identity: &Identity,
-        action: impl FnOnce() -> Result<T, storage_engine::Error>,
-    ) -> Result<T, ApiError> {
-        self.ensure_running()?;
-        let auth = crate::lock(&self.auth)
-            .clone()
-            .ok_or_else(ApiError::unauthorized)?;
-        let current = crate::lock(&auth);
-        if identity.admission_session.is_none() {
-            return Err(ApiError::unauthorized());
-        }
-        current.revalidate_identity(identity)?;
-        // Serialize revocation with the core's publication call. A session
-        // checked before copying the archive cannot authorize a later commit.
-        let result = action().map_err(crate::engine_backend::error);
-        drop(current);
-        result
-    }
-
     pub(super) fn terminal_configuration(
         &self,
         identity: &Identity,
@@ -421,7 +400,7 @@ impl Inner {
             bind_held_resume(&pending, intent)?;
             intent.status.phase = AdditionPhase::JointDecision;
             save(directory, intent)?;
-            self.with_resume_authorization(identity, || pending.synchronize())?;
+            self.with_terminal_authorization(identity, || pending.synchronize())?;
             self.current_management_identity(identity)?;
             intent.status.phase = AdditionPhase::Activating;
             save(directory, intent)?;
@@ -502,7 +481,7 @@ impl Inner {
                 return Err(error);
             }
         };
-        let pending = self.with_resume_authorization(identity, || {
+        let pending = self.with_terminal_authorization(identity, || {
             terminal.prepare_metadata_resume(
                 intent.target.clone(),
                 &identity.principal,
@@ -572,14 +551,14 @@ impl Inner {
         self.current_management_identity(identity)?;
         match proof.phase {
             TerminalMetadataResumePhase::ResupplyDirectories => {
-                let management = self.with_resume_authorization(identity, || {
+                let management = self.with_terminal_authorization(identity, || {
                     TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)
                 })?;
                 let held = match directories {
                     Some(held) => held,
                     None => self.open_resume_directories(intent)?,
                 };
-                self.with_resume_authorization(identity, || {
+                self.with_terminal_authorization(identity, || {
                     management.reopen_metadata_resume_held(held)
                 })
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)))
@@ -595,7 +574,7 @@ impl Inner {
                 }
                 // Activation consumed its pending owner. Restore through the
                 // protected selector, not the HTTP progress field.
-                let engine = self.with_resume_authorization(identity, || {
+                let engine = self.with_terminal_authorization(identity, || {
                     TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)?
                         .complete_metadata_resume_held(self.retained_workspace_limits)
                 })?;

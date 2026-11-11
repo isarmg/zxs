@@ -54,6 +54,27 @@ impl BackendState {
     }
 }
 impl Inner {
+    pub(super) fn with_terminal_authorization<T>(
+        &self,
+        identity: &Identity,
+        action: impl FnOnce() -> Result<T, storage_engine::Error>,
+    ) -> Result<T, ApiError> {
+        self.ensure_running()?;
+        let auth = crate::lock(&self.auth)
+            .clone()
+            .ok_or_else(ApiError::unauthorized)?;
+        let current = crate::lock(&auth);
+        if identity.admission_session.is_none() {
+            return Err(ApiError::unauthorized());
+        }
+        current.revalidate_identity(identity)?;
+        // Serialize revocation with the core's publication call. A session
+        // checked before copying the archive cannot authorize a later commit.
+        let result = action().map_err(crate::engine_backend::error);
+        drop(current);
+        result
+    }
+
     pub(super) fn current_management_identity(
         &self,
         caller: &Identity,

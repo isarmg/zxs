@@ -224,25 +224,6 @@ enum ResumeOwner {
 }
 
 impl Inner {
-    fn with_readmission_authorization<T>(
-        &self,
-        identity: &Identity,
-        action: impl FnOnce() -> Result<T, storage_engine::Error>,
-    ) -> Result<T, ApiError> {
-        self.ensure_running()?;
-        let auth = crate::lock(&self.auth)
-            .clone()
-            .ok_or_else(ApiError::unauthorized)?;
-        let current = crate::lock(&auth);
-        if identity.admission_session.is_none() {
-            return Err(ApiError::unauthorized());
-        }
-        current.revalidate_identity(identity)?;
-        let result = action().map_err(crate::engine_backend::error);
-        drop(current);
-        result
-    }
-
     fn verify_terminal_readmission_owner(
         &self,
         identity: &Identity,
@@ -352,19 +333,19 @@ impl Inner {
         bind_archive(intent, binding)?;
         save(directory, intent)?;
         self.current_management_identity(identity)?;
-        let management = self.with_readmission_authorization(identity, || {
+        let management = self.with_terminal_authorization(identity, || {
             TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)
         })?;
         match proof.phase {
             TerminalMetadataResumePhase::ResupplyDirectories => {
                 let held = crate::engine_backend::storage_readmission::open_target(intent)?;
-                self.with_readmission_authorization(identity, || {
+                self.with_terminal_authorization(identity, || {
                     management.reopen_metadata_resume_held(vec![held])
                 })
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)))
             }
             TerminalMetadataResumePhase::CompleteGeneration => self
-                .with_readmission_authorization(identity, || {
+                .with_terminal_authorization(identity, || {
                     management.complete_metadata_resume_held(self.retained_workspace_limits)
                 })
                 .map(|engine| ResumeOwner::Published(Box::new(engine))),
@@ -454,7 +435,7 @@ impl Inner {
             bind_archive(intent, binding)?;
             intent.status.phase = ReadmissionPhase::Archiving;
             save(directory, intent)?;
-            self.with_readmission_authorization(identity, || pending.synchronize())?;
+            self.with_terminal_authorization(identity, || pending.synchronize())?;
             self.current_management_identity(identity)?;
             intent.status.phase = ReadmissionPhase::Activating;
             save(directory, intent)
