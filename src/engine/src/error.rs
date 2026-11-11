@@ -48,9 +48,9 @@ pub enum Error {
     #[error("CHECKSUM_MISMATCH: {0}")]
     Digest(#[from] blake3::HexError),
     #[error("CONTAINER_LAYOUT_INVALID: {0}")]
-    Integer(#[from] std::num::ParseIntError),
+    Integer(#[source] std::num::ParseIntError),
     #[error("PLAN_INVALID: {0}")]
-    IntegerRange(#[from] std::num::TryFromIntError),
+    IntegerRange(#[source] std::num::TryFromIntError),
     #[error("directory name is not UTF-8: {0:?}")]
     PathEncoding(std::ffi::OsString),
     #[error("{operation}; cleanup failed: {cleanup}")]

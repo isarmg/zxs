@@ -1498,6 +1498,92 @@
           "mode": "check"
         }
       ]
+    },
+    "engine-integer-errors": {
+      "reason": "Explicit integer error selection preserves storage sequence admission, historical plan range rejection, history projection counts and cursor error order without changing wire codes or sources. Engine tests currently enable fault-injection through dev dependencies; separate check targets compile product consumers, not their complete integration-test or test-harness closure.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::history_window::oracle_tests::",
+            "container_storage::file_database::tests::",
+            "historical_save::integer_tests::",
+            "history_package::manifest::integer_tests::"
+          ],
+          "exact": [
+            "container_storage::tests::raw_storage_sequence_parser_retains_format_errors",
+            "container_storage::tests::identity_counts_each_file_independently_with_required_numbered_names",
+            "container_storage::tests::identity_preserves_number_width_and_exhaustion_without_global_sequence_coupling",
+            "container_storage::tests::current_version_requires_storage_name_and_creation_time",
+            "container_storage::tests::version_sequence_admission_retains_overflow_before_digest_and_calendar_errors",
+            "historical_save::tests::historical_edits_materialize_only_written_files_without_changing_the_source_head",
+            "historical_save::tests::historical_placeholders_need_no_old_payload_and_written_replacements_materialize",
+            "historical_save::tests::historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherited",
+            "history_package::tests::tombstoned_storage_identity_is_validated_before_restore_decision"
+          ],
+          "max_tests": 45,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "mode": "check"
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "mode": "check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "name": "perf-check",
+          "mode": "check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "name": "recovery-startup",
+          "mode": "check"
+        },
+        {
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3901,6 +3987,72 @@
       "path": "test/engine/unit/history_package/timestamp_tests.rs",
       "groups": [
         "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/projection.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/query.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/historical_save.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/tests.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/file_database_tests.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_window_oracle_tests.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/historical_save/integer_tests.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/integer_tests.rs",
+      "groups": [
+        "engine-integer-errors"
       ]
     }
   ],

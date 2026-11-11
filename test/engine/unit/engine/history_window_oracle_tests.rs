@@ -1771,7 +1771,10 @@ fn cursors_cannot_change_scope_budget_or_query_or_invent_a_boundary() {
 
 #[test]
 fn invalid_utf8_field_offsets_and_tiny_unusable_budgets_are_explicit_errors() {
+    use std::error::Error as _;
+
     let view = fixture();
+    let before = storage_contract::encoding::canonical_json(view.business_projection()).unwrap();
     let mut request = request(
         HistoryCollection::NodeField {
             node_id: id("ver", 16).parse().unwrap(),
@@ -1794,12 +1797,18 @@ fn invalid_utf8_field_offsets_and_tiny_unusable_budgets_are_explicit_errors() {
             byte_offset: offset,
         };
         request.cursor = Some(HistoryCursor::from_payload(payload).unwrap());
-        assert_eq!(
-            view.history_window(&request, &context(), &HistoryWindowCancellation::new())
-                .unwrap_err()
-                .code(),
-            storage_contract::ErrorCode::InvalidRequest
-        );
+        let error = view
+            .history_window(&request, &context(), &HistoryWindowCancellation::new())
+            .unwrap_err();
+        if usize::try_from(offset).is_err() {
+            assert_eq!(error.code(), storage_contract::ErrorCode::PlanInvalid);
+            assert!(matches!(error, Error::IntegerRange(_)));
+            assert!(error.source().unwrap().is::<std::num::TryFromIntError>());
+        } else {
+            assert_eq!(error.code(), storage_contract::ErrorCode::InvalidRequest);
+        }
+        assert!(!error.is_retryable());
+        assert!(error.published_result().is_none());
     }
     request.cursor = None;
     request.limit = HistoryPageLimit::new(1).unwrap();
@@ -1808,6 +1817,10 @@ fn invalid_utf8_field_offsets_and_tiny_unusable_budgets_are_explicit_errors() {
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::InvalidRequest
+    );
+    assert_eq!(
+        storage_contract::encoding::canonical_json(view.business_projection()).unwrap(),
+        before
     );
 }
 

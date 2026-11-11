@@ -545,7 +545,7 @@ impl Engine {
             .as_u64()
             .map(|copies| {
                 u32::try_from(copies).map_err(|source| {
-                    Error::from(source).context(
+                    Error::IntegerRange(source).context(
                         storage_contract::ErrorCode::PlanInvalid,
                         "historical copy count is invalid",
                     )
@@ -658,3 +658,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/historical_save/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/historical_save/integer_tests.rs"]
+mod integer_tests;

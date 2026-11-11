@@ -99,7 +99,8 @@ impl<'a> Query<'a> {
                 context: context.clone(),
                 query_hash,
                 limit: request.limit,
-                action_max_entries: u64::try_from(view.history_action_max_entries)?,
+                action_max_entries: u64::try_from(view.history_action_max_entries)
+                    .map_err(Error::IntegerRange)?,
             },
             anchor,
             indexed: None,
@@ -572,7 +573,10 @@ impl<'a> Query<'a> {
         for (ordinal, source) in version.source_version_ids.iter().enumerate() {
             self.cancel.checkpoint()?;
             if self.allowed_version(source) {
-                selector.offer(u64::try_from(ordinal)?, source.as_str());
+                selector.offer(
+                    u64::try_from(ordinal).map_err(Error::IntegerRange)?,
+                    source.as_str(),
+                );
             }
         }
         let selection = selector.finish()?;
@@ -606,7 +610,10 @@ impl<'a> Query<'a> {
             self.cancel.checkpoint()?;
             if self.allowed_branch(branch) && nodes::node(self.state, self.scope(), node).is_some()
             {
-                selector.offer(u64::try_from(ordinal)?, (branch.as_str(), node.as_str()));
+                selector.offer(
+                    u64::try_from(ordinal).map_err(Error::IntegerRange)?,
+                    (branch.as_str(), node.as_str()),
+                );
             }
         }
         let selection = selector.finish()?;
@@ -635,7 +642,10 @@ impl<'a> Query<'a> {
         for (ordinal, parent) in merge.parent_node_ids.iter().enumerate() {
             self.cancel.checkpoint()?;
             if nodes::node(self.state, self.scope(), parent).is_some() {
-                selector.offer(u64::try_from(ordinal)?, parent.as_str());
+                selector.offer(
+                    u64::try_from(ordinal).map_err(Error::IntegerRange)?,
+                    parent.as_str(),
+                );
             }
         }
         let selection = selector.finish()?;
@@ -663,7 +673,7 @@ impl<'a> Query<'a> {
         let offset = match &self.request.cursor {
             Some(cursor) => match (&cursor.payload().position, cursor.payload().direction) {
                 (HistoryPosition::Field { byte_offset }, HistoryDirection::Forward) => {
-                    usize::try_from(*byte_offset)?
+                    usize::try_from(*byte_offset).map_err(Error::IntegerRange)?
                 }
                 _ => return Err(invalid("field cursor requires a forward UTF-8 byte offset")),
             },
@@ -687,7 +697,7 @@ impl<'a> Query<'a> {
                 &self.identity,
                 HistoryDirection::Forward,
                 HistoryPosition::Field {
-                    byte_offset: u64::try_from(end)?,
+                    byte_offset: u64::try_from(end).map_err(Error::IntegerRange)?,
                 },
                 None,
             )?)
@@ -699,8 +709,8 @@ impl<'a> Query<'a> {
         Ok(HistoryWindowPage::NodeField {
             identity: self.identity.clone(),
             field,
-            total_bytes: u64::try_from(text.len())?,
-            byte_offset: u64::try_from(offset)?,
+            total_bytes: u64::try_from(text.len()).map_err(Error::IntegerRange)?,
+            byte_offset: u64::try_from(offset).map_err(Error::IntegerRange)?,
             text: fragment,
             end_of_field: end == text.len(),
             next_cursor,

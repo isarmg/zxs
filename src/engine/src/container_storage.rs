@@ -78,7 +78,7 @@ fn sequence(name: &str) -> Result<u64> {
         ));
     }
     let value = number.parse::<u64>().map_err(|source| {
-        Error::from(source).context(
+        Error::Integer(source).context(
             ErrorCode::ContainerLayoutInvalid,
             "version sequence exceeds the storage format",
         )

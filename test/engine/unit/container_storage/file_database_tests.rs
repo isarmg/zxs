@@ -767,3 +767,78 @@ fn typed_copy_capture_preserves_record_hash_and_exact_lifecycle_without_json_rou
     fixture.delete();
     check(&fixture, 3);
 }
+
+#[test]
+fn file_database_storage_integer_admission_preserves_cause_order_and_bytes() {
+    use std::error::Error as _;
+    use storage_contract::encoding::canonical_json;
+
+    let fixture = Fixture::new();
+    let state_before = canonical_json(fixture.engine.state()).unwrap();
+    let good = fixture.bytes();
+    let good_before = good.clone();
+    for corrupt_calendar in [false, true] {
+        let bad = rewrite(&good, |records| {
+            let record = records
+                .iter_mut()
+                .find(|row| row.kind == "version")
+                .unwrap();
+            let mut row: rows::VersionRow =
+                storage_contract::decode_strict(record.body.as_bytes()).unwrap();
+            let (_, suffix) = row.version.storage_name.split_once('_').unwrap();
+            row.version.storage_name = format!("v18446744073709551616_{suffix}");
+            if corrupt_calendar {
+                row.version.created_at = "2023-02-29T00:00:00Z".into();
+            }
+            record.body = String::from_utf8(
+                crate::disk::encode_metadata(&row, projection::MAX_RECORD_BYTES).unwrap(),
+            )
+            .unwrap();
+        });
+        let before = bad.clone();
+        let error = verify_scope(&bad, &fixture.file.file_id, &fixture.repo.history_tree_id)
+            .unwrap_err();
+        let mut current = &error;
+        for _ in 0..2 {
+            assert_eq!(current.code(), ErrorCode::ContainerLayoutInvalid);
+            assert!(!current.is_retryable());
+            assert!(current.published_result().is_none());
+            let Error::Context { source, .. } = current else {
+                panic!("storage admission must retain both context layers: {current:?}");
+            };
+            current = source;
+        }
+        assert!(matches!(current, Error::Integer(_)));
+        assert_eq!(current.code(), ErrorCode::ContainerLayoutInvalid);
+        assert!(!current.is_retryable());
+        assert!(current.published_result().is_none());
+        let cause = current
+            .source()
+            .unwrap()
+            .downcast_ref::<std::num::ParseIntError>()
+            .unwrap();
+        assert_eq!(cause.kind(), &std::num::IntErrorKind::PosOverflow);
+        assert!(cause.source().is_none());
+        assert_eq!(bad, before);
+    }
+    // Admission accepts the largest sequence; this is not a next-sequence request.
+    let maximum = rewrite(&good, |records| {
+        let record = records
+            .iter_mut()
+            .find(|row| row.kind == "version")
+            .unwrap();
+        let mut row: rows::VersionRow =
+            storage_contract::decode_strict(record.body.as_bytes()).unwrap();
+        let (_, suffix) = row.version.storage_name.split_once('_').unwrap();
+        row.version.storage_name = format!("v{}_{suffix}", u64::MAX);
+        record.body = String::from_utf8(
+            crate::disk::encode_metadata(&row, projection::MAX_RECORD_BYTES).unwrap(),
+        )
+        .unwrap();
+    });
+    let maximum_before = maximum.clone();
+    verify_scope(&maximum, &fixture.file.file_id, &fixture.repo.history_tree_id).unwrap();
+    assert_eq!(maximum, maximum_before);
+    assert_eq!(good, good_before);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state_before);
+}

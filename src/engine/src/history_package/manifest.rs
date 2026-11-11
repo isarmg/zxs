@@ -3,6 +3,10 @@
 #[path = "../../../../test/engine/unit/history_package/timestamp_tests.rs"]
 mod timestamp_tests;
 
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/history_package/integer_tests.rs"]
+mod integer_tests;
+
 use crate::business::{validate_branch_name, validate_entries};
 use crate::directory_contents::DirectoryContents;
 use crate::{Error, ErrorCode, Result};
@@ -906,7 +910,7 @@ impl HistoryManifest {
                 }
                 crate::disk::encode_metadata(deletions, crate::disk::MAX_METADATA)?;
                 let timestamp = i64::try_from(deletions.timestamp).map_err(|source| {
-                    Error::from(source).context(
+                    Error::IntegerRange(source).context(
                         ErrorCode::HistoryPackageInvalid,
                         "namespace deletion timestamp is invalid",
                     )

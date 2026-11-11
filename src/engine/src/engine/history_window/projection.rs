@@ -121,13 +121,16 @@ impl<'a> Query<'a> {
         }
         Ok(HistoryNodeFields {
             message: HistoryFieldInfo {
-                byte_length: u64::try_from(self.field(node, HistoryField::Message)?.len())?,
+                byte_length: u64::try_from(self.field(node, HistoryField::Message)?.len())
+                    .map_err(Error::IntegerRange)?,
             },
             author: HistoryFieldInfo {
-                byte_length: u64::try_from(self.field(node, HistoryField::Author)?.len())?,
+                byte_length: u64::try_from(self.field(node, HistoryField::Author)?.len())
+                    .map_err(Error::IntegerRange)?,
             },
             created_at: HistoryFieldInfo {
-                byte_length: u64::try_from(self.field(node, HistoryField::CreatedAt)?.len())?,
+                byte_length: u64::try_from(self.field(node, HistoryField::CreatedAt)?.len())
+                    .map_err(Error::IntegerRange)?,
             },
         })
     }
@@ -275,7 +278,7 @@ impl<'a> Query<'a> {
                 .into(),
             download_name: self.download_name(version).into(),
             storage_name: version.storage_name.clone(),
-            source_count: u64::try_from(sources)?,
+            source_count: u64::try_from(sources).map_err(Error::IntegerRange)?,
             fields: self.fields(Node::Content(version))?,
         })
     }
@@ -400,8 +403,8 @@ impl<'a> Query<'a> {
             surviving_branch_id: HistoryBranchId::parse(&merge.surviving_branch_id)?,
             reused_node: merge.reused_node,
             operation_id: merge.operation_id,
-            input_count: u64::try_from(inputs)?,
-            parent_count: u64::try_from(parents)?,
+            input_count: u64::try_from(inputs).map_err(Error::IntegerRange)?,
+            parent_count: u64::try_from(parents).map_err(Error::IntegerRange)?,
         })
     }
 
@@ -474,20 +477,22 @@ fn content_fields(
     cancel.checkpoint()?;
     Ok(HistoryNodeFields {
         message: HistoryFieldInfo {
-            byte_length: u64::try_from(commit.map_or(0, |commit| commit.message.len()))?,
+            byte_length: u64::try_from(commit.map_or(0, |commit| commit.message.len()))
+                .map_err(Error::IntegerRange)?,
         },
         author: HistoryFieldInfo {
-            byte_length: u64::try_from(commit.map_or(0, |commit| commit.author.len()))?,
+            byte_length: u64::try_from(commit.map_or(0, |commit| commit.author.len()))
+                .map_err(Error::IntegerRange)?,
         },
         created_at: HistoryFieldInfo {
-            byte_length: u64::try_from(version.created_at.len())?,
+            byte_length: u64::try_from(version.created_at.len()).map_err(Error::IntegerRange)?,
         },
     })
 }
 
 fn created_at(timestamp: u64) -> Result<String> {
     let seconds = i64::try_from(timestamp).map_err(|source| {
-        Error::from(source).context(
+        Error::IntegerRange(source).context(
             storage_contract::ErrorCode::StateInvalid,
             "file node creation timestamp is outside the UTC range",
         )

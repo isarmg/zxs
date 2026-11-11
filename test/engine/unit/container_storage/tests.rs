@@ -214,6 +214,48 @@ fn version_calendar_admission_preserves_causes_bytes_and_storage_error_order() {
 }
 
 #[test]
+fn version_sequence_admission_retains_overflow_before_digest_and_calendar_errors() {
+    use std::{error::Error as _, num::IntErrorKind};
+
+    let mut item = version(
+        &State::default(),
+        &new_id("history").unwrap(),
+        &new_id("file").unwrap(),
+        "file.txt",
+        b"body",
+    );
+    let suffix = item.storage_name.split_once('_').unwrap().1.to_owned();
+    for number in [1, 999_999, 1_000_000, u64::MAX] {
+        item.storage_name = format!("v{number:06}_{suffix}");
+        let before = canonical_json(&item).unwrap();
+        validate_version(&item).unwrap();
+        assert_eq!(canonical_json(&item).unwrap(), before);
+    }
+
+    item.storage_name = "v18446744073709551616_20261111T000000Z_00000000.txt".into();
+    item.created_at = "2026-02-30T00:00:00Z".into();
+    let state = with_version(&item);
+    let before = canonical_json(&state).unwrap();
+    let error = validate_version(&state.versions[&item.version_id]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
+    assert!(!error.is_retryable());
+    assert!(error.published_result().is_none());
+    let Error::Context { source, .. } = &error else {
+        panic!("sequence overflow must retain its storage context: {error}");
+    };
+    assert!(matches!(source.as_ref(), Error::Integer(_)));
+    let cause = error
+        .source()
+        .unwrap()
+        .source()
+        .unwrap()
+        .downcast_ref::<std::num::ParseIntError>()
+        .unwrap();
+    assert_eq!(cause.kind(), &IntErrorKind::PosOverflow);
+    assert_eq!(canonical_json(&state).unwrap(), before);
+}
+
+#[test]
 fn current_version_requires_storage_name_and_creation_time() {
     let item = version(
         &State::default(),
