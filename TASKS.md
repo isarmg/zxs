@@ -31,6 +31,7 @@
 
 - [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
 - [ ] GitHub 定向 CI 验证 T08 两个 operation 查询端点：OperationLookupPath 保留 OperationId 或解析来源，维持认证／路径解码／query／容量／404／当前凭据与收据所有者的原次序。覆盖 malformed 不调用 Backend、重复 query、注销、观察与 outcome 字段、原永久收据冷开读取；其余 HTTP 类型化、未选覆盖与既有 CI 失败仍待推进。
+- [ ] 补跑 #1231 未执行的 server 单元测试：历史源查询组的 panic 用例映射已改为当前 http_boundary_tests 模块；按 #1231 编译库存核验修正后选择 9 条，行为执行仍待下一批相关定向 CI。
 - [ ] GitHub 定向 CI 验证 T08 历史合并源查询：路径与 query 持有既有 HistoryFileId／HistoryNodeId／HistoryRoot 解析结果，保持 query／容量／file→node→root／当前凭据的原次序；节点域仅 ver／fnode／fmeta。验证取消、原查询字节、真实冷开源响应和既存永久收据不变；其余 HTTP 类型化与未选覆盖继续推进。
 
 - [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。

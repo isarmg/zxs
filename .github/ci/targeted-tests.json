@@ -1009,7 +1009,7 @@
             "backend_admission_tests::history_source_cancellation_reaches_the_admitted_backend",
             "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
             "authorized_backend_tests::historical_source_override_preserves_request_identity_and_revocation",
-            "tests::http_boundary::blocking_task_panics_are_internal_errors_not_client_errors"
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
           ],
           "max_tests": 9,
           "timeout_seconds": 900
