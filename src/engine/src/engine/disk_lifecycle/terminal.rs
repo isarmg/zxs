@@ -6,6 +6,7 @@ use super::bootstrap::{
     IntentDigest,
     runtime::{management_error, open_store},
 };
+use crate::engine::ReadView;
 use crate::engine::disk_registry::current::PreparedCurrentNamespaces;
 use crate::{
     DiskRegistrationIdentity, Engine, Error, ErrorCode, MembershipControlArchive,
@@ -296,6 +297,10 @@ impl TerminalManagement {
     }
     pub fn state(&self) -> &State {
         &self.state
+    }
+    /// Borrow the current terminal publication counters in constant time.
+    pub fn read(&self) -> ReadView<'_> {
+        ReadView::new(&self.state.sequence, &self.state.topology_generation)
     }
     pub fn auth_state(&self) -> Option<json_codec::Value> {
         self.state.control_auth.clone()

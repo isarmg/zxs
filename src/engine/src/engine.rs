@@ -129,6 +129,8 @@ pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
+mod read_view;
+pub use read_view::ReadView;
 mod directory_history;
 mod directory_layout;
 #[path = "engine/history_window/selection.rs"]

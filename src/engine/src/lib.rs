@@ -45,6 +45,7 @@ pub mod disk_authority;
 mod engine;
 pub use engine::DetachedHistoryRead;
 pub use engine::FileHistoryMoveTargetReport;
+pub use engine::ReadView;
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

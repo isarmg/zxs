@@ -62,6 +62,16 @@ HistoryManifest 校验冻结 DirectoryTree、当前目录投影读取历史子�
 
 ## 权威数据与投影
 
+### 同所有者计数读取
+
+`Engine::read()` 与 `TerminalManagement::read()` 返回借用当前所有者的 `ReadView`，
+通过 `sequence()`、`topology_generation()` 读取当前发布状态的两项 `u64` 计数。
+视图只持有这两个字段的共享引用，生命周期绑定原所有者，获取和读取均为 O(1)。
+后续发布结束原借用后再获取视图；终态管理读取其自身已发布状态。
+
+[计数行为测试](../../test/engine/unit/engine/read_view_tests.rs) 覆盖初始值、仓库发布、
+精确重放、引擎重开及终态发布后的冷重开；公共 API 文档示例覆盖所有者与共享借用约束。
+
 ### 磁盘资源生命周期
 
 `Engine` 的 `Arc<DiskResources>` 保存一次准入后的磁盘根 FD 与实际身份，独立于配置和 `_locks`。Planning、detached publication、内容读计划和 scrub 共用该代资源；盘内遍历、marker、正文/证明、对象图、journal、镜像、修复与 checkpoint 均从同一根执行相对 I/O，容量也读取该 FD。根路径改名或替换不把普通 I/O 转向新盘；缺席成员必须重开后才重新准入。资源 owner 不持 writer lock，内容读计划不会延长写者锁生命周期，写准备仍显式保留原 OS 锁。
