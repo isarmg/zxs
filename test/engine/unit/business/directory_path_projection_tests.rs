@@ -47,7 +47,7 @@ fn entry(path: &str, ordinal: usize) -> Entry {
     Entry {
         entry_id: format!("entry-{ordinal}"),
         path: name_policy::PortablePath::parse(path).unwrap(),
-        kind: if ordinal % 2 == 0 {
+        kind: if ordinal.is_multiple_of(2) {
             NamespaceEntryKind::File
         } else {
             NamespaceEntryKind::Directory

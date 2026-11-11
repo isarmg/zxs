@@ -100,9 +100,7 @@ fn request_cannot_choose_replacement_path_pool_or_force_old_authority() {
 }
 #[test]
 fn pending_error_retains_source_and_never_claims_rollback() {
-    let error = Pending {
-        source: std::io::Error::from_raw_os_error(5).into(),
-    };
+    let error = coordinator::pending::<Plan>(std::io::Error::from_raw_os_error(5).into());
     assert!(error.to_string().contains("may be pending or published"));
-    assert!(std::error::Error::source(&error).is_some());
+    assert!(std::error::Error::source(error.as_ref()).is_some());
 }
