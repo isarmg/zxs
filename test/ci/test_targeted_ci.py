@@ -832,6 +832,37 @@ finally:
         self.assertEqual([item['name'] for item in summary['passed']], ['module::a'])
         self.assertEqual(summary['compiled'], [check])
 
+    def test_large_evidence_is_complete_in_artifact_but_compact_in_step_summary(self):
+        large = {'inventory': ['unselected::' + '界' * 1000] * 200}
+        self.run.summary['artifacts'].append(large)
+        path = self.root / 'step-summary.md'
+        with mock.patch.dict(CI.os.environ, {'GITHUB_STEP_SUMMARY': str(path)}):
+            self.run.execute('run')
+        evidence = self.persisted()
+        self.assertEqual(evidence['artifacts'][0], large)
+        self.assertGreater(len(json.dumps(evidence).encode('utf-8')), 1024 * 1024)
+        self.assertEqual(evidence['status'], 'selected-tests-passed')
+        self.assertEqual(len(evidence['passed']), 2)
+        rendered = path.read_text()
+        self.assertLess(len(rendered.encode('utf-8')), 128 * 1024)
+        self.assertIn('"rust_tests_passed": 2', rendered)
+        self.assertIn('summary.json', rendered)
+        self.assertNotIn('unselected::', rendered)
+
+    def test_failure_presentation_is_bounded_and_does_not_mutate_evidence(self):
+        failure = {key: '界' * 100000 for key in
+                   ('stage', 'name', 'python_module', 'error')}
+        summary = {'status': 'failed', 'failed': [failure] * 100,
+                   'error': '界' * 100000, 'passed': [], 'skipped': [{}] * 30,
+                   'blocked': [{}] * 40}
+        before = copy.deepcopy(summary)
+        rendered = CI.step_summary(summary)
+        self.assertLess(len(rendered.encode('utf-8')), 256 * 1024)
+        self.assertIn('"failed": 100', rendered)
+        self.assertIn('"skipped": 30', rendered)
+        self.assertIn('"blocked": 40', rendered)
+        self.assertEqual(summary, before)
+
     def test_invalid_plan_stops_before_any_execution(self):
         with mock.patch.object(self.run, 'plan', side_effect=ValueError('invalid selection')):
             with self.assertRaises(ValueError):

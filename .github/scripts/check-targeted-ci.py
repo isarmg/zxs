@@ -15,6 +15,40 @@ ROOT = Path(__file__).resolve().parents[2]
 PLAN_PATH = '.github/ci/targeted-tests.json'
 
 
+def step_summary(summary):
+    # Full inventories, configuration provenance and logs remain in the artifact.
+    # GitHub rejects a step summary above 1 MiB; bound this presentation separately.
+    short = lambda value, limit=2000: str(value)[:limit]
+    failed = summary.get('failed', [])
+    passed = summary.get('passed', [])
+    projection = {
+        'status': short(summary.get('status', 'unknown'), 80),
+        'head': short(summary.get('head', ''), 40),
+        'base': short(summary.get('base', ''), 40),
+        'rust_tests_passed': sum('name' in item for item in passed),
+        'python_tests_passed': sum(item.get('tests', 0) for item in passed
+                                   if 'python_module' in item),
+        'compile_checks_passed': len(summary.get('compiled', [])),
+        'selected_groups': [short(group, 80) for group in
+                            summary.get('plan', {}).get('groups', [])[:50]],
+        'unexecuted_scope': short(summary.get('plan', {}).get('unexecuted', '')),
+        'failed': len(failed),
+        'skipped': len(summary.get('skipped', [])),
+        'blocked': len(summary.get('blocked', [])),
+        'first_failures': [
+            {key: short(item[key], 500) for key in ('stage', 'name', 'python_module', 'error')
+             if key in item}
+            for item in failed[:20]
+        ],
+    }
+    if 'error' in summary:
+        projection['error'] = short(summary['error'])
+    return ('### Targeted CI scope and result\n\n'
+            'Complete scope, inventories, all failures, skipped/blocked work and logs are '
+            'retained in the targeted-tests artifact (summary.json and *.log).\n\n'
+            '~~~json\n' + json.dumps(projection, indent=2, ensure_ascii=False) + '\n~~~\n')
+
+
 def digest(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -472,8 +506,7 @@ class Run:
             self.save()
             if os.environ.get('GITHUB_STEP_SUMMARY'):
                 with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
-                    stream.write('### Targeted CI scope and result\n\n```json\n'
-                                 + json.dumps(self.summary, indent=2) + '\n```\n')
+                    stream.write(step_summary(self.summary))
 
 
 if __name__ == '__main__':
