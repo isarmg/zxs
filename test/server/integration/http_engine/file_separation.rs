@@ -220,3 +220,59 @@ async fn owning_main_summary_follows_nearest_owner_not_current_checkout() {
         main
     );
 }
+
+#[tokio::test]
+async fn directory_scope_queries_are_read_only_and_require_current_session() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "docs/a.txt", b"retained content").await;
+    let initialized = manager_initialize_git(&app, &token, "docs").await;
+    let repo = initialized["repository_id"].as_str().unwrap();
+    let route = format!("/api/repositories/{repo}/directory-branches");
+    let bytes = manager_disk_files(root.path());
+    let events = success(&app, &token, "GET", "/api/events", None).await;
+    let full = success(&app, &token, "GET", &format!("{route}?path=docs"), None).await;
+    assert_eq!(full["directory_branches"].as_array().unwrap().len(), 1);
+    assert!(full["directory_branches"][0]["entries"].is_array());
+    let summary = success(
+        &app,
+        &token,
+        "GET",
+        &format!("{route}?path=docs&summary=true"),
+        None,
+    )
+    .await;
+    assert_eq!(summary["directory_branches"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        summary["directory_branches"][0]["directory_branch_id"],
+        full["directory_branches"][0]["directory_branch_id"]
+    );
+    assert!(summary["directory_branches"][0].get("entries").is_none());
+    assert_eq!(
+        success(&app, &token, "GET", &format!("{route}?path=docs"), None).await,
+        full
+    );
+    for query in ["path=docs&path=other", "unexpected=true", "summary=false"] {
+        assert_eq!(
+            send(&app, Some(&token), "GET", &format!("{route}?{query}"), None)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        send(&app, None, "GET", &route, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        success(&app, &token, "GET", "/api/events", None).await,
+        events
+    );
+    assert_eq!(manager_disk_files(root.path()), bytes);
+    let revoked = revoked_session(&app).await;
+    assert_eq!(
+        send(&app, Some(&revoked), "GET", &route, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}

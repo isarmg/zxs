@@ -29,7 +29,8 @@
 
 ## 新版规范的底层重构
 
-- [ ] 定向 CI 验证 T08 目录历史 nodes／branches 提取器：边界一次构造 DirectoryHistoryRequest，保留路径／query 结构及容量后契约错误、root／child 域和集合／cursor／anchor 约束；验证取消、当前授权与只读历史响应。未本地编译或测试；目录写入与未决删除布局不在本批范围。
+- [ ] 定向 CI 验证 T08 directory-scopes 查询提取器：一次构造 filter／projection，保留 All／Root／Directory／OwningMain、原 LookupPath 文本与 summary 约束、结构错误和容量后的契约错误；验证当前授权、只读响应与 nearest-owner 选择。未本地编译或测试，其余 HTTP 类型化继续分域推进。
+
 
 
 
@@ -138,3 +139,4 @@
 - [ ] 核对并完成 Release 四文件收敛：ZXS、helper、完整源码归档与 SHA256SUMS；BUILD／VFS／安装说明、全部来源与许可证保留在源码包或工具内，两个 ELF 绑定同次构建。
 - [ ] 补齐完全离线发行所需 Debian 包／对应源／签名索引、固定 OCI、Rust／WASM 工具链材料，以及 SDK 缓存未命中的 apt／Docker 联网边界；验证下载复验、完整 Git 身份、真实 helper 导出与首次离线安装。
 - [ ] 在获准环境完成物理掉盘／断电、真实目标设备、最大规模与性能验收；完成准确集成版本的全量运行后，另行取得发行演练、正式发布和真实部署授权。
+

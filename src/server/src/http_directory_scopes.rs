@@ -1,11 +1,14 @@
 //! The public query format selects a typed scope and one response projection.
 use crate::{
     ApiError, AppState, DirectoryBranchFilter, DirectoryBranchProjection, ReadDirectoryScopes,
-    auth::Identity,
     backend_directory_scopes::DirectoryScopesResponse,
-    http_boundary::{ApiPath, ApiQuery},
+    http_boundary::{ApiPath, ApiQuery, Authenticated},
 };
-use http_routing::{Extension, Json, extract::State};
+use http_routing::{
+    Json,
+    extract::{FromRequestParts, State},
+    http::request::Parts,
+};
 use std::collections::BTreeMap;
 
 fn parse(
@@ -50,15 +53,27 @@ fn parse(
     };
     Ok((filter, projection))
 }
+pub(crate) struct Query(Result<(DirectoryBranchFilter, DirectoryBranchProjection), ApiError>);
+
+impl<S: Send + Sync> FromRequestParts<S> for Query {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let ApiQuery(query) =
+            ApiQuery::<BTreeMap<String, String>>::from_request_parts(parts, state).await?;
+        Ok(Self(parse(query)))
+    }
+}
+
 pub(crate) async fn read(
     State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
+    Authenticated(identity): Authenticated,
     ApiPath(repository_id): ApiPath<String>,
-    ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
+    Query(query): Query,
 ) -> Result<Json<DirectoryScopesResponse>, ApiError> {
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
-            let (filter, projection) = parse(query)?;
+            let (filter, projection) = query?;
             backend
                 .directory_scopes(
                     &identity,

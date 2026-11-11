@@ -40,3 +40,39 @@ fn directory_query_has_distinct_all_root_and_lookup_filters() {
     let bad = parse_query(&[("path", "../bad")]).err().unwrap();
     assert!(std::error::Error::source(&bad).is_some());
 }
+
+#[test]
+fn owning_main_query_retains_root_and_original_lookup_path() {
+    for raw in ["", "Cafe\u{301}/Child"] {
+        let query = [
+            ("summary".into(), "true".into()),
+            ("owner_main".into(), "true".into()),
+            ("path".into(), raw.into()),
+        ]
+        .into_iter()
+        .collect();
+        let (filter, projection) = parse(query).unwrap();
+        assert!(matches!(projection, DirectoryBranchProjection::Summary));
+        let DirectoryBranchFilter::OwningMain(path) = filter else {
+            panic!("owning-main query must retain its distinct filter")
+        };
+        assert_eq!(
+            path.as_ref().map(name_policy::LookupPath::as_str),
+            if raw.is_empty() { None } else { Some(raw) }
+        );
+        if let Some(path) = path {
+            assert_eq!(path.key(), "café/child");
+        }
+    }
+    for pairs in [
+        vec![("owner_main", "true"), ("path", "")],
+        vec![("owner_main", "true"), ("summary", "true")],
+        vec![("owner_main", "false"), ("summary", "true"), ("path", "")],
+        vec![("owner_main", "true"), ("summary", "true"), ("path", "../bad")],
+    ] {
+        let error = parse(pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+            .err()
+            .unwrap();
+        assert_eq!(error.status, http::StatusCode::BAD_REQUEST);
+    }
+}

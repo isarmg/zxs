@@ -2607,3 +2607,90 @@ async fn directory_history_cancellation_reaches_both_collection_backends() {
             .forget();
     }
 }
+
+#[tokio::test]
+async fn directory_scope_query_contract_errors_follow_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    let route = "/api/repositories/unused/directory-branches";
+    for query in [
+        "unknown=true",
+        "summary=false",
+        "owner_main=true",
+        "summary=true&owner_main=true",
+        "path=../bad",
+    ] {
+        overloaded(app.clone(), &format!("{route}?{query}")).await;
+    }
+    for path in [
+        format!("{route}?summary=true&summary=true"),
+        format!("{route}?path=a&path=b"),
+        "/api/repositories/%FF/directory-branches".into(),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &path))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn directory_scope_query_admits_only_valid_projection_and_path_combinations() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let route = "/api/repositories/unused/directory-branches";
+    for query in [
+        "unknown=true",
+        "summary=false",
+        "owner_main=true&path=",
+        "summary=true&owner_main=true",
+        "summary=true&owner_main=false&path=",
+        "path=../bad",
+        "path=%2Fbad",
+    ] {
+        let response = request(app.clone(), &format!("{route}?{query}")).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(result["error"].get("source").is_none());
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    for query in [
+        "",
+        "path=",
+        "path=Cafe%CC%81/Child",
+        "summary=true",
+        "path=&summary=true",
+        "path=&summary=true&owner_main=true",
+        "path=Cafe%CC%81/Child&summary=true&owner_main=true",
+    ] {
+        assert_eq!(
+            request(app.clone(), &format!("{route}?{query}")).await.status(),
+            StatusCode::NOT_IMPLEMENTED,
+        );
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 7);
+}
