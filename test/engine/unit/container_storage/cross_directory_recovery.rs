@@ -190,7 +190,7 @@ fn assert_views(
         engine.state.directory_git_repositories,
         previous.directory_git_repositories
     );
-    for (id, tree) in &previous.directory_trees {
+    for (id, tree) in previous.directory_trees.iter() {
         assert_eq!(&engine.state.directory_trees[id], tree);
     }
     target

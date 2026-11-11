@@ -12,7 +12,7 @@
       "rust_targets": []
     },
     "held-directory-layout": {
-      "reason": "Disk layout bytes, held directory identity, lease revocation and atomic replacement",
+      "reason": "Disk layout bytes, held directory identity, lease revocation, atomic replacement and repaired cross-directory recovery fixtures",
       "python_tests": [],
       "rust_targets": [
         {
@@ -30,7 +30,10 @@
             "engine::membership_transition::pending::activation::backup::startup::resume::",
             "engine::backup_preparation::tests::",
             "engine::recovery_checkpoint::tests::",
-            "engine::history_move_decision::choice::tests::"
+            "engine::history_move_decision::choice::tests::",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_seals::store::tests::",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_writers::store::tests::",
+            "container_storage::tests::cross_directory_recovery::"
           ],
           "max_tests": 160
         },
@@ -835,6 +838,30 @@
       "groups": [
         "ci-selection",
         "paged-deletion-review"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_bootstrap_writer_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_target_seal_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_target_writer_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/cross_directory_recovery.rs",
+      "groups": [
+        "held-directory-layout"
       ]
     }
   ],
