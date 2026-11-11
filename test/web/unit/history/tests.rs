@@ -288,3 +288,23 @@ fn file_lifecycle_operations_have_specific_labels() {
         assert_eq!(action_label(action), "Restored file");
     }
 }
+
+#[test]
+fn directory_lifecycle_activity_uses_folder_labels_and_existing_wire_shape() {
+    for (action, expected) in [
+        ("directory.delete", "Soft-deleted folder"),
+        ("directory.delete.undo", "Restored folder"),
+    ] {
+        let mut value = response();
+        let row = value["events"][0].as_object_mut().unwrap();
+        row.insert("action".into(), Value::String(action.into()));
+        row.insert("file_id".into(), Value::String(String::new()));
+        row.insert("directory_branch_id".into(), Value::String("directory-branch".into()));
+        row.insert("head_tree_id".into(), Value::String("retained-source-tree".into()));
+        let rows = decode(value).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, action);
+        assert_eq!(rows[0].path, "a");
+        assert_eq!(action_label(&rows[0].action), expected);
+    }
+}

@@ -819,6 +819,37 @@
         "test_boundary_metrics"
       ],
       "rust_targets": []
+    },
+    "directory-deletion-activity": {
+      "reason": "Ordinary directory deletion and exact undo retain original group activity, including empty directories and previously deleted members",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "engine_backend::file_manager::activity::activity_tests::"
+          ],
+          "max_tests": 25,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "exact": [
+            "history::tests::directory_lifecycle_activity_uses_folder_labels_and_existing_wire_shape",
+            "history::tests::every_current_activity_detail_shape_is_accepted_and_closed"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -2735,6 +2766,42 @@
       "path": "test/ci/test_boundary_metrics.py",
       "groups": [
         "boundary-watch"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/activity/deletion.rs",
+      "groups": [
+        "directory-deletion-activity"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/activity_tests.rs",
+      "groups": [
+        "directory-deletion-activity"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/directory_deletion_activity_tests.rs",
+      "groups": [
+        "directory-deletion-activity"
+      ]
+    },
+    {
+      "path": "src/web/src/history.rs",
+      "groups": [
+        "directory-deletion-activity"
+      ]
+    },
+    {
+      "path": "test/web/unit/history/tests.rs",
+      "groups": [
+        "directory-deletion-activity"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/activity.rs",
+      "groups": [
+        "directory-deletion-activity"
       ]
     }
   ],

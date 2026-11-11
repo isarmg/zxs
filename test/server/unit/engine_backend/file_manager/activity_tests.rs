@@ -502,3 +502,6 @@ fn empty_file_projection_preserves_current_namespace_admission_errors() {
 
 #[path = "deletion_tests.rs"]
 mod deletion_tests;
+
+#[path = "directory_deletion_activity_tests.rs"]
+mod directory_deletion_activity_tests;

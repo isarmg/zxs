@@ -1,7 +1,7 @@
 //! Native lifecycle receipts retain their original paths after exact-node undo.
 use crate::engine_backend::{
     file_manager::activity::{
-        ActivityRows, PendingDetail, PendingEvent, Timestamp, optional_field, record_event,
+        ActivityRows, PendingDetail, PendingEvent, Timestamp, optional_field, receipt_field, record_event,
     },
     repo_for_history,
 };
@@ -100,11 +100,89 @@ fn record_node<'a>(
     Ok(())
 }
 
+// Native admission owns the complete receipt. This read projection borrows only
+// displayed fields so a directory's member map is not cloned for its group row.
+#[derive(data_serialization::Deserialize)]
+struct DirectoryActivity<'a> {
+    node_id: &'a str,
+    history_tree_id: &'a str,
+    path: &'a str,
+    directory_branch_id: &'a str,
+    source_tree_id: &'a str,
+    #[serialization(with = "storage_contract::u64_string")]
+    created_at: u64,
+}
+
+#[derive(data_serialization::Deserialize)]
+struct DeletedDirectory<'a> {
+    #[serialization(borrow)]
+    directory_deletion: DirectoryActivity<'a>,
+}
+
+#[derive(data_serialization::Deserialize)]
+struct RestoredDirectory<'a> {
+    #[serialization(borrow)]
+    removed_directory_deletion: DirectoryActivity<'a>,
+}
+
+fn record_directory<'a>(
+    engine: &'a Engine,
+    events: &mut ActivityRows<'a>,
+    operation: &'a OperationResult,
+) -> Result<bool, ApiError> {
+    let (action, node) = match operation.kind.as_str() {
+        "directory.delete" => (
+            Action::Delete,
+            receipt_field::<DeletedDirectory<'_>>(&operation.result)?.directory_deletion,
+        ),
+        "directory.delete.undo" => (
+            Action::Undo,
+            receipt_field::<RestoredDirectory<'_>>(&operation.result)?.removed_directory_deletion,
+        ),
+        _ => return Ok(false),
+    };
+    let repository = repo_for_history(engine, &node.history_tree_id)?;
+    let path = if repository.file_manager_root {
+        node.path.to_owned()
+    } else {
+        format!("{}/{}", repository.name, node.path)
+    };
+    let timestamp = match action {
+        Action::Delete => Timestamp::Seconds(node.created_at),
+        Action::Undo => Timestamp::Receipt(operation.result.get("timestamp")),
+    };
+    record_event(
+        events,
+        operation.sequence,
+        format!("{}:{}", operation.operation_id, node.node_id),
+        PendingEvent {
+            timestamp,
+            slot_id: repository.primary_slot_id.clone(),
+            path,
+            action: operation.kind.clone(),
+            principal: engine
+                .operation_owner(operation.operation_id)
+                .map_err(crate::engine_backend::error)?,
+            file_id: String::new(),
+            message: String::new(),
+            detail: PendingDetail::Captured(ActivityDetailSnapshot::DirectoryOperation {
+                version_id: None,
+                directory_branch_id: node.directory_branch_id.into(),
+                head_tree_id: Some(node.source_tree_id.into()),
+            }),
+        },
+    );
+    Ok(true)
+}
+
 pub(super) fn record_operation<'a>(
     engine: &'a Engine,
     events: &mut ActivityRows<'a>,
     operation: &'a OperationResult,
 ) -> Result<bool, ApiError> {
+    if record_directory(engine, events, operation)? {
+        return Ok(true);
+    }
     let Some((action, nodes)) = nodes(operation)? else {
         return Ok(false);
     };

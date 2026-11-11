@@ -12,21 +12,25 @@ mod deletion;
 
 // Operation receipts retain an open JSON payload on disk. Parse only fields
 // consumed here; malformed retained rows are external state errors, not bugs.
+fn receipt_field<'a, T: data_serialization::Deserialize<'a>>(
+    value: &'a Value,
+) -> Result<T, ApiError> {
+    T::deserialize(value).map_err(|source| {
+        ApiError::new(
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::StateInvalid,
+            "history receipt field is invalid",
+        )
+        .with_source(source)
+    })
+}
+
 fn optional_field<'a, T: data_serialization::Deserialize<'a>>(
     value: Option<&'a Value>,
 ) -> Result<Option<T>, ApiError> {
     value
         .filter(|value| !value.is_null())
-        .map(|value| {
-            T::deserialize(value).map_err(|source| {
-                ApiError::new(
-                    ::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    storage_contract::ErrorCode::StateInvalid,
-                    "history receipt field is invalid",
-                )
-                .with_source(source)
-            })
-        })
+        .map(receipt_field)
         .transpose()
 }
 
