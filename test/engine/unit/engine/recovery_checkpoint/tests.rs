@@ -348,6 +348,83 @@ fn repeated_same_file_saves_replay_only_checkpoint_and_suffix() {
     drop(engine);
     assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
+
+#[test]
+fn sealed_suffix_keeps_file_database_corruption_visible() {
+    let (_temp, root, config) = setup();
+    let mut engine = Engine::open(&root).unwrap();
+    let branch = engine
+        .state()
+        .repositories
+        .values()
+        .next()
+        .unwrap()
+        .main_branch_id
+        .clone();
+    save_file(&mut engine, &branch, "same.txt", b"first");
+    drop(engine);
+    let (mut engine, _) = reopen(&root);
+    save_file(&mut engine, &branch, "same.txt", b"second");
+    let version = engine.state().versions.values().next().unwrap().clone();
+    let body = crate::container_storage::content_path(
+        &version_dir(&config.disks[0], &version.history_tree_id, &version.version_id),
+        &version,
+    )
+    .unwrap();
+    let database = body
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(crate::container_storage::file_database::NAME);
+    drop(engine);
+    let corrupt = b"corrupt SQLite projection";
+    std::fs::write(&database, corrupt).unwrap();
+    assert!(Engine::open(&root).is_err());
+    assert_eq!(std::fs::read(&database).unwrap(), corrupt);
+}
+
+#[test]
+fn retained_database_installations_allow_new_attempts_but_cover_old_bytes() {
+    let (_temp, root, config) = setup();
+    let mut engine = Engine::open(&root).unwrap();
+    let branch = engine
+        .state()
+        .repositories
+        .values()
+        .next()
+        .unwrap()
+        .main_branch_id
+        .clone();
+    save_file(&mut engine, &branch, "same.txt", b"first");
+    drop(engine);
+    let (engine, _) = reopen(&root);
+    let scope = CheckpointScope::admit(&engine).unwrap().unwrap();
+    let checkpoint: Envelope = read_json(&path(&config.disks[0])).unwrap();
+    let retained = checkpoint.checkpoint.coverage[&config.disks[0].disk_id]
+        .iter()
+        .find(|entry| {
+            entry.path.contains("/.zxs-layout/database-installs/")
+                && entry.path.ends_with("/intent.json")
+        })
+        .unwrap();
+    let retained_path = config.disks[0].root.join(&retained.path);
+    let attempts = retained_path.parent().unwrap().parent().unwrap();
+    let new_attempt = attempts.join("new-retained-attempt");
+    std::fs::create_dir(&new_attempt).unwrap();
+    std::fs::write(new_attempt.join("payload"), b"new retained bytes").unwrap();
+    verify_coverage(&scope, &checkpoint.checkpoint, &BTreeSet::new()).unwrap();
+    let original = std::fs::read(&retained_path).unwrap();
+    let mut damaged = original.clone();
+    damaged[0] ^= 1;
+    std::fs::write(&retained_path, damaged).unwrap();
+    assert!(matches!(
+        verify_coverage(&scope, &checkpoint.checkpoint, &BTreeSet::new()),
+        Err(Error::Checkpoint(CheckpointError::FileContent(_)))
+    ));
+    assert_ne!(std::fs::read(retained_path).unwrap(), original);
+}
+
 #[test]
 fn corrupted_container_outside_suffix_forces_full_repair() {
     let (_temp, root, config) = setup();
@@ -469,6 +546,7 @@ fn malformed_or_partially_replicated_checkpoint_falls_back() {
     drop(engine);
     assert_eq!(reopen(&root).1.recovery_after_histories(&config), 1);
 }
+
 #[test]
 fn checkpoint_never_hides_corrupt_journal_prefix() {
     use std::io::{Seek, SeekFrom};

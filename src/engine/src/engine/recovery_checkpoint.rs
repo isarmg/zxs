@@ -260,12 +260,17 @@ fn append_only(root: &DiskRoot, path: &Path) -> Result<bool> {
     {
         return Ok(true);
     }
+    // Each database installation adds a binding and a fresh attempt. Existing
+    // attempts retain their exact children and bytes in checkpoint coverage.
     Ok(
         (parts.first() == Some(&"metadata") && parts.get(1) == Some(&"objects"))
             || path == Path::new("metadata/publication-seals")
             || (parts.first() == Some(&"histories")
                 && (parts.len() <= 2
                     || (parts.len() == 3 && matches!(parts[2], "versions" | "file-containers"))
+                    || ((parts.len() == 4 || parts.len() == 5)
+                        && parts[2] == ".zxs-layout"
+                        && parts[3] == "database-installs")
                     || (parts.len() == 5
                         && parts[2] == "versions"
                         && parts[4] == "protection-proofs"))),
@@ -578,13 +583,22 @@ fn verify_coverage(
             if parts.len() >= 6
                 && parts[0] == "histories"
                 && parts[2] == "file-containers"
-                && parts.last() == Some(&"container.json")
+                && parts.last().is_some_and(|name| {
+                    matches!(
+                        *name,
+                        "container.json" | crate::container_storage::file_database::NAME
+                    )
+                })
                 && match path.parent() {
                     Some(parent) => named_container(root, parent)?,
                     None => false,
                 }
                 && rebuilt.contains(&(parts[1].to_owned(), parts[3].to_owned()))
             {
+                // A sealed suffix names the file whose projections will be
+                // reconstructed from the final admitted State. The installer
+                // retains displaced database bytes and verifies its bound
+                // intent before publishing the replacement.
                 continue;
             }
             let metadata = metadata(root, path);

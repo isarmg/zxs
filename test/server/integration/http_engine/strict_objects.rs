@@ -198,6 +198,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     .await;
     let repo = listing["context"]["repository_id"].as_str().unwrap();
     let branch = manager_prepare_directory_branch(&app, &token, "", "batch-replay").await;
+    manager_checkpoint_and_select(&app, &token, repo, &branch).await;
     let before = manager_scope(&app, &token, repo, &branch).await;
     let source = manager_batch_source(&before, "report.txt");
     let route = "/api/file-manager/disks/P01/namespace-batch";
@@ -241,7 +242,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     }
     let original = success(&app, &token, "POST", route, Some(request.clone())).await;
     let canonical = json!({"kind":"delete","items":[{"source":source,"target":null}]});
-    assert_eq!(original["request_digest"], storage_contract::object_hash("request", &json!({"kind":"directory.namespace.batch","principal":"admin","body":{"repository_id":repo,"request":canonical}})).unwrap());
+    assert_eq!(original["request_digest"], storage_contract::object_hash("request", &json!({"kind":"file.delete.batch","principal":"admin","body":{"repository_id":repo,"request":canonical}})).unwrap());
     let after_delete = manager_scope(&app, &token, repo, &branch).await;
     success(&app,&token,"POST",route,Some(json!({"kind":"rename","operation_id":new_id("op").unwrap(),"items":[{"source":manager_batch_source(&after_delete,"stay.txt"),"target":manager_batch_target(&after_delete,"later.txt")}]}))).await;
     let later = manager_scope(&app, &token, repo, &branch).await;

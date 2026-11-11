@@ -8,7 +8,7 @@ fn store(root: &Path) -> AuthStore {
 
 #[test]
 fn prepared_reset_revokes_sessions_once_and_resolves_exact_published_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let mut auth = store(root.path());
     let session = auth.login("admin", OLD).unwrap();
     let before = auth.credential_revision().unwrap();
@@ -36,7 +36,7 @@ fn prepared_reset_revokes_sessions_once_and_resolves_exact_published_state() {
 
 #[test]
 fn retained_replacement_reopens_without_another_generation_and_never_retains_plaintext() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let mut auth = store(root.path());
     let change = auth.prepare_system_password_replacement(NEW).unwrap();
     let bytes = json_codec::to_vec(&change).unwrap();
@@ -63,7 +63,7 @@ fn retained_replacement_reopens_without_another_generation_and_never_retains_pla
 
 #[test]
 fn stale_or_nonmanagement_replacement_cannot_overwrite_authority() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let mut auth = store(root.path());
     let first = auth.prepare_system_password_replacement(NEW).unwrap();
     let second = auth
@@ -73,14 +73,14 @@ fn stale_or_nonmanagement_replacement_cannot_overwrite_authority() {
     let before = auth.credential_revision().unwrap();
     assert!(auth.apply_system_password_replacement(&first).is_err());
     assert!(before == auth.credential_revision().unwrap());
-    let other = tempfile::tempdir().unwrap();
+    let other = crate::tests::private_tempdir();
     let legacy = AuthStore::initialize(other.path(), "admin", OLD).unwrap();
     assert!(legacy.prepare_system_password_replacement(NEW).is_err());
 }
 
 #[test]
 fn management_open_does_not_initialize_missing_credentials_or_accept_malformed_replacement() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     assert!(
         AuthStore::open_system_management_directory(
             PrivateDirectory::open_trusted(root.path()).unwrap()

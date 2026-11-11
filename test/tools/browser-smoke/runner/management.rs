@@ -160,11 +160,12 @@ pub(super) fn prepared_primary(
     server.finish(|| {
         fixture.wait_state("ready")?;
         fixture.visit(browser)?;
-        sign_in(browser, "prepared-admin", password)?;
-        AdminPage::Storage.open(browser)?;
+        // Login starts the automatic disk read; observe before it can complete.
         primary_browse::observe(browser)?;
         with_cleanup(
             || {
+                sign_in(browser, "prepared-admin", password)?;
+                AdminPage::Storage.open(browser)?;
                 primary_browse::run(browser, &storage)?;
                 assert_single_storage(&fixture, &storage)
             },
