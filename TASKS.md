@@ -1,5 +1,7 @@
 # ZXS 当前任务清单
 
+- 待 CI 验证：初始管理员测试使用明确 0700 的私有临时目录夹具，覆盖准确重复创建、后来会话冲突、不同账号和密码拒绝及凭据字节保持；生产准入不变，未运行本地编译或测试。
+
 - 待 CI 验证：HTTP backend panic 边界测试补齐目录分支创建所需的精确 source 夹具，使请求通过正常准入后实际触发 backend panic；保留 INTERNAL_ERROR、500、可重试与隐私断言。未运行本地编译或测试。
 
 - 待 CI 验证：Backup serving 完成时保留 Genesis discovery config；冷启动由已认证的 native bootstrap extension 选择 Backup 扇出。新增完整事务与精确操作重试的 discovery 原字节不变断言；未运行本地编译或测试。

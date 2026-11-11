@@ -2,7 +2,7 @@ use super::*;
 const PASSWORD: &str = "first-management-password-2026";
 #[test]
 fn first_candidate_uses_current_policy_and_resolves_exact_creation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let candidate = PreparedInitialAdministrator::new("admin", PASSWORD).unwrap();
     let encoded = json_codec::to_vec(&candidate).unwrap();
     assert!(!std::str::from_utf8(&encoded).unwrap().contains(PASSWORD));
@@ -44,7 +44,7 @@ fn first_candidate_uses_current_policy_and_resolves_exact_creation() {
 }
 #[test]
 fn different_initial_account_or_password_never_overwrites_existing_credentials() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let candidate = PreparedInitialAdministrator::new("admin", PASSWORD).unwrap();
     let (auth, _) = AuthStore::create_initial_system_management(
         PrivateDirectory::open_trusted(root.path()).unwrap(),
