@@ -155,7 +155,7 @@ pub(crate) fn commit(input: Commit) -> Result<json_codec::Value> {
         &[("plan.json", &bytes)],
     )?;
     drop(root);
-    finish(input, request).map_err(|source| Box::new(Pending { source }) as _)
+    finish(input, request).map_err(coordinator::pending::<super::Plan>)
 }
 fn finish(input: Commit, request: WorkerRequest) -> Result<json_codec::Value> {
     let Output::TerminalResult {

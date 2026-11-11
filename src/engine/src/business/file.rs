@@ -695,7 +695,11 @@ pub(super) fn create_file_branch_change<'a>(
     }
     let repo = engine.repository_for_history(&source.history_tree_id)?;
 
-    let current = writable_file_namespace(state, repo, engine.current_namespaces)?;
+    let current = writable_file_namespace(
+        state,
+        repo,
+        engine.current_namespaces.map(std::sync::Arc::as_ref),
+    )?;
     let original = current
         .entries
         .iter()

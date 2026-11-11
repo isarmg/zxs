@@ -51,7 +51,44 @@ for (const message of ['Default branch saved', '已设为默认分支', 'Publica
 }
 expect('no notice is not success', {notice: false});
 expect('missing role is not success', {role: null});
-assert.ok(scene.includes('writes.length===8&&writes.every'));
+assert.ok(scene.includes('writes.length===11&&writes.every'));
+const navigation = readFileSync(new URL('../runner/admin_navigation.rs', import.meta.url), 'utf8');
+const pages = navigation.match(/const ALL: \[Self; 4\] = \[([\s\S]*?)\];/);
+assert.ok(pages, 'missing current management navigation declaration');
+assert.deepEqual([...pages[1].matchAll(/Self::(\w+)/g)].map(match => match[1]),
+    ['Storage', 'Repositories', 'Rules', 'Diagnostics']);
+assert.ok(scene.includes('.chain(AdminPage::ALL.map(AdminPage::labels))'));
+assert.ok(scene.includes('[("Status", "状态"), ("History", "历史记录")]'));
+assert.ok(scene.includes('.chain([("Account settings", "账号设置"), ("Details", "详情")])'));
+const publication = scene.match(/^\s*("const writes=window\.__zxsNoticeDelivery\.writes;return [^"\n]*"),$/m);
+assert.ok(publication, 'missing final real-publication browser predicate');
+const verifyPublications = new Function('window', JSON.parse(publication[1]));
+const writes = count => Array.from({length: count}, (_, index) => ({
+    method: 'PUT', path: `/api/repositories/repo-${index}/default-branch`,
+}));
+let publicationCases = 0;
+const expectPublications = (label, actual, expected) => {
+    assert.equal(Boolean(verifyPublications({__zxsNoticeDelivery: {writes: actual}})),
+        expected, label);
+    publicationCases++;
+};
+expectPublications('eight navigation targets plus dismiss, expiry and late delivery', writes(11), true);
+for (const count of [0, 8, 10, 12]) {
+    expectPublications(`wrong publication count ${count}`, writes(count), false);
+}
+for (let index = 0; index < 11; index++) {
+    for (const change of [
+        {method: 'POST'}, {method: 'GET'}, {method: 'DELETE'},
+        {path: '/api/repositories/repo/branches'},
+        {path: '/api/repositories//default-branch'},
+        {path: '/api/repositories/repo/default-branch/outcome'},
+    ]) {
+        const actual = writes(11);
+        Object.assign(actual[index], change);
+        expectPublications(`wrong publication at ${index}: ${JSON.stringify(change)}`, actual, false);
+    }
+}
+assert.equal(publicationCases, 71);
 assert.ok(scene.includes("if(!response.ok)throw new Error('real default branch publication failed')"));
 assert.ok(scene.includes("typeof window.__zxsNoticeDelivery.release==='function'"));
-console.log(`PASS ${cases} real-copy and settled-notice observer model cases; no browser publication executed`);
+console.log(`PASS ${cases} real-copy and settled-notice observer model cases; ${publicationCases} exact-publication predicate cases; no browser publication executed`);

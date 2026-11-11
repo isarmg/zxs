@@ -150,7 +150,7 @@ pub(crate) fn prepare(input: Prepare) -> Result<json_codec::Value> {
         &[("plan.json", &json_codec::to_vec(&input.expected)?)],
     )?;
     drop(root);
-    finish(input, plan, envelope).map_err(|source| Box::new(Pending { source }) as _)
+    finish(input, plan, envelope).map_err(coordinator::pending::<super::Plan>)
 }
 fn finish(input: Prepare, plan: Plan, envelope: WorkerRequest) -> Result<json_codec::Value> {
     let Output::Objects { report } = crate::offline::service_worker::run(envelope)? else {

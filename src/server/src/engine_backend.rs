@@ -2120,7 +2120,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
     ) -> Result<std::convert::Infallible, crate::ApiError> {
-        let (engine, _) = self.lock_current(identity)?;
+        let (_engine, _) = self.lock_current(identity)?;
         Err(ApiError::new(
             ::http::StatusCode::CONFLICT,
             storage_contract::ErrorCode::OfflineConfigurationRequired,

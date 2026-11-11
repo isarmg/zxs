@@ -945,9 +945,9 @@ fn omitted_child_and_ordinary_scope_require_exact_historical_evidence() {
             .is_none()
     );
     assert_eq!(child_plan.files().len(), 1);
-    let file = &child_plan.files()[&key(&state, &content).unwrap()];
-    assert_eq!(file.directory_id, child.entry_id);
-    assert_eq!(file.path.as_str(), "content");
+    let child_file = &child_plan.files()[&key(&state, &content).unwrap()];
+    assert_eq!(child_file.directory_id, child.entry_id);
+    assert_eq!(child_file.path.as_str(), "content");
     assert!(child_plan.outside_files().is_empty());
 
     let mut state = fixture_state();

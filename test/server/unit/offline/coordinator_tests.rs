@@ -157,3 +157,35 @@ fn shared_worker_envelope_keeps_strict_context_and_action_fields() {
     changed["action"]["skip_validation"] = true.into();
     assert!(json_codec::from_value::<Envelope<Echo>>(changed).is_err());
 }
+
+#[test]
+fn native_plan_pending_errors_keep_the_exact_policy_and_source_object() {
+    for (wrap, message) in [
+        (
+            pending::<crate::offline::disk_removal::Plan> as fn(Cause) -> Cause,
+            "deregistration may be partly or fully published; retain the original operation/digest and inspect or continue only it; do not unplug media on an uncertain result, clean up or start another exit",
+        ),
+        (
+            pending::<crate::offline::foreign_chain::Plan>,
+            "complete-chain material may be partly or fully prepared; retain its original operation/digest and all roots, never clear or replace them; foreign membership was not admitted",
+        ),
+    ] {
+        let source = Box::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "retained native failure",
+        ));
+        let original = source.as_ref() as *const std::io::Error;
+        let error = wrap(source);
+        assert_eq!(
+            error.to_string(),
+            format!("{message}: retained native failure")
+        );
+        let cause = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert!(std::ptr::eq(cause, original));
+        assert_eq!(cause.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+}

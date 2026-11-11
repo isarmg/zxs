@@ -1,8 +1,5 @@
 //! Authorized content read plans and their unlocked I/O execution.
-use super::{
-    EngineBackend, current_protected_identity, error, repo_for_history, repository,
-    workspace_authorize,
-};
+use super::{EngineBackend, error, repo_for_history, repository, workspace_authorize};
 use crate::{ApiError, Content, auth::Identity};
 
 impl EngineBackend {
