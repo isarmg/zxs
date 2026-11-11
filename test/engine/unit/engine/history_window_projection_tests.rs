@@ -26,6 +26,14 @@ fn creation_time_fields_preserve_utc_text_range_errors_and_state_bytes() {
         let state = Arc::make_mut(&mut view.state.0);
         state.file_path_nodes.get_mut(PATH).unwrap().created_at = timestamp;
         state.file_metadata_nodes.get_mut(METADATA).unwrap().created_at = timestamp;
+        // Arc::make_mut dissociates the fixture's weak root binding.
+        view.history_window_roots = Some(HistoryRootBindings::recovered(
+            &view.state.0,
+            BTreeMap::from([(
+                HISTORY.into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            )]),
+        ));
         let before = canonical_json(view.business_projection()).unwrap();
         let context = context();
         let request = request(HistoryCollection::Nodes, 64);
@@ -78,6 +86,14 @@ fn creation_time_field_cancellation_precedes_calendar_conversion() {
         .get_mut(PATH)
         .unwrap()
         .created_at = 253_402_300_800;
+    // Arc::make_mut dissociates the fixture's weak root binding.
+    view.history_window_roots = Some(HistoryRootBindings::recovered(
+        &view.state.0,
+        BTreeMap::from([(
+            HISTORY.into(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        )]),
+    ));
     let before = canonical_json(view.business_projection()).unwrap();
     let context = context();
     let request = request(HistoryCollection::Nodes, 64);

@@ -143,7 +143,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     let [entry] = entries.as_slice() else {
         return Err("fixture must persist exactly one file".into());
     };
-    if entry.path != FILE || engine.file_history(&entry.file_id)?.len() != 2 {
+    if entry.path.as_str() != FILE || engine.file_history(&entry.file_id)?.len() != 2 {
         return Err("fixture file path or two-version history did not survive reopen".into());
     }
     let mut content = engine.open_content(&entry.version_id)?;

@@ -1584,6 +1584,19 @@
           "default_features": false
         }
       ]
+    },
+    "browser-smoke-fixture": {
+      "reason": "Compile the browser-smoke fixture against current typed engine paths. This product check preserves the cold-reopen file path comparison and is not browser interaction execution.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke",
+          "mode": "check"
+        }
+      ]
     }
   },
   "rules": [
@@ -4053,6 +4066,12 @@
       "path": "test/engine/unit/history_package/integer_tests.rs",
       "groups": [
         "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "test/tools/browser-smoke/runner/fixture.rs",
+      "groups": [
+        "browser-smoke-fixture"
       ]
     }
   ],
