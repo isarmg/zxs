@@ -20,6 +20,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] GitHub CI 采集并审查 T03 的 quality／smb-sdk 完整 Clippy 警告报告，提交真实基线后验证精确八类、第一方包范围、计数增减与其余诊断严格门禁；缺基线仍失败，完整性为 false 的报告不得用作基线。验证 workspace lint 继承、原有 unsafe 拒绝与最小 FFI 例外。
+
 - [ ] 完成《禁止防御性编程》§13 阶段 0：验证过程入口与文本棘轮，建立 workspace lint、Clippy 阈值及警告数棘轮；第一方继承规则保留 smb-vfs 自有许可证与最小 FFI deny 边界。
 - [ ] 清点并逐类替换读取第一方源码或绑定测试名的 CI 门禁，改为行为验证；保留 foundation 依赖图、Cargo 元数据、来源与许可检查。
 - [ ] 按 §19 的新版 T04–T07 完成 contract／naming 类型地基：`Id<K>`、多前缀 ID、`Generation`／`Sequence`／`Principal`／`Timestamp`、名称构造器及路径去字符串退化；补齐 `Hash<D>`、`TrackedMap<K, V>` 与 `EncodedLen`。

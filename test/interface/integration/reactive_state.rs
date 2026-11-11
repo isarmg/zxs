@@ -1,3 +1,5 @@
+#![deny(unexpected_cfgs)]
+#![forbid(unsafe_code)]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Probe the actual child process without compiling WASM or changing real assets.
 #![cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};

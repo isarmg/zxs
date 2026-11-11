@@ -1,3 +1,5 @@
+#![deny(unexpected_cfgs)]
+#![forbid(unsafe_code)]
 //! ZXS browser interface: CSR primitives, presentation and application lifetime.
 //!
 //! The adopted CSR engine and project lifecycle compile together in this crate.

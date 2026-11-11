@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
 #[cfg(feature = "sqlite-pool")]
 use sqlite_access::sqlite::SqlitePoolOptions;
 use sqlite_access::{Connection, Row};

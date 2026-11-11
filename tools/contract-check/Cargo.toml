@@ -9,7 +9,6 @@ license = "Apache-2.0"
 # This is not enabled by the production/default contract-check executable.
 schema-async = ["schema-validation/resolve-async"]
 
-
 [dependencies]
 blake3 = {version = "1.8.7", path = "../../src/foundation/cryptography/blake3"}
 schema-validation = { version = "=0.58.6", default-features = false, features = ["validator"], path = "../../src/foundation/data-storage/schema-validation"}
@@ -32,8 +31,8 @@ path = "../../test/tools/contract-check/source_export.rs"
 name = "document_scan"
 path = "../../test/tools/contract-check/document_scan.rs"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(walker_oracle)'] }
-
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints]
+workspace = true

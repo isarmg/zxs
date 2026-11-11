@@ -32,3 +32,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [[test]]
 name = "tls_trust_regression"
 path = "../../test/client/integration/tls_trust_regression.rs"
+
+[lints]
+workspace = true

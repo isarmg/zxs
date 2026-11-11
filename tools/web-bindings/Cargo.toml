@@ -8,7 +8,6 @@ repository = "https://github.com/wasm-bindgen/wasm-bindgen"
 description = "ZXS Web-only binding generator derived from wasm-bindgen-cli"
 autobins = false
 
-
 [[bin]]
 name = "wasm-bindgen"
 path = "src/main.rs"
@@ -19,9 +18,8 @@ command-line = { version = "4", features = ["derive"], path = "../../src/foundat
 logging = {version = "0.11.5", default-features = false, features = ["auto-color", "regex"], path = "../../src/foundation/diagnostics/logging"}
 wasm-bindgen-cli-support = {version = "=0.2.129", path = "../../src/foundation/web-runtime/wasm-bindgen-cli-support"}
 
-
-[lints.rust]
-unsafe_code = "forbid"
-
 [dev-dependencies]
 log = { version = "0.4", path = "../../src/foundation/diagnostics/log" }
+
+[lints]
+workspace = true

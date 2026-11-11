@@ -16,3 +16,6 @@ sha2 = {version = "0.11", path = "../foundation/cryptography/sha2"}
 subtle = {version = "2.6", path = "../foundation/cryptography/subtle"}
 error-definition.workspace = true
 url-encoding.workspace = true
+
+[lints]
+workspace = true

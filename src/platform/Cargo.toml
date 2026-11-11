@@ -33,13 +33,9 @@ json-codec.workspace = true
 log = { path = "../foundation/diagnostics/log", features = ["std"] }
 tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros"], path = "../foundation/concurrency/tokio" }
 
-[lints.rust]
-unsafe_code = "deny"
-unsafe_op_in_unsafe_fn = "deny"
-
-[lints.clippy]
-undocumented_unsafe_blocks = "deny"
-
 [[test]]
 name = "sqlite_foundation"
 path = "../../test/platform/integration/sqlite_foundation.rs"
+
+[lints]
+workspace = true

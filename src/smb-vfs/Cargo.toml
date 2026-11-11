@@ -1,7 +1,8 @@
 [package]
 name = "smb-vfs"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "GPL-3.0-or-later"
 
 [lib]
@@ -22,3 +23,6 @@ smb-protocol = { path = "../smb" }
 [build-dependencies]
 bindgen = { version = "0.72.1", optional = true, path = "../foundation/tooling/bindgen"}
 json-codec.workspace = true
+
+[lints]
+workspace = true

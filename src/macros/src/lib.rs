@@ -1,3 +1,4 @@
+#![deny(unexpected_cfgs)]
 //! Macros for use with the web-interface framework.
 
 #![forbid(unsafe_code)]

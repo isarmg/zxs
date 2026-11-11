@@ -49,6 +49,20 @@ edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(walker_oracle)'] }
+
+[workspace.lints.clippy]
+wildcard_enum_match_arm = "warn"
+map_err_ignore = "warn"
+unreachable = "warn"
+wildcard_imports = "warn"
+too_many_lines = "warn"
+excessive_nesting = "warn"
+let_underscore_untyped = "warn"
+fallible_impl_from = "warn"
+
 [workspace.dependencies]
 system-entropy = { version = "0.4", path = "src/foundation/cryptography/system-entropy", features = ["std"] }
 url-encoding = { path = "src/foundation/networking/url-encoding", default-features = false, features = ["std", "parser"] }

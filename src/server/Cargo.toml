@@ -98,3 +98,6 @@ required-features = ["core"]
 name = "foreign_admission"
 path = "../../test/server/integration/foreign_admission.rs"
 required-features = ["core"]
+
+[lints]
+workspace = true

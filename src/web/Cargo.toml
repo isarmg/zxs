@@ -1,8 +1,9 @@
 [package]
 name = "web-app"
 version.workspace = true
-edition = "2024"
-license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -22,8 +23,8 @@ gloo-timers = { version = "0.3", path = "../foundation/web-runtime/gloo-timers" 
 send_wrapper = {version = "0.6", path = "../foundation/concurrency/send_wrapper"}
 web-sys = { version = "=0.3.106", features = ["MutationRecord", "Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "Crypto", "AbortController", "AbortSignal", "DomException", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestRedirect", "Response", "ReadableStream", "ReadableStreamDefaultReader", "Headers", "UrlSearchParams", "Storage", "Event", "MouseEvent", "SubmitEvent", "console"], path = "../foundation/web-runtime/web-sys"}
 
-[lints.rust]
-unsafe_code = "forbid"
-
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 task-dispatch = { path = "../foundation/concurrency/task-dispatch", version = "0.3.0", features = ["futures-executor"] }
+
+[lints]
+workspace = true

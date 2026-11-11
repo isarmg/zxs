@@ -1,3 +1,5 @@
+#![deny(unexpected_cfgs)]
+#![forbid(unsafe_code)]
 //! Source-level guards only. The Chromium fixture checks actual CSS behavior.
 #[test]
 fn shared_styles_do_not_erase_native_input_focus_globally() {

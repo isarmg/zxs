@@ -55,6 +55,7 @@ pub const MAX_READ_BYTES: usize = 64 * 1024;
 pub const MAX_DIRECTORY_PAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 256;
 
+#[allow(unsafe_code)]
 pub fn effective_uid() -> u32 {
     // SAFETY: geteuid has no arguments or side effects and cannot fail.
     unsafe { libc::geteuid() }
@@ -451,6 +452,7 @@ impl FrameStream {
 
     /// Send an already serialized JSON payload, rejecting invalid frame sizes
     /// before writing any bytes or transferring the borrowed descriptor.
+    #[allow(unsafe_code)]
     pub fn send_serialized(
         &mut self,
         payload: &[u8],
@@ -531,6 +533,7 @@ impl FrameStream {
     // A blocking send can keep making progress beyond SO_SNDTIMEO. Use
     // per-call nonblocking writes (without changing shared descriptor flags)
     // and one poll deadline for the complete header and payload.
+    #[allow(unsafe_code)]
     fn write_before_deadline(&mut self, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
         while !bytes.is_empty() {
             remaining_timeout(deadline)?;
@@ -560,6 +563,7 @@ impl FrameStream {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
     fn wait_writable(&self, deadline: Instant) -> io::Result<()> {
         loop {
             let remaining = remaining_timeout(deadline)?;
@@ -602,6 +606,7 @@ impl FrameStream {
         Ok((value, descriptor))
     }
 
+    #[allow(unsafe_code)]
     pub(crate) fn receive_payload(
         &mut self,
         mode: ReadMode,

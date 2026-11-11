@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Validate a release tag and every first-party product manifest before building.
 use std::{env, fs, io::Write, path::Path};
 

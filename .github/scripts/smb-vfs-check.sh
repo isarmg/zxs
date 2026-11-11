@@ -2,10 +2,13 @@
 # Compiler diagnostics, real target SDK FFI tests, and the required unwind policy.
 set -euo pipefail
 mode=full
+capture_args=()
 if [[ $# -eq 1 && "$1" == --build-only ]]; then
   mode=build-only
+elif [[ $# -eq 1 && "$1" == --capture-clippy-baseline ]]; then
+  capture_args=(--capture-clippy-baseline)
 elif [[ $# -ne 0 ]]; then
-  printf 'usage: %s [--build-only]\n' "$0" >&2
+  printf 'usage: %s [--build-only|--capture-clippy-baseline]\n' "$0" >&2
   exit 2
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -14,9 +17,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 cache="${ZXS_SMB_SDK_CACHE:-$PWD/target/smb-debian13}"
 mkdir -p "$cache"
 if [[ "$mode" == full ]]; then
-python3 .github/scripts/check-rust-diagnostics.py -- \
+python3 .github/scripts/check-rust-diagnostics.py \
+  --clippy-scope smb-sdk --clippy-report "$cache/product/clippy-warnings.json" \
+  "${capture_args[@]}" -- \
   cargo clippy --locked --offline --message-format=json \
-  -p smb-vfs --all-targets -- -D warnings
+  -p smb-vfs --all-targets
 # Test harness output is not Cargo JSON. Gate compilation first, then run the
 # already compiled tests without filtering their normal stdout/stderr.
 python3 .github/scripts/check-rust-diagnostics.py -- \

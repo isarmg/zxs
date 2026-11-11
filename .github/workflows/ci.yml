@@ -98,6 +98,14 @@ jobs:
           key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
       - name: Run locked test suite
         run: bash .github/scripts/check.sh "${{ matrix.suite }}"
+      - name: Retain measured first-party Clippy warnings
+        if: always() && matrix.suite == 'quality'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: clippy-warnings-quality-${{ github.sha }}
+          path: target/clippy-warnings/quality.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain workspace shard inventory and execution evidence
         if: always() && matrix.suite == 'workspace'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

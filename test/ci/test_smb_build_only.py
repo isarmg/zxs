@@ -49,7 +49,8 @@ class SmbBuildOnly(unittest.TestCase):
             script = (ROOT / '.github/scripts' / name).read_text()
             # Only relocate the OS fixture file; no production bypass setting.
             (scripts / name).write_text(script.replace('/etc/os-release', str(self.os_release)))
-        (scripts / 'check-rust-diagnostics.py').write_text('import subprocess,sys\nsys.exit(subprocess.run(sys.argv[2:]).returncode)\n')
+        (scripts / 'check-rust-diagnostics.py').write_text(
+            'import subprocess,sys\nsys.exit(subprocess.run(sys.argv[sys.argv.index("--")+1:]).returncode)\n')
         source = self.root / 'target/smb-debian13/source'
         source.mkdir(parents=True)
         (source / '.downloaded').touch()

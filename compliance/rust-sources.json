@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "ca01f70f0eeb45d7407ac784e262534256024d5697990640a5520f1dcb17732d",
-    "compliance/external-tests/integrated.json": "5aef2e25f01fc2d584d8aaaf2cca5a9094cf89640fd3445a8667ae1c61947af3",
+    "compliance/external-tests/integrated.json": "02705daf33513960a8061b0331029a31a03456fd3054edddac0230a4a024fc38",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9",
     "compliance/external-tests/sqlite-0.39.1.json": "9c59a550e15da11a6998f2fa63f188fc3c787f6249e20be465c68970e83b4d1c"
   },
@@ -79150,13 +79150,13 @@
       ]
     },
     "src/interface": {
-      "bytes": 96926,
+      "bytes": 97076,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
         {
           "path": "test/interface/integration/component_props.rs",
-          "sha256": "eb6c9edc898b99688c3a66b08b3d4bc9b1b69af5f29690558c0dcee4b11997f5",
+          "sha256": "470f674ed507c282ff00232533733b596b2a02aa62376cde57a968722f66e16d",
           "source": "src/interface/tests/component_props.rs",
           "source_sha256_before": "b0680d33bc7a9c61bdb77acd995caee1e1b4b3b691c0f5a58d7de4aaa37b890c"
         },
@@ -79168,13 +79168,13 @@
         },
         {
           "path": "test/interface/integration/reactive_state.rs",
-          "sha256": "5a85744f7022edae1895379e106db336e67814a388e218c0a07f3f96a33635da",
+          "sha256": "9a2b71c59a2cb2004ea79a56599af2b9d4f763ec4a1fa3ba07ef35845698b89f",
           "source": "src/interface/tests/reactive_state.rs",
           "source_sha256_before": "0e62e3fc9d568ca2e902b8a01a1add3440c7800963f35a9146cf4a5ba5413663"
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "91b3de4e02e37a76b86618fd44dcfe8585e25c16a54e90e1e902ee3bee44a6ad",
+          "sha256": "7a3ab8bdf8d13542e6a31054cd228a62e192d841ebb0be78bce798cbd1e52af1",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },
@@ -79502,12 +79502,12 @@
     "Cargo.lock": "6614c732be4234259b355b2ae73950bdbb5667433c8196abc9fd3c88f041ab8b"
   },
   "manifests_sha256": {
-    "Cargo.toml": "5654bb35c6dced1e90ce89f5c28fe2d03d05c253188c1ea34c25f3b9c11c736d",
-    "helper/Cargo.toml": "b6953d9d2aaf801cedc5f62b4e0dc9f08f6bc02351fcedcb3514f9ff22996466",
-    "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
-    "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
-    "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",
-    "src/engine/Cargo.toml": "e9a151070158e772f2943ada4790fec440d42fda60cef8fc051e1edd0c602224",
+    "Cargo.toml": "ca1ffbb2fa59327067c99eefc52fc780340292a72686d1305d6291a4fcf82d08",
+    "helper/Cargo.toml": "0071473a5f84c7a69d9c1cd6514124f7aeaf0eff192de976c1477592806d02a6",
+    "src/auth/Cargo.toml": "30c13cd13b7760139354761dc800d6a939702af7e638e8139cb32e73a3378839",
+    "src/client/Cargo.toml": "948ee09545561370e0041bcdda5ff3641b5239a6ceadbeb774ee061b7ccfc12b",
+    "src/contract/Cargo.toml": "db3403209d0526713bb87c658b10020c592d0dd32b8c2c5c42fc1f0419909cfc",
+    "src/engine/Cargo.toml": "b380aa878b794462276094a0f5efbe348757f35e325c52d8a0afa307feddfed7",
     "src/foundation/code-generation/derive-where/Cargo.toml": "dac6d156693a9ca4d661e41d456a17154836e90ca1d9be52e85b86b5264f1725",
     "src/foundation/code-generation/displaydoc/Cargo.toml": "bffb4f3a7d1b0aa79151f31872f40b7b7bcac575fbeea5e628b30a523a883d8e",
     "src/foundation/code-generation/pastey/Cargo.toml": "0dcbf18a646aff0eb601f5efffc2294b82470a5c44b744778ac6920b536e5991",
@@ -79730,21 +79730,21 @@
     "src/foundation/web-runtime/wasm-text-printer/Cargo.toml": "69ed0cdda84a13bfc928eda48dc1acd44d49e962f624f0e873f882d2651d9a65",
     "src/foundation/web-runtime/wasmparser/Cargo.toml": "771207359c85d13aa247962a53b713da998d1bbc634fee7931dfb1c180e558f8",
     "src/foundation/web-runtime/web-sys/Cargo.toml": "3ab4e3a313566167584cc6f711e6d84209f01be850ca1a18a88292704b267011",
-    "src/interface/Cargo.toml": "b2829ad76c14374ddc8b74d5901395894578930e8b5ef0dca7ba7c22a71755d8",
-    "src/macros/Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
-    "src/naming/Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
-    "src/platform/Cargo.toml": "3b2c264383bc19f1475be6879c6b6372b0e258462e1105b6b2f0710f556f0522",
-    "src/server/Cargo.toml": "bde0f1796c96f59eb58c8229b410674083c67007688dfa4d690e55e13d17cabf",
-    "src/smb-vfs/Cargo.toml": "c31cbf9f660ee8cd4b99a6fbe1dde835444ce189db1e6a68a02cb87d0141fc0b",
-    "src/smb/Cargo.toml": "62c7175cf2e4e98ea75380065be3e4e4d1e535bbe313ede6577f216543456ec5",
-    "src/web/Cargo.toml": "d1b0468e33c954617ef1f565b8e3cd312a517aa4836d32cb0b2800b8f653f1a8",
-    "tools/browser-smoke/Cargo.toml": "fe0db8d33c6a8143d67cfb4a4fbf2d528a113e078a51f88b31e7b5e70d85baa8",
-    "tools/contract-check/Cargo.toml": "25ab62023c5fc48b88d7eff349ee634a3e474f523a05ebf76bdb962685d80567",
-    "tools/perf-check/Cargo.toml": "0711cfa82680a487e214f0c125e181144bb8bb0944a60c11051a8b751a079694",
-    "tools/release-tools/Cargo.toml": "2196ba19e6a40d4eaf9d0171d1215850f2da5c56a72d1fcf79ec7fdafa1daccd",
-    "tools/unicode-build/Cargo.toml": "1aa18cf337bcda1013aa01086b84a443ea1237e15703aaae607bb9ddfcd27506",
-    "tools/web-bindings/Cargo.toml": "e5e2a35c6707369e5fe2b9299f6609af20dc3cb14cb107110960f96b7a11a700",
-    "tools/web-build/Cargo.toml": "3b9fc40e5f1073d84dfa137e62d4dbc633142d4366f40115718c8b558653bc8b"
+    "src/interface/Cargo.toml": "a68bb23386d8efa0d23efa23d24ea490de334638178cc45d2be6a0d61112a85f",
+    "src/macros/Cargo.toml": "5313007e6bd4dc29c9f6fae9ea69412101268e24f6787806a08b8b12c9025219",
+    "src/naming/Cargo.toml": "14e729debac58cd4a43d64408da318fdd3115f2ced97561db5edbd2238749cf6",
+    "src/platform/Cargo.toml": "9e8f30e0ae93d8ad34b1e6fc7978a75a95ec9751b19e36e026f63195d5d3aaca",
+    "src/server/Cargo.toml": "067af1fddf49c5ec0972471c5ce17edc1aecc843e11eadf27a74f9e36846aca7",
+    "src/smb-vfs/Cargo.toml": "9716371df2a62a5b96db181117c4d970b95a87244a958c5a8f63924f7f5962b6",
+    "src/smb/Cargo.toml": "3891b383a6aee8a8ea2b985da5017804b3c66569d4290f315b6822dbe8f7e403",
+    "src/web/Cargo.toml": "a054ee6dc2722dd3157a72313b9450db018af97737eb759322b29e6a0b19cd8d",
+    "tools/browser-smoke/Cargo.toml": "21789c3aa9ce95bc6f0a14a6b5e28ac2016e83c01adb4f72bccdce0c72963caf",
+    "tools/contract-check/Cargo.toml": "0f0b6017716fca73129ddcc15e42cb9886ad065aa399023c0d1fa391ab5d04a6",
+    "tools/perf-check/Cargo.toml": "bf3682f88624b2f173040f0e0a0bf2baef6f75013e28eace86e8099c293cebfb",
+    "tools/release-tools/Cargo.toml": "734d1451cd6122345960c7474979ec0660afa029636ef82391706314b58e598d",
+    "tools/unicode-build/Cargo.toml": "9c2490ea1f07fe25f5fa7c1aa1484498fb5bb2f9f47db0f8045e8b311e7e37df",
+    "tools/web-bindings/Cargo.toml": "f23408b57775bb0aef06c4ca9d3e07005fa0ceeb3e726bb337129ad1d9044924",
+    "tools/web-build/Cargo.toml": "a008d435d5daf7211d9c4bbcd070c4c3f1f28b46f9105e1f959c7c98a42f4e9a"
   },
   "merges": [
     {
@@ -79752,7 +79752,7 @@
       "description": "This crate provides functions for normalization of\nUnicode strings, including Canonical and Compatible\nDecomposition and Recomposition, as described in\nUnicode Standard Annex #15.",
       "directory": "src/naming",
       "files_sha256": {
-        "Cargo.toml": "14f34fa82d476daeac6d300225a028f92d589a3f117095ed025c3ae607af79e7",
+        "Cargo.toml": "14e729debac58cd4a43d64408da318fdd3115f2ced97561db5edbd2238749cf6",
         "data/case-folding-16.0.0.txt": "6f1f9c588eb4a5c718d9e8f93b782685e5c7fec872cf05e8e6878053599e09bb",
         "data/derived-core-properties-16.0.0.txt": "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd",
         "data/derived-normalization-props-16.0.0.txt": "4d4c03892dea9146d674b686e495df2d55a28d071ac474041d73518f887abddc",
@@ -79809,7 +79809,7 @@
       "description": "Project-specific browser CSR runtime",
       "directory": "src/interface",
       "files_sha256": {
-        "Cargo.toml": "b2829ad76c14374ddc8b74d5901395894578930e8b5ef0dca7ba7c22a71755d8",
+        "Cargo.toml": "a68bb23386d8efa0d23efa23d24ea490de334638178cc45d2be6a0d61112a85f",
         "src/animated_show.rs": "7a1e5012b9d0edddbf131b0070eeb8d35bac64f8163b159acab9609fb1ef40eb",
         "src/attribute_interceptor.rs": "60a0fd6aa679aefbe34a57437539f6db1fc93fa96cb18b6cbb51485a1665e960",
         "src/browser_support.rs": "45b0881fd8b443f3062bb2ff9893e667b6f480c77d9d728ace8e98a076a114ab",
@@ -79836,7 +79836,7 @@
         "src/for_snapshot.rs": "406af645436f3832601d12a7af3eefee7408e0654e39ea198c7d2e39c8049c05",
         "src/i18n.rs": "58303b320714a3fbdfb3b9ce60f97377f7b699435af00f7213bbf27e6b92501b",
         "src/into_view.rs": "63eb8d572837186f8cdd5872e63b78a9bd3142e275d99991f746b1d9c59fabb4",
-        "src/lib.rs": "af51238d7145877f310b9553ae79ac7ea92ef61c76bd11ca78caf8d01b7c5d49",
+        "src/lib.rs": "f357bf758bd74c9953a569e36de7ff8b9eba10e69af984db74888eedb6735103",
         "src/lifecycle.rs": "ecc68b7bd3dc32316fc8c43d407b71979b8282b7608137766dbe4b43578fb5bb",
         "src/mount.rs": "11d4421e13eea30031f1c226c2f5cde9b450d3ff8ba34d9699bef99b9eceaa41",
         "src/portal.rs": "c67d6f30c1e85446ea3d8542d8337b81ef88e1c49b65d220345cca03da9691db",
@@ -79874,10 +79874,10 @@
       "description": "Utility types used for dev mode and hot-reloading for the Leptos web framework.",
       "directory": "src/macros",
       "files_sha256": {
-        "Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
+        "Cargo.toml": "5313007e6bd4dc29c9f6fae9ea69412101268e24f6787806a08b8b12c9025219",
         "src/component.rs": "fb75e07c61f0984ce96c4f00da7bdf1fe21cee94fafbd6793e501f16f786affa",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
-        "src/lib.rs": "47064e23f19896cde411b4cd4d5ed865458032fcab97910322eaf0f62181ee0a",
+        "src/lib.rs": "f42d4dbe85a362423caefae47b425506b707324d04c3fd67f0b273b9b9101d4c",
         "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
         "src/prop_options.rs": "91f6a3ad2fb81a49c2dde7c18f7558002172ba10523aac04c822559034d70a12",
         "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
@@ -102322,10 +102322,10 @@
       "description": "Project CSR view and component macros",
       "directory": "src/macros",
       "files_sha256": {
-        "Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
+        "Cargo.toml": "5313007e6bd4dc29c9f6fae9ea69412101268e24f6787806a08b8b12c9025219",
         "src/component.rs": "fb75e07c61f0984ce96c4f00da7bdf1fe21cee94fafbd6793e501f16f786affa",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
-        "src/lib.rs": "47064e23f19896cde411b4cd4d5ed865458032fcab97910322eaf0f62181ee0a",
+        "src/lib.rs": "f42d4dbe85a362423caefae47b425506b707324d04c3fd67f0b273b9b9101d4c",
         "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
         "src/prop_options.rs": "91f6a3ad2fb81a49c2dde7c18f7558002172ba10523aac04c822559034d70a12",
         "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
@@ -102362,8 +102362,8 @@
       "description": "ZXS Web-only binding generator derived from wasm-bindgen-cli",
       "directory": "tools/web-bindings",
       "files_sha256": {
-        "Cargo.toml": "e5e2a35c6707369e5fe2b9299f6609af20dc3cb14cb107110960f96b7a11a700",
-        "src/main.rs": "dae1d3d6e9fd6e48073795cbbd570465d1fa3f574d1f6b541bdb9ea1eae4816d"
+        "Cargo.toml": "f23408b57775bb0aef06c4ca9d3e07005fa0ceeb3e726bb337129ad1d9044924",
+        "src/main.rs": "8b025cdaddb66022bec7036d4edcf5d92bbed7e3896bc5796e967b3338fc4be3"
       },
       "license": "MIT OR Apache-2.0",
       "license_materials": [

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 mod admin;
 mod api;
 mod files;

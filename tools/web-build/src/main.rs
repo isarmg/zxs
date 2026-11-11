@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Rust-only production builder. JavaScript consists of generated WASM bindings
 //! and a generated generic module loader; product behavior lives in Rust.
 use anyhow::{Context, Result, bail};

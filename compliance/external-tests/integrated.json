@@ -5,7 +5,7 @@
       "files": [
         {
           "path": "test/interface/integration/component_props.rs",
-          "sha256": "eb6c9edc898b99688c3a66b08b3d4bc9b1b69af5f29690558c0dcee4b11997f5",
+          "sha256": "470f674ed507c282ff00232533733b596b2a02aa62376cde57a968722f66e16d",
           "source": "src/interface/tests/component_props.rs",
           "source_sha256_before": "b0680d33bc7a9c61bdb77acd995caee1e1b4b3b691c0f5a58d7de4aaa37b890c"
         },
@@ -17,13 +17,13 @@
         },
         {
           "path": "test/interface/integration/reactive_state.rs",
-          "sha256": "5a85744f7022edae1895379e106db336e67814a388e218c0a07f3f96a33635da",
+          "sha256": "9a2b71c59a2cb2004ea79a56599af2b9d4f763ec4a1fa3ba07ef35845698b89f",
           "source": "src/interface/tests/reactive_state.rs",
           "source_sha256_before": "0e62e3fc9d568ca2e902b8a01a1add3440c7800963f35a9146cf4a5ba5413663"
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "91b3de4e02e37a76b86618fd44dcfe8585e25c16a54e90e1e902ee3bee44a6ad",
+          "sha256": "7a3ab8bdf8d13542e6a31054cd228a62e192d841ebb0be78bce798cbd1e52af1",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },

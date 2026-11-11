@@ -1,3 +1,5 @@
+#![deny(unexpected_cfgs)]
+#![forbid(unsafe_code)]
 use core::num::NonZeroUsize;
 use web_interface::prelude::*;
 

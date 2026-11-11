@@ -16,3 +16,6 @@ system-entropy.workspace = true
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 system-entropy = { workspace = true, features = ["wasm_js"] }
+
+[lints]
+workspace = true

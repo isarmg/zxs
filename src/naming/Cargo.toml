@@ -8,3 +8,6 @@ rust-version.workspace = true
 error-definition.workspace = true
 data-serialization.workspace = true
 tinyvec = { path = "../foundation/collections/tinyvec", version = "1", features = ["alloc"] }
+
+[lints]
+workspace = true

@@ -16,3 +16,6 @@ storage-server.workspace = true
 base64 = {version = "0.23.1", path = "../../src/foundation/data-storage/base64", default-features = false, features = ["std"]}
 json-codec = {version = "1", path = "../../src/foundation/data-storage/json-codec"}
 tempfile = {version = "3", path = "../../src/foundation/platform/tempfile"}
+
+[lints]
+workspace = true

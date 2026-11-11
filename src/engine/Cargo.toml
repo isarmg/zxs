@@ -107,3 +107,6 @@ path = "../../test/engine/integration/independent_inventory.rs"
 [[test]]
 name = "foreign_original_databases"
 path = "../../test/engine/integration/foreign_original_databases.rs"
+
+[lints]
+workspace = true

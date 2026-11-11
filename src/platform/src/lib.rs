@@ -1,3 +1,4 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
 //! ZXS's independent, narrowly selected platform foundation.
 //!
 //! SQLite is a rebuildable query index. Neither its transactions nor any

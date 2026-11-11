@@ -4,11 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
-
 [dependencies]
 semver = {version = "1", path = "../../src/foundation/tooling/semver"}
 toml = {version = "0.8.23", path = "../../src/foundation/data-storage/toml"}
 
-
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

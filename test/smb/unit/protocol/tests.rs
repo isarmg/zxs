@@ -95,6 +95,7 @@ fn frame_remainder_preserves_every_partial_header_and_payload_boundary() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn coalesced_frames_keep_descriptors_bound_to_their_own_header() {
     let (one, two) = UnixStream::pair().unwrap();
     let mut sender = FrameStream::new(one).unwrap();
@@ -120,6 +121,7 @@ fn coalesced_frames_keep_descriptors_bound_to_their_own_header() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn framing_transfers_an_owned_cloexec_descriptor_without_a_path() {
     let (one, two) = UnixStream::pair().unwrap();
     let mut sender = FrameStream::new(one).unwrap();
@@ -147,6 +149,7 @@ fn framing_transfers_an_owned_cloexec_descriptor_without_a_path() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn serialized_frames_reject_invalid_sizes_before_writing_and_preserve_descriptor_delivery() {
     let (one, two) = UnixStream::pair().unwrap();
     let mut sender = FrameStream::new(one).unwrap();
@@ -295,6 +298,7 @@ fn directory_reads_use_only_session_handles_and_do_not_accept_client_snapshots()
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn partial_write_progress_does_not_restart_the_frame_deadline() {
     let (one, mut two) = UnixStream::pair().unwrap();
     let size: libc::c_int = 4096;
@@ -353,6 +357,7 @@ fn blocked_send_is_cancelled_by_socket_shutdown() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn misplaced_extra_and_truncated_rights_are_rejected_without_leaking() {
     for (on_payload, descriptor_count) in [(true, 1), (false, 2), (false, 80)] {
         let (mut one, two) = UnixStream::pair().unwrap();
@@ -419,6 +424,7 @@ fn misplaced_extra_and_truncated_rights_are_rejected_without_leaking() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn immutable_reads_hide_appended_bytes_while_workspace_reads_follow_live_length() {
     use std::os::unix::fs::FileExt;
     // SAFETY: the static name is NUL-terminated; memfd_create returns a fresh

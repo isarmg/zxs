@@ -37,3 +37,6 @@ path = "../test/helper/startup.rs"
 [[test]]
 name = "independent_authority"
 path = "../test/helper/independent_authority.rs"
+
+[lints]
+workspace = true

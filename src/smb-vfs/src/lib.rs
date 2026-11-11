@@ -9,4 +9,8 @@ compile_error!(
     "the loadable ZXS VFS module requires smb-sdk; build smb-protocol for protocol-only tools"
 );
 #[cfg(feature = "smb-sdk")]
+// SAFETY: This module is the pinned-SDK FFI boundary. Its host contract and
+// per-block proofs cover pointer lifetime/alignment, initialized buffer bounds,
+// exclusive event-loop access, owned worker data, and exactly-once cleanup.
+#[allow(unsafe_code)]
 mod module;

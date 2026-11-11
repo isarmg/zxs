@@ -41,10 +41,6 @@ web-sys = { version = "=0.3.106", features = [
 [dev-dependencies]
 json-codec.workspace = true
 
-[lints.rust]
-unsafe_code = "forbid"
-unexpected_cfgs = "deny"
-
 [[test]]
 name = "component_props"
 path = "../../test/interface/integration/component_props.rs"
@@ -56,3 +52,6 @@ path = "../../test/interface/integration/reactive_state.rs"
 [[test]]
 name = "style_contracts"
 path = "../../test/interface/integration/style_contracts.rs"
+
+[lints]
+workspace = true

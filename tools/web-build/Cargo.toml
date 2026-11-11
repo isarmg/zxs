@@ -4,17 +4,15 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
-
 [dependencies]
 anyhow = {version = "1", path = "../../src/foundation/diagnostics/anyhow"}
 compression = { path = "../../src/foundation/data-storage/compression", features = ["streams", "simd", "runtime-detection"] }
 json-codec = {version = "1", path = "../../src/foundation/data-storage/json-codec"}
 sha2 = {version = "0.11", path = "../../src/foundation/cryptography/sha2"}
 
-
-[lints.rust]
-unsafe_code = "forbid"
-
 [[test]]
 name = "build_context"
 path = "../../test/tools/web-build/build_context.rs"
+
+[lints]
+workspace = true

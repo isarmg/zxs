@@ -627,6 +627,34 @@ class DiagnosticGateCommands(unittest.TestCase):
         scripts.mkdir(parents=True)
         for name in ("quality.sh", "smb-vfs-check.sh", "check-rust-diagnostics.py"):
             shutil.copy2((Path(__file__).resolve().parents[2] / ".github/scripts") / name, scripts)
+        shutil.copy2(Path(__file__).resolve().parents[2] / "rust-toolchain.toml", self.root)
+        spec = importlib.util.spec_from_file_location("suite_clippy_diagnostics", scripts / "check-rust-diagnostics.py")
+        self.diagnostics = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.diagnostics)
+        metadata = {
+            "workspace_root": str(self.root),
+            "workspace_members": ["web-app", "smb-vfs", "local-dependency"],
+            "packages": [
+                {"id": name, "name": name, "manifest_path": str(self.root / path / "Cargo.toml")}
+                for name, path in (("web-app", "src/web"), ("smb-vfs", "src/smb-vfs"),
+                                   ("local-dependency", "src/foundation/local"))
+            ],
+        }
+        commands = {
+            "quality": ["cargo", "clippy", "--locked", "--offline", "--package", "web-app",
+                        "--all-targets", "--message-format=json"],
+            "smb-sdk": ["cargo", "clippy", "--locked", "--offline", "--message-format=json",
+                        "-p", "smb-vfs", "--all-targets"],
+        }
+        self.baselines = {}
+        for scope, command in commands.items():
+            measurement = self.diagnostics.ClippyWarnings(
+                self.root, scope, Path("fixture-report.json"), False, command, metadata,
+            )
+            # Temporary baselines match this synthetic tool's default empty output.
+            measurement.baseline.parent.mkdir(parents=True, exist_ok=True)
+            measurement.baseline.write_text(json.dumps(measurement.current))
+            self.baselines[scope] = measurement.baseline
         self.binary_directory = self.root / "bin"
         self.binary_directory.mkdir()
         self.write_tool("node", "#!/bin/sh\nexit 0\n")
@@ -636,6 +664,8 @@ args = sys.argv[1:]
 with open(os.environ['SUITE_RECEIPT'], 'a') as receipt:
     receipt.write(json.dumps(args) + '\\n')
 if args[0] == 'metadata':
+    if os.environ.get('SUITE_METADATA_ERROR'):
+        sys.exit(7)
     root = os.environ['SUITE_ROOT']
     packages = [{{'id': name, 'name': name, 'manifest_path': root + '/' + path + '/Cargo.toml'}}
                 for name, path in [('web-app', 'src/web'), ('smb-vfs', 'src/smb-vfs'),
@@ -657,6 +687,13 @@ elif '--message-format=json' in args:
                           'package_id': 'path+file:///src/foundation/local#1.0.0',
                           'message': {{'message': 'local dependency warning', 'level': 'warning',
                                       'rendered': 'warning: local dependency warning\\n'}}}}))
+    if args[0] == 'clippy' and os.environ.get('SUITE_CLIPPY_CODE'):
+        identity = os.environ.get('SUITE_CLIPPY_ID', 'smb-vfs' if 'smb-vfs' in args else 'web-app')
+        print(json.dumps({{'reason': 'compiler-message', 'package_id': identity,
+                          'message': {{'message': 'measured Clippy fixture',
+                                      'level': os.environ.get('SUITE_CLIPPY_LEVEL', 'warning'),
+                                      'code': {{'code': os.environ['SUITE_CLIPPY_CODE']}},
+                                      'rendered': 'warning: measured Clippy fixture\\n'}}}}))
     print(json.dumps({{'reason': 'build-finished', 'success': True}}))
 ''')
         self.receipt = self.root / "calls.jsonl"
@@ -671,9 +708,10 @@ elif '--message-format=json' in args:
         path.write_text(source)
         path.chmod(0o700)
 
-    def run_script(self, name, **environment):
+    def run_script(self, name, *arguments, **environment):
+        self.receipt.unlink(missing_ok=True)
         result = subprocess.run(
-            ["bash", str(self.root / ".github/scripts" / name)], cwd="/tmp",
+            ["bash", str(self.root / ".github/scripts" / name), *arguments], cwd="/tmp",
             env=dict(self.environment, **environment), capture_output=True, text=True,
             check=False,
         )
@@ -683,14 +721,17 @@ elif '--message-format=json' in args:
     def test_quality_checks_first_party_clippy_and_host_and_wasm_dependency_warnings(self):
         result, calls = self.run_script("quality.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
-        metadata, formatting, clippy, host, wasm = calls
+        metadata, formatting, clippy_metadata, clippy, host, wasm = calls
         self.assertEqual(metadata[0], "metadata")
+        self.assertEqual(clippy_metadata, metadata)
         self.assertEqual(formatting, ["fmt", "--package", "web-app", "--package", "smb-vfs",
                                       "--", "--check"])
         self.assertEqual(clippy[0], "clippy")
         self.assertIn("--all-targets", clippy)
         self.assertIn("--message-format=json", clippy)
-        self.assertEqual(clippy[-3:], ["--", "-D", "warnings"])
+        self.assertNotIn("-D", clippy)
+        self.assertNotIn("--force-warn", clippy)
+        self.assertNotIn("--cap-lints", clippy)
         self.assertNotIn("smb-vfs", clippy)
         self.assertIn("--workspace", host)
         self.assertIn("--all-targets", host)
@@ -709,6 +750,44 @@ elif '--message-format=json' in args:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("1 Rust warning(s)", result.stderr)
 
+    def test_quality_missing_baseline_captures_counts_but_fails(self):
+        self.baselines["quality"].unlink()
+        code = self.diagnostics.CLIPPY_WARNINGS[0]
+        result, calls = self.run_script("quality.sh", SUITE_CLIPPY_CODE=code)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls[-1][0], "clippy")
+        report = json.loads((self.root / "target/clippy-warnings/quality.json").read_text())
+        self.assertIs(report["complete"], True)
+        self.assertEqual(report["baseline_candidate"]["counts"]["src/web/Cargo.toml"][code], 1)
+        self.assertFalse(self.baselines["quality"].exists())
+        self.assertIn("reviewed baseline unavailable", result.stderr)
+
+    def test_quality_measured_warning_requires_exact_reviewed_count(self):
+        code = self.diagnostics.CLIPPY_WARNINGS[0]
+        baseline = json.loads(self.baselines["quality"].read_text())
+        baseline["counts"]["src/web/Cargo.toml"][code] = 1
+        self.baselines["quality"].write_text(json.dumps(baseline))
+        result, calls = self.run_script("quality.sh", SUITE_CLIPPY_CODE=code)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1][0], "check")
+        for environment in ({"SUITE_CLIPPY_ID": "local-dependency"},
+                            {"SUITE_CLIPPY_ID": "smb-vfs"},
+                            {"SUITE_CLIPPY_CODE": "clippy::unknown"},
+                            {"SUITE_CLIPPY_LEVEL": "error"}):
+            with self.subTest(environment=environment):
+                options = {"SUITE_CLIPPY_CODE": code, **environment}
+                result, _ = self.run_script("quality.sh", **options)
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads((self.root / "target/clippy-warnings/quality.json").read_text())
+                self.assertIs(report["complete"], False)
+
+    def test_quality_explicit_capture_does_not_accept_or_change_baseline(self):
+        original = self.baselines["quality"].read_bytes()
+        result, _ = self.run_script("quality.sh", "--capture-clippy-baseline")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("capture is not a passing ratchet", result.stderr)
+        self.assertEqual(self.baselines["quality"].read_bytes(), original)
+
     def prepare_sdk(self):
         # Only diagnostic command orchestration is mocked here. Exact Debian
         # source/configuration and live host ABI have their own real CI gate.
@@ -722,8 +801,10 @@ elif '--message-format=json' in args:
         self.prepare_sdk()
         result, calls = self.run_script("smb-vfs-check.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
-        clippy, compile_tests, tests, abort, release = calls
+        metadata, clippy, compile_tests, tests, abort, release = calls
+        self.assertEqual(metadata[0], "metadata")
         self.assertEqual(clippy[0], "clippy")
+        self.assertNotIn("-D", clippy)
         self.assertIn("--all-targets", clippy)
         self.assertIn("--no-run", compile_tests)
         self.assertEqual(tests, ["test", "--locked", "--offline", "-p", "smb-vfs"])
@@ -739,7 +820,7 @@ elif '--message-format=json' in args:
         result, calls = self.run_script("smb-vfs-check.sh", SUITE_ABORT="accepted")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SMB VFS unexpectedly accepted panic=abort", result.stderr)
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertEqual(calls[-1][0], "rustc")
 
     def test_sdk_abort_gate_rejects_unrelated_compile_failure(self):
@@ -747,16 +828,51 @@ elif '--message-format=json' in args:
         result, calls = self.run_script("smb-vfs-check.sh", SUITE_ABORT="unrelated")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unrelated compilation failure", result.stdout)
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertEqual(calls[-1][0], "rustc")
 
     def test_sdk_rejects_warnings_before_running_test_bodies(self):
         self.prepare_sdk()
         result, calls = self.run_script("smb-vfs-check.sh", SUITE_WARNING="test")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertIn("--no-run", calls[-1])
         self.assertIn("1 Rust warning(s)", result.stderr)
+
+    def test_sdk_missing_baseline_preserves_measured_report_as_product_evidence(self):
+        self.prepare_sdk()
+        self.baselines["smb-sdk"].unlink()
+        code = self.diagnostics.CLIPPY_WARNINGS[0]
+        result, calls = self.run_script("smb-vfs-check.sh", SUITE_CLIPPY_CODE=code)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([call[0] for call in calls], ["metadata", "clippy"])
+        report = json.loads((self.root / "target/smb-debian13/product/clippy-warnings.json").read_text())
+        self.assertIs(report["complete"], True)
+        self.assertEqual(report["baseline_candidate"]["counts"]["src/smb-vfs/Cargo.toml"][code], 1)
+        self.assertFalse(self.baselines["smb-sdk"].exists())
+
+    def test_sdk_capture_and_other_diagnostics_remain_fatal(self):
+        self.prepare_sdk()
+        result, _ = self.run_script("smb-vfs-check.sh", "--capture-clippy-baseline")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("capture is not a passing ratchet", result.stderr)
+        for stage in ("clippy", "test", "build"):
+            with self.subTest(stage=stage):
+                result, _ = self.run_script("smb-vfs-check.sh", SUITE_WARNING=stage)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("1 Rust warning(s)", result.stderr)
+
+    def test_sdk_failed_metadata_invalidates_previous_observation(self):
+        self.prepare_sdk()
+        result, _ = self.run_script("smb-vfs-check.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report_path = self.root / "target/smb-debian13/product/clippy-warnings.json"
+        self.assertIs(json.loads(report_path.read_text())["complete"], True)
+        result, calls = self.run_script("smb-vfs-check.sh", SUITE_METADATA_ERROR="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([call[0] for call in calls], ["metadata"])
+        self.assertEqual(json.loads(report_path.read_text()),
+                         {"complete": False, "baseline_candidate": None})
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Derived from wasm-bindgen-cli 0.2.129's wasm_bindgen module and binary.
 //! Exact source mapping: compliance/provenance/packages/zxs-bindgen-0.2.129/PROVENANCE.json.
 //! Upstream licenses: compliance/licenses/upstream/zxs-bindgen-0.2.129/.

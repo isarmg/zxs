@@ -331,6 +331,7 @@ pub fn error_errno(error: &io::Error) -> i32 {
 /// Close is terminal even when publication fails. If a worker poisoned the I/O
 /// lock, detach instead: neither publishing suspect bytes nor aborting/deleting
 /// them is safe. The guard still serializes against outstanding FD users.
+#[allow(unsafe_code)]
 pub fn close_descriptor<T>(
     handle: u64,
     descriptor: OwnedFd,
