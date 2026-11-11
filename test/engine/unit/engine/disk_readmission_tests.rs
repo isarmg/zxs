@@ -775,12 +775,14 @@ fn explicit_system_loss_recovery_persists_active_epoch_for_metadata_and_data_roo
         let archive = fixture.begin(operation);
         let result = fixture.activate(&archive);
         let disk_id = fixture.config.disks[0].disk_id.clone();
-        // Recovery rebuilds both derived databases through the authoritative head.
-        // Materialize that same prefix before capturing the retained disk's bytes.
+        // Normal cold open repairs file and directory projections before rebuilding
+        // disk catalogs and histories. Capture the same complete maintenance boundary.
         let state_before_maintenance = canonical_json(&*fixture.engine.state).unwrap();
+        drop(fixture.engine);
+        fixture.engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
         let slot = &fixture.config.disks[0].slot_id;
-        let catalog = fixture.engine.rebuild_disk_catalog(slot).unwrap();
-        let history = fixture.engine.rebuild_disk_history(slot).unwrap();
+        let catalog = fixture.engine.disk_catalog_observation(slot).unwrap().snapshot;
+        let history = fixture.engine.disk_history_observation(slot).unwrap().snapshot;
         assert_eq!(
             catalog.identity,
             fixture.engine.registered_disk(&disk_id).unwrap().identity()
@@ -793,6 +795,15 @@ fn explicit_system_loss_recovery_persists_active_epoch_for_metadata_and_data_roo
             state_before_maintenance
         );
         assert_eq!(fixture.engine.state.operations[&operation], result);
+        assert_eq!(
+            fixture
+                .engine
+                .config
+                .io_admission_epoch(&disk_id)
+                .unwrap()
+                .as_deref(),
+            Some(result.request_digest.as_str())
+        );
         let mut metadata_roots = fixture
             .engine
             .config
