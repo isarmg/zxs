@@ -155,6 +155,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         .unwrap();
     let before = engine.state().operations.clone();
     let originals = engine.config().disks.clone();
+    let discovery = fs::read(temp.path().join("system/config.json")).unwrap();
     let request = transaction(
         &engine,
         vec![
@@ -180,6 +181,10 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         .complete_backup_registry_placement_decision(operation, "admin")
         .unwrap();
     assert_eq!(result.kind, "backup-target-replacement");
+    assert_eq!(
+        fs::read(temp.path().join("system/config.json")).unwrap(),
+        discovery
+    );
     assert_eq!(
         engine.backup_preparation_status().unwrap().phase,
         BackupPreparationPhase::GenerationServingActive
@@ -345,10 +350,15 @@ fn late_bootstrap_prefix() -> (tempfile::TempDir, BackupTransactionRequest, Entr
     let (temp, mut engine, repository) = full_route();
     let old = save(&mut engine, &repository, "kept", b"same original body");
     let request = transaction(&engine, vec![target(temp.path(), "cold-original-target")]);
+    let discovery = fs::read(temp.path().join("system/config.json")).unwrap();
     prepared(&mut engine, &request);
     engine
         .complete_backup_registry_placement_decision(request.preparation.operation_id, "admin")
         .unwrap();
+    assert_eq!(
+        fs::read(temp.path().join("system/config.json")).unwrap(),
+        discovery
+    );
     drop(engine);
     fs::remove_file(
         temp.path()

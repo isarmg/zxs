@@ -1,5 +1,7 @@
 # ZXS 当前任务清单
 
+- 待 CI 验证：Backup serving 完成时保留 Genesis discovery config；冷启动由已认证的 native bootstrap extension 选择 Backup 扇出。新增完整事务与精确操作重试的 discovery 原字节不变断言；未运行本地编译或测试。
+
 - [ ] GitHub CI 验证容器重命名夹具的已持有版本序号，以及历史投影对未知收据/主体表变更的完整重建行为。
 
 ## 当前底层重构与 CI 闭环

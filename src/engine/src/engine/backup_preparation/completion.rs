@@ -20,7 +20,14 @@ impl Engine {
         let barrier = admitted.barrier.clone();
         let result = admitted.result.clone();
         self.reopen_backup_system_index(&barrier)?;
-        write_json(&self.root.join("config.json"), &self.config, true)?;
+        // SYSTEM retains the Genesis discovery anchor. The authenticated
+        // bootstrap extension selects the native Backup fanout on restart.
+        let discovery = self
+            .config
+            .generation()
+            .expect("invariant: completed Backup serving has native generation authority")
+            .original();
+        write_json(&self.root.join("config.json"), discovery, true)?;
         if self.retire_completed_backup_source_stop(&barrier, &result)? {
             self.restore_published_disk_histories();
         }
