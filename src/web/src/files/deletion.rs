@@ -3,12 +3,14 @@
 mod batch;
 mod batch_restore;
 mod directory;
+mod frontier;
+mod listing;
 mod recovery;
 mod request;
 mod restore;
 mod view;
 mod wire;
-use super::actions;
+use crate::files::actions;
 use crate::{
     api,
     ui::{State, accept_read_response, current_session, fail},
@@ -75,23 +77,8 @@ impl Model {
     }
 }
 
-fn load(state: RwSignal<State>, next: bool) {
-    let endpoint = state.with_untracked(|s| {
-        if !s.session_active() || s.files.deletion.loading {
-            return None;
-        }
-        if next {
-            let page = s.files.deletion.page.as_ref()?;
-            let after = page.next_after.as_ref()?;
-            Some(format!(
-                "/api/file-deletions?after={}&snapshot={}",
-                api::segment(after.as_str()),
-                api::segment(&page.snapshot)
-            ))
-        } else {
-            Some("/api/file-deletions".into())
-        }
-    });
+fn load(state: RwSignal<State>, read: listing::Read) {
+    let endpoint = state.with_untracked(|s| read.endpoint(s));
     let Some(endpoint) = endpoint else {
         return;
     };
@@ -120,19 +107,13 @@ fn load(state: RwSignal<State>, next: bool) {
     });
 }
 
-fn select(state: RwSignal<State>, summary: Summary) {
-    if !state.with_untracked(|s| {
-        s.session_active() && s.files.deletion.open && !s.files.deletion.loading
-    }) {
+fn select(state: RwSignal<State>, selection: listing::Selection) {
+    let Some((epoch, generation, summary)) = state
+        .try_update(|s| selection.begin(s))
+        .expect("invariant: application state outlives its file view")
+    else {
         return;
-    }
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    let generation = state
-        .try_update(|s| {
-            s.files.deletion.selected = Some(summary.clone());
-            s.files.deletion.begin()
-        })
-        .expect("invariant: application state outlives its file view");
+    };
     spawn_local(async move {
         let endpoint = format!(
             "/api/files/{}/deletion",

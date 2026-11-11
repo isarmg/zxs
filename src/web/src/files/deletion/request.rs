@@ -405,7 +405,7 @@ pub(super) fn send(state: RwSignal<State>, mut attempt: Attempt, submission: Sub
         }
         state.update(|s| s.files.mutation_pending = false);
         if state.with_untracked(|s| s.files.deletion.open) {
-            load(state, false);
+            load(state, listing::Read::First);
         }
     });
 }
