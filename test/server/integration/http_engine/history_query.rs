@@ -282,3 +282,45 @@ async fn history_window_roots_change_with_metadata_but_not_authentication() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(error["error"]["code"], "UNAUTHORIZED");
 }
+
+#[tokio::test]
+async fn detached_history_http_keeps_authenticated_read_and_cursor_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let route = "/api/file-manager/detached-history";
+    assert_eq!(
+        send(&app, None, "GET", route, None).await.0,
+        StatusCode::UNAUTHORIZED,
+    );
+    let page = success(&app, &token, "GET", route, None).await;
+    assert_eq!(page["files"], json!([]));
+    assert!(page["snapshot"].as_str().is_some());
+    assert!(page["next_after"].is_null());
+    for query in [
+        "snapshot=bad",
+        "after_file=file_00000000000000000000000000000000",
+        "snapshot=bad&after_file=bad",
+        "snapshot=bad&snapshot=bad",
+        "unknown=true",
+    ] {
+        let (status, error) = send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("{route}?{query}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+    }
+    assert_eq!(success(&app, &token, "GET", route, None).await, page);
+    success(&app, &token, "POST", "/api/auth/logout", None).await;
+    for path in [route.to_owned(), format!("{route}?snapshot=bad")] {
+        assert_eq!(
+            send(&app, Some(&token), "GET", &path, None).await.0,
+            StatusCode::UNAUTHORIZED,
+        );
+    }
+}

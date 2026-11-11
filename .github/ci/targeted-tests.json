@@ -1101,6 +1101,49 @@
           "default_features": false
         }
       ]
+    },
+    "detached-history-http-boundary": {
+      "reason": "Typed detached-history cursor retains paired snapshot/file validation before capacity, strict query decoding, cancellation and authenticated read semantics.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_detached_history::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::detached_history_query_errors_precede_capacity_admission",
+            "backend_admission_tests::detached_history_only_admits_valid_first_page_and_paired_cursor",
+            "backend_admission_tests::detached_history_cancellation_reaches_admitted_backend"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "history_query::detached_history_http_keeps_authenticated_read_and_cursor_errors"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3234,6 +3277,30 @@
       "path": "test/server/integration/phase1_save_tags/shared_history.rs",
       "groups": [
         "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/http_detached_history.rs",
+      "groups": [
+        "detached-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_detached_history.rs",
+      "groups": [
+        "detached-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "detached-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/history_query.rs",
+      "groups": [
+        "detached-history-http-boundary"
       ]
     }
   ],

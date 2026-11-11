@@ -581,6 +581,16 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn detached_history(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::detached_history::Request,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::detached_history::Page, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn shared_history(
         &self,
         _identity: &crate::auth::Identity,
@@ -2270,4 +2280,109 @@ async fn shared_history_calls_backend_only_for_original_file_and_root_domains() 
     let route = format!("/api/file-manager/files/{file}/shared-history?history_root={root}");
     assert_eq!(request(app, &route).await.status(), StatusCode::NOT_IMPLEMENTED);
     assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn detached_history_query_errors_precede_capacity_admission() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    for query in [
+        "snapshot=malformed",
+        "after_file=file_00000000000000000000000000000000",
+        "snapshot=malformed&after_file=malformed",
+        "snapshot=malformed&snapshot=duplicate",
+        "unknown=true",
+    ] {
+        let route = format!("/api/file-manager/detached-history?{query}");
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &route))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    overloaded(app.clone(), "/api/file-manager/detached-history").await;
+    overloaded(
+        app.clone(),
+        &format!(
+            "/api/file-manager/detached-history?snapshot={}&after_file=file_00000000000000000000000000000000",
+            "a".repeat(64),
+        ),
+    )
+    .await;
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn detached_history_only_admits_valid_first_page_and_paired_cursor() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    for query in [
+        "snapshot=malformed",
+        "after_file=malformed",
+        "snapshot=&after_file=",
+        "snapshot=malformed&after_file=malformed",
+    ] {
+        let route = format!("/api/file-manager/detached-history?{query}");
+        let response = request(app.clone(), &route).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(result["error"].get("source").is_none());
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    for route in [
+        "/api/file-manager/detached-history".to_owned(),
+        format!(
+            "/api/file-manager/detached-history?snapshot={}&after_file=file_00000000000000000000000000000000",
+            "a".repeat(64),
+        ),
+    ] {
+        assert_eq!(request(app.clone(), &route).await.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn detached_history_cancellation_reaches_admitted_backend() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let waiter = tokio::spawn(request(app, "/api/file-manager/detached-history"));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    assert_eq!(gate.cancellations.lock().unwrap().len(), 1);
+    assert!(!gate.cancellations.lock().unwrap()[0].is_cancelled());
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+    assert_eq!(gate.finished.available_permits(), 0);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
 }

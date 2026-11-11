@@ -29,7 +29,8 @@
 
 ## 新版规范的底层重构
 
-- [ ] 定向 CI 验证 T08 shared-history 查询类型边界：持有 HistoryFileId／HistoryRoot 解析结果，保持认证、路径解码、query 结构、容量、file→root 的原错误顺序；验证取消、撤权、原 route/query 字节与真实传递关联图。未本地编译或测试；其余 HTTP 类型化继续推进。
+- [ ] 定向 CI 验证 T08 detached-history 输入类型：查询持有配对 snapshot／after_file 请求或原契约错误，保持容量前验证、严格查询结构、取消和会话撤销；真实管理员只读查询及其余 HTTP 迁移仍待验证。未本地编译或测试。
+
 
 - [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
 - [ ] GitHub 定向 CI 验证 T08 两个 operation 查询端点：OperationLookupPath 保留 OperationId 或解析来源，维持认证／路径解码／query／容量／404／当前凭据与收据所有者的原次序。覆盖 malformed 不调用 Backend、重复 query、注销、观察与 outcome 字段、原永久收据冷开读取；其余 HTTP 类型化、未选覆盖与既有 CI 失败仍待推进。
