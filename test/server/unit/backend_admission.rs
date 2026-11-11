@@ -2105,6 +2105,97 @@ async fn operation_lookup_calls_backend_only_for_admitted_ids_and_queries() {
     assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn listing_contract_errors_follow_query_shape_and_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    let route = "/api/file-manager/disks/P01/entries";
+    for query in [
+        "",
+        "unknown=true",
+        "path=../bad",
+        "limit=0",
+        "limit=501",
+        "selected_path=item",
+        "directory_branch_id=branch",
+        "cursor=gg",
+    ] {
+        overloaded(app.clone(), &format!("{route}?{query}")).await;
+    }
+    for path in [
+        format!("{route}?path=a&%70ath=b"),
+        format!("{route}?unknown=1&%75nknown=2"),
+        "/api/file-manager/disks/%FF/entries?limit=0".into(),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &path))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn listing_only_dispatches_valid_domain_requests() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let route = "/api/file-manager/disks/P01/entries";
+    for query in [
+        "unknown=true",
+        "path=../bad&unknown=true",
+        "limit=0",
+        "limit=501",
+        "limit=not-a-number",
+        "selected_path=item",
+        "directory_branch_id=branch",
+        "cursor=gg",
+    ] {
+        let response = request(app.clone(), &format!("{route}?{query}")).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(!result["error"]["retryable"].as_bool().unwrap());
+        assert!(result["error"].get("source").is_none());
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    for query in [
+        "",
+        "path=",
+        "path=Cafe%CC%81/Child&limit=500",
+        "selected_path=File&selected_entry_id=entry",
+        "directory_branch_id=branch&expected_tree_id=tree",
+        "query=%FF",
+    ] {
+        assert_eq!(
+            request(app.clone(), &format!("{route}?{query}")).await.status(),
+            StatusCode::NOT_IMPLEMENTED,
+        );
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 6);
+}
+
 fn history_source_route(file: &str, node: &str, root: &str) -> String {
     format!(
         "/api/file-manager/files/{file}/merge-history/source?node_id={node}&history_root={root}"

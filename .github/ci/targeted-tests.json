@@ -1373,6 +1373,56 @@
           "default_features": false
         }
       ]
+    },
+    "listing-http-boundary": {
+      "reason": "Typed listing input retains strict path/query decoding, domain-error capacity ordering, lookup spelling and cursor/selection domains; current authorization and worker ownership remain unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_listing::tests::",
+            "backend_listing::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::listing_contract_errors_follow_query_shape_and_capacity",
+            "backend_admission_tests::listing_only_dispatches_valid_domain_requests",
+            "tests::listing_http_boundary_preserves_root_shape_and_rejects_invalid_queries",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
+            "backend_admission_tests::typed_jobs_hold_auth_owner_until_cancelled_worker_finishes",
+            "backend_admission_tests::queued_backend_job_keeps_auth_and_admission_after_cancellation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 17,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "prefixes": [
+            "paginated_listing::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3710,6 +3760,24 @@
       "path": "test/server/unit/management/ordinary_conversion.rs",
       "groups": [
         "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/server/src/http_listing.rs",
+      "groups": [
+        "listing-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_listing.rs",
+      "groups": [
+        "listing-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "listing-http-boundary"
       ]
     }
   ],
