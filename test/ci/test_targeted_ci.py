@@ -103,6 +103,8 @@ class TargetedSelection(unittest.TestCase):
             '工程规范.md',
             'test/tools/rust-sources/test_legacy_http_maintenance_integration.py',
             'test/ci/test_engineering_guidance.py',
+            'tools/rust-sources/source_layout.py',
+            'test/tools/rust-sources/test_source_layout.py',
         ]
         for path in paths:
             with self.subTest(path=path):

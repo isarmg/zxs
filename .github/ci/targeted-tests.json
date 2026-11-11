@@ -805,7 +805,7 @@
       ]
     },
     "engineering-guidance": {
-      "reason": "Engineering standard rename exercises the existing real HTTP maintenance fixture through unittest wiring; CI selection regressions cover rename admission and the Python-only budget; dedicated 600-second trial budget after run 43016701410 exceeded 120 seconds, without a measured completion time",
+      "reason": "Engineering standard rename exercises the existing real HTTP maintenance fixture through unittest wiring; CI selection regressions cover rename admission and the Python-only budget; dedicated 600-second trial budget after run 43016701410 exceeded 120 seconds, without a measured completion time; isolated layout projections retain known fixture bytes and independent output ownership before the unchanged real maintenance integration",
       "python_tests": [
         "test_engineering_guidance"
       ],
@@ -2897,6 +2897,18 @@
       "path": "test/server/integration/http_engine/optional_identities.rs",
       "groups": [
         "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "tools/rust-sources/source_layout.py",
+      "groups": [
+        "engineering-guidance"
+      ]
+    },
+    {
+      "path": "test/tools/rust-sources/test_source_layout.py",
+      "groups": [
+        "engineering-guidance"
       ]
     }
   ],

@@ -509,7 +509,10 @@ class Layout:
 
     def project_catalog(self, catalog):
         """Project CURRENT owners only; historical records/source labels stay exact."""
-        result = deepcopy(catalog)
+        # Rebuilt inventories are copied by their projection below, exactly once.
+        result = dict.fromkeys(catalog)
+        result.update(deepcopy({key: value for key, value in catalog.items()
+                                if key not in {'packages', 'merges', 'external_tests'}}))
         result['packages'] = {self.historical_path(k): self._project_package(v) for k, v in catalog.get('packages', {}).items()}
         if len(result['packages']) != len(catalog.get('packages', {})):
             raise ValueError('layout projected package key collision')

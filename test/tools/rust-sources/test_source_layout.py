@@ -109,6 +109,69 @@ class LayoutFixture(unittest.TestCase):
         self.pin()
 
 
+class ProjectionIsolation(LayoutFixture):
+    def test_projection_matches_known_fixture_and_preserves_every_other_field(self):
+        view = self.install()
+        current = deepcopy(self.scenario.current)
+        current['extra_metadata'] = {'nested': [1, {'value': 'retained'}]}
+        original = deepcopy(current)
+        expected = deepcopy(current)
+        for key in ('packages', 'merges', 'external_tests'):
+            expected[key] = deepcopy(self.scenario.previous[key])
+        projected = view.project_catalog(current)
+        self.assertEqual(encoded(projected), encoded(expected))
+        self.assertEqual(list(projected), list(expected))
+        self.assertEqual(current, original)
+
+        projected['packages']['src/foundation/alpha']['files_sha256']['src/lib.rs'] = 'changed'
+        self.assertEqual(projected['merges'][0]['files_sha256'],
+                         expected['merges'][0]['files_sha256'])
+        projected['merges'][0]['files_sha256'].clear()
+        projected['external_tests']['src/foundation/alpha']['files'][0]['sha256'] = 'changed'
+        projected['extra_metadata']['nested'][1]['value'] = 'changed'
+        self.assertEqual(current, original)
+        self.assertEqual(projected['packages']['src/foundation/alpha']['name'],
+                         expected['packages']['src/foundation/alpha']['name'])
+        self.assertEqual(view.project_catalog(current), expected)
+
+    def test_untouched_aliases_stay_shared_but_rebuilt_inventories_are_separate(self):
+        view = self.install()
+        current = deepcopy(self.scenario.current)
+        shared = {'values': [1]}
+        current['unknown_a'] = shared
+        current['unknown_b'] = shared
+        current['unknown_inventory_alias'] = current['packages']
+        projected = view.project_catalog(current)
+        self.assertIs(projected['unknown_a'], projected['unknown_b'])
+        self.assertIsNot(projected['unknown_a'], shared)
+        self.assertEqual(projected['unknown_inventory_alias'], current['packages'])
+        self.assertIsNot(projected['unknown_inventory_alias'], current['packages'])
+        self.assertIsNot(projected['unknown_inventory_alias'], projected['packages'])
+        projected['unknown_a']['values'].append(2)
+        self.assertEqual(projected['unknown_b']['values'], [1, 2])
+        self.assertEqual(shared, {'values': [1]})
+        self.assertEqual(list(projected), list(current))
+
+    def test_missing_inventory_fields_keep_empty_projection_and_independent_metadata(self):
+        view = self.install()
+        original = {'metadata': {'values': [1, 2]}}
+        projected = view.project_catalog(original)
+        self.assertEqual(projected, {'metadata': {'values': [1, 2]},
+                                     'packages': {}, 'merges': [], 'external_tests': {}})
+        projected['metadata']['values'].append(3)
+        self.assertEqual(original, {'metadata': {'values': [1, 2]}})
+
+    def test_package_without_hash_inventory_keeps_absence_and_owned_metadata(self):
+        view = self.install()
+        package = {'directory': self.scenario.routes['src/foundation/alpha'],
+                   'metadata': {'values': [1]}}
+        projected = view._project_package(package)
+        self.assertEqual(projected, {'directory': 'src/foundation/alpha',
+                                     'metadata': {'values': [1]}})
+        projected['metadata']['values'].append(2)
+        self.assertEqual(package['metadata'], {'values': [1]})
+
+
 class HappyPaths(LayoutFixture):
     def test_exact_install_read_inventory_and_current_paths(self):
         view = self.install()
