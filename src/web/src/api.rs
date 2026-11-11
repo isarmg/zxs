@@ -492,21 +492,27 @@ pub(crate) async fn cancellable_request(
     decode(fetch_authorized(method, path, body, false, Some(cancellation)).await?).await
 }
 
-/// Public one-time account setup; no reusable bootstrap capability is accepted.
-pub(crate) async fn setup_request(
-    method: &str,
-    path: &str,
-    body: Option<Value>,
-) -> Result<Value, Error> {
-    if !matches!(
-        (method, path),
-        ("GET", "/api/setup/status") | ("POST", "/api/setup/initialize")
-    ) {
-        return Err(error(
-            storage_contract::ErrorCode::InvalidSetupRequest,
-            t("无效的首次设置请求。", "Invalid first-time setup request."),
-        ));
+pub(crate) enum SetupCall {
+    Status,
+    Initialize { username: String, password: String },
+}
+
+impl SetupCall {
+    pub(crate) fn into_request(self) -> (&'static str, &'static str, Option<Value>) {
+        match self {
+            Self::Status => ("GET", "/api/setup/status", None),
+            Self::Initialize { username, password } => (
+                "POST",
+                "/api/setup/initialize",
+                Some(json!({"username": username, "password": password})),
+            ),
+        }
     }
+}
+
+/// Public one-time account setup; no reusable bootstrap capability is accepted.
+pub(crate) async fn setup_request(call: SetupCall) -> Result<Value, Error> {
+    let (method, path, body) = call.into_request();
     decode(fetch_authorized(method, path, body, true, None).await?).await
 }
 

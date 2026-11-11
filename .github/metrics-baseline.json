@@ -312,7 +312,7 @@
     "wildcard_arm": 3
   },
   "src/web": {
-    "api_path_literal": 145,
+    "api_path_literal": 143,
     "assert_fn_def": 22,
     "cfg_not_test": 0,
     "cfg_test_item": 21,

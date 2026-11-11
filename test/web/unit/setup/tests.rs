@@ -1,4 +1,5 @@
 use super::*;
+use json_codec::json;
 
 fn ready() -> Model {
     Model {
@@ -14,24 +15,10 @@ fn ready() -> Model {
 fn first_setup_needs_no_disks_and_never_sends_storage_settings() {
     let model = ready();
     assert!(can_initialize(&model));
-    assert_eq!(
-        submission(&model, "secret".into()),
-        json!({"username":"admin","password":"secret"})
-    );
-    let source = include_str!("../../../../src/web/src/setup.rs");
-    for obsolete in [
-        "data-setup-key",
-        "data-setup-disk",
-        "initialize-preset",
-        "preset-preview",
-        "complete-initialization",
-        "data-setup-development",
-    ] {
-        assert!(
-            !source.contains(obsolete),
-            "retained obsolete bootstrap control {obsolete}"
-        );
-    }
+    let (method, path, body) = submission(&model, "secret".into()).into_request();
+    assert_eq!(method, "POST");
+    assert_eq!(path, "/api/setup/initialize");
+    assert_eq!(body, Some(json!({"username":"admin","password":"secret"})));
 }
 
 #[test]

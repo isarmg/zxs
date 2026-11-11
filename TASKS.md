@@ -49,6 +49,7 @@
 - [ ] 清点并逐类替换读取第一方源码或绑定测试名的 CI 门禁，改为行为验证；保留 foundation 依赖图、Cargo 元数据、来源与许可检查。
 - [ ] 按 §19 的新版 T04–T07 完成 contract／naming 类型地基：`Id<K>`、多前缀 ID、`Generation`／`Sequence`／`Principal`／`Timestamp`、名称构造器及路径去字符串退化；补齐 `Hash<D>`、`TrackedMap<K, V>` 与 `EncodedLen`。
 - [ ] 按新版 T08–T09 推进 HTTP 提取器、类型化备注目标、Web 操作号、会话 DTO 与 `SetupCall`，继续逐领域迁移 Web Endpoint／响应 DTO；保持现有未知字段错误、响应关联和凭据代数边界。
+- [ ] T09：以 GitHub 定向 CI 验证 `SetupCall` 首次设置请求切片的 wire、未知结果围栏、会话代数与管理读取队列，并完成 Web WASM 编译检查；操作号 `OperationId::from_random` 与登录／恢复会话 DTO 仍待独立切片完成。
 - [ ] 按新版 T10–T11 保留并传递现有 `AdmittedState` 证明、提升本状态访问器；完成 `BusinessState`／类型化 `AuthState` 与授权收据读接口，逐领域迁移 server 的裸 State 读取。
 - [ ] 按新版 T12、T14–T16 推进错误显式映射、计数查询、`persist/layout` 句柄名字及确定性计划时间；迁移 serde 表示时完成真实快照／收据字节往返和摘要固定向量。
 - [ ] 逐 kind 完成 `Command → plan → linearize → publish`，收敛 `Activity`／`Availability`、`BranchScope`／`DirectoryComposition`／`PolicyScope` 与文件属性聚合；先核实可达状态及写集成本。

@@ -2,7 +2,7 @@
 //! The one-time account endpoint is open only while no account or prior authority exists.
 use crate::api;
 use data_serialization::Deserialize;
-use json_codec::{Value, json};
+use json_codec::{Value, from_value};
 use web_interface::{
     components::{ErrorState, Feedback},
     i18n::t,
@@ -98,7 +98,7 @@ pub(crate) fn check(state: RwSignal<Model>) {
         return;
     };
     spawn_local(async move {
-        let result = api::setup_request("GET", "/api/setup/status", None).await;
+        let result = api::setup_request(api::SetupCall::Status).await;
         let _ = state.try_update(|s| finish_check(s, generation, result));
     });
 }
@@ -109,7 +109,7 @@ fn finish_check(s: &mut Model, generation: u64, result: Result<Value, api::Error
     }
     s.pending = false;
     match result {
-        Ok(value) => match json_codec::from_value::<SetupStatus>(value) {
+        Ok(value) => match from_value::<SetupStatus>(value) {
             Ok(status) => {
                 s.status = status.state;
                 if status.state == Status::Empty {
@@ -132,8 +132,11 @@ fn finish_check(s: &mut Model, generation: u64, result: Result<Value, api::Error
     }
 }
 
-fn submission(s: &Model, password: String) -> Value {
-    json!({"username": s.username, "password": password})
+fn submission(s: &Model, password: String) -> api::SetupCall {
+    api::SetupCall::Initialize {
+        username: s.username.clone(),
+        password,
+    }
 }
 
 fn initialize(state: RwSignal<Model>) {
@@ -153,7 +156,7 @@ fn initialize(state: RwSignal<Model>) {
         return;
     };
     spawn_local(async move {
-        let result = api::setup_request("POST", "/api/setup/initialize", Some(body)).await;
+        let result = api::setup_request(body).await;
         let _ = state.try_update(|s| {
             if s.generation == generation {
                 finish_initialization(s, result);

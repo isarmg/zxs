@@ -385,3 +385,11 @@ fn endpoint_validation_status_keeps_request_identity_and_source() {
         assert!(failure.mutation_outcome_unknown());
     }
 }
+
+#[test]
+fn setup_status_is_a_bodyless_read() {
+    let (method, path, body) = SetupCall::Status.into_request();
+    assert_eq!(method, "GET");
+    assert_eq!(path, "/api/setup/status");
+    assert!(body.is_none());
+}
