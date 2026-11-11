@@ -1072,10 +1072,17 @@ impl Backend for RecordingBackend {
         identity: &crate::auth::Identity,
         request: crate::MutateDiskDirectory,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        let action = match request.action {
+            crate::DiskDirectoryAction::Create => json!({"kind": "create"}),
+            crate::DiskDirectoryAction::ReviewedCreate(source) => {
+                json!({"kind": "reviewed_create", "source": source})
+            }
+            crate::DiskDirectoryAction::Select => json!({"kind": "select"}),
+        };
         self.record(
             "mutate_disk_directory",
             Some(identity),
-            json!({"slot_id":request.slot_id,"path":request.path.as_ref().map_or("",name_policy::LookupPath::as_str),"operation_id":request.operation_id,"name":request.name.as_str(),"action":format!("{:?}",request.action)}),
+            json!({"slot_id":request.slot_id,"path":request.path.as_ref().map_or("",name_policy::LookupPath::as_str),"operation_id":request.operation_id,"name":request.name.as_str(),"action":action}),
         )?;
         Ok(recorded_operation(
             request.operation_id,
@@ -2527,8 +2534,9 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"file_id":"file","branch_id":"branch","location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","location":{"repository_id":"repository","path":"Café/file.txt","key":"café/file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","branch_id":"branch","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
-        json!({"slot_id":"P01","path":"Café","name":"Side","action":"Create","operation_id":"op_00000000000000000000000000000000"}),
-        json!({"slot_id":"P01","path":"Café","name":"Side","action":"Select","operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café","name":"Side","action":{"kind":"create"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café","name":"Side","action":{"kind":"reviewed_create","source":reviewed_directory_source()},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({"slot_id":"P01","path":"Café","name":"Side","action":{"kind":"select"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","path":"Café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","directory_branch_id":"directory","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),

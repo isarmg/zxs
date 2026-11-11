@@ -567,19 +567,25 @@ fn preview_fixture() -> (Fixture, String, String, Value) {
         .head_tree_id
         .clone();
     let frozen = json_codec::to_value(&engine.state().directory_branches[&branch]).unwrap();
+    // A same-owner rename separates the current path from the frozen snapshot
+    // while preserving the initialized directory's reversible deletion lifecycle.
     engine
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation::parse(
-                storage_contract::NamespaceOperationKind::Delete,
+                storage_contract::NamespaceOperationKind::Rename,
                 "Café/child.txt",
-                None,
+                Some("Café/renamed.txt"),
             )
             .unwrap(),
             "owner",
             OperationId::generate().unwrap(),
         )
         .unwrap();
+    assert_eq!(
+        json_codec::to_value(&engine.state().directory_branches[&branch]).unwrap(),
+        frozen
+    );
     drop(engine);
     (fixture, branch, tree, frozen)
 }
@@ -653,8 +659,45 @@ fn branch_preview_lists_frozen_files_without_changing_namespace_or_receipts() {
         storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap()
     );
     let default = read(backend.as_ref(), &identity, request("Files/Café", &[])).unwrap();
-    assert_eq!(default["entries"].as_array().unwrap().len(), 1);
-    assert_eq!(default["entries"][0]["name"], "z.txt");
+    assert_eq!(default["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(default["entries"][0]["name"], "renamed.txt");
+    assert_eq!(default["entries"][0]["repository_path"], "Café/renamed.txt");
+    for field in ["entry_id", "file_id", "version_id"] {
+        assert_eq!(default["entries"][0][field], page["entries"][0][field]);
+    }
+    assert_eq!(default["entries"][1]["name"], "z.txt");
+    assert_eq!(
+        before,
+        storage_contract::canonical_json(backend.engine.lock().unwrap().state()).unwrap()
+    );
+}
+
+#[test]
+fn initialized_preview_scope_rejects_structural_deletion_without_publication() {
+    let ((_root, backend, _auth, _token, _identity, repo), _branch, _tree, _frozen) = preview_fixture();
+    let mut engine = backend.engine.lock().unwrap();
+    let before = storage_contract::canonical_json(engine.state()).unwrap();
+    assert_eq!(
+        engine
+            .file_namespace(
+                &repo.repository_id,
+                NamespaceOperation::parse(
+                    storage_contract::NamespaceOperationKind::Delete,
+                    "Café/renamed.txt",
+                    None,
+                )
+                .unwrap(),
+                "owner",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(
+        before,
+        storage_contract::canonical_json(engine.state()).unwrap()
+    );
 }
 
 #[test]
@@ -679,9 +722,9 @@ fn preview_rechecks_auth_and_exact_tree_after_detached_scan() {
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation::parse(
-                storage_contract::NamespaceOperationKind::Delete,
+                storage_contract::NamespaceOperationKind::Rename,
                 "Café/z.txt",
-                None,
+                Some("Café/later.txt"),
             )
             .unwrap(),
             "owner",
