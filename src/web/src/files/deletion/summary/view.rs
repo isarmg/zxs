@@ -117,7 +117,7 @@ fn audit_page(
     };
     view! {
         <section class="zxs-stack" data-deletion-audit-page="">
-            <h4>{label}</h4>
+            <h3>{label}</h3>
             <ul>{entries.into_iter().map(|entry|view! {
                 <li><code>{entry}</code></li>
             }).collect_view()}</ul>

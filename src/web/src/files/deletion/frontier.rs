@@ -71,7 +71,7 @@ pub(super) fn view(state: RwSignal<State>, node: Arc<FileDeletionNode>) -> impl 
                     "branch HEADs are unchanged.",
                 ),
             )}</p>
-            {evidence(node)}
+            {evidence(node.clone())}
             {edges(state,target)}
             {pagination(state,target)}
             {restore_button}

@@ -41,7 +41,7 @@ fn receipt(attempt: &Attempt) -> Value {
         "request_digest":attempt.request_digest, "state":"completed", "commit_state":"PUBLISHED",
         "publication_sequence":"2", "protection_at_publish":"NOT_APPLICABLE", "error":null,
         "result":{
-            "restored_file_id":summary.file_id, "removed_deletion_summary":summary,
+            "restored_file_id":summary.file_id, "removed_deletion_summary":summary.as_ref(),
             "timestamp":"124", "membership_epoch":"1", "version_protection":[]
         }
     })
