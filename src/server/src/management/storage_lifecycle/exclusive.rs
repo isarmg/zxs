@@ -99,8 +99,8 @@ impl ExclusiveExit {
             operation_id: status.operation_id,
             authority_hash: status.authority_hash,
             registry: terminal.registry().commitment().clone(),
-            sequence: terminal.state().sequence,
-            topology_generation: terminal.state().topology_generation,
+            sequence: terminal.read().sequence(),
+            topology_generation: terminal.read().topology_generation(),
             pending_retirement: terminal
                 .terminal_retirement_status()
                 .map_err(crate::engine_backend::error)?

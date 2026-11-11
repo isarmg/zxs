@@ -2,6 +2,46 @@ use super::*;
 use storage_engine::Config;
 
 #[test]
+fn readiness_and_topology_counters_follow_publication_and_release_the_engine_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temp.path().join("system"),
+        Config::development([temp.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "admin");
+    let backend = EngineBackend::new(engine);
+    let crate::Readiness::Engine(before) = backend.ready().unwrap() else {
+        panic!("expected engine readiness")
+    };
+    let topology_before = backend.topology_snapshot(&identity).unwrap();
+    assert_eq!(before.sequence, 1);
+    assert_eq!(topology_before.generation, 1);
+
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_repository(
+            &storage_contract::RepositoryName::parse("counter publication").unwrap(),
+            "P01",
+            1,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+
+    let crate::Readiness::Engine(after) = backend.ready().unwrap() else {
+        panic!("expected engine readiness")
+    };
+    let topology_after = backend.topology_snapshot(&identity).unwrap();
+    assert_eq!(after.sequence, 2);
+    assert_eq!(before.sequence, 1);
+    assert_eq!(topology_after.generation, topology_before.generation);
+    assert!(backend.engine.try_lock().is_ok());
+}
+
+#[test]
 fn readiness_uses_fixed_membership_and_reports_single_disk_no_metadata_redundancy() {
     for count in [1, 2, 3, 4] {
         let temp = tempfile::tempdir().unwrap();

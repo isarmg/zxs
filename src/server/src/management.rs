@@ -1036,7 +1036,7 @@ impl Backend for ManagementBackend {
     ) -> Result<crate::TopologySnapshot, crate::ApiError> {
         if let Some(terminal) = self.inner.terminal(identity)? {
             return Ok(crate::TopologySnapshot {
-                generation: terminal.state().topology_generation,
+                generation: terminal.read().topology_generation(),
                 slots: terminal
                     .registered_disks()
                     .map(|disk| crate::TopologySlot {
@@ -1065,7 +1065,7 @@ impl Backend for ManagementBackend {
                 .partition_point(|event| event.sequence <= after);
             return crate::engine_backend::capture_event_page(
                 state.events[start..].iter(),
-                state.sequence,
+                terminal.read().sequence(),
                 after,
             );
         }

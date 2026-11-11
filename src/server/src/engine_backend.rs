@@ -651,7 +651,7 @@ impl Backend for EngineBackend {
         let configured_members = probe.member_count();
         let storage_disks = engine.config().disks.len();
         let mode = engine.config().mode.clone();
-        let sequence = engine.state().sequence;
+        let sequence = engine.read().sequence();
         let history_index = history_index_status(engine.index_health());
         drop(engine);
         probe.verify().map_err(|source| {
@@ -1867,7 +1867,7 @@ impl Backend for EngineBackend {
             })
             .collect();
         Ok(crate::TopologySnapshot {
-            generation: engine.state().topology_generation,
+            generation: engine.read().topology_generation(),
             slots,
         })
     }
@@ -1892,7 +1892,7 @@ impl Backend for EngineBackend {
         after: u64,
     ) -> Result<crate::EventPage, crate::ApiError> {
         let (engine, _) = self.lock_current(identity)?;
-        capture_event_page(engine.events_after(after), engine.state().sequence, after)
+        capture_event_page(engine.events_after(after), engine.read().sequence(), after)
     }
     fn activity_history(
         &self,

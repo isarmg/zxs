@@ -20,6 +20,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] GitHub CI 验证 T14 两计数 ReadView：Engine／终态视图仅借用 sequence 和 topology_generation，16 处生产读取保持原鉴权、锁与事件迭代；验证真实发布、重放、冷开、终态与 ready／topology 快照及借用约束。其余实体／收据读取和测试投影钩子仍待分轮迁移。
+
 - [ ] GitHub CI 验证 T04 Id<K>／OperationId 的原编码、排序、serde 收据字节、解析错误与熵错误兼容；FileNodeId 五变体仅作基础类型，逐入口接入须保留原允许域。确定性 derive 尚须核实既有领域派生协议，不擅自引入新算法。
 
 - [ ] GitHub CI 采集并审查 T03 的 quality／smb-sdk 完整 Clippy 警告报告，提交真实基线后验证精确八类、第一方包范围、计数增减与其余诊断严格门禁；缺基线仍失败，完整性为 false 的报告不得用作基线。验证 workspace lint 继承、原有 unsafe 拒绝与最小 FFI 例外。

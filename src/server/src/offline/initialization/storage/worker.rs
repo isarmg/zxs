@@ -193,7 +193,7 @@ fn initialize(target: &Target, plan: &Plan) -> Result<Materialized> {
 fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Materialized> {
     target.plan(plan)?;
     if engine.is_read_only()
-        || engine.state().sequence > 1
+        || engine.read().sequence() > 1
         || engine
             .state()
             .operations
@@ -223,7 +223,7 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
     let mut snapshot = target.auth.snapshot()?;
     snapshot["sessions"] = json!({});
     if engine.auth_state_ref() != Some(&snapshot) {
-        if engine.auth_state_ref().is_some() || engine.state().sequence != 0 {
+        if engine.auth_state_ref().is_some() || engine.read().sequence() != 0 {
             return Err(
                 "initial credential recovery snapshot differs; no later authority was overwritten"
                     .into(),
@@ -243,9 +243,9 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
         let history = engine.rebuild_disk_history(&slot_id)?;
         let observed = engine.disk_catalog_observation(&slot_id)?;
         let observed_history = engine.disk_history_observation(&slot_id)?;
-        if observed.verified_sequence != engine.state().sequence
-            || observed_history.verified_sequence != engine.state().sequence
-            || observed_history.snapshot.header.through_sequence != engine.state().sequence
+        if observed.verified_sequence != engine.read().sequence()
+            || observed_history.verified_sequence != engine.read().sequence()
+            || observed_history.snapshot.header.through_sequence != engine.read().sequence()
         {
             return Err("first-storage database observations are not current; activation remains incomplete".into());
         }
@@ -257,8 +257,11 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
         });
     }
     let metadata = engine.system_state_metadata()?;
-    if metadata.sequence != engine.state().sequence
-        || !matches!(engine.index_health(),IndexHealth::Ready{sequence} if sequence==engine.state().sequence)
+    if metadata.sequence != engine.read().sequence()
+        || !matches!(
+            engine.index_health(),
+            IndexHealth::Ready { sequence } if sequence == engine.read().sequence()
+        )
     {
         return Err(
             "system SQLite projection is not current; first storage cannot be completed".into(),
@@ -267,7 +270,7 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
     target.plan(plan)?;
     Ok(Materialized {
         pool_id: engine.config().pool_id.clone(),
-        sequence: engine.state().sequence.to_string(),
+        sequence: engine.read().sequence().to_string(),
         primary_disks,
         system_catalog_current: true,
         credential_recovery_snapshot_published: true,

@@ -38,7 +38,7 @@ impl EngineBackend {
             .filter(|disk| enabled.contains(disk.disk_id.as_str()))
             .map(|disk| disk.slot_id.clone())
             .collect();
-        Ok((engine.state().sequence, slots))
+        Ok((engine.read().sequence(), slots))
     }
 
     pub(crate) fn current_backup_transaction(
