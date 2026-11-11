@@ -4,9 +4,9 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] 验证按实际变更选择的 GitHub 定向 CI：本批 engine 的 12 个模块前缀、platform 的 2 个模块和 4 组 CI 回归，核对当前编译库存、非空选择、逐测试完成与未执行清单。完整 workspace、ignored、跨特性及其余恢复场景尚未验证；后续语义变化须审阅并扩展持久路径映射。
+- [ ] 验证按实际变更选择的 GitHub 定向 CI，核对当前编译库存、非空选择、逐测试完成与未执行清单。完整 workspace、ignored、跨特性及其余恢复场景尚未验证；后续语义变化须审阅并扩展持久路径映射。
 
-- [ ] GitHub CI 与浏览器验证 D 审阅的准确页面／节点／读取代数／会话绑定：旧行及旧续页回调不得改写替换后的面板，分页范围完整，恢复完成后保持第一页重读与原未知结果围栏。超预算 D 的分页／紧凑恢复另行实现，尚未完成。
+- [ ] 完成 D 审阅的真实浏览器验收：准确页面／节点／读取代数／会话绑定、旧行及旧续页回调隔离、分页范围完整、恢复后第一页重读与原未知结果围栏。相关原生定向测试已通过；超预算 D 的分页／紧凑恢复已实现，其剩余验证见删除与审计项。
 
 - [ ] GitHub CI 验证合法同 scope alias 逐路径审计与全文件 D 生命周期，并验证四类软删除／恢复全局活动投影：原路径、不同主体、准确序号／节点、整批每文件一事件、精确重放与跨仓移动后冷开保留。
 
@@ -34,6 +34,8 @@
 - [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。
 
 - [ ] 定向 CI 验证 T07 foreign-plan 目标槽位边界：ForeignDestination 从原 TryFrom 位置保留 SlotId 至 engine 映射，维持槽位先于 parent 的错误顺序和原始 history_names 延后准入；覆盖大小写、64 字节边界、原父路径与命名错误源，并运行既有 foreign-plan 管理行为。server 文本计数 validate_fn 33→32、parse_discard 35→36，新增匹配为持有 slot 的 let 绑定；其余 T07 迁移继续保留。
+
+- [ ] 定向 CI 验证 T07 offline foreign-chain 槽位准入：持有 SlotId 完成前驱精确比较与大小写折叠碰撞检测，保持链基数／槽位／链接错误顺序、资源上限与持久记录；engine validate_slot 公有再导出暂保留，另轮降可见性并依据完整消费者编译证据处理。核对 zxs/core 行为、engine 产品图及已登记 helper／perf 消费者；server 文本计数 validate_fn 32→30、parse_discard 36→38，后者两处为持有结果的 let 绑定。其余 naming 公开 validator 与 manifest 准入迁移仍待完成。
 
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
@@ -81,7 +83,7 @@
 - [ ] 验证批量别名只生成一个文件 D、完整 frontier／回执预算、失败无部分发布、Current selected tree 与 CAS tree 区别；目录撤销只恢复本次创建的 D，保持先前删除和其他活动目录 D 的引用关系。
 - [ ] 补齐初始化仓库实体／嵌套初始化子仓库、跨仓库批次和原子整批撤销的剩余需求；分别验证原批次撤销清单、准确原目标恢复及路径被新身份占用时的拒绝。
 - [ ] 验证当前／备份 listing、名称查找、已打开 SMB 目录分页与删除列表的生命周期可见性；原始保留行、冻结树、当前稳定目录身份与冷重开一致。
-- [ ] 定向 CI 验证超预算单文件 D 的摘要、全部分支与父边分页、紧凑恢复及刷新后原操作查询：超过 4096 分支的真实 HTTP 场景、完整永久收据、主体／新 D 隔离、会话迟到与未知结果围栏。目录／整批 D 仍沿原预算和恢复流程，完整浏览器与大规模成本尚未验证。 本功能五路由／紧凑投影使 server api_path_literal 161→166、json_value 274→277，Web 分页／查询接线使 api_path_literal 139→145、json_value 154→156，long_line 1430→1429；准确基线已更新，计数规则不变。
+- [ ] 完成已实现的超预算单文件 D 分页／紧凑恢复剩余验收：server 紧凑投影单测、WASM 编译、真实浏览器和大规模成本。准确提交 `b07dd3da` 的 [#1188 定向 CI](https://github.com/isarmg/zxs/actions/runs/42993088091) 已执行通过 contract 4 项、Web 69 项及 HTTP 4 项，覆盖摘要、4097 分支与完整父边分页、永久完整收据及冷恢复、主体／新 D 隔离、原操作恢复和未知结果围栏；不等于全量或后继提交通过。目录／整批 D 仍沿原预算和恢复流程。
 - [ ] 完成永久节点退役与共享关系拆分的剩余闭包：D／namespace 共同终止、原副本退出／换代、独立旧备份防复活和全记录物理删除；复验末节点／保留分支终止及 FILE 冷重建。
 - [ ] 完成 [保留审计复制](docs/design/retained-history-copy.md)、公开单历史包及离线材料的完整 operation／principal／D／undo／退休凭据闭包；接入 Foreign 的 batch／directory delete、copy／move、原子替换和退役审计，保持源审计且不继承权限。
 

@@ -166,25 +166,25 @@ fn complete_chain(
     {
         return Err("a foreign source must include every real lower level in the same bounded chain; missing levels cannot be added later".into());
     }
-    storage_engine::validate_slot(source_slot)?;
-    let mut slots = BTreeSet::from([source_slot.to_ascii_lowercase()]);
+    let source_slot = name_policy::SlotId::parse(source_slot)?;
+    let mut slots = BTreeSet::from([source_slot.as_str().to_ascii_lowercase()]);
+    let mut previous: Option<name_policy::SlotId> = None;
     for (index, item) in lower.iter().enumerate() {
-        storage_engine::validate_slot(&item.slot_id)?;
-        let expected_upstream = index
-            .checked_sub(1)
-            .map(|previous| lower[previous].slot_id.as_str());
+        let slot = name_policy::SlotId::parse(&item.slot_id)?;
+        let expected_upstream = previous.as_ref().map(name_policy::SlotId::as_str);
         if item.level != index as u32 + 1
             || item.upstream_slot_id.as_deref() != expected_upstream
-            || !slots.insert(item.slot_id.to_ascii_lowercase())
+            || !slots.insert(slot.as_str().to_ascii_lowercase())
         {
             return Err("list every lower level once in ascending order with its exact preceding upstream slot".into());
         }
+        previous = Some(slot);
     }
     if upstream
-        != lower
-            .last()
+        != previous
+            .as_ref()
             .expect("invariant: complete lower chain is nonempty")
-            .slot_id
+            .as_str()
     {
         return Err("foreign source must explicitly target the highest selected lower slot".into());
     }

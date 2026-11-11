@@ -251,12 +251,12 @@
     "join_literal": 62,
     "json_value": 278,
     "long_line": 265,
-    "parse_discard": 36,
+    "parse_discard": 38,
     "state_leak": 51,
     "string_key_map": 122,
     "unreachable": 56,
     "unwrap_or_default": 14,
-    "validate_fn": 32,
+    "validate_fn": 30,
     "wildcard_arm": 87
   },
   "src/smb": {

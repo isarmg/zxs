@@ -99,3 +99,42 @@ fn original_selector_never_bypasses_stopped_acknowledgment() {
             .contains("stop ZXS")
     );
 }
+
+#[test]
+fn typed_chain_slots_preserve_case_rules_and_the_sixty_four_byte_boundary() {
+    let first = lower(1, "Primary", None);
+    let second = lower(2, "Backup", Some("Primary"));
+    assert!(complete_chain(3, "Source", "Backup", &[&first, &second]).is_ok());
+    assert!(complete_chain(3, "PRIMARY", "Backup", &[&first, &second]).is_err());
+    assert!(complete_chain(3, "Source", "backup", &[&first, &second]).is_err());
+    let wrong_link = lower(2, "Backup", Some("primary"));
+    assert!(complete_chain(3, "Source", "Backup", &[&first, &wrong_link]).is_err());
+
+    let primary = "A".repeat(64);
+    let source = "B".repeat(64);
+    let first = lower(1, &primary, None);
+    assert!(complete_chain(2, &source, &primary, &[&first]).is_ok());
+    let error = complete_chain(2, &"B".repeat(65), &primary, &[&first]).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<name_policy::Error>(),
+        Some(&name_policy::Error::InvalidSlot)
+    );
+}
+
+#[test]
+fn chain_admission_keeps_cardinality_then_slot_then_link_error_order() {
+    let error = complete_chain(2, "0source", "primary", &[]).unwrap_err();
+    assert!(error.downcast_ref::<name_policy::Error>().is_none());
+    let first = lower(1, "primary", None);
+    let error = complete_chain(2, "0source", "primary", &[&first]).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<name_policy::Error>(),
+        Some(&name_policy::Error::InvalidSlot)
+    );
+    let invalid_lower = lower(9, "0primary", Some("wrong"));
+    let error = complete_chain(2, "source", "wrong", &[&invalid_lower]).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<name_policy::Error>(),
+        Some(&name_policy::Error::InvalidSlot)
+    );
+}

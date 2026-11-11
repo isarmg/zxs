@@ -370,6 +370,51 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "offline-chain-slots": {
+      "reason": "Offline complete-chain typed slot admission and registered engine consumer compilation without broad test selection",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "offline::foreign_chain::tests::"
+          ],
+          "max_tests": 12
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "zxs-helper"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "perf-check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "recovery-startup"
+        }
+      ]
     }
   },
   "rules": [
@@ -845,7 +890,8 @@
       "path": "src/engine/src/lib.rs",
       "groups": [
         "held-directory-layout",
-        "typed-name-consumers"
+        "typed-name-consumers",
+        "offline-chain-slots"
       ]
     },
     {
@@ -1564,6 +1610,18 @@
       "path": "src/web/src/api/session.rs",
       "groups": [
         "setup-request-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/foreign_chain.rs",
+      "groups": [
+        "offline-chain-slots"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/foreign_chain_tests.rs",
+      "groups": [
+        "offline-chain-slots"
       ]
     }
   ],
