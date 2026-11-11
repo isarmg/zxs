@@ -500,7 +500,10 @@ fn required_nullable_keeps_missing_null_value_and_error_boundaries() {
         "null",
         "[]",
     ] {
-        assert!(json_codec::from_str::<NullableFixture>(wire).is_err(), "{wire}");
+        assert!(
+            json_codec::from_str::<NullableFixture>(wire).is_err(),
+            "{wire}"
+        );
     }
 }
 

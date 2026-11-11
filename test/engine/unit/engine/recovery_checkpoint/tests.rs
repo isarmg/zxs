@@ -367,7 +367,11 @@ fn sealed_suffix_keeps_file_database_corruption_visible() {
     save_file(&mut engine, &branch, "same.txt", b"second");
     let version = engine.state().versions.values().next().unwrap().clone();
     let body = crate::container_storage::content_path(
-        &version_dir(&config.disks[0], &version.history_tree_id, &version.version_id),
+        &version_dir(
+            &config.disks[0],
+            &version.history_tree_id,
+            &version.version_id,
+        ),
         &version,
     )
     .unwrap();
