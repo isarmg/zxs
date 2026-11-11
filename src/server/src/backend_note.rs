@@ -2,9 +2,30 @@
 #[derive(Debug)]
 pub enum NoteTarget {
     File(String),
-    Version(String),
+    Version(VersionNoteTarget),
     Node { file: String, node: String },
 }
+
+/// Version lookup failures are resolved after current-credential admission.
+#[derive(Debug)]
+pub struct VersionNoteTarget(Result<storage_contract::VersionId, storage_contract::Error>);
+
+impl From<storage_contract::VersionId> for VersionNoteTarget {
+    fn from(id: storage_contract::VersionId) -> Self {
+        Self(Ok(id))
+    }
+}
+
+impl VersionNoteTarget {
+    pub(crate) fn malformed(source: storage_contract::Error) -> Self {
+        Self(Err(source))
+    }
+
+    pub fn into_id(self) -> Result<storage_contract::VersionId, storage_contract::Error> {
+        self.0
+    }
+}
+
 pub struct UpdateNote {
     pub target: NoteTarget,
     pub note: storage_contract::Note,

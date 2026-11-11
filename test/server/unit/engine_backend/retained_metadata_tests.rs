@@ -68,7 +68,12 @@ fn file_note(file: &str, operation_id: OperationId) -> UpdateNote {
 }
 fn version_note(version: &str, operation_id: OperationId) -> UpdateNote {
     UpdateNote {
-        target: NoteTarget::Version(version.into()),
+        target: NoteTarget::Version(
+            version
+                .parse::<storage_contract::VersionId>()
+                .unwrap()
+                .into(),
+        ),
         note: Note::parse("historical metadata".into()).unwrap(),
         operation_id,
     }

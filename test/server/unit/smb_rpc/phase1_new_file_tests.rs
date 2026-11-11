@@ -91,7 +91,13 @@ fn annotate_source(shared: &Shared, repository: &str, source: &Entry) -> String 
         .unwrap();
     for target in [
         crate::NoteTarget::File(source.file_id.clone()),
-        crate::NoteTarget::Version(source.version_id.clone()),
+        crate::NoteTarget::Version(
+            source
+                .version_id
+                .parse::<storage_contract::VersionId>()
+                .unwrap()
+                .into(),
+        ),
     ] {
         shared
             .backend

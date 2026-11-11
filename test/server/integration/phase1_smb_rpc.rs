@@ -177,7 +177,13 @@ impl Fixture {
             .unwrap();
         for target in [
             storage_server::NoteTarget::File(source.file_id.clone()),
-            storage_server::NoteTarget::Version(source.version_id.clone()),
+            storage_server::NoteTarget::Version(
+                source
+                    .version_id
+                    .parse::<storage_contract::VersionId>()
+                    .unwrap()
+                    .into(),
+            ),
         ] {
             self.backend
                 .update_note(

@@ -914,17 +914,22 @@ impl Backend for EngineBackend {
                 )
             }
             crate::NoteTarget::Version(version) => {
+                let missing = || {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::VersionNotFound,
+                        "version not found",
+                    )
+                };
+                let version = version
+                    .into_id()
+                    .map_err(|source| missing().with_source(source))?
+                    .to_string();
                 let file = engine
                     .state()
                     .versions
                     .get(&version)
-                    .ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::VersionNotFound,
-                            "version not found",
-                        )
-                    })?
+                    .ok_or_else(missing)?
                     .file_id
                     .clone();
                 file_manager::file_repo(&engine, &file)?;

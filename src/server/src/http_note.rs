@@ -4,8 +4,43 @@ use crate::{
     auth::Identity,
     http_boundary::{ApiJson, ApiPath, Authenticated, JsonBody},
 };
+use data_serialization::{Deserialize, Deserializer};
 use http_routing::{Json, extract::State};
 use json_codec::{Map, Value};
+
+/// Keep path spelling through body binding and resolve failures at backend lookup.
+pub(crate) enum VersionNotePath {
+    Canonical(storage_contract::VersionId),
+    Malformed {
+        original: String,
+        source: storage_contract::Error,
+    },
+}
+
+impl<'de> Deserialize<'de> for VersionNotePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let original = String::deserialize(deserializer)?;
+        Ok(match original.parse() {
+            Ok(id) => Self::Canonical(id),
+            Err(source) => Self::Malformed { original, source },
+        })
+    }
+}
+
+impl VersionNotePath {
+    fn bind(self, body: &NoteBody) -> Result<crate::VersionNoteTarget, ApiError> {
+        match self {
+            Self::Canonical(id) => {
+                body.matches_path("version_id", &id.to_string())?;
+                Ok(id.into())
+            }
+            Self::Malformed { original, source } => {
+                body.matches_path("version_id", &original)?;
+                Ok(crate::VersionNoteTarget::malformed(source))
+            }
+        }
+    }
+}
 
 pub(crate) struct NoteBody(Map<String, Value>);
 
@@ -79,10 +114,10 @@ pub(crate) async fn file(
 pub(crate) async fn version(
     State(state): State<AppState>,
     Authenticated(identity): Authenticated,
-    ApiPath(version): ApiPath<String>,
+    ApiPath(version): ApiPath<VersionNotePath>,
     ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    body.matches_path("version_id", &version)?;
+    let version = version.bind(&body)?;
     submit(state, identity, body, NoteTarget::Version(version)).await
 }
 pub(crate) async fn node(

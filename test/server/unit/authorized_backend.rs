@@ -1960,7 +1960,21 @@ impl Fixture {
                 backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::File("file".into()),note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
             }),
             ("update_note", {
-                backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Version("version".into()),note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
+                backend
+                    .update_note(
+                        identity,
+                        crate::UpdateNote {
+                            target: crate::NoteTarget::Version(
+                                storage_contract::VersionId::from_random([0; 16]).into(),
+                            ),
+                            note: storage_contract::Note::parse("".into()).unwrap(),
+                            operation_id,
+                        },
+                    )
+                    .map(|result| {
+                        assert_eq!(result, recorded_operation(operation_id, "update_note"));
+                        json!({"returned_by":"update_note"})
+                    })
             }),
             ("update_note", {
                 backend.update_note(identity,crate::UpdateNote {target:crate::NoteTarget::Node {file:"file".into(),node:"node".into()},note:storage_contract::Note::parse("".into()).unwrap(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"update_note"));json!({"returned_by":"update_note"})})
@@ -2514,7 +2528,16 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"file_id":"file","source_version_id":"version","source_node_id":null,"name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","source_version_id":"version","source_node_id":"node","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"target":"File(\"file\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
-        json!({"target":"Version(\"version\")","note":"","operation_id":"op_00000000000000000000000000000000"}),
+        json!({
+            "target":format!(
+                "{:?}",
+                crate::NoteTarget::Version(
+                    storage_contract::VersionId::from_random([0; 16]).into(),
+                ),
+            ),
+            "note":"",
+            "operation_id":"op_00000000000000000000000000000000",
+        }),
         json!({"target":"Node { file: \"file\", node: \"node\" }","note":"","operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
