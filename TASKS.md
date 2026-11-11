@@ -20,6 +20,8 @@
 
 ## 新版规范的底层重构
 
+- [ ] GitHub CI 验证 T04 Id<K>／OperationId 的原编码、排序、serde 收据字节、解析错误与熵错误兼容；FileNodeId 五变体仅作基础类型，逐入口接入须保留原允许域。确定性 derive 尚须核实既有领域派生协议，不擅自引入新算法。
+
 - [ ] GitHub CI 采集并审查 T03 的 quality／smb-sdk 完整 Clippy 警告报告，提交真实基线后验证精确八类、第一方包范围、计数增减与其余诊断严格门禁；缺基线仍失败，完整性为 false 的报告不得用作基线。验证 workspace lint 继承、原有 unsafe 拒绝与最小 FFI 例外。
 
 - [ ] 完成《禁止防御性编程》§13 阶段 0：验证过程入口与文本棘轮，建立 workspace lint、Clippy 阈值及警告数棘轮；第一方继承规则保留 smb-vfs 自有许可证与最小 FFI deny 边界。

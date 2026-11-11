@@ -266,6 +266,11 @@ impl std::fmt::Display for ErrorCode {
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("INVALID_ID: invalid {prefix} identifier")]
+    InvalidIdentifier {
+        prefix: &'static str,
+        retryable: bool,
+    },
     #[error("identifier generation failed: {source}")]
     IdentifierGeneration {
         #[source]
@@ -320,7 +325,8 @@ impl Error {
     }
     pub fn retryable(mut self) -> Self {
         match &mut self {
-            Self::IdentifierGeneration { retryable, .. }
+            Self::InvalidIdentifier { retryable, .. }
+            | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
@@ -331,7 +337,8 @@ impl Error {
     }
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::IdentifierGeneration { retryable, .. }
+            Self::InvalidIdentifier { retryable, .. }
+            | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
@@ -341,6 +348,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::InvalidIdentifier { .. } => ErrorCode::InvalidId,
             Self::IdentifierGeneration { .. } => ErrorCode::InternalError,
             Self::Message { code, .. } => *code,
             Self::Name { source, .. } => source.into(),
@@ -351,6 +359,7 @@ impl Error {
     }
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
+            Self::InvalidIdentifier { prefix, .. } => format!("invalid {prefix} identifier").into(),
             Self::IdentifierGeneration { .. } => "identifier generation failed".into(),
             Self::Message { message, .. } => message.as_str().into(),
             Self::Name { source, .. } => source.to_string().into(),

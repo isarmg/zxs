@@ -86,7 +86,7 @@
     "clock_read": 0,
     "disk_name_const": 0,
     "erase_error": 2,
-    "error_new": 28,
+    "error_new": 26,
     "fault_cfg": 0,
     "glob_super": 0,
     "hash_string": 16,
@@ -101,7 +101,7 @@
     "unreachable": 0,
     "unwrap_or_default": 1,
     "validate_fn": 32,
-    "wildcard_arm": 20
+    "wildcard_arm": 21
   },
   "src/engine": {
     "api_path_literal": 1,

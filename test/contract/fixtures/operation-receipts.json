@@ -1,0 +1,1 @@
+{"op_00000000000000000000000000000001":{"branch_id":null,"commit_id":null,"commit_state":"PUBLISHED","current_health":"HEALTHY","history_tree_id":null,"kind":"test.receipt","operation_id":"op_00000000000000000000000000000001","protection_at_publish":"NOT_APPLICABLE","request_digest":"fixed-digest","result":{"nested":[{"answer":"original"}]},"sequence":"7"}}

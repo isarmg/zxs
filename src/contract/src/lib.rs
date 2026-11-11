@@ -14,7 +14,9 @@ pub mod file_deletion_batch;
 pub mod file_history_merge;
 pub mod file_relocation;
 pub mod history_window;
+mod id;
 mod integer_json;
+pub mod kind;
 pub mod node_retirement;
 pub mod offline_maintenance;
 pub mod shared_history;
@@ -31,6 +33,11 @@ pub mod storage_independent_topology;
 pub mod storage_lifecycle;
 pub mod storage_readmission;
 pub use content_hash::{ContentHash, ParseContentHashError};
+pub use id::{
+    BranchId, CommitId, DirectoryBranchId, DirectoryTreeId, DiskId, EntryId, FileAnchorId,
+    FileDeletionId, FileId, FileMergeId, FileMetadataId, FileNodeId, HistoryTreeId, Id, IdKind,
+    PoolId, RepositoryId, RuleId, TreeId, VersionId,
+};
 mod operation_id;
 mod operation_outcome;
 pub use operation_outcome::OperationOutcome;
