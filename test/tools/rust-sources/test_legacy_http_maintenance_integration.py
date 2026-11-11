@@ -4,10 +4,10 @@ The disposable repository preserves every live source and immutable proof. Only
 the unchanged Cargo resolution boundary is stubbed: these comment edits do not
 alter manifests or features. This is not a Cargo metadata or behavior test.
 """
-from contextlib import contextmanager, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
+from functools import wraps
 from copy import deepcopy
 import io
-import faulthandler
 import json
 from pathlib import Path
 import shutil
@@ -39,20 +39,56 @@ def observed(label, operation, *args, **kwargs):
               file=sys.stderr, flush=True)
 
 
+def timed(label, operation):
+    @wraps(operation)
+    def run(*args, **kwargs):
+        return observed(label, operation, *args, **kwargs)
+    return run
+
+
 @contextmanager
-def progress_tracebacks():
-    faulthandler.dump_traceback_later(60, repeat=True)
-    try:
+def refresh_phases():
+    # Wrap existing operations only during refresh; preserve every result and error.
+    phases = [
+        (source_layout.Layout, '__init__', 'refresh layout construction'),
+        (source_layout.Layout, 'require_supported_plan', 'refresh supported plan'),
+        (manage, '_refresh', 'refresh implementation'),
+        (manage, 'structure', 'refresh structure'),
+        (manage.source_trimming, 'prepare', 'refresh trim history'),
+        (manage.benchmark_relocation, 'prepare', 'refresh benchmark history'),
+        (manage, 'origins', 'refresh origins'),
+        (manage, 'provenance', 'refresh provenance'),
+        (manage.source_consolidation, 'prepare', 'refresh consolidation'),
+        (manage.source_naming, 'prepare', 'refresh naming'),
+        (manage.source_moves, 'prepare', 'refresh moves'),
+        (manage, 'upgrade_plan', 'refresh upgrade'),
+        (manage, 'retirement_plan', 'refresh retirement'),
+        (manage, 'source_directories', 'refresh directory inventory'),
+        (manage.external_tests, 'load', 'refresh external tests'),
+        (manage, 'project_manifests', 'refresh manifest inventory'),
+        (manage.proof_routing, 'validate_refresh', 'refresh routing validation'),
+        (manage.source_consolidation, 'validate_history', 'refresh consolidation validation'),
+        (manage.source_naming, 'validate_history', 'refresh naming validation'),
+        (manage.source_moves, 'validate_history', 'refresh move validation'),
+        (source_layout, 'written_catalog', 'refresh committed catalog'),
+        (manage, 'document', 'refresh generated document'),
+    ]
+    with ExitStack() as stack:
+        for owner, name, label in phases:
+            stack.enter_context(patch.object(owner, name, timed(label, getattr(owner, name))))
         yield
-    finally:
-        faulthandler.cancel_dump_traceback_later()
+
+
+def observed_refresh(root):
+    with refresh_phases():
+        return observed('refresh', manage.refresh, root)
 
 
 class HttpMaintenanceManager(unittest.TestCase):
     def test_real_manager_successors_preserve_history_and_reject_external_drift(self):
         # Keep this full provenance fixture off small /tmp tmpfs. Do not use
         # links: the test intentionally edits and damages disposable files.
-        with progress_tracebacks(), tempfile.TemporaryDirectory(
+        with tempfile.TemporaryDirectory(
                 prefix='http-maintenance-manager-', dir=ROOT.parent) as temporary:
             root = Path(temporary)
             for name in ('.cargo', '.github', 'compliance', 'docs', 'src', 'helper', 'test', 'tools'):
@@ -90,12 +126,12 @@ class HttpMaintenanceManager(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         observed('verify', manage.verify, root)
                     self.assertEqual((root / manage.CATALOG).read_bytes(), before_bytes)
-                    observed('refresh', manage.refresh, root)
+                    observed_refresh(root)
                     observed('verify', manage.verify, root)
                     catalog = json.loads((root / manage.CATALOG).read_bytes())
                     self.assertEqual(catalog[legacy.KEY], list(legacy.RECEIPTS))
                     committed = (root / manage.CATALOG).read_bytes()
-                    observed('refresh', manage.refresh, root)
+                    observed_refresh(root)
                     observed('verify', manage.verify, root)
                     self.assertEqual((root / manage.CATALOG).read_bytes(), committed)
                 view = observed('load final layout', source_layout.load, root, catalog)
