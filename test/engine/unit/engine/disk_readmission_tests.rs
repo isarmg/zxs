@@ -775,6 +775,24 @@ fn explicit_system_loss_recovery_persists_active_epoch_for_metadata_and_data_roo
         let archive = fixture.begin(operation);
         let result = fixture.activate(&archive);
         let disk_id = fixture.config.disks[0].disk_id.clone();
+        // Recovery rebuilds both derived databases through the authoritative head.
+        // Materialize that same prefix before capturing the retained disk's bytes.
+        let state_before_maintenance = canonical_json(&*fixture.engine.state).unwrap();
+        let slot = &fixture.config.disks[0].slot_id;
+        let catalog = fixture.engine.rebuild_disk_catalog(slot).unwrap();
+        let history = fixture.engine.rebuild_disk_history(slot).unwrap();
+        assert_eq!(
+            catalog.identity,
+            fixture.engine.registered_disk(&disk_id).unwrap().identity()
+        );
+        assert_eq!(history.header.identity, catalog.identity);
+        assert_eq!(catalog.source_sequence, fixture.engine.state.sequence);
+        assert_eq!(history.header.through_sequence, fixture.engine.state.sequence);
+        assert_eq!(
+            canonical_json(&*fixture.engine.state).unwrap(),
+            state_before_maintenance
+        );
+        assert_eq!(fixture.engine.state.operations[&operation], result);
         let mut metadata_roots = fixture
             .engine
             .config

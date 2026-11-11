@@ -1204,6 +1204,12 @@
       ]
     },
     {
+      "path": "test/engine/unit/engine/disk_readmission_tests.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
       "path": "test/engine/unit/persist/layout_tests.rs",
       "groups": [
         "held-directory-layout"
