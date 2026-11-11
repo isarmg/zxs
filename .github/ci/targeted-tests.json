@@ -812,6 +812,13 @@
       "python_timeouts": {
         "test_engineering_guidance": 600
       }
+    },
+    "boundary-watch": {
+      "reason": "Watch-only candidate deltas, explicit snapshot provenance and independent manifest gates",
+      "python_tests": [
+        "test_boundary_metrics"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -1342,7 +1349,7 @@
     {
       "path": ".github/metrics-baseline.json",
       "groups": [
-        "ci-selection"
+        "boundary-watch"
       ]
     },
     {
@@ -2716,6 +2723,18 @@
       "path": "test/ci/test_engineering_guidance.py",
       "groups": [
         "engineering-guidance"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-boundary-metrics.py",
+      "groups": [
+        "boundary-watch"
+      ]
+    },
+    {
+      "path": "test/ci/test_boundary_metrics.py",
+      "groups": [
+        "boundary-watch"
       ]
     }
   ],

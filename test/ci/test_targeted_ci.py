@@ -135,6 +135,28 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(len(plan['python_tests']), 8)
         self.assertEqual(plan['rust_targets'], [])
 
+    def test_boundary_watch_changes_select_only_behavioral_metrics_regressions(self):
+        for path in ['.github/scripts/check-boundary-metrics.py',
+                     '.github/metrics-baseline.json', 'test/ci/test_boundary_metrics.py']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['boundary-watch'])
+                self.assertEqual(plan['python_tests'], ['test_boundary_metrics'])
+                self.assertEqual(plan['rust_targets'], [])
+
+    def test_boundary_watch_migration_keeps_existing_python_budget(self):
+        plan = CI.select_plan(self.policy, [
+            '.github/scripts/check-boundary-metrics.py', '.github/metrics-baseline.json',
+            'test/ci/test_boundary_metrics.py', '.github/ci/targeted-tests.json',
+            'test/ci/test_targeted_ci.py',
+        ])
+        self.assertEqual(plan['groups'], ['boundary-watch', 'ci-selection'])
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_boundary_metrics']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assertEqual(plan['rust_targets'], [])
+
     def test_python_budget_defaults_and_dedicated_maintenance_limit(self):
         plan = CI.select_plan(self.policy, ['工程规范.md', 'TASKS.md'])
         self.assertEqual(len(plan['python_tests']), 8)
