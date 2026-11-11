@@ -1115,7 +1115,10 @@ impl Backend for RecordingBackend {
         self.record(
             "archive_branch",
             Some(identity),
-            json!({"branch_id":request.branch_id,"operation_id":request.operation_id}),
+            json!({
+                "branch_id":request.branch_id.into_id().unwrap().to_string(),
+                "operation_id":request.operation_id,
+            }),
         )?;
         Ok(recorded_operation(request.operation_id, "archive_branch"))
     }
@@ -2057,7 +2060,10 @@ impl Fixture {
                 backend.initialize_directory_scope(identity,crate::InitializeDirectoryScope {repository_id:"repository".into(),path:Some(name_policy::LookupPath::parse("Café").unwrap()),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"initialize_directory_scope"));json!({"returned_by":"initialize_directory_scope"})})
             }),
             ("archive_branch", {
-                let request = crate::ArchiveBranch {branch_id:"branch".into(),operation_id};
+                let request = crate::ArchiveBranch {
+                    branch_id: storage_contract::BranchId::from_random([0; 16]).into(),
+                    operation_id,
+                };
                 backend.archive_branch(identity,request).map(|result| {
                     assert_eq!(result,recorded_operation(operation_id,"archive_branch"));
                     json!({"returned_by":"archive_branch"})
@@ -2618,7 +2624,10 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"slot_id":"P01","path":"Café","name":"Side","action":{"kind":"reviewed_create","source":reviewed_directory_source()},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","path":"Café","name":"Side","action":{"kind":"select"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","path":"Café","operation_id":"op_00000000000000000000000000000000"}),
-        json!({"branch_id":"branch","operation_id":"op_00000000000000000000000000000000"}),
+        json!({
+            "branch_id":"br_00000000000000000000000000000000",
+            "operation_id":"op_00000000000000000000000000000000",
+        }),
         json!({"repository_id":"repository","directory_branch_id":"directory","name":"Café","key":"café","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","directory_branch_id":"directory","operation_id":"op_00000000000000000000000000000000"}),
         json!({"repository_id":"repository","key":"folder","sources":1,"entries":1}),

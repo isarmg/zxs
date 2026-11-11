@@ -5,9 +5,29 @@ use storage_contract::{
 };
 
 pub struct ArchiveBranch {
-    pub branch_id: String,
+    pub branch_id: ArchiveBranchTarget,
     pub operation_id: OperationId,
 }
+/// Resolve malformed branch lookup only after current credentials are admitted.
+#[derive(Debug)]
+pub struct ArchiveBranchTarget(Result<storage_contract::BranchId, storage_contract::Error>);
+
+impl From<storage_contract::BranchId> for ArchiveBranchTarget {
+    fn from(branch: storage_contract::BranchId) -> Self {
+        Self(Ok(branch))
+    }
+}
+
+impl ArchiveBranchTarget {
+    pub(crate) fn malformed(source: storage_contract::Error) -> Self {
+        Self(Err(source))
+    }
+
+    pub fn into_id(self) -> Result<storage_contract::BranchId, storage_contract::Error> {
+        self.0
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct ArchiveResponse {
     operation_id: OperationId,

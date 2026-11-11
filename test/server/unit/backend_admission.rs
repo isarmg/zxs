@@ -1946,3 +1946,59 @@ fn backend_job_admission_preserves_capacity_errors_and_does_not_enqueue() {
     assert_eq!(Arc::strong_count(&auth), before);
     assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn archive_binding_precedes_capacity_while_command_parsing_waits_for_admission() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    for (body, expected_status, expected_code) in [
+        (json!([]), StatusCode::BAD_REQUEST, "INVALID_REQUEST"),
+        (json!({"branch_id":null}), StatusCode::BAD_REQUEST, "INVALID_REQUEST"),
+        (json!({"branch_id":"other"}), StatusCode::BAD_REQUEST, "INVALID_REQUEST"),
+        (json!({}), StatusCode::TOO_MANY_REQUESTS, "RESOURCE_LIMIT_EXCEEDED"),
+        (
+            json!({"branch_id":"malformed","operation_id":"bad","unknown":true}),
+            StatusCode::TOO_MANY_REQUESTS,
+            "RESOURCE_LIMIT_EXCEEDED",
+        ),
+    ] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/branches/malformed/archive")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json_codec::to_vec(&body).unwrap()))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), expected_status);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}

@@ -162,7 +162,7 @@ pub use backend_merge_link::CreateMergeLink;
 mod http_create_repository;
 pub use backend_create_repository::CreateRepository;
 mod http_create_branch;
-pub use backend_archive::ArchiveBranch;
+pub use backend_archive::{ArchiveBranch, ArchiveBranchTarget};
 pub use backend_create_branch::CreateBranch;
 mod backend_smb_binding;
 mod http_archive;

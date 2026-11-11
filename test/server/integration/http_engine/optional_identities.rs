@@ -2148,6 +2148,47 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         send(&app, None, "POST", &uri, Some(json!({}))).await.0,
         StatusCode::UNAUTHORIZED
     );
+
+    let digest_input = json!({
+        "kind":"branch.archive",
+        "principal":"admin",
+        "body":{"branch_id":branch},
+    });
+    assert_eq!(
+        storage_contract::canonical_json(&digest_input).unwrap(),
+        format!(
+            concat!(
+                "{{\"body\":{{\"branch_id\":\"{}\"}},",
+                "\"kind\":\"branch.archive\",\"principal\":\"admin\"}}",
+            ),
+            branch,
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        receipt["request_digest"],
+        storage_contract::object_hash("request", &digest_input).unwrap(),
+    );
+    let bytes = storage_contract::canonical_json(&receipt).unwrap();
+    let decoded: storage_contract::OperationResult = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
+    let generation = archived["generation"].as_str().unwrap().parse::<u64>().unwrap();
+    drop(app);
+    let mut engine = reopen_after_router_drop(&root.path().join("system")).await;
+    assert_eq!(
+        storage_contract::canonical_json(&engine.state().operations[&operation]).unwrap(),
+        bytes,
+    );
+    let replay = engine.archive_branch(branch, "admin", operation).unwrap();
+    assert_eq!(storage_contract::canonical_json(&replay).unwrap(), bytes);
+    assert_eq!(engine.state().branches[branch].generation, generation);
+    drop(engine);
+    let reopened = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(
+        storage_contract::canonical_json(&reopened.state().operations[&operation]).unwrap(),
+        bytes,
+    );
+    assert_eq!(reopened.state().branches[branch].generation, generation);
 }
 
 #[tokio::test]
@@ -2365,4 +2406,61 @@ async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
         send(&app, None, "POST", &uri, Some(body)).await.0,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn archive_unknown_paths_keep_body_errors_and_resource_before_replay_order() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let operation = storage_contract::OperationId::from_random([17; 16]);
+    success(
+        &app,
+        &token,
+        "POST",
+        "/api/repositories",
+        Some(json!({
+            "name":"Archive admission",
+            "primary_slot_id":"P01",
+            "target_copies":3,
+            "operation_id":operation,
+        })),
+    )
+    .await;
+    for branch in [
+        "malformed",
+        "br_0123456789ABCDEF0123456789abcdef",
+        "file_0123456789abcdef0123456789abcdef",
+        "br_0123456789abcdef0123456789abcdef",
+    ] {
+        let uri = format!("/api/branches/{branch}/archive");
+        for operation_id in [operation.to_string(), new_id("op").unwrap()] {
+            let (status, response) = send(
+                &app,
+                Some(&token),
+                "POST",
+                &uri,
+                Some(json!({"branch_id":branch,"operation_id":operation_id})),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(response["error"]["code"], "NOT_FOUND");
+        }
+        for (body, code) in [
+            (json!({}), "INVALID_REQUEST"),
+            (json!({"operation_id":null,"unknown":true}), "INVALID_REQUEST"),
+            (json!({"operation_id":"bad","unknown":true}), "INVALID_REQUEST"),
+            (json!({"operation_id":"bad"}), "INVALID_ID"),
+            (json!({"branch_id":null,"operation_id":"bad"}), "INVALID_REQUEST"),
+            (json!({"branch_id":7,"operation_id":"bad"}), "INVALID_REQUEST"),
+            (json!({"branch_id":"other","operation_id":"bad"}), "INVALID_REQUEST"),
+        ] {
+            let (status, response) = send(&app, Some(&token), "POST", &uri, Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response["error"]["code"], code);
+        }
+        let (status, response) = send(&app, None, "POST", &uri, Some(json!(null))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(response["error"]["code"], "UNAUTHORIZED");
+    }
 }

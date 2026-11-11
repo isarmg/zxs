@@ -95,7 +95,10 @@ fn typed_creation_binds_digest_and_checks_scope_before_receipt() {
         .archive_branch(
             &identity,
             crate::ArchiveBranch {
-                branch_id: created.branch_id.clone(),
+                branch_id: created.branch_id
+                    .parse::<storage_contract::BranchId>()
+                    .unwrap()
+                    .into(),
                 operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )

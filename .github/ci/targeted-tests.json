@@ -851,6 +851,52 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "archive-http-boundary": {
+      "reason": "Typed branch archive path and command, body versus capacity ordering, current authorization, resource lookup before replay, raw receipt and cold-open digest preservation",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_archive::tests::",
+            "backend_archive::tests::"
+          ],
+          "exact": [
+            "engine_backend::read_projection::tests::archive_tests::typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order",
+            "engine_backend::read_projection::tests::create_branch_tests::typed_creation_binds_digest_and_checks_scope_before_receipt",
+            "engine_backend::application::tests::creation_replays_keep_public_response_shapes_after_archive_binding_change_and_reopen",
+            "backend_admission_tests::archive_binding_precedes_capacity_while_command_parsing_waits_for_admission"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "optional_identities::typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace",
+            "optional_identities::archive_unknown_paths_keep_body_errors_and_resource_before_replay_order"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -2804,7 +2850,55 @@
       "groups": [
         "directory-deletion-activity"
       ]
+    },
+    {
+      "path": "src/server/src/backend_archive.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "src/server/src/http_archive.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_archive.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/read_projection/archive_tests.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/read_projection/create_branch_tests.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/application/tests.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/optional_identities.rs",
+      "groups": [
+        "archive-http-boundary"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features; Node target ID migration and other HTTP endpoints remain outside this slice. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections."
 }

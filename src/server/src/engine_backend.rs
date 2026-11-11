@@ -1525,9 +1525,21 @@ impl Backend for EngineBackend {
         request: crate::ArchiveBranch,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
-        repo_for_branch(&engine, &request.branch_id)?;
+        let branch = request
+            .branch_id
+            .into_id()
+            .map_err(|source| {
+                ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "branch not found",
+                )
+                .with_source(source)
+            })?
+            .to_string();
+        repo_for_branch(&engine, &branch)?;
         engine
-            .archive_branch(&request.branch_id, &current.principal, request.operation_id)
+            .archive_branch(&branch, &current.principal, request.operation_id)
             .map_err(error)
     }
     fn rename_directory_branch(

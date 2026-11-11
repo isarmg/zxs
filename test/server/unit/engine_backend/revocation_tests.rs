@@ -1587,7 +1587,9 @@ impl Request {
             }
             Self::ArchiveBranch => {
                 let request = crate::ArchiveBranch {
-                    branch_id: "missing-branch".into(),
+                    branch_id: crate::ArchiveBranchTarget::malformed(
+                        "missing-branch".parse::<storage_contract::BranchId>().unwrap_err(),
+                    ),
                     operation_id: storage_contract::OperationId::generate().unwrap(),
                 };
                 backend.archive_branch(identity, request).map(|_| ())

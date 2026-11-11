@@ -399,7 +399,12 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
         .archive_branch(
             &owner,
             crate::ArchiveBranch {
-                branch_id: branch["branch_id"].as_str().unwrap().into(),
+                branch_id: branch["branch_id"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<storage_contract::BranchId>()
+                    .unwrap()
+                    .into(),
                 operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )

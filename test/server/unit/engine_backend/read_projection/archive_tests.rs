@@ -17,7 +17,10 @@ fn typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order()
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     let operation = storage_contract::OperationId::generate().unwrap();
     let request = |branch: &str, operation_id| crate::ArchiveBranch {
-        branch_id: branch.into(),
+        branch_id: match branch.parse::<storage_contract::BranchId>() {
+            Ok(branch) => branch.into(),
+            Err(source) => crate::ArchiveBranchTarget::malformed(source),
+        },
         operation_id,
     };
     let result = backend
@@ -75,7 +78,12 @@ fn typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order()
         .archive_branch(&identity, request("missing", operation))
         .unwrap_err();
     assert_eq!(missing.code, storage_contract::ErrorCode::NotFound);
-    assert_eq!(missing.message, "branch not found");
+    assert_eq!(missing.status, http::StatusCode::NOT_FOUND);
+    let Some(crate::http_boundary::ApiErrorSource::Contract(source)) = missing.source.as_deref()
+    else {
+        panic!("malformed branch lookup retains the ID parse failure");
+    };
+    assert_eq!(source.code(), storage_contract::ErrorCode::InvalidId);
     auth.logout(&token).unwrap();
     assert_eq!(
         backend
