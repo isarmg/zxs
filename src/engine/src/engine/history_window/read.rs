@@ -207,7 +207,7 @@ impl Engine {
                 Some(entry) => Some(entry),
                 None => {
                     let mut chosen = None;
-                    for entry in tree.entries() {
+                    for entry in tree.visible_entries() {
                         cancel.checkpoint()?;
                         if entry.kind == crate::NamespaceEntryKind::File && entry.file_id == file {
                             chosen = Some(entry);

@@ -279,6 +279,9 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
     )
     .await;
     assert!(historical["identity"]["context"]["path"].is_null());
+    assert!(historical["identity"]["context"]["current_node_id"].is_null());
+    assert!(historical["context"]["content"].is_null());
+    assert!(historical["nodes"].as_array().unwrap().iter().all(|node| node["current"] == false));
     assert_eq!(
         history_versions(&app, &admin, file, &historical, None).await["versions"]
             .as_array()

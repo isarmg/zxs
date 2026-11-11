@@ -469,7 +469,6 @@ impl FileHistoryRead {
         let repo = repo_for_history(engine, &version.history_tree_id)?;
         let state = engine.state();
         let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-        let entries = tree.entries();
         let current = if let Some((repository_id, path)) = request.location() {
             if repository_id != repo.repository_id {
                 return Err(ApiError::new(
@@ -497,7 +496,7 @@ impl FileHistoryRead {
                 .file_locations
                 .get(file)
                 .and_then(|path| tree.get(path).filter(|entry| entry.file_id == file))
-                .or_else(|| entries.iter().find(|entry| entry.file_id == file))
+                .or_else(|| tree.visible_entries().find(|entry| entry.file_id == file))
         };
         let context = current
             .as_ref()

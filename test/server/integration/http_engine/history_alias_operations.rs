@@ -227,6 +227,33 @@ async fn selection_history_keeps_two_introduced_alias_paths() {
     );
 }
 
+async fn assert_visible_alias_history(app: &Router, token: &str, entry: &Value, path: &str) {
+    let route = format!(
+        "/api/file-manager/files/{}/history",
+        entry["file_id"].as_str().unwrap()
+    );
+    let history = success(app, token, "GET", &route, None).await;
+    assert_eq!(history["identity"]["context"]["path"], path);
+    assert_eq!(history["identity"]["context"]["current_node_id"], entry["node_id"]);
+    assert_eq!(history["context"]["content"]["version_id"], entry["version_id"]);
+    assert!(history["nodes"].as_array().unwrap().iter().any(|node| {
+        node["current"] == true && node["node_id"] == entry["node_id"]
+    }));
+    let mut query = url_encoding::form::Serializer::new(String::new());
+    query.append_pair("repository_id", entry["repository_id"].as_str().unwrap());
+    query.append_pair("path", path);
+    let scoped = success(
+        app,
+        token,
+        "GET",
+        &format!("{route}?{}", query.finish()),
+        None,
+    )
+    .await;
+    assert_eq!(scoped["identity"]["context"], history["identity"]["context"]);
+    assert_eq!(scoped["nodes"], history["nodes"]);
+}
+
 #[tokio::test]
 async fn workspace_history_keeps_both_deleted_alias_paths_with_retained_occurrence() {
     let root = tempfile::tempdir().unwrap();
@@ -259,6 +286,7 @@ async fn workspace_history_keeps_both_deleted_alias_paths_with_retained_occurren
     assert_eq!(aliases.len(), 1);
     assert_eq!(aliases[0]["name"], "retained.txt");
     assert_same_file(&file, aliases[0]);
+    assert_visible_alias_history(&app, &token, aliases[0], "b/retained.txt").await;
     let events = operation_events(&app, &token, &deleted, &file).await;
     assert_paths(&events, "delete", &["b/first.txt", "b/second.txt"]);
 }

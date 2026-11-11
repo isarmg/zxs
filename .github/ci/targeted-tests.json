@@ -706,6 +706,53 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "history-visible-context": {
+      "reason": "Current history context uses authoritative namespace visibility while retained nodes, download names and saved selections survive soft deletion, undo and cold reopen",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "exact": [
+            "engine::history_window::read::tests::soft_deleted_history_keeps_retained_nodes_without_current_context_across_reopen_and_undo"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::file_manager::history_query_tests::history_context_preserves_projection_and_current_admission"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backup_namespace::user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_rename_and_delete",
+            "file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name",
+            "history_alias_operations::workspace_history_keeps_both_deleted_alias_paths_with_retained_occurrence",
+            "history_query::history_query_rejects_unknown_fields_and_preserves_paired_context"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -2371,6 +2418,30 @@
       "path": "test/server/unit/smb_rpc/phase1_new_file_tests.rs",
       "groups": [
         "note-target-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/read.rs",
+      "groups": [
+        "history-visible-context"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager.rs",
+      "groups": [
+        "history-visible-context"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_window_read_tests.rs",
+      "groups": [
+        "history-visible-context"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/history_query_tests.rs",
+      "groups": [
+        "history-visible-context"
       ]
     }
   ],

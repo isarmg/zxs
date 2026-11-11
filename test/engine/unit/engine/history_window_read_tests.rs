@@ -48,6 +48,137 @@ fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     )
 }
 
+fn visible_request(file: &HistoryFileId) -> HistoryWindowRequest {
+    let mut request = request(HistoryCollection::Nodes, 64);
+    request.file_id = file.clone();
+    request.history_root = None;
+    request.location = None;
+    request
+}
+
+fn assert_hidden_history(
+    engine: &Engine,
+    file: &HistoryFileId,
+    version: &HistoryVersionId,
+) -> HistoryWindowRead {
+    let read = engine
+        .capture_history_window(visible_request(file), HistoryWindowCancellation::new())
+        .unwrap();
+    let HistoryWindowPage::Nodes {
+        identity, context, nodes, ..
+    } = read.page().unwrap() else {
+        panic!("node request returns a node page");
+    };
+    assert!(identity.context.path.is_none());
+    assert!(identity.context.current_node_id.is_none());
+    assert!(context.content.is_none());
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(&nodes[0].version_id, version);
+    assert!(nodes.iter().all(|node| !node.current));
+    assert!(nodes.iter().all(|node| node.download_name == "file.txt"));
+    engine.recheck_history_window(&read).unwrap();
+    read
+}
+
+fn delete_observed_file(
+    engine: &mut Engine,
+    file: &HistoryFileId,
+    version: &HistoryVersionId,
+) -> (HistoryResolvedContext, crate::FileDeletionNode, HistoryWindowRequest) {
+    use crate::file_deletion::{DeleteFileRequest, FileDeletionTarget};
+    let before = engine
+        .capture_history_window(visible_request(file), HistoryWindowCancellation::new())
+        .unwrap();
+    let original = before.context().clone();
+    assert_eq!(original.path.as_ref().unwrap().as_str(), "file.txt");
+    assert_eq!(original.current_node_id.as_ref().unwrap().as_str(), version.as_str());
+    let path = name_policy::LookupPath::parse("file.txt").unwrap();
+    let mut scoped = visible_request(file);
+    scoped.location = Some(HistoryLocation {
+        repository_id: original.repository_id.clone(),
+        path: path.clone(),
+    });
+    let scoped_before = engine
+        .capture_history_window(scoped.clone(), HistoryWindowCancellation::new())
+        .unwrap();
+    engine
+        .soft_delete_file(DeleteFileRequest {
+            target: FileDeletionTarget {
+                repository_id: &original.repository_id,
+                file_id: file,
+                path: &path,
+            },
+            principal: "admin",
+            operation_id: crate::OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    let deleted = engine.file_deletion(file.as_str()).unwrap().clone();
+    assert_eq!(deleted.path.as_str(), "file.txt");
+    let repository = &engine.state.repositories[original.repository_id.as_str()];
+    let tree = engine.namespace_tree(&repository.main_branch_id).unwrap();
+    assert!(tree.entries().iter().any(|entry| entry.file_id == file.as_str()));
+    assert!(tree.get("file.txt").is_none());
+    assert_eq!(
+        engine.recheck_history_window(&before).unwrap_err().code(),
+        storage_contract::ErrorCode::HistoryChanged
+    );
+    assert_eq!(
+        engine.recheck_history_window(&scoped_before).unwrap_err().code(),
+        storage_contract::ErrorCode::FileNotFound
+    );
+    drop(before);
+    drop(scoped_before);
+    (original, deleted, scoped)
+}
+
+#[test]
+fn soft_deleted_history_keeps_retained_nodes_without_current_context_across_reopen_and_undo() {
+    use crate::file_deletion::UndoFileDeletionRequest;
+    let (temp, mut engine, file, version) = actual();
+    let (original, deleted, scoped) = delete_observed_file(&mut engine, &file, &version);
+    assert_hidden_history(&engine, &file, &version);
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert_eq!(engine.file_deletion(file.as_str()), Some(&deleted));
+    let hidden = assert_hidden_history(&engine, &file, &version);
+    assert_eq!(hidden.context().selected_branch_id, original.selected_branch_id);
+    assert_eq!(
+        engine
+            .capture_history_window(scoped.clone(), HistoryWindowCancellation::new())
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::FileNotFound
+    );
+    let exported = temp.path().join("retained.bin");
+    engine.export_version(version.as_str(), &exported).unwrap();
+    assert_eq!(std::fs::read(exported).unwrap(), b"retained source");
+    engine
+        .undo_file_deletion(UndoFileDeletionRequest {
+            file_id: &file,
+            deletion_node_id: &deleted.node_id,
+            principal: "admin",
+            operation_id: crate::OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        engine.recheck_history_window(&hidden).unwrap_err().code(),
+        storage_contract::ErrorCode::HistoryChanged
+    );
+    drop(hidden);
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("state")).unwrap();
+    let restored = engine
+        .capture_history_window(scoped, HistoryWindowCancellation::new())
+        .unwrap();
+    assert_eq!(restored.context(), &original);
+    let HistoryWindowPage::Nodes { context, nodes, .. } = restored.page().unwrap() else {
+        panic!("node request returns a node page");
+    };
+    assert_eq!(context.content.unwrap().version_id.as_ref(), Some(&version));
+    assert!(nodes.iter().any(|node| node.current && node.version_id == version));
+    engine.recheck_history_window(&restored).unwrap();
+}
+
 #[test]
 fn captured_direct_pages_reuse_scope_witness_without_opening_membership_streams() {
     let (_temp, engine, file, version) = actual();

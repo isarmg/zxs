@@ -97,6 +97,54 @@ fn history_context_preserves_projection_and_current_admission() {
         assert_eq!(error.status, http::StatusCode::NOT_FOUND);
         assert_eq!(error.code, storage_contract::ErrorCode::FileNotFound);
     }
+    assert_eq!(read(plain.clone()).unwrap(), expected);
+
+    let file = storage_contract::history_window::HistoryFileId::parse(&entry.file_id).unwrap();
+    let repository =
+        storage_contract::history_window::HistoryRepositoryId::parse(&repo.repository_id).unwrap();
+    let path = name_policy::LookupPath::parse("report.txt").unwrap();
+    let deleted = {
+        let mut engine = backend.engine.lock().unwrap();
+        engine
+            .soft_delete_file(storage_engine::DeleteFileRequest {
+                target: storage_engine::FileDeletionTarget {
+                    repository_id: &repository,
+                    file_id: &file,
+                    path: &path,
+                },
+                principal: "owner",
+                operation_id: storage_contract::OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        engine.file_deletion(&entry.file_id).unwrap().clone()
+    };
+    let hidden = backend
+        .file_history_snapshot(
+            &identity,
+            crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
+        )
+        .unwrap();
+    assert!(hidden.path.is_none());
+    assert!(hidden.current_node_id.is_none());
+    assert!(hidden.content.is_none());
+    assert_eq!(hidden.selected_branch_id.as_deref(), expected["selected_branch_id"].as_str());
+    assert_eq!(hidden.versions.len(), 1);
+    assert!(!hidden.versions[0].current);
+    assert_eq!(hidden.versions[0].data.download_name, "report.txt");
+    let error = read(json!({"file_id":entry.file_id,"query":context})).unwrap_err();
+    assert_eq!(error.status, http::StatusCode::NOT_FOUND);
+    assert_eq!(error.code, storage_contract::ErrorCode::FileNotFound);
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .undo_file_deletion(storage_engine::UndoFileDeletionRequest {
+            file_id: &file,
+            deletion_node_id: &deleted.node_id,
+            principal: "owner",
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+        })
+        .unwrap();
     assert_eq!(read(plain).unwrap(), expected);
 
     auth.logout(&token).unwrap();

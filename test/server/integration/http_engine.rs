@@ -916,6 +916,9 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
     )
     .await;
     assert!(deleted["identity"]["context"]["path"].is_null());
+    assert!(deleted["identity"]["context"]["current_node_id"].is_null());
+    assert!(deleted["context"]["content"].is_null());
+    assert!(deleted["nodes"].as_array().unwrap().iter().all(|node| node["current"] == false));
     let deleted_versions = history_versions(&app, &session, file, &deleted, None).await;
     assert_eq!(
         deleted_versions["versions"][0]["download_name"], "改名后的文件.txt",
