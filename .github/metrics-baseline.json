@@ -249,15 +249,15 @@
     "id_string": 423,
     "invariant_as_error": 141,
     "join_literal": 62,
-    "json_value": 277,
+    "json_value": 278,
     "long_line": 265,
     "parse_discard": 34,
     "state_leak": 51,
     "string_key_map": 122,
-    "unreachable": 58,
+    "unreachable": 56,
     "unwrap_or_default": 14,
     "validate_fn": 34,
-    "wildcard_arm": 86
+    "wildcard_arm": 87
   },
   "src/smb": {
     "api_path_literal": 0,

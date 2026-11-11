@@ -222,6 +222,38 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// A bounded strict JSON body whose outer shape is established at extraction.
+pub(crate) struct ApiJson<T>(pub T);
+
+pub(crate) trait JsonBody: Sized {
+    fn from_json(value: json_codec::Value) -> Result<Self, ApiError>;
+}
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: JsonBody,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        T::from_json(crate::json_body(request).await?).map(Self)
+    }
+}
+
+/// Carries the identity established by the route's authorization middleware.
+pub(crate) struct Authenticated(pub(crate) crate::auth::Identity);
+
+impl<S: Send + Sync> FromRequestParts<S> for Authenticated {
+    type Rejection = http_routing::extract::rejection::ExtensionRejection;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        http_routing::Extension::<crate::auth::Identity>::from_request_parts(parts, state)
+            .await
+            .map(|http_routing::Extension(identity)| Self(identity))
+    }
+}
+
 /// Reject duplicate decoded fields before map deserialization can erase them.
 /// Preserve Axum query parsing, but never expose its plain-text rejection body.
 pub(crate) struct ApiQuery<T>(pub T);

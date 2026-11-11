@@ -1,39 +1,41 @@
 //! Decode user notes once; missing/null is not an explicit empty clear.
-use crate::{ApiError, AppState, NoteTarget, UpdateNote, auth::Identity, http_boundary::ApiPath};
-use http_routing::{
-    Extension, Json,
-    extract::{Request, State},
+use crate::{
+    ApiError, AppState, NoteTarget, UpdateNote,
+    auth::Identity,
+    http_boundary::{ApiJson, ApiPath, Authenticated, JsonBody},
 };
+use http_routing::{Json, extract::State};
 use json_codec::{Map, Value};
-#[derive(Clone, Copy)]
-enum NoteRoute {
-    File,
-    Version,
-    Node,
+
+pub(crate) struct NoteBody(Map<String, Value>);
+
+impl JsonBody for NoteBody {
+    fn from_json(value: Value) -> Result<Self, ApiError> {
+        match value {
+            Value::Object(body) => Ok(Self(body)),
+            _ => Err(ApiError::invalid("expected JSON object")),
+        }
+    }
 }
-fn bound(body: &mut Map<String, Value>, key: &str) -> String {
-    let Some(Value::String(id)) = body.remove(key) else {
-        unreachable!("invariant: with_id binds every note target path")
-    };
-    id
+
+impl NoteBody {
+    fn matches_path(&self, key: &str, id: &str) -> Result<(), ApiError> {
+        if self.0.get(key).is_some_and(|value| value.as_str() != Some(id)) {
+            return Err(ApiError::invalid("path and body identity disagree"));
+        }
+        Ok(())
+    }
 }
-fn parse(mut body: Map<String, Value>, route: NoteRoute) -> Result<UpdateNote, ApiError> {
-    let keys: &[&str] = match route {
-        NoteRoute::File => &["file_id", "note", "operation_id"],
-        NoteRoute::Version => &["version_id", "note", "operation_id"],
-        NoteRoute::Node => &["file_id", "node_id", "note", "operation_id"],
+
+fn parse(NoteBody(mut body): NoteBody, target: NoteTarget) -> Result<UpdateNote, ApiError> {
+    let keys: &[&str] = match &target {
+        NoteTarget::File(_) => &["file_id", "note", "operation_id"],
+        NoteTarget::Version(_) => &["version_id", "note", "operation_id"],
+        NoteTarget::Node { .. } => &["file_id", "node_id", "note", "operation_id"],
     };
     if let Some(key) = body.keys().find(|key| !keys.contains(&key.as_str())) {
         return Err(ApiError::invalid(format!("unknown field {key}")));
     }
-    let target = match route {
-        NoteRoute::File => NoteTarget::File(bound(&mut body, "file_id")),
-        NoteRoute::Version => NoteTarget::Version(bound(&mut body, "version_id")),
-        NoteRoute::Node => NoteTarget::Node {
-            file: bound(&mut body, "file_id"),
-            node: bound(&mut body, "node_id"),
-        },
-    };
     let note = match body.remove("note") {
         Some(Value::String(value)) => value,
         _ => return Err(ApiError::invalid("note must be a string")),
@@ -53,16 +55,13 @@ fn parse(mut body: Map<String, Value>, route: NoteRoute) -> Result<UpdateNote, A
 async fn submit(
     state: AppState,
     identity: Identity,
-    body: Value,
-    route: NoteRoute,
+    body: NoteBody,
+    target: NoteTarget,
 ) -> Result<Json<Value>, ApiError> {
-    let Value::Object(body) = body else {
-        unreachable!("invariant: with_id binds an object body")
-    };
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
-                .update_note(&identity, parse(body, route)?)
+                .update_note(&identity, parse(body, target)?)
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
@@ -70,31 +69,31 @@ async fn submit(
 }
 pub(crate) async fn file(
     State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
+    Authenticated(identity): Authenticated,
     ApiPath(file): ApiPath<String>,
-    request: Request,
+    ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let body = crate::with_id(crate::json_body(request).await?, "file_id", file)?;
-    submit(state, identity, body, NoteRoute::File).await
+    body.matches_path("file_id", &file)?;
+    submit(state, identity, body, NoteTarget::File(file)).await
 }
 pub(crate) async fn version(
     State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
+    Authenticated(identity): Authenticated,
     ApiPath(version): ApiPath<String>,
-    request: Request,
+    ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let body = crate::with_id(crate::json_body(request).await?, "version_id", version)?;
-    submit(state, identity, body, NoteRoute::Version).await
+    body.matches_path("version_id", &version)?;
+    submit(state, identity, body, NoteTarget::Version(version)).await
 }
 pub(crate) async fn node(
     State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
+    Authenticated(identity): Authenticated,
     ApiPath((file, node)): ApiPath<(String, String)>,
-    request: Request,
+    ApiJson(body): ApiJson<NoteBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let body = crate::with_id(crate::json_body(request).await?, "file_id", file)?;
-    let body = crate::with_id(body, "node_id", node)?;
-    submit(state, identity, body, NoteRoute::Node).await
+    body.matches_path("file_id", &file)?;
+    body.matches_path("node_id", &node)?;
+    submit(state, identity, body, NoteTarget::Node { file, node }).await
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_note.rs"]

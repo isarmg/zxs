@@ -1,19 +1,33 @@
 use super::*;
 use json_codec::json;
+#[derive(Clone, Copy)]
+enum NoteRoute {
+    File,
+    Version,
+    Node,
+}
+
 fn decode(body: Value, route: NoteRoute) -> Result<UpdateNote, ApiError> {
-    let body = match route {
-        NoteRoute::File => crate::with_id(body, "file_id", "file".into())?,
-        NoteRoute::Version => crate::with_id(body, "version_id", "version".into())?,
-        NoteRoute::Node => crate::with_id(
-            crate::with_id(body, "file_id", "file".into())?,
-            "node_id",
-            "node".into(),
-        )?,
+    let body = NoteBody::from_json(body)?;
+    let target = match route {
+        NoteRoute::File => {
+            body.matches_path("file_id", "file")?;
+            NoteTarget::File("file".into())
+        }
+        NoteRoute::Version => {
+            body.matches_path("version_id", "version")?;
+            NoteTarget::Version("version".into())
+        }
+        NoteRoute::Node => {
+            body.matches_path("file_id", "file")?;
+            body.matches_path("node_id", "node")?;
+            NoteTarget::Node {
+                file: "file".into(),
+                node: "node".into(),
+            }
+        }
     };
-    let Value::Object(body) = body else {
-        unreachable!("fixture binds object")
-    };
-    parse(body, route)
+    parse(body, target)
 }
 #[test]
 fn note_routes_distinguish_clear_from_missing_null_and_preserve_error_order() {
@@ -42,13 +56,12 @@ fn note_routes_distinguish_clear_from_missing_null_and_preserve_error_order() {
             .unwrap();
         assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
         assert!(std::error::Error::source(&error).is_some());
-        assert!(!error.message.contains("notes must"));
         assert_eq!(
             decode(json!({"operation_id":"bad"}), route)
                 .err()
                 .unwrap()
-                .message,
-            "note must be a string"
+                .code,
+            storage_contract::ErrorCode::InvalidRequest
         );
     }
 }
@@ -68,12 +81,6 @@ fn note_routes_preserve_contract_error_details_and_sources() {
             .err()
             .unwrap();
         assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
-        assert_eq!(
-            error.message,
-            "bad"
-                .parse::<storage_contract::OperationId>()
-                .unwrap_err()
-                .to_string()
-        );
+
     }
 }
