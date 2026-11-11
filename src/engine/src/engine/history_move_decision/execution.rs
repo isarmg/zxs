@@ -294,9 +294,9 @@ impl Engine {
         self.require_unfenced_membership()?;
         self.require_native_move_authority()?;
         let cancellation = HistoryWindowCancellation::default();
-        let projection = if let Some(original) =
-            self.original_move_path_intent(request, replacement, principal, operation)?
-        {
+        let retained = self.original_move_path_intent(request, replacement, principal, operation)?;
+        let retained_identity = retained.is_some();
+        let projection = if let Some(original) = retained {
             self.resume_file_history_move_recovery(
                 operation,
                 original.digest(),
@@ -327,10 +327,14 @@ impl Engine {
             && (source.file_id != *projection.capture().source_file_id()
                 || !source.matches(&self.state, projection.capture().namespace())?)
         {
-            return Err(Error::new(
-                ErrorCode::WorkspaceChanged,
-                "move source differs from the originally captured entry and file",
-            ));
+            return Err(if retained_identity {
+                conflict()
+            } else {
+                Error::new(
+                    ErrorCode::WorkspaceChanged,
+                    "move source differs from the originally captured entry and file",
+                )
+            });
         }
         let original = self.save_file_history_move_recovery(&projection, &cancellation)?;
         #[cfg(feature = "fault-injection")]

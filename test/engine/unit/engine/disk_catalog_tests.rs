@@ -84,7 +84,7 @@ fn same_name_on_distinct_primary_disks_has_distinct_scoped_catalogs() {
 }
 
 #[test]
-fn explicit_rebuild_survives_cold_open_and_requires_refresh_after_path_change() {
+fn explicit_rebuild_survives_cold_open_and_path_changes_refresh_automatically() {
     let (temp, mut engine) = fixture();
     let repo = repository(&mut engine, "files", "P01");
     save(&mut engine, &repo, "before.txt");
@@ -108,14 +108,13 @@ fn explicit_rebuild_survives_cold_open_and_requires_refresh_after_path_change() 
             OperationId::generate().unwrap(),
         )
         .unwrap();
-    assert!(engine.disk_catalog_snapshot("P01").is_err());
-    engine.rebuild_disk_catalog("P01").unwrap();
-    assert_eq!(
-        engine.disk_catalog_snapshot("P01").unwrap().versions[0]
-            .owner_path
-            .as_deref(),
-        Some("after.txt")
-    );
+    let updated = engine.disk_catalog_snapshot("P01").unwrap();
+    assert_eq!(updated.versions.len(), 1);
+    assert_eq!(updated.versions[0].owner_path.as_deref(), Some("after.txt"));
+    assert!(updated.source_sequence > expected.source_sequence);
+    let rebuilt = engine.rebuild_disk_catalog("P01").unwrap();
+    assert_ne!(rebuilt.records_hash, first.records_hash);
+    assert_eq!(engine.disk_catalog_snapshot("P01").unwrap(), updated);
 }
 
 #[test]
