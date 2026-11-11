@@ -1,5 +1,5 @@
 //! Ordinary input is an immutable inventory, admitted through one held root.
-use super::{invalid, io};
+use super::{invalid, io, name_budget::NameBudget};
 use crate::Result;
 use crate::persist::layout;
 use name_policy::PortablePath;
@@ -71,13 +71,18 @@ pub struct Source {
     limits: Limits,
 }
 impl Source {
-    pub fn hold(file: File, path: &Path, limits: Limits) -> Result<Self> {
+    pub(super) fn hold(
+        file: File,
+        path: &Path,
+        limits: Limits,
+        budget: Option<NameBudget>,
+    ) -> Result<Self> {
         let root = OpenAt2Root::from_directory(file, MountPolicy::SameMount)?;
         let named = OpenAt2Root::open(path, MountPolicy::SameMount)?;
         if named.identity() != root.identity() {
             return Err(invalid("source directory identity changed"));
         }
-        let inventory = scan(&root, limits)?;
+        let inventory = scan(&root, limits, budget)?;
         Ok(Self {
             root,
             inventory,
@@ -132,7 +137,7 @@ impl Source {
         Ok(())
     }
     pub fn verify_unchanged(&self) -> Result<()> {
-        if scan(&self.root, self.limits)? != self.inventory {
+        if scan(&self.root, self.limits, None)? != self.inventory {
             return Err(invalid(
                 "source tree changed during conversion; incomplete output is preserved",
             ));
@@ -141,7 +146,7 @@ impl Source {
     }
 }
 
-fn scan(root: &OpenAt2Root, limits: Limits) -> Result<Inventory> {
+fn scan(root: &OpenAt2Root, limits: Limits, budget: Option<NameBudget>) -> Result<Inventory> {
     let before = root
         .directory()
         .metadata()
@@ -171,10 +176,16 @@ fn scan(root: &OpenAt2Root, limits: Limits) -> Result<Inventory> {
                 .as_os_str()
                 .to_str()
                 .ok_or_else(|| invalid("ordinary filenames must be valid UTF-8"))?;
-            let path = PortablePath::parse(&if parent.is_empty() {
-                name.into()
+            let raw_path = if parent.is_empty() {
+                name.to_owned()
             } else {
                 format!("{parent}/{name}")
+            };
+            // Check the original spelling before PortablePath applies its
+            // independent component and total-path limits. Report one offender.
+            let path = PortablePath::parse(match budget {
+                Some(budget) => budget.path(&raw_path)?,
+                None => &raw_path,
             })?;
             let metadata = statat(
                 held.directory(),

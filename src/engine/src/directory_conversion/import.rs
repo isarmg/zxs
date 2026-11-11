@@ -1,4 +1,5 @@
 use super::{
+    name_budget::{ImportNames, NameBudget},
     source::{Kind, Limits, Source},
     *,
 };
@@ -38,12 +39,35 @@ impl PreparedOrdinaryDirectory {
             },
         )
     }
+    /// Read-only preview against the caller's verified fresh target FD.
+    /// This does not admit or initialize that target, and does not change names.
+    pub fn inspect_for_target(source: File, source_path: &Path, target: &File) -> Result<Self> {
+        let maximum = rustix::fs::fstatvfs(target).map_err(std::io::Error::from)?.f_namemax;
+        Self::inspect_source(
+            source,
+            source_path,
+            Limits {
+                entries: 100_000,
+                bytes: 1 << 40,
+                file_bytes: 1 << 40,
+            },
+            Some(NameBudget::from_maximum(maximum)?),
+        )
+    }
     fn inspect_with_limits(source: File, source_path: &Path, limits: Limits) -> Result<Self> {
+        Self::inspect_source(source, source_path, limits, None)
+    }
+    fn inspect_source(
+        source: File,
+        source_path: &Path,
+        limits: Limits,
+        budget: Option<NameBudget>,
+    ) -> Result<Self> {
         let source_path = crate::disk::absolute_path(source_path)?;
         if source_path.to_str().is_none() {
             return Err(invalid("conversion root must be valid UTF-8"));
         }
-        let source = Source::hold(source, &source_path, limits)?;
+        let source = Source::hold(source, &source_path, limits, budget)?;
         let mut digest = blake3::Hasher::new();
         digest.update(b"zxs:ordinary-directory\0");
         digest_field(&mut digest, source_path.as_os_str().as_encoded_bytes());
@@ -139,6 +163,11 @@ impl Engine {
         let (identity, target) = disk_target(self, slot, Some(destination))?;
         self.bind_import(source, target, identity, Some(destination.clone()))
     }
+    fn conversion_name_budget(&self, slot: &str) -> Result<NameBudget> {
+        let disk = self.disk(slot)?;
+        let maximum = self.disk_resources.get(disk)?.root.component_name_maximum()?;
+        NameBudget::from_maximum(maximum)
+    }
     fn bind_import(
         &self,
         source: PreparedOrdinaryDirectory,
@@ -187,8 +216,13 @@ impl Engine {
                 "ordinary import exceeds host entry or byte limits",
             ));
         }
-        for item in source.source.items() {
-            target_path(&item.path, destination.as_ref())?;
+        let names = ImportNames::plan(
+            &source.source,
+            destination.as_ref(),
+            self.conversion_name_budget(&registration.slot_id)?,
+        )?;
+        for item in names.source.items() {
+            names.target_path(&item.path)?;
         }
         let mut digest = blake3::Hasher::new();
         digest.update(b"zxs:directory-import\0");
@@ -304,6 +338,11 @@ impl PreparedDirectoryImport {
         external_root(engine, &self.preview.source)?;
         self.source.verify_named(&self.preview.source)?;
         self.source.verify_unchanged()?;
+        let names = ImportNames::plan(
+            &self.source,
+            self.destination.as_ref(),
+            engine.conversion_name_budget(&self.registration.slot_id)?,
+        )?;
         observer(progress)?;
         let branch = match &self.target {
             Target::Branch { id, head } => {
@@ -329,7 +368,9 @@ impl PreparedDirectoryImport {
             observer(progress)
         })?;
         observer(progress)?;
-        self.execute_workspace(engine, principal, operation, &workspace, progress, observer)
+        self.execute_workspace(
+            engine, principal, operation, &workspace, &names, progress, observer,
+        )
     }
     fn execute_workspace(
         &self,
@@ -337,6 +378,7 @@ impl PreparedDirectoryImport {
         principal: &str,
         operation: OperationId,
         workspace: &Workspace,
+        names: &ImportNames<'_>,
         progress: &mut DirectoryImportProgress,
         observer: &mut impl FnMut(&DirectoryImportProgress) -> Result<()>,
     ) -> Result<OperationResult> {
@@ -346,7 +388,7 @@ impl PreparedDirectoryImport {
                 NamespaceOperation::Mkdir { path: path.clone() },
             )?;
         }
-        for item in self
+        for item in names
             .source
             .items()
             .filter(|item| item.kind == Kind::Directory)
@@ -354,11 +396,11 @@ impl PreparedDirectoryImport {
             engine.namespace_operation(
                 &workspace.workspace_id,
                 NamespaceOperation::Mkdir {
-                    path: target_path(&item.path, self.destination.as_ref())?,
+                    path: names.target_path(&item.path)?,
                 },
             )?;
         }
-        for item in self.source.items().filter(|item| item.kind == Kind::File) {
+        for item in names.source.items().filter(|item| item.kind == Kind::File) {
             let file = self.source.open_file(item)?;
             let witness = file
                 .try_clone()
@@ -367,7 +409,7 @@ impl PreparedDirectoryImport {
                 .prepare_upload_file(
                     &workspace.workspace_id,
                     &crate::new_id("entry")?,
-                    &target_path(&item.path, self.destination.as_ref())?,
+                    &names.target_path(&item.path)?,
                     file,
                     1,
                     None,
@@ -395,7 +437,10 @@ impl PreparedDirectoryImport {
         engine.commit_workspace(request)
     }
 }
-fn target_path(path: &PortablePath, destination: Option<&PortablePath>) -> Result<PortablePath> {
+pub(super) fn target_path(
+    path: &PortablePath,
+    destination: Option<&PortablePath>,
+) -> Result<PortablePath> {
     match destination {
         Some(destination) => Ok(path.rebase(0, destination)?),
         None => Ok(path.clone()),

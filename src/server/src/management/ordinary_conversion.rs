@@ -13,6 +13,19 @@ use storage_contract::{
 };
 use storage_engine::PreparedOrdinaryDirectory;
 
+enum ConversionTarget<'a> {
+    Fresh(&'a storage_contract::storage_directories::CandidateSelection),
+    Retained(Option<&'a str>),
+}
+impl ConversionTarget<'_> {
+    fn path(&self) -> Option<&str> {
+        match self {
+            Self::Fresh(selection) => Some(&selection.root_path),
+            Self::Retained(path) => *path,
+        }
+    }
+}
+
 const DIRECTORY: &str = "ordinary-disk-conversions";
 #[derive(data_serialization::Serialize, data_serialization::Deserialize)]
 enum Format {
@@ -383,14 +396,10 @@ impl ManagementBackend {
         }
         self.ensure_prior_conversion_settled(&directory, identity)?;
         // Complete the source scan and target review before any target writes.
-        let source = self.inspect_conversion_source(
+        let source = self.inspect_conversion_input(
             identity,
             &request.preview.source,
-            Some(
-                &request.preview.target.request.additions[0]
-                    .selection
-                    .root_path,
-            ),
+            ConversionTarget::Fresh(&request.preview.target.request.additions[0].selection),
         )?;
         if source_preview(&source) != request.preview.source_preview {
             return Err(ApiError::conflict(
@@ -498,6 +507,15 @@ impl ManagementBackend {
         source: &storage_contract::storage_directories::DirectorySource,
         target: Option<&str>,
     ) -> Result<PreparedOrdinaryConversion, ApiError> {
+        self.inspect_conversion_input(identity, source, ConversionTarget::Retained(target))
+    }
+
+    fn inspect_conversion_input(
+        &self,
+        identity: &Identity,
+        source: &storage_contract::storage_directories::DirectorySource,
+        target: ConversionTarget<'_>,
+    ) -> Result<PreparedOrdinaryConversion, ApiError> {
         let backend = self.inner.backend()?;
         let (config, stopped) = backend.addition_directory_scope(identity)?;
         let mut excluded = vec![
@@ -505,15 +523,40 @@ impl ManagementBackend {
             self.inner.management_root.clone(),
         ];
         excluded.extend(config.disks.into_iter().map(|disk| disk.root));
-        excluded.extend(target.map(PathBuf::from));
+        let target_directory = match &target {
+            ConversionTarget::Fresh(selection) => {
+                let mut target_excluded = excluded.clone();
+                target_excluded.push(PathBuf::from(&source.path));
+                Some(
+                    crate::storage_directories::revalidate_fresh_within(
+                        self.inner.discovery_root.as_str(),
+                        selection,
+                        &target_excluded,
+                        &stopped,
+                    )?
+                    .into_storage_directory(),
+                )
+            }
+            // Retained registration is checked against its exact original
+            // receipt by run_ordinary_conversion. Never reopen it as empty.
+            ConversionTarget::Retained(_) => None,
+        };
+        excluded.extend(target.path().map(PathBuf::from));
         let directory = crate::storage_directories::reopen_source(
             self.inner.discovery_root.as_str(),
             source,
             &excluded,
             &stopped,
         )?;
-        let source = PreparedOrdinaryDirectory::inspect(directory, Path::new(&source.path))
-            .map_err(crate::engine_backend::error)?;
+        let source = match target_directory {
+            Some(target) => PreparedOrdinaryDirectory::inspect_for_target(
+                directory,
+                Path::new(&source.path),
+                &target,
+            ),
+            None => PreparedOrdinaryDirectory::inspect(directory, Path::new(&source.path)),
+        }
+        .map_err(crate::engine_backend::error)?;
         Ok(PreparedOrdinaryConversion { backend, source })
     }
     fn preview_ordinary_conversion(
@@ -523,10 +566,10 @@ impl ManagementBackend {
     ) -> Result<OrdinaryDiskConversionPreview, ApiError> {
         name_policy::validate_slot(&request.slot_id).map_err(ApiError::invalid_source)?;
         distinct_directories(&request.source, &request.target)?;
-        let source = self.inspect_conversion_source(
+        let source = self.inspect_conversion_input(
             identity,
             &request.source,
-            Some(&request.target.root_path),
+            ConversionTarget::Fresh(&request.target),
         )?;
         let target = self.preview_storage_addition(
             identity,

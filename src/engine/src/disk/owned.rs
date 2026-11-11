@@ -645,6 +645,10 @@ impl DiskRoot {
             .remove_owned_empty_directory_synced(path, expected)
     }
 
+    pub(crate) fn component_name_maximum(&self) -> Result<u64> {
+        self.operation()?.component_name_maximum()
+    }
+
     pub(crate) fn available(&self) -> Result<u64> {
         self.operation()?.available()
     }
@@ -1110,6 +1114,11 @@ impl RootOperation<'_> {
         parent.sync_all()?;
         self.check_running()?;
         Ok(removed)
+    }
+
+    fn component_name_maximum(&self) -> Result<u64> {
+        let stat = rustix::fs::fstatvfs(self.held().directory()).map_err(std::io::Error::from)?;
+        Ok(stat.f_namemax)
     }
 
     fn available(&self) -> Result<u64> {

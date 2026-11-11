@@ -1339,6 +1339,40 @@
           "default_features": false
         }
       ]
+    },
+    "ordinary-conversion-name-budget": {
+      "reason": "Fresh conversion previews reserve 16 UTF-8 bytes from the held target component limit; registered import binding and prewrite checks retain source names, exact operation recovery and all destination parent budgets.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "directory_conversion::tests::",
+            "directory_conversion::name_budget::tests::"
+          ],
+          "max_tests": 22,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::ordinary_conversion::tests::"
+          ],
+          "max_tests": 20,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3610,6 +3644,72 @@
       "path": "test/server/integration/http_engine/directory_git.rs",
       "groups": [
         "directory-git-status-http-boundary"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_conversion.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_conversion/import.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_conversion/source.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_conversion/name_budget.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/server/src/management/ordinary_conversion.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_conversion/tests.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_conversion/name_budget_tests.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/ordinary_conversion.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
       ]
     }
   ],

@@ -611,3 +611,82 @@ fn nested_storage_appearing_after_preview_never_creates_a_destination_root() {
 
 #[path = "stop_tests.rs"]
 mod stop_tests;
+
+#[test]
+fn fresh_target_budget_rejects_raw_long_names_without_touching_either_tree() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = make_source(temp.path());
+    let target = temp.path().join("empty-target");
+    fs::create_dir(&target).unwrap();
+    let held = fs::File::open(&target).unwrap();
+    assert_eq!(rustix::fs::fstatvfs(&held).unwrap().f_namemax, 255);
+    for length in [240, 241] {
+        let relative = PathBuf::from("旅行").join("a".repeat(length));
+        fs::write(source.join(&relative), b"must remain original").unwrap();
+        let before = contents(&source);
+        let result = PreparedOrdinaryDirectory::inspect_for_target(
+            fs::File::open(&source).unwrap(), &source, &held,
+        );
+        match result {
+            Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+                path, bytes, allowed,
+            })) => {
+                assert_eq!(path, relative);
+                assert_eq!(bytes, length);
+                assert_eq!(allowed, 239);
+            }
+            _ => panic!("raw target budget must run before PortablePath limits"),
+        }
+        assert_eq!(contents(&source), before);
+        assert!(contents(&target).is_empty());
+        fs::remove_file(source.join(relative)).unwrap();
+    }
+    let accepted = format!("{}ab", "界".repeat(79));
+    fs::write(source.join("旅行").join(accepted), b"239 UTF-8 bytes").unwrap();
+    let before = contents(&source);
+    let prepared = PreparedOrdinaryDirectory::inspect_for_target(
+        fs::File::open(&source).unwrap(), &source, &held,
+    ).unwrap();
+    assert_eq!(prepared.preview().files, 4);
+    assert_eq!(contents(&source), before);
+    assert!(contents(&target).is_empty());
+}
+
+#[test]
+fn registered_import_budget_rejects_source_and_destination_parent_before_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = make_source(temp.path());
+    let mut engine = engine(temp.path());
+    let long = "界".repeat(80);
+    fs::create_dir(source.join("旅行").join(&long)).unwrap();
+    let original = contents(&source);
+    let disk_before = contents(&engine.config().disks[0].root);
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    let result = inspect(&source).prepare_new_disk_import(&engine, "P01");
+    assert!(matches!(
+        result,
+        Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+            bytes: 240, allowed: 239, ..
+        }))
+    ));
+    assert_eq!(contents(&source), original);
+    assert_eq!(contents(&engine.config().disks[0].root), disk_before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+
+    fs::remove_dir(source.join("旅行").join(&long)).unwrap();
+    engine.create_disk_root("P01", "admin", operation()).unwrap();
+    let disk_before = contents(&engine.config().disks[0].root);
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    let destination = PortablePath::parse(&format!("{long}/child")).unwrap();
+    let result = engine.prepare_disk_directory_import(
+        fs::File::open(&source).unwrap(), &source, "P01", &destination,
+    );
+    assert!(matches!(
+        result,
+        Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+            bytes: 240, allowed: 239, ..
+        }))
+    ));
+    assert_eq!(contents(&engine.config().disks[0].root), disk_before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+}

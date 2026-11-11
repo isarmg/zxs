@@ -1230,3 +1230,109 @@ fn registered_conversion_import_rejects_a_later_membership_fence() {
         b"keep original content"
     );
 }
+
+#[test]
+fn target_name_budget_rejects_preview_and_user_rename_requires_a_new_review() {
+    let f = fixture();
+    let parent = f.discovery.join("ordinary/empty");
+    let accepted = format!("{}ab", "界".repeat(79));
+    fs::write(parent.join(&accepted), b"retain these bytes").unwrap();
+    let original = preview(&f);
+    let overlong = "界".repeat(80);
+    fs::rename(parent.join(&accepted), parent.join(&overlong)).unwrap();
+    let (source, target) = selection(&f);
+    let failure = f.backend.preview_ordinary_conversion(
+        &f.identity,
+        OrdinaryDiskConversionRequest {
+            operation_id: OperationId::generate().unwrap(),
+            source,
+            target,
+            slot_id: "D02".into(),
+            metadata_member: false,
+        },
+    ).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::PlanInvalid);
+    assert_eq!(fs::read(parent.join(&overlong)).unwrap(), b"retain these bytes");
+    target_empty(&f);
+    assert!(!f.data.join("management").join(DIRECTORY).exists());
+
+    let renamed = "界".repeat(79);
+    fs::rename(parent.join(&overlong), parent.join(&renamed)).unwrap();
+    let revised = preview(&f);
+    assert_ne!(revised.source_preview.digest, original.source_preview.digest);
+    assert_eq!(commit(&f, &original, true).unwrap_err().code, ErrorCode::PlanStale);
+    target_empty(&f);
+    let status: OrdinaryDiskConversionStatus =
+        json_codec::from_value(commit(&f, &revised, true).unwrap()).unwrap();
+    assert_eq!(status.phase, OrdinaryDiskConversionPhase::Completed);
+    assert_eq!(fs::read(parent.join(renamed)).unwrap(), b"retain these bytes");
+}
+
+#[test]
+fn registered_legacy_review_rejects_over_budget_import_and_retains_registration() {
+    let f = fixture();
+    let mut p = preview(&f);
+    let long = "界".repeat(80);
+    fs::write(f.discovery.join("ordinary/empty").join(&long), b"keep original").unwrap();
+    // Reconstruct a valid review issued before target budgeting existed using
+    // the unchanged source-only inventory and unchanged request digest format.
+    let prepared = f.backend.inspect_conversion_source(
+        &f.identity, &p.source, Some(&p.target.request.additions[0].selection.root_path),
+    ).unwrap();
+    p.source_preview = source_preview(&prepared);
+    p.preview_digest = digest(&p);
+    let registration = f.backend.commit_storage_addition(
+        &f.identity, AdditionCommit { preview: p.target.clone() },
+    ).unwrap();
+    assert_eq!(registration.state, AdditionState::Completed);
+    let directory = PrivateDirectory::open_existing(f.data.join("management"))
+        .unwrap()
+        .create_child(&EntryName::new(DIRECTORY).unwrap())
+        .unwrap();
+    let mut record = pending_record(&f, &p);
+    record.status.registration = Some(registration.clone());
+    save(&directory, &record).unwrap();
+    let backend = f.backend.inner.backend().unwrap();
+    let before = conversion_import_snapshot(&backend);
+    let failure = f.backend.ordinary_conversion(
+        "ordinary_conversion_resume",
+        json_codec::json!({"operation_id": p.operation_id}),
+        &f.identity,
+    ).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::PlanInvalid);
+    assert_eq!(conversion_import_snapshot(&backend), before);
+    assert_eq!(
+        fs::read(f.discovery.join("ordinary/empty").join(long)).unwrap(),
+        b"keep original"
+    );
+    let retained = read_record(&directory, p.operation_id).unwrap();
+    assert_eq!(retained.status.phase, OrdinaryDiskConversionPhase::RecoveryRequired);
+    assert_eq!(retained.status.registration, Some(registration));
+    assert!(retained.status.workspace_id.is_none());
+    assert!(retained.status.root_operation_id.is_none());
+    assert!(!retained.import_attempted);
+}
+
+#[test]
+fn completed_conversion_result_remains_queryable_after_source_exceeds_budget() {
+    let f = fixture();
+    let p = preview(&f);
+    let completed: OrdinaryDiskConversionStatus =
+        json_codec::from_value(commit(&f, &p, true).unwrap()).unwrap();
+    let long = "界".repeat(80);
+    fs::write(f.discovery.join("ordinary/empty").join(long), b"later source data").unwrap();
+    let backend = f.backend.inner.backend().unwrap();
+    let before = conversion_import_snapshot(&backend);
+    let replay: OrdinaryDiskConversionStatus =
+        json_codec::from_value(commit(&f, &p, true).unwrap()).unwrap();
+    assert_eq!(replay.result, completed.result);
+    let resumed: OrdinaryDiskConversionStatus = json_codec::from_value(
+        f.backend.ordinary_conversion(
+            "ordinary_conversion_resume",
+            json_codec::json!({"operation_id": p.operation_id}),
+            &f.identity,
+        ).unwrap(),
+    ).unwrap();
+    assert_eq!(resumed.result, completed.result);
+    assert_eq!(conversion_import_snapshot(&backend), before);
+}

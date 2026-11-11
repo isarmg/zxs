@@ -36,7 +36,7 @@ mod directory_conversion;
 pub use directory_conversion::{
     DirectoryConversionConfirmation, DirectoryConversionDigest, DirectoryConversionPreview,
     DirectoryExportOutcome, DirectoryImportFailure, DirectoryImportProgress,
-    DirectoryImportStopOutcome, DirectoryImportStopRequest, OrdinaryDirectoryPreview,
+    DirectoryImportStopOutcome, DirectoryImportStopRequest, NameBudgetError, OrdinaryDirectoryPreview,
     ParseDirectoryConversionDigest, PreparedDirectoryExport, PreparedDirectoryImport,
     PreparedOrdinaryDirectory,
 };

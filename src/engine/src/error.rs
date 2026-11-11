@@ -10,6 +10,8 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    ConversionNameBudget(crate::directory_conversion::NameBudgetError),
+    #[error(transparent)]
     HistoricalBranch(#[from] HistoricalBranchError),
     #[error(transparent)]
     BatchUndo(crate::BatchUndoError),
@@ -101,6 +103,7 @@ impl Error {
             },
             source @ (Self::HistoricalBranch(_)
             | Self::BatchUndo(_)
+            | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Checkpoint(_)
@@ -131,6 +134,7 @@ impl Error {
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
             | Self::BatchUndo(_)
+            | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::PublishedWorkspaceReconciliation(_)
@@ -155,6 +159,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
+            Self::ConversionNameBudget(_) => ErrorCode::PlanInvalid,
             Self::DirectoryLayout(error) => match error.as_ref() {
                 crate::DirectoryLayoutError::ResourceLimit => ErrorCode::ResourceLimit,
                 crate::DirectoryLayoutError::ExtraDirectoryCollision { .. }
@@ -205,6 +210,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
+            Self::ConversionNameBudget(error) => error.to_string().into(),
             Self::DirectoryLayout(error) => error.to_string().into(),
             Self::DiskObservation(_) => "disk observation unavailable".into(),
             Self::PublishedWorkspaceReconciliation(error) => error.message().into(),
@@ -259,6 +265,7 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
             | Self::BatchUndo(_)
+            | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
             | Self::DiskObservation(_)
             | Self::Clock(_)
