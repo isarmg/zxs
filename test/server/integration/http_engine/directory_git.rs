@@ -406,21 +406,16 @@ async fn directory_git_parent_pins_only_explicitly_staged_child_commit() {
 }
 
 #[tokio::test]
-async fn directory_default_selection_cannot_follow_a_recreated_same_name_directory() {
+async fn directory_git_workspace_delete_cannot_bypass_reversible_lifecycle() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "docs/a.txt", b"original").await;
-    let branch = manager_prepare_directory_branch(&app, &token, "docs", "frozen").await;
+    manager_prepare_directory_branch(&app, &token, "docs", "frozen").await;
     let current = listing(&app, &token, "docs").await;
     let repository = current["context"]["repository_id"].as_str().unwrap();
-    let mut original =
-        manager_prepare_default_request(&app, &token, repository, &branch, &new_id("op").unwrap())
-            .await;
-    let original_id = status(&app, &token, repository, "docs").await["directory_id"].clone();
-    // Parent branch-scope batches deliberately cannot cross an independent
-    // repository boundary. The user instead explicitly deletes this subtree
-    // through a workspace bound to the current namespace commit.
+    let original = status(&app, &token, repository, "docs").await;
+    let version = current["entries"][0]["version_id"].as_str().unwrap();
     let workspace = success(
         &app,
         &token,
@@ -455,54 +450,24 @@ async fn directory_default_selection_cannot_follow_a_recreated_same_name_directo
     )
     .unwrap()
     .into();
-    success(
+    let events = success(&app, &token, "GET", "/api/events", None).await;
+    let bytes = manager_disk_files(root.path());
+    let (code, rejected) = send(
         &app,
-        &token,
+        Some(&token),
         "POST",
         &format!("/api/workspaces/{workspace}/commit"),
         Some(commit),
     )
     .await;
-    manager_upload(&app, &token, "docs/replacement.txt", b"replacement").await;
-    manager_checkpoint_git(&app, &token, "docs").await;
-    let recreated = status(&app, &token, repository, "docs").await;
-    assert_ne!(recreated["directory_id"], original_id);
-    let replacement = listing(&app, &token, "docs").await;
-    // A fresh namespace token cannot turn the deleted stable branch identity
-    // into a request for the new directory at the old path.
-    original["expected_head"] = replacement["context"]["base_head"].clone();
-    let bytes = manager_disk_files(root.path());
-    let events = success(&app, &token, "GET", "/api/events", None).await;
-    let (code, rejected) = send(
-        &app,
-        Some(&token),
-        "PUT",
-        &format!("/api/repositories/{repository}/default-branch"),
-        Some(original.clone()),
-    )
-    .await;
-    assert_eq!(code, StatusCode::NOT_FOUND, "{rejected}");
-    assert_eq!(rejected["error"]["code"], "DIRECTORY_NOT_FOUND");
-    assert_eq!(listing(&app, &token, "docs").await, replacement);
-    assert_eq!(status(&app, &token, repository, "docs").await, recreated);
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"]["code"], "UNSUPPORTED_OPERATION");
+    assert_eq!(listing(&app, &token, "docs").await, current);
+    assert_eq!(status(&app, &token, repository, "docs").await, original);
+    assert_eq!(version_bytes(&app, &token, version).await, b"original");
+    assert_eq!(manager_disk_files(root.path()), bytes);
     assert_eq!(
         success(&app, &token, "GET", "/api/events", None).await,
         events
-    );
-    assert_eq!(manager_disk_files(root.path()), bytes);
-    assert_eq!(
-        send(
-            &app,
-            Some(&token),
-            "GET",
-            &format!(
-                "/api/operations/{}/outcome",
-                original["operation_id"].as_str().unwrap()
-            ),
-            None
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
     );
 }

@@ -4,6 +4,8 @@
 
 ## 当前 CI 与失败闭环
 
+- [ ] 定向 CI 验证 directory-git 的已初始化仓库 workspace delete_tree 拒绝及原状态不变；#1241 暴露旧夹具依赖已禁止的删除入口。删除后同名重建的旧分支身份拒绝仍待新可逆生命周期接线后补验，不能用普通rename替代该身份消失场景。
+
 - [ ] 定向 CI 验证历史目录节点建分支的 Web 接线：可写目录加载节点与冻结干净审阅、原请求字节／摘要／会话与边界预算、未知结果只查原 operation ID、显式原请求重试、不自动 checkout。原生行为选择与 WASM 编译须分别取得证据，真实浏览器仍待验；新增原请求摘要／HTTP 正文边界使 web json_value +2、api_path_literal +1，显式导入替换 glob_super -1，其余指标不变。
 
 - [ ] 定向 CI 验证历史目录分支 Core／HTTP：准确历史提交与当前 CAS、旧入口旧 source 409、权限撤销、本仓干净围栏、固定三级子仓引用、完整写集与永久重放、checkout／标签后冷重开。Web 另片接线；本次仅新增持久请求／完整回执编解码与 HTTP 边界计数：engine json_value +8，server json_value +1、api_path_literal +1，其余指标不变。
