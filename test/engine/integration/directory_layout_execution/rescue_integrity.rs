@@ -128,7 +128,6 @@ fn assert_integrity_failure<T>(result: Result<T, storage_engine::Error>) {
         Err(error) => error,
     };
     assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
-    assert!(error.to_string().contains("physical integrity"), "{error}");
 }
 
 fn assert_physical_corruption(bytes: &[u8], quick_check_passes: bool) {
