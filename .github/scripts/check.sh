@@ -10,6 +10,7 @@ case "${1:-}" in
     python3 .github/scripts/development-ci.py check
     python3 .github/scripts/check-workflows.py
     python3 .github/scripts/check-architecture.py
+    python3 .github/scripts/check-boundary-metrics.py
     python3 tools/rust-sources/manage.py verify
     python3 tools/rust-sources/architecture.py verify
     python3 tools/rust-sources/documentation.py verify

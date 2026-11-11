@@ -1,0 +1,74 @@
+{
+  "helper/src": {
+    "cfg_not_test": 0,
+    "checked_add_1": 2,
+    "error_new": 3,
+    "hash_string": 1,
+    "id_string": 5,
+    "join_literal": 1,
+    "json_value": 65,
+    "parse_discard": 0,
+    "unwrap_or_default": 0,
+    "validate_id": 0
+  },
+  "src/contract/src": {
+    "cfg_not_test": 0,
+    "checked_add_1": 0,
+    "error_new": 31,
+    "hash_string": 15,
+    "id_string": 211,
+    "join_literal": 0,
+    "json_value": 16,
+    "parse_discard": 3,
+    "unwrap_or_default": 1,
+    "validate_id": 26
+  },
+  "src/engine/src": {
+    "cfg_not_test": 1,
+    "checked_add_1": 160,
+    "error_new": 2790,
+    "hash_string": 423,
+    "id_string": 281,
+    "join_literal": 599,
+    "json_value": 430,
+    "parse_discard": 128,
+    "unwrap_or_default": 32,
+    "validate_id": 194
+  },
+  "src/naming/src": {
+    "cfg_not_test": 0,
+    "checked_add_1": 0,
+    "error_new": 0,
+    "hash_string": 0,
+    "id_string": 0,
+    "join_literal": 0,
+    "json_value": 0,
+    "parse_discard": 0,
+    "unwrap_or_default": 0,
+    "validate_id": 0
+  },
+  "src/server/src": {
+    "cfg_not_test": 2,
+    "checked_add_1": 9,
+    "error_new": 230,
+    "hash_string": 17,
+    "id_string": 327,
+    "join_literal": 56,
+    "json_value": 191,
+    "parse_discard": 32,
+    "unwrap_or_default": 14,
+    "validate_id": 21
+  },
+  "src/web/src": {
+    "cfg_not_test": 0,
+    "checked_add_1": 5,
+    "error_new": 7,
+    "hash_string": 1,
+    "id_string": 72,
+    "join_literal": 15,
+    "json_value": 121,
+    "parse_discard": 12,
+    "unwrap_or_default": 108,
+    "validate_id": 50
+  }
+}
