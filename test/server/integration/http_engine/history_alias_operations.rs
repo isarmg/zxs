@@ -579,12 +579,13 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
     let undo_events = lifecycle_events(&app, &token, &restored, node).await;
     assert_ne!(deletion_events[0]["event_id"], undo_events[0]["event_id"]);
     let listing = alias_listing(&app, &token).await;
+    let request = alias_move_request(&listing, "b/first.txt", "b/renamed.txt");
     let moved = success(
         &app,
         &token,
         "POST",
         "/api/file-manager/disks/P01/object-move",
-        Some(alias_move_request(&listing, "b/first.txt", "b/renamed.txt")),
+        Some(request.clone()),
     )
     .await;
     let events = operation_events(&app, &token, &moved, &file).await;
@@ -598,6 +599,57 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
         lifecycle_events(&app, &token, &restored, node).await,
         undo_events
     );
+    drop(app);
+    let system = root.path().join("system");
+    let engine = reopen_after_router_drop(&system).await;
+    let commit = engine
+        .state()
+        .commits
+        .values()
+        .find(|commit| {
+            commit.operation_id.to_string() == request["operation_id"].as_str().unwrap()
+                && commit.kind == "object_move"
+        })
+        .unwrap();
+    assert!(
+        commit
+            .namespace_deletions
+            .as_ref()
+            .unwrap()
+            .paths
+            .iter()
+            .any(|deleted| deleted.path == "b/first.txt")
+    );
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(operation_events(&app, &token, &moved, &file).await, events);
+    let replay = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(request),
+    )
+    .await;
+    assert_eq!(replay, moved);
+    assert_eq!(operation_events(&app, &token, &replay, &file).await, events);
+    let listing = alias_listing(&app, &token).await;
+    let mut replacement = alias_move_request(&listing, "b/renamed.txt", "b/stay.txt");
+    replacement["movement"]["replace"] = json!(true);
+    replacement["movement"]["target_entry_id"] = alias_entry(&listing, "stay.txt")["entry_id"].clone();
+    let replaced = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(replacement),
+    )
+    .await;
+    let events = operation_events(&app, &token, &replaced, &file).await;
+    assert_paths(&events, "file.path.rename", &["b/stay.txt"]);
+    assert_paths(&events, "delete", &["b/stay.txt"]);
 }
 
 #[tokio::test]
@@ -710,5 +762,261 @@ async fn move_routes_keep_invalid_request_responses_for_malformed_source_slots()
     assert_eq!(
         success(&app, &token, "GET", "/api/file-manager/history", None).await,
         before
+    );
+}
+
+#[tokio::test]
+async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = Config::development([root.path().join("d1"), root.path().join("d2")])
+        .unwrap();
+    config.disks[1].level = 1;
+    config.disks[1].upstream_slot_id = None;
+    let app = configured_application(root.path(), config);
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "b/first.txt", b"cross-owner body").await;
+    let listing = alias_listing(&app, &token).await;
+    let source = alias_entry(&listing, "first.txt").clone();
+    let mut request = alias_move_request(&listing, "b/first.txt", "moved.txt");
+    request["movement"]["target_slot_id"] = json!("B01");
+    request["movement"]["target_repository_id"] = Value::Null;
+    let moved = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(request.clone()),
+    )
+    .await;
+    let target_listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/B01/entries",
+        None,
+    )
+    .await;
+    let target = alias_entry(&target_listing, "moved.txt").clone();
+    assert_ne!(source["file_id"], target["file_id"]);
+    assert_ne!(
+        listing["context"]["repository_id"],
+        target_listing["context"]["repository_id"]
+    );
+    let events = operation_events(&app, &token, &moved, &target).await;
+    assert_paths(&events, "delete", &["b/first.txt"]);
+    assert_paths(&events, "file.path.rename", &["moved.txt"]);
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event["action"] == "delete")
+            .unwrap()["slot_id"],
+        "P01"
+    );
+    drop(app);
+    let system = root.path().join("system");
+    let engine = reopen_after_router_drop(&system).await;
+    let source_repository = listing["context"]["repository_id"].as_str().unwrap();
+    let target_repository = target_listing["context"]["repository_id"].as_str().unwrap();
+    let source_history = &engine.state().repositories[source_repository].history_tree_id;
+    let target_history = &engine.state().repositories[target_repository].history_tree_id;
+    assert_ne!(source_history, target_history);
+    let operation = request["operation_id"].as_str().unwrap();
+    assert!(engine.state().commits.values().any(|commit| {
+        commit.operation_id.to_string() == operation
+            && &commit.history_tree_id == source_history
+            && commit.namespace_deletions.as_ref().is_some_and(|deletions| {
+                deletions.paths.iter().any(|deleted| deleted.path == "b/first.txt")
+            })
+    }));
+    assert!(engine.state().file_path_nodes.values().any(|node| {
+        node.operation_id.to_string() == operation
+            && &node.history_tree_id == target_history
+            && node.previous_path == "b/first.txt"
+            && node.path == "moved.txt"
+    }));
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(operation_events(&app, &token, &moved, &target).await, events);
+    let replay = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(request),
+    )
+    .await;
+    assert_eq!(replay, moved);
+    assert_eq!(operation_events(&app, &token, &replay, &target).await, events);
+}
+
+async fn activity_upload(app: &Router, token: &str, slot: &str, path: &str) -> Value {
+    let workspace = success(
+        app,
+        token,
+        "POST",
+        &format!("/api/file-manager/disks/{slot}/write-sessions"),
+        Some(json!({"path":path})),
+    )
+    .await;
+    let id = workspace["workspace_id"].as_str().unwrap();
+    upload(
+        app,
+        token,
+        id,
+        &new_id("entry").unwrap(),
+        workspace["relative_path"].as_str().unwrap(),
+        b"activity body",
+    )
+    .await;
+    let mut body = success(
+        app,
+        token,
+        "POST",
+        &format!("/api/workspaces/{id}/seal"),
+        Some(json!({})),
+    )
+    .await;
+    body["message"] = format!("Upload {path}").into();
+    body["request_digest"] = request_digest(
+        "POST",
+        "/api/workspaces/{workspace}/commit",
+        json!({"workspace":id}),
+        json!({}),
+        &body,
+    )
+    .unwrap()
+    .into();
+    success(
+        app,
+        token,
+        "POST",
+        &format!("/api/workspaces/{id}/commit"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn cross_repository_overwrite_keeps_both_deletions_at_the_same_path() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = Config::development([root.path().join("d1"), root.path().join("d2")])
+        .unwrap();
+    config.disks[1].level = 1;
+    config.disks[1].upstream_slot_id = None;
+    let app = configured_application(root.path(), config);
+    let token = login(&app, "admin", "integration-test-password").await;
+    for slot in ["P01", "B01"] {
+        activity_upload(&app, &token, slot, "a/x/f").await;
+    }
+    let source = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries?path=a",
+        None,
+    )
+    .await;
+    let target = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/B01/entries",
+        None,
+    )
+    .await;
+    let directory_request = json!({
+        "operation_id":new_id("op").unwrap(),
+        "movement":{
+            "source_repository_id":source["context"]["repository_id"],
+            "source_entry_id":alias_entry(&source, "x")["entry_id"],
+            "source_path":"a/x", "target_slot_id":"B01",
+            "target_repository_id":target["context"]["repository_id"],
+            "target_path":"a", "replace":true,
+            "target_entry_id":alias_entry(&target, "a")["entry_id"]
+        }
+    });
+    let (status, rejected) = send(
+        &app,
+        Some(&token),
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(directory_request),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected["error"]["code"], "DIRECTORY_NOT_EMPTY");
+    let source = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries?path=a/x",
+        None,
+    )
+    .await;
+    let target = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/B01/entries?path=a/x",
+        None,
+    )
+    .await;
+    let request = json!({
+        "operation_id":new_id("op").unwrap(),
+        "movement":{
+            "source_repository_id":source["context"]["repository_id"],
+            "source_entry_id":alias_entry(&source, "f")["entry_id"],
+            "source_path":"a/x/f", "target_slot_id":"B01",
+            "target_repository_id":target["context"]["repository_id"],
+            "target_path":"a/x/f", "replace":true,
+            "target_entry_id":alias_entry(&target, "f")["entry_id"]
+        }
+    });
+    let moved = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(request.clone()),
+    )
+    .await;
+    let events = operation_events(&app, &token, &moved, alias_entry(&source, "f")).await;
+    assert_paths(&events, "delete", &["a/x/f"]);
+    let deletions = events
+        .iter()
+        .filter(|event| event["action"] == "delete")
+        .collect::<Vec<_>>();
+    assert_eq!(deletions.len(), 2);
+    assert_eq!(
+        deletions
+            .iter()
+            .map(|event| event["slot_id"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["P01", "B01"])
+    );
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(
+        operation_events(&app, &token, &moved, alias_entry(&source, "f")).await,
+        events
+    );
+    let replay = success(
+        &app,
+        &token,
+        "POST",
+        "/api/file-manager/disks/P01/object-move",
+        Some(request),
+    )
+    .await;
+    assert_eq!(replay, moved);
+    assert_eq!(
+        operation_events(&app, &token, &replay, alias_entry(&source, "f")).await,
+        events
     );
 }

@@ -1681,6 +1681,12 @@
       "groups": [
         "browser-identity-generation"
       ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/activity.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
     }
   ],
   "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features; typed-ID expansion and other HTTP endpoints remain outside this slice. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution."

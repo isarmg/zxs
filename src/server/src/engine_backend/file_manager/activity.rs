@@ -166,7 +166,8 @@ fn record_event<'a>(
 }
 
 fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    for commit in engine.state().commits.values() {
+    let state = engine.state();
+    for commit in state.commits.values() {
         if !history_sequence_may_fit(events, commit.sequence) {
             continue;
         }
@@ -175,7 +176,37 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
         // identity and of whether another alias still names the same file.
         // The ordinal preserves repeated removal of one path in a transaction.
         if let Some(deletions) = &commit.namespace_deletions {
+            let movement = state
+                .operations
+                .get(&commit.operation_id)
+                .filter(|operation| {
+                    commit.kind == "object_move"
+                        && operation.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND
+                })
+                .map(|operation| {
+                    optional_field::<storage_contract::file_relocation::ObjectMoveFact>(
+                        operation.result.get("movement"),
+                    )
+                })
+                .transpose()?
+                .flatten();
+            // The original receipt identifies same-owner source removals as renames.
+            // Cross-owner and displaced-target removal facts retain deletion activity.
+            let renamed_source = movement
+                .as_ref()
+                .filter(|movement| {
+                    movement.request.source_repository_id == movement.target_repository_id
+                        && movement.target_repository_id.as_str() == repo.repository_id
+                })
+                .map(|movement| movement.request.source_path.key());
             for (ordinal, deleted) in deletions.paths.iter().enumerate() {
+                if renamed_source.is_some_and(|source| {
+                    let path = name_policy::path_key(&deleted.path);
+                    path == source
+                        || path.strip_prefix(source).is_some_and(|tail| tail.starts_with('/'))
+                }) {
+                    continue;
+                }
                 let display = if repo.file_manager_root {
                     deleted.path.clone()
                 } else {

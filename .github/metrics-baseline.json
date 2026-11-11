@@ -252,7 +252,7 @@
     "json_value": 278,
     "long_line": 265,
     "parse_discard": 38,
-    "state_leak": 51,
+    "state_leak": 50,
     "string_key_map": 122,
     "unreachable": 56,
     "unwrap_or_default": 14,
