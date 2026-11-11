@@ -265,7 +265,9 @@
           "manifest": "src/server/Cargo.toml",
           "prefixes": [
             "backend_listing::tests::",
-            "backend_object_move::tests::"
+            "backend_object_move::tests::",
+            "engine_backend::foreign_plan::tests::",
+            "management::foreign_plan::tests::"
           ],
           "max_tests": 16,
           "features": [
@@ -1470,6 +1472,18 @@
     },
     {
       "path": "test/server/unit/backend_object_move.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/foreign_plan.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/foreign_plan.rs",
       "groups": [
         "typed-name-consumers"
       ]

@@ -33,6 +33,8 @@
 
 - [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。
 
+- [ ] 定向 CI 验证 T07 foreign-plan 目标槽位边界：ForeignDestination 从原 TryFrom 位置保留 SlotId 至 engine 映射，维持槽位先于 parent 的错误顺序和原始 history_names 延后准入；覆盖大小写、64 字节边界、原父路径与命名错误源，并运行既有 foreign-plan 管理行为。server 文本计数 validate_fn 33→32、parse_discard 35→36，新增匹配为持有 slot 的 let 绑定；其余 T07 迁移继续保留。
+
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。
