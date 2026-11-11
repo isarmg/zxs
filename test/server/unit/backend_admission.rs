@@ -605,8 +605,9 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: storage_contract::file_history_merge::FileHistorySourceRequest,
-        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
     ) -> Result<storage_contract::file_history_merge::FileHistorySource, crate::ApiError> {
+        self.gate.cancellations.lock().unwrap().push(cancellation);
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -2091,4 +2092,112 @@ async fn operation_lookup_calls_backend_only_for_admitted_ids_and_queries() {
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
     assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+}
+
+fn history_source_route(file: &str, node: &str, root: &str) -> String {
+    format!(
+        "/api/file-manager/files/{file}/merge-history/source?node_id={node}&history_root={root}"
+    )
+}
+
+#[tokio::test]
+async fn history_source_defers_contract_errors_until_after_query_and_capacity() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let mut jobs = Vec::new();
+    for _ in 0..HTTP_BACKEND_SLOTS {
+        let app = app.clone();
+        jobs.push(tokio::spawn(async move {
+            request(app, "/api/repositories").await
+        }));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .forget();
+    let malformed = history_source_route("malformed", "malformed", "malformed");
+    overloaded(app.clone(), &malformed).await;
+    for route in [
+        format!("{malformed}&unexpected=true"),
+        format!("{malformed}&node_id=duplicate"),
+        "/api/file-manager/files/malformed/merge-history/source?node_id=malformed".into(),
+        history_source_route("%FF", "malformed", "malformed"),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(5), request(app.clone(), &route))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+    gate.release();
+    for job in jobs {
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn history_source_calls_backend_only_for_the_original_identifier_domain() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, true);
+    let file = "file_00000000000000000000000000000000";
+    let root = "a".repeat(64);
+    for prefix in ["ver", "fnode", "fmeta"] {
+        let node = format!("{prefix}_00000000000000000000000000000000");
+        let route = history_source_route(file, &node, &root);
+        assert_eq!(request(app.clone(), &route).await.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
+    for (file_id, node, digest) in [
+        ("malformed", "ver_00000000000000000000000000000000", root.as_str()),
+        (file, "fdel_00000000000000000000000000000000", root.as_str()),
+        (file, "fmerge_00000000000000000000000000000000", root.as_str()),
+        (file, "ver_0000000000000000000000000000000A", root.as_str()),
+        (file, "ver_00000000000000000000000000000000", "malformed"),
+    ] {
+        let response = request(app.clone(), &history_source_route(file_id, node, digest)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = http_routing::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: Value = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(result["error"]["code"], "INVALID_REQUEST");
+        assert!(result["error"].get("source").is_none());
+    }
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn history_source_cancellation_reaches_the_admitted_backend() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let route = history_source_route(
+        "file_00000000000000000000000000000000",
+        "ver_00000000000000000000000000000000",
+        &"a".repeat(64),
+    );
+    let waiter = tokio::spawn(async move { request(app, &route).await });
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    {
+        let signals = gate.cancellations.lock().unwrap();
+        assert_eq!(signals.len(), 1);
+        assert!(!signals[0].is_cancelled());
+    }
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(gate.cancellations.lock().unwrap()[0].is_cancelled());
+    assert_eq!(gate.finished.available_permits(), 0);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), gate.finished.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
 }

@@ -1485,8 +1485,88 @@ async fn historical_source_http_resolves_old_other_branch_and_requires_exact_roo
         .0,
         StatusCode::BAD_REQUEST
     );
+    let source_bytes = storage_contract::canonical_json(&source).unwrap();
+    drop(app);
+    let system = root.path().join("system");
+    let engine = reopen_after_router_drop(&system).await;
+    let receipts: Vec<_> = engine
+        .state()
+        .operations
+        .iter()
+        .map(|(operation, result)| {
+            (*operation, storage_contract::canonical_json(result).unwrap())
+        })
+        .collect();
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let restored = success(&app, &token, "GET", &route, None).await;
+    assert_eq!(
+        storage_contract::canonical_json(&restored).unwrap(),
+        source_bytes,
+    );
+    assert_eq!(history(&app, &token, file).await, before);
+    drop(app);
+    let engine = reopen_after_router_drop(&system).await;
+    for (operation, bytes) in receipts {
+        assert_eq!(
+            storage_contract::canonical_json(&engine.state().operations[&operation]).unwrap(),
+            bytes,
+        );
+    }
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     manager_upload(&app, &token, "report.txt", b"new root").await;
     let (status, error) = send(&app, Some(&token), "GET", &route, None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(error["error"]["code"], "HISTORY_CHANGED");
+}
+
+#[tokio::test]
+async fn historical_source_http_keeps_auth_query_and_identifier_domains_separate() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    let file = "file_00000000000000000000000000000000";
+    let node = "ver_00000000000000000000000000000000";
+    let digest = "a".repeat(64);
+    let route = |file: &str, node: &str, root: &str| {
+        format!(
+            "/api/file-manager/files/{file}/merge-history/source?node_id={node}&history_root={root}"
+        )
+    };
+    for path in [
+        route("malformed", node, &digest),
+        route(file, "fdel_00000000000000000000000000000000", &digest),
+        route(file, "fmerge_00000000000000000000000000000000", &digest),
+        route(file, "ver_0000000000000000000000000000000A", &digest),
+        route(file, node, "malformed"),
+        format!("{}&node_id={node}", route(file, node, &digest)),
+        format!("{}&unexpected=true", route(file, node, &digest)),
+        format!("/api/file-manager/files/{file}/merge-history/source?node_id={node}"),
+    ] {
+        let (status, error) = send(&app, Some(&token), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], "INVALID_REQUEST");
+        assert!(error["error"].get("source").is_none());
+        assert_eq!(
+            send(&app, None, "GET", &path, None).await.0,
+            StatusCode::UNAUTHORIZED,
+        );
+    }
+    let valid = route(file, node, &digest);
+    let (status, error) = send(&app, Some(&token), "GET", &valid, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error"]["code"], "FILE_NOT_FOUND");
+    success(&app, &token, "POST", "/api/auth/logout", None).await;
+    for path in [
+        valid,
+        route("malformed", "malformed", "malformed"),
+        format!("{}&unexpected=true", route("malformed", "malformed", "malformed")),
+    ] {
+        let (status, error) = send(&app, Some(&token), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(error["error"]["code"], "UNAUTHORIZED");
+    }
 }

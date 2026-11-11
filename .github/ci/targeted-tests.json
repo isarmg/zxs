@@ -989,6 +989,73 @@
           "max_tests": 2
         }
       ]
+    },
+    "history-source-http-boundary": {
+      "reason": "Typed historical source path and query retain query/capacity errors, exact identifier domains, authorization, cancellation, frozen response bytes and cold-read receipts.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_file_history_source::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::history_source_defers_contract_errors_until_after_query_and_capacity",
+            "backend_admission_tests::history_source_calls_backend_only_for_the_original_identifier_domain",
+            "backend_admission_tests::history_source_cancellation_reaches_the_admitted_backend",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
+            "authorized_backend_tests::historical_source_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "file_metadata_operations::historical_source_http_resolves_old_other_branch_and_requires_exact_root",
+            "file_metadata_operations::historical_source_http_keeps_auth_query_and_identifier_domains_separate"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "exact": [
+            "file_history_merge::tests::historical_source_request_is_exact_and_reuses_typed_identifiers"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "branch_alias_operations",
+          "exact": [
+            "file_history_merge_scenarios::historical_source_lookup_proves_other_branch_ancestors_without_changing_history_pages"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -3068,6 +3135,30 @@
       "path": "test/support/directory_child.rs",
       "groups": [
         "directory-lock-child-inheritance"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_history_source.rs",
+      "groups": [
+        "history-source-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_file_history_source.rs",
+      "groups": [
+        "history-source-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "history-source-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/file_metadata_operations.rs",
+      "groups": [
+        "history-source-http-boundary"
       ]
     }
   ],
