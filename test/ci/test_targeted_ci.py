@@ -135,6 +135,48 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(len(plan['python_tests']), 8)
         self.assertEqual(plan['rust_targets'], [])
 
+    def test_python_budget_defaults_and_dedicated_maintenance_limit(self):
+        plan = CI.select_plan(self.policy, ['工程规范.md', 'TASKS.md'])
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assertEqual(plan['python_timeouts']['test_engineering_guidance'], 600)
+        for module in plan['python_tests']:
+            if module != 'test_engineering_guidance':
+                self.assertEqual(plan['python_timeouts'][module], 120)
+        plain = CI.select_plan(self.policy, ['TASKS.md'])
+        self.assertNotIn('test_engineering_guidance', plain['python_timeouts'])
+        self.assertNotIn('engineering-guidance',
+                         {item['group'] for item in plain['python_selections']})
+
+    def test_python_budget_rejects_invalid_values_and_unselected_modules(self):
+        invalid = [
+            [], {'test_engineering_guidance': 0}, {'test_engineering_guidance': 901},
+            {'test_engineering_guidance': True}, {'test_engineering_guidance': '600'},
+            {'test_engineering_guidance': 1.5}, {'test_not_in_group': 600},
+        ]
+        for value in invalid:
+            policy = copy.deepcopy(self.policy)
+            policy['groups']['engineering-guidance']['python_timeouts'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                CI.select_plan(policy, ['工程规范.md'])
+
+    def test_python_overlapping_groups_keep_sources_and_strictest_budget(self):
+        first = {'reason': 'first', 'python_tests': ['test_example'], 'rust_targets': [],
+                 'python_timeouts': {'test_example': 600}}
+        second = dict(first, reason='second', python_timeouts={'test_example': 300})
+        policy = {'groups': {'first': first, 'second': second},
+                  'rules': [{'path': 'change', 'groups': ['first', 'second']}],
+                  'unexecuted': 'other work'}
+        plan = CI.select_plan(policy, ['change'])
+        self.assertEqual(plan['python_tests'], ['test_example'])
+        self.assertEqual(plan['python_timeouts'], {'test_example': 300})
+        self.assertEqual(plan['python_selections'], [
+            {'group': 'first', 'module': 'test_example', 'timeout_seconds': 600},
+            {'group': 'second', 'module': 'test_example', 'timeout_seconds': 300},
+        ])
+        del second['python_timeouts']
+        self.assertEqual(CI.select_plan(policy, ['change'])['python_timeouts'],
+                         {'test_example': 120})
+
     def test_python_zero_tests_missing_import_and_skips_cannot_pass(self):
         CI.passed_python('Ran 2 tests in 0.001s\n\nOK\n', 2)
         for output in ['Ran 0 tests in 0.001s\n\nOK\n',
@@ -381,6 +423,29 @@ class TargetedExecution(unittest.TestCase):
     def persisted(self):
         return json.loads((self.run.directory / 'summary.json').read_text())
 
+    def test_python_runner_uses_exact_budget_and_records_completion(self):
+        directory = self.root / 'test/ci'
+        directory.mkdir(parents=True)
+        (directory / 'test_budget_fixture.py').write_text('# synthetic module\n')
+        suite = mock.Mock()
+        suite.countTestCases.return_value = 1
+        observed = []
+
+        def command(args, timeout):
+            observed.append((args, timeout))
+            (self.run.directory / '000.stderr.log').write_text(
+                'Ran 1 test in 0.001s\n\nOK\n')
+
+        with mock.patch.object(CI.unittest.defaultTestLoader, 'loadTestsFromName',
+                               return_value=suite), \
+                mock.patch.object(self.run, 'command', side_effect=command):
+            self.run.python('test_budget_fixture', 600)
+        self.assertEqual(observed[0][1], 600)
+        self.assertIn('test_budget_fixture.py', observed[0][0])
+        self.assertEqual(self.persisted()['passed'], [
+            {'python_module': 'test_budget_fixture', 'tests': 1, 'timeout_seconds': 600},
+        ])
+
     def test_failure_continues_selected_tests_and_target_but_still_raises(self):
         self.failures['module::a'] = 101
         check = {'package': 'consumer', 'manifest': 'src/consumer/Cargo.toml', 'mode': 'check'}
@@ -516,11 +581,15 @@ class TargetedExecution(unittest.TestCase):
 
     def test_python_timeout_stops_remaining_modules_and_all_rust_targets(self):
         self.plan['python_tests'] = ['test_first', 'test_timeout', 'test_later']
+        self.plan['python_timeouts'] = {'test_timeout': 600}
         visited = []
-        def python(name):
+        def python(name, timeout=120):
             visited.append(name)
             if name == 'test_timeout':
-                self.run.command(['python-fixture'], 1)
+                self.assertEqual(timeout, 600)
+                self.run.command(['python-fixture'], timeout)
+            else:
+                self.assertEqual(timeout, 120)
             self.run.summary['passed'].append({'python_module': name, 'tests': 1})
         self.failures['python-fixture'] = subprocess.TimeoutExpired(['python-fixture'], 1)
         with mock.patch.object(self.run, 'python', side_effect=python):
@@ -551,7 +620,7 @@ class TargetedExecution(unittest.TestCase):
     def test_python_failure_continues_other_module_and_selected_rust(self):
         self.plan['python_tests'] = ['test_first', 'test_second']
         visited = []
-        def python(name):
+        def python(name, timeout=120):
             visited.append(name)
             if name == 'test_first':
                 raise ValueError('fixture invalid Python evidence')

@@ -803,11 +803,14 @@
       ]
     },
     "engineering-guidance": {
-      "reason": "Engineering standard rename exercises the existing real HTTP maintenance fixture through unittest wiring; CI selection regressions cover rename admission and the Python-only budget",
+      "reason": "Engineering standard rename exercises the existing real HTTP maintenance fixture through unittest wiring; CI selection regressions cover rename admission and the Python-only budget; dedicated 600-second trial budget after run 43016701410 exceeded 120 seconds, without a measured completion time",
       "python_tests": [
         "test_engineering_guidance"
       ],
-      "rust_targets": []
+      "rust_targets": [],
+      "python_timeouts": {
+        "test_engineering_guidance": 600
+      }
     }
   },
   "rules": [

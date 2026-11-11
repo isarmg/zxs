@@ -40,11 +40,29 @@ def select_plan(policy, changed):
     if not changed or not selected or not selected <= set(groups):
         raise ValueError('empty or unknown targeted selection')
     targets, origins, python_tests = [], [], set()
+    python_timeouts, python_selections = {}, []
     for name in sorted(selected):
         group = groups[name]
-        if set(group) != {'reason', 'python_tests', 'rust_targets'} or not group['reason']:
+        required = {'reason', 'python_tests', 'rust_targets'}
+        if (not required <= set(group) or set(group) - required - {'python_timeouts'}
+                or not group['reason']):
             raise ValueError('invalid target group')
-        python_tests.update(group['python_tests'])
+        modules = group['python_tests']
+        timeouts = group.get('python_timeouts', {})
+        if (not isinstance(modules, list)
+                or any(not isinstance(module, str)
+                       or not re.fullmatch(r'test_[a-z_]+', module) for module in modules)
+                or len(set(modules)) != len(modules)
+                or not isinstance(timeouts, dict) or not set(timeouts) <= set(modules)
+                or any(type(value) is not int or not 1 <= value <= 900
+                       for value in timeouts.values())):
+            raise ValueError('invalid Python modules or timeout budget')
+        for module in modules:
+            timeout = timeouts.get(module, 120)
+            python_timeouts[module] = min(python_timeouts.get(module, timeout), timeout)
+            python_selections.append({'group': name, 'module': module,
+                                      'timeout_seconds': timeout})
+        python_tests.update(modules)
         targets.extend(group['rust_targets'])
         origins.extend([name] * len(group['rust_targets']))
     if len(python_tests) > 8 or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
@@ -120,7 +138,8 @@ def select_plan(policy, changed):
     if len(targets) > 16:
         raise ValueError('target selection must be bounded and nonempty')
     return {'groups': sorted(selected), 'changed_paths': sorted(changed),
-            'python_tests': sorted(python_tests), 'rust_targets': targets,
+            'python_tests': sorted(python_tests), 'python_timeouts': python_timeouts,
+            'python_selections': python_selections, 'rust_targets': targets,
             'unexecuted': policy['unexecuted']}
 
 
@@ -380,7 +399,7 @@ class Run:
             self.summary['passed'].append({'configuration': target, 'name': name})
             self.save()
 
-    def python(self, name):
+    def python(self, name, timeout=120):
         # Count first: unittest's successful zero-test exit cannot satisfy a plan.
         if not (self.root / 'test/ci' / (name + '.py')).is_file():
             raise ValueError(f'missing Python module: {name}')
@@ -390,10 +409,11 @@ class Run:
             raise ValueError(f'empty Python module: {name}')
         index = len(self.summary['commands'])
         self.command([sys.executable, '-m', 'unittest', 'discover',
-                      '-s', 'test/ci', '-p', name + '.py', '-v'], 120)
+                      '-s', 'test/ci', '-p', name + '.py', '-v'], timeout)
         passed_python((self.directory / f'{index:03}.stderr.log').read_text(),
                       suite.countTestCases())
-        self.summary['passed'].append({'python_module': name, 'tests': suite.countTestCases()})
+        self.summary['passed'].append({'python_module': name, 'tests': suite.countTestCases(),
+                                       'timeout_seconds': timeout})
         self.save()
 
     def execute(self, action):
@@ -410,7 +430,7 @@ class Run:
             for index, name in enumerate(plan['python_tests']):
                 remaining_python = plan['python_tests'][index + 1:]
                 try:
-                    self.python(name)
+                    self.python(name, plan.get('python_timeouts', {}).get(name, 120))
                 except Exception as error:
                     self.failure('python', error, python_module=name)
                     if isinstance(error, subprocess.TimeoutExpired):

@@ -44,7 +44,26 @@ class DeletionTargetedCi(unittest.TestCase):
         web = [t for t in plan['rust_targets'] if t['package'] == 'web-app']
         tests = next(t for t in web if t.get('mode', 'test') == 'test')
         compile_only = next(t for t in web if t.get('mode') == 'check')
-        self.assertEqual(tests['prefixes'], ['files::deletion::', 'files::actions::operation::tests::'])
+        selections = tests.get('selections', [tests])
+        deletion_selection = next(selection for selection in selections
+                                  if selection.get('prefixes') ==
+                                  ['files::deletion::', 'files::actions::operation::tests::'])
+        self.assertEqual(deletion_selection['prefixes'],
+                         ['files::deletion::', 'files::actions::operation::tests::'])
+        self.assertEqual(deletion_selection['max_tests'], 80)
+        self.assertIn('paged-deletion-review', tests['selection_groups'])
+        self.assertEqual(deletion_selection,
+                         next(target for target in
+                              self.policy['groups']['paged-deletion-review']['rust_targets']
+                              if target['package'] == 'web-app'
+                              and target.get('mode', 'test') == 'test'))
+        names = ['files::actions::operation::tests::case', 'files::deletion::case']
+        self.assertEqual(CI.selected_tests(names, [], deletion_selection), names)
+        with self.assertRaises(ValueError):
+            CI.selected_tests(names[:1], [], deletion_selection)
+        with self.assertRaises(ValueError):
+            CI.selected_tests(names[1:] + [f'files::actions::operation::tests::case_{index}'
+                                          for index in range(80)], [], deletion_selection)
         self.assertEqual(compile_only['compile_target'], 'wasm32-unknown-unknown')
         self.assertNotIn('prefixes', compile_only)
 

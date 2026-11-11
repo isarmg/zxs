@@ -1,4 +1,4 @@
-"""Run the existing real source-maintenance fixture for the engineering guide rename."""
+"""Run the real maintenance fixture within its dedicated targeted-policy time budget."""
 import importlib.util
 from pathlib import Path
 
