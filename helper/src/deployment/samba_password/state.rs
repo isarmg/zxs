@@ -12,6 +12,37 @@ use platform_io::fs_safety::{
 };
 use std::{fs::File, os::unix::fs::MetadataExt, path::Path};
 
+#[derive(Debug)]
+enum ObservationError {
+    ParameterText(std::str::Utf8Error),
+    ExistingAccountText(std::str::Utf8Error),
+    ExistingAccountUid(std::num::ParseIntError),
+    NativeAccountsText(std::str::Utf8Error),
+    NativeAccountUid(std::num::ParseIntError),
+}
+impl std::fmt::Display for ObservationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::ParameterText(_) => "Samba parameter reply is not UTF-8",
+            Self::ExistingAccountText(_) => "Samba account query returned invalid text",
+            Self::ExistingAccountUid(_) => "Samba account UID is malformed",
+            Self::NativeAccountsText(_) => "native Samba account listing is not UTF-8",
+            Self::NativeAccountUid(_) => "native Samba account UID is malformed",
+        };
+        f.write_str(message)
+    }
+}
+impl std::error::Error for ObservationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ParameterText(source)
+            | Self::ExistingAccountText(source)
+            | Self::NativeAccountsText(source) => Some(source),
+            Self::ExistingAccountUid(source) | Self::NativeAccountUid(source) => Some(source),
+        }
+    }
+}
+
 pub(super) const PRIVATE: &str = "/var/lib/samba/private";
 pub(super) const DATABASE: &str = "/var/lib/samba/private/passdb.tdb";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,7 +191,7 @@ pub(super) fn query(program: &Executable, parameter: &str) -> Result<String> {
 }
 fn scalar(bytes: &[u8]) -> Result<String> {
     let value = std::str::from_utf8(bytes)
-        .map_err(|_| "Samba parameter reply is not UTF-8")?
+        .map_err(ObservationError::ParameterText)?
         .trim();
     if value.is_empty() || value.chars().any(char::is_control) {
         return Err("Samba parameter reply is missing or is not a single bounded scalar".into());
@@ -193,8 +224,7 @@ pub(super) fn require_existing_account(program: &Executable, account: &Snapshot)
     account_listing(&bytes, account.name.as_str(), account.uid)
 }
 fn account_listing(bytes: &[u8], name: &str, uid: u32) -> Result<()> {
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| "Samba account query returned invalid text")?;
+    let text = std::str::from_utf8(bytes).map_err(ObservationError::ExistingAccountText)?;
     let mut lines = text.lines();
     let line = lines
         .next()
@@ -208,7 +238,7 @@ fn account_listing(bytes: &[u8], name: &str, uid: u32) -> Result<()> {
         .next()
         .ok_or("Samba account reply is malformed")?
         .parse::<u32>()
-        .map_err(|_| "Samba account UID is malformed")?;
+        .map_err(ObservationError::ExistingAccountUid)?;
     if current_name != name || current_uid != uid || fields.next().is_none() {
         return Err(
             "existing Samba account differs from the selected local non-root account".into(),

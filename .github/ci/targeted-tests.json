@@ -944,6 +944,26 @@
           "default_features": false
         }
       ]
+    },
+    "helper-samba-observation-sources": {
+      "reason": "Samba command-output decoding preserves UTF-8 and UID causes, record admission order and credential-source privacy",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "prefixes": [
+            "deployment::samba_password::state::tests::",
+            "deployment::samba_password::state::enrollment::tests::"
+          ],
+          "exact": [
+            "console::http::job::tests::credential_observation_and_change_never_return_operation_source_chains"
+          ],
+          "max_tests": 12
+        }
+      ]
     }
   },
   "rules": [
@@ -2980,6 +3000,30 @@
       "path": "test/server/integration/http_engine/optional_identities.rs",
       "groups": [
         "operation-http-boundary"
+      ]
+    },
+    {
+      "path": "helper/src/deployment/samba_password/state.rs",
+      "groups": [
+        "helper-samba-observation-sources"
+      ]
+    },
+    {
+      "path": "helper/src/deployment/samba_password/state/enrollment.rs",
+      "groups": [
+        "helper-samba-observation-sources"
+      ]
+    },
+    {
+      "path": "test/helper/unit/samba_password_state.rs",
+      "groups": [
+        "helper-samba-observation-sources"
+      ]
+    },
+    {
+      "path": "test/helper/unit/samba_account_listing_tests.rs",
+      "groups": [
+        "helper-samba-observation-sources"
       ]
     }
   ],

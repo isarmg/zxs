@@ -193,8 +193,10 @@ fn accounts(program: &Executable) -> Result<Accounts> {
         crate::private_io::SAMBA_PATH,
         "--list",
     ])?;
-    let text =
-        std::str::from_utf8(&bytes).map_err(|_| "native Samba account listing is not UTF-8")?;
+    account_listing(&bytes)
+}
+fn account_listing(bytes: &[u8]) -> Result<Accounts> {
+    let text = std::str::from_utf8(bytes).map_err(ObservationError::NativeAccountsText)?;
     let mut result = Accounts::new();
     for line in text.lines() {
         if line.is_empty() || line.chars().any(char::is_control) {
@@ -208,7 +210,7 @@ fn accounts(program: &Executable) -> Result<Accounts> {
             .next()
             .ok_or("native Samba account record has no UID")?
             .parse::<u32>()
-            .map_err(|_| "native Samba account UID is malformed")?;
+            .map_err(ObservationError::NativeAccountUid)?;
         let description = fields
             .next()
             .ok_or("native Samba account record is incomplete")?;
@@ -228,3 +230,7 @@ fn accounts(program: &Executable) -> Result<Accounts> {
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/helper/unit/samba_account_listing_tests.rs"]
+mod tests;
