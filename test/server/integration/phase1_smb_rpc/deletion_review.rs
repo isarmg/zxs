@@ -3,41 +3,91 @@ use storage_contract::file_deletion_review::{BranchPage, ParentPage, Summary};
 
 fn oversized_seed() -> (tempfile::TempDir, Engine, Repository, Entry, Entry) {
     let (root, mut engine, repo, a, b) = seed();
-    // Seed already owns the shared branch and one review branch.
-    for index in 0..4095 {
-        let created = engine
-            .create_file_branch(
-                &a.file_id,
-                &a.version_id,
-                &storage_contract::BranchName::parse(&format!("review-{index}")).unwrap(),
-                "alice",
-                OperationId::generate().unwrap(),
-            )
+    let branch = engine
+        .state()
+        .branches
+        .values()
+        .find(|branch| {
+            branch.file_id.as_deref() == Some(a.file_id.as_str()) && branch.name == "review"
+        })
+        .unwrap()
+        .branch_id
+        .clone();
+    let sources = historical_sources(&mut engine, &a.file_id, &branch);
+    let expected = engine.file_branch_head(&branch).unwrap();
+    let inputs = sources
+        .iter()
+        .map(|node| storage_contract::FileHistoryMergeInput {
+            branch_id: branch.clone(),
+            source_node_id: node.clone(),
+            expected_node_id: expected.clone(),
+        })
+        .collect::<Vec<_>>();
+    // Seed already owns the shared branch and one review branch. Each real
+    // historical merge derives one branch per input, retaining frozen aliases.
+    // 40 * 100 + 95 gives 4095 more branches without thousands of independent
+    // database installations exhausting their unchanged retention budget.
+    for batch in 0..41 {
+        let count = if batch == 40 { 95 } else { 100 };
+        let receipt = engine
+            .merge_file_history(storage_engine::FileHistoryMergeRequest {
+                file_id: &a.file_id,
+                inputs: &inputs[..count],
+                chosen_node_id: &sources[0],
+                name: &storage_contract::BranchName::parse(&format!("review-{batch}")).unwrap(),
+                location: None,
+                principal: "alice",
+                operation_id: OperationId::generate().unwrap(),
+            })
             .unwrap();
-        if index < 101 {
-            let branch = created.result["branch_id"].as_str().unwrap();
-            let workspace = engine.create_workspace(branch, "alice").unwrap();
-            engine
-                .stage_bytes(
-                    &workspace.workspace_id,
-                    "A.txt",
-                    format!("branch {index}").as_bytes(),
-                )
-                .unwrap();
-            engine
-                .commit_workspace(storage_engine::CommitRequest {
-                    workspace_id: workspace.workspace_id,
-                    principal: "alice".into(),
-                    expected_head: workspace.base_head,
-                    fencing_token: workspace.fencing_token,
-                    operation_id: OperationId::generate().unwrap(),
-                    message: format!("review head {index}"),
-                    request_digest: None,
-                })
-                .unwrap();
-        }
+        assert_eq!(receipt.result["directory_branch_ids"], json!([]));
+        assert_eq!(engine.file_branch_head(&branch).unwrap(), expected);
     }
+    assert_eq!(
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("A.txt"),
+        Some(&a)
+    );
     (root, engine, repo, a, b)
+}
+
+fn historical_sources(engine: &mut Engine, file: &str, branch: &str) -> Vec<String> {
+    let mut head = engine.file_branch_head(branch).unwrap();
+    let mut sources = Vec::new();
+    // Alternating one tag creates distinct immutable nodes without creating
+    // content versions or exceeding the per-node tag limit.
+    for index in 0..100 {
+        let tag = vec!["audit-source".to_owned()];
+        let (add, remove) = if index % 2 == 0 {
+            (tag, Vec::new())
+        } else {
+            (Vec::new(), tag)
+        };
+        let receipt = engine
+            .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
+                file_id: file,
+                targets: &[storage_contract::FileTagTarget {
+                    branch_id: branch.into(),
+                    source_node_id: head.clone(),
+                    expected_node_id: head,
+                }],
+                add: &add,
+                remove: &remove,
+                location: None,
+                principal: "alice",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        assert_eq!(receipt.result["nodes"][0]["no_change"], false);
+        head = receipt.result["nodes"][0]["node_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        sources.push(head.clone());
+    }
+    sources
 }
 
 fn delete(
