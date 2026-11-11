@@ -28,6 +28,14 @@ pub(crate) fn directory_branch(
     crate::files::mkdir::start_directory_branch(state, source, name)
 }
 
+pub(crate) fn historical_directory_branch(
+    state: RwSignal<State>,
+    source: storage_contract::directory_git::HistoricalDirectoryBranchSource,
+    name: String,
+) -> Option<String> {
+    crate::files::mkdir::start_historical_directory_branch(state, source, name)
+}
+
 pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
     crate::files::mkdir::start_directory_checkout(state, &branch_id);
 }

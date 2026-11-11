@@ -381,15 +381,37 @@ pub(super) struct BranchReview {
     source: DirectoryBranchCreateSource,
 }
 impl BranchReview {
+    pub(super) fn source(&self) -> &DirectoryBranchCreateSource {
+        &self.source
+    }
+
+    fn current(&self, state: &State) -> bool {
+        Target::capture(state).as_ref() == Some(&self.target)
+            && state.files.slot == self.slot
+            && state.files.directory == self.display_path
+    }
+
     pub(super) fn submit(self, state: RwSignal<State>, name: String) -> Option<String> {
-        if !state.with_untracked(|state| {
-            Target::capture(state).as_ref() == Some(&self.target)
-                && state.files.slot == self.slot
-                && state.files.directory == self.display_path
-        }) {
+        if !state.with_untracked(|state| self.current(state)) {
             return None;
         }
         actions::directory_branch(state, self.source, name)
+    }
+
+    pub(super) fn submit_history(
+        self,
+        state: RwSignal<State>,
+        tree: storage_contract::DirectoryTreeId,
+        name: String,
+    ) -> Option<String> {
+        if !state.with_untracked(|state| self.current(state)) {
+            return None;
+        }
+        let source = storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+            self.source,
+            tree,
+        ).expect("invariant: the reviewed status and listing admit all current source fields");
+        actions::historical_directory_branch(state, source, name)
     }
 }
 
@@ -756,7 +778,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
                 {move ||message_error.get().map(|reason|view!{<p class="zxs-row zxs-inline-error" role="status" data-directory-commit-message-error="" title=reason>{t("提交说明须包含非空白内容，最多 128 UTF-8 字节，且不能包含换行或控制字符。", "Enter a nonblank commit message of at most 128 UTF-8 bytes, without line breaks or control characters.")}</p>})}
             </Show>
-            {super::directory_history::current_directory_view(state, history_target)}
+            {super::directory_history::current_directory_view(state, history_target, branch_source)}
             {layout::view(state, model)}
         </section>
     </Show>}

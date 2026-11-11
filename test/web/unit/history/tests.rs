@@ -14,6 +14,7 @@ fn current_directory_git_operations_have_specific_labels() {
         ),
         ("directory.git.checkout", "Switched folder branch"),
         ("directory.git.branch-create", "Created folder branch"),
+        ("directory.git.branch-create-history", "Created folder branch from history"),
         ("directory.changes.commit", "Committed folder changes"),
     ] {
         assert_eq!(action_label(action), expected, "{action}");

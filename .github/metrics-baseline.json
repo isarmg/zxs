@@ -312,7 +312,7 @@
     "wildcard_arm": 3
   },
   "src/web": {
-    "api_path_literal": 143,
+    "api_path_literal": 144,
     "assert_fn_def": 21,
     "cfg_not_test": 0,
     "cfg_test_item": 21,
@@ -322,12 +322,12 @@
     "erase_error": 2,
     "error_new": 7,
     "fault_cfg": 0,
-    "glob_super": 114,
+    "glob_super": 113,
     "hash_string": 3,
     "id_string": 96,
     "invariant_as_error": 3,
     "join_literal": 0,
-    "json_value": 156,
+    "json_value": 158,
     "long_line": 1429,
     "parse_discard": 14,
     "state_leak": 0,

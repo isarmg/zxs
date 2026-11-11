@@ -492,6 +492,11 @@ fn frozen_branch_review_refuses_later_navigation_before_allocating_an_operation(
             }
             let state = RwSignal::new(changed);
             assert!(review.clone().submit(state, "draft".into()).is_none());
+            assert!(review.clone().submit_history(
+                state,
+                id("dtree", 7).parse().unwrap(),
+                "historical".into(),
+            ).is_none());
             assert!(!state.with_untracked(|s| s.files.mutation_pending));
             assert!(state.with_untracked(|s| s.files.operations.is_empty()));
         }

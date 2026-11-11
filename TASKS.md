@@ -4,6 +4,8 @@
 
 ## 当前 CI 与失败闭环
 
+- [ ] 定向 CI 验证历史目录节点建分支的 Web 接线：可写目录加载节点与冻结干净审阅、原请求字节／摘要／会话与边界预算、未知结果只查原 operation ID、显式原请求重试、不自动 checkout。原生行为选择与 WASM 编译须分别取得证据，真实浏览器仍待验；新增原请求摘要／HTTP 正文边界使 web json_value +2、api_path_literal +1，显式导入替换 glob_super -1，其余指标不变。
+
 - [ ] 定向 CI 验证历史目录分支 Core／HTTP：准确历史提交与当前 CAS、旧入口旧 source 409、权限撤销、本仓干净围栏、固定三级子仓引用、完整写集与永久重放、checkout／标签后冷重开。Web 另片接线；本次仅新增持久请求／完整回执编解码与 HTTP 边界计数：engine json_value +8，server json_value +1、api_path_literal +1，其余指标不变。
 
 - [ ] 定向 CI 验证历史目录分支契约地基：历史 tree 与当前七项 CAS 分离、严格来源 DTO、BranchName 原字符串 serde、固定字节向量与真实 schema／OpenAPI／文档检查。本批仅登记契约；Core／HTTP 执行和 Web 接线另片交付，旧入口及原摘要保持。

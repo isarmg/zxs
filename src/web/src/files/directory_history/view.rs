@@ -5,28 +5,34 @@ use storage_contract::history_window::HistoryEndpoint;
 use web_interface::i18n::t;
 
 mod branches;
+mod creation;
 
 pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
     let Some(target) = state.with_untracked(Target::capture) else {
         return view! { <section class="zxs-entry-section zxs-directory-history zxs-stack"><h3 class="zxs-row">{t("目录分支树","Folder branch tree")}</h3><p class="zxs-row">{t("此目录是磁盘或备份的汇总视图，没有独立的目录历史。请打开原始仓库中的具体文件夹查看。","This is a disk or backup aggregate, with no independent folder history. Open the original folder in its repository to view its history.")}</p></section> }.into_any();
     };
-    graph(state, target).into_any()
+    graph(state, target, Signal::derive(|| None)).into_any()
 }
 
 pub(in crate::files) fn current_directory_view(
     state: RwSignal<State>,
     target: Memo<Option<Target>>,
+    source: Signal<Option<crate::files::staging::BranchReview>>,
 ) -> impl IntoView {
     view! {
         <For
             each=move || target.get()
             key=|target| target.clone()
-            children=move |target| graph(state, target)
+            children=move |target| graph(state, target, source)
         />
     }
 }
 
-fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
+fn graph(
+    state: RwSignal<State>,
+    target: Target,
+    source: Signal<Option<crate::files::staging::BranchReview>>,
+) -> impl IntoView {
     let target = StoredValue::new(target);
     let model = RwSignal::new(Model::default());
     on_cleanup(move || {
@@ -123,6 +129,9 @@ fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
                 <Show when=move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.as_ref().map(|id|!page.nodes.iter().any(|node|&node.tree_id==id))).unwrap_or(false))><button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|if let Some(id)=model.with_untracked(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(id)});}>{t("定位默认目录节点","Locate default folder node")}</button></Show>
             </div>
             {super::super::version_tree::ancestry_graph(layout, move |id| {
+                let tree=id.parse().expect(
+                    "invariant: admitted directory history has canonical tree identities",
+                );
                 let id=StoredValue::new(id);
                 let node=Memo::new(move |_|nodes.with(|nodes|id.with_value(|id|nodes.get(id).cloned())));
                 let current=Signal::derive(move ||model.with(|model|model.nodes.as_ref().and_then(|page|page.current.committed_tree_id.as_deref())==Some(id.get_value().as_str())));
@@ -144,6 +153,7 @@ fn graph(state: RwSignal<State>, target: Target) -> impl IntoView {
                                 if let Some(path)=path{super::super::actions::preview_directory_snapshot(state,path,node.directory_branch_id,node.tree_id);}
                             }
                         }>{t("浏览此快照","Browse this snapshot")}</button>
+                    {creation::control(state, model, target, source, tree)}
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_endpoint==Some(HistoryEndpoint::OutsideWindow)))><button class="zxs-button" data-directory-parent="outside_window" disabled=move ||disabled.get() on:click=move |_|if let Some(parent)=node.with_untracked(|node|node.as_ref().and_then(|node|node.parent_tree_id.clone())){load(state,model,target,Read::Nodes{cursor:None,anchor:Some(parent)});}>{t("查看前一个目录节点","Show previous folder node")}</button></Show>
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_tree_id.is_none()))><span class="zxs-row">{t("无父关系","No parent relationships")}</span></Show>
                     </div>

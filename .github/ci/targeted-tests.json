@@ -591,6 +591,38 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "historical-directory-web": {
+      "reason": "Frozen clean current review and loaded historical commit; retained original request, unknown-result lookup, explicit same-request retry and no automatic checkout",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "prefixes": [
+            "files::mkdir::storage::tests::",
+            "files::staging::tests::",
+            "files::branch::tests::",
+            "files::directory_history::view::creation::tests::"
+          ],
+          "exact": [
+            "history::tests::current_directory_git_operations_have_specific_labels"
+          ],
+          "max_tests": 54,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "features": [],
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown",
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -2095,6 +2127,90 @@
       "path": "test/server/unit/http_disk_directory.rs",
       "groups": [
         "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/mod.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/mutation.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/branch.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_history/view.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mkdir.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mkdir/storage/directory.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/staging.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/history.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/branch/tests.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_branch_recovery_tests.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/staging_tests.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/history/tests.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "src/web/src/files/directory_history/view/creation.rs",
+      "groups": [
+        "historical-directory-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/directory_history/creation_tests.rs",
+      "groups": [
+        "historical-directory-web"
       ]
     }
   ],

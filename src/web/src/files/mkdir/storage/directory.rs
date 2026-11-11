@@ -1,7 +1,14 @@
 //! Typed retained commands derive both the HTTP request and server digest.
 //! No retry reads the current listing or mints another operation identity.
-use super::*;
-use storage_contract::directory_git::DirectoryBranchCreateSource;
+use crate::api;
+use crate::files::mkdir::failure;
+use crate::files::mkdir::storage::{Format, Namespace, Record, Stored, decode_error, required_path};
+use crate::ui::State;
+use data_serialization::{Deserialize, Serialize};
+use json_codec::{Value, json};
+use name_policy::PortablePath;
+use storage_contract::directory_git::{DirectoryBranchCreateSource, HistoricalDirectoryBranchSource};
+use storage_contract::{BranchName, DirectoryBranchId, OperationId};
 
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -10,6 +17,12 @@ pub(super) enum DirectoryRequest {
         source: DirectoryBranchCreateSource,
         repository_path: String,
         name: String,
+    },
+    CreateHistorical {
+        source: HistoricalDirectoryBranchSource,
+        #[serialization(deserialize_with = "required_path")]
+        repository_path: Option<PortablePath>,
+        name: BranchName,
     },
     Checkout {
         repository_id: String,
@@ -41,12 +54,17 @@ impl DirectoryRequest {
                                 && branch.head_tree_id() == expected_tree_id
                         })
             }
-            Self::Create { .. } => false,
+            Self::Create { .. } | Self::CreateHistorical { .. } => false,
         }
     }
     pub(super) fn label(&self, path: &str) -> String {
         match self {
             Self::Create { name, .. } => format!("{path} · create branch {name}"),
+            Self::CreateHistorical { name, source, .. } => format!(
+                "{path} · create branch {} from {}",
+                name.as_str(),
+                source.tree_id(),
+            ),
             Self::Checkout {
                 directory_branch_id,
                 ..
@@ -58,6 +76,7 @@ impl DirectoryRequest {
     fn kind(&self) -> &'static str {
         match self {
             Self::Create { .. } => "directory.git.branch-create",
+            Self::CreateHistorical { .. } => "directory.git.branch-create-history",
             Self::Checkout { .. } => "directory.git.checkout",
         }
     }
@@ -70,6 +89,15 @@ impl DirectoryRequest {
             } => json!({
                 "repository_id":source.repository_id,
                 "path":repository_path, "name":name, "source":source,
+            }),
+            Self::CreateHistorical {
+                source,
+                repository_path,
+                name,
+            } => json!({
+                "repository_id":source.current().repository_id,
+                "path":repository_path.as_ref().map_or("", PortablePath::as_str),
+                "name":name.as_str(), "source":source,
             }),
             Self::Checkout {
                 repository_id,
@@ -105,6 +133,25 @@ impl DirectoryRequest {
                 {
                     return Err(failure(
                         "The retained branch source and folder paths disagree.",
+                    ));
+                }
+            }
+            Self::CreateHistorical {
+                source,
+                repository_path,
+                ..
+            } => {
+                let current = source.current();
+                let path = repository_path.as_ref().map_or("", PortablePath::as_str);
+                if repository_path.is_none() != (current.directory_id == current.repository_id)
+                    || (path != display
+                        && display.split_once('/').map(|(_, tail)| tail) != Some(path)
+                        && !(repository_path.is_none()
+                            && !display.is_empty()
+                            && !display.contains('/')))
+                {
+                    return Err(failure(
+                        "The retained historical branch source and folder paths disagree.",
                     ));
                 }
             }
@@ -144,6 +191,17 @@ impl DirectoryRequest {
                 ),
                 json!({"path":display,"name":name,"operation_id":operation,"source":source}),
             ),
+            Self::CreateHistorical { source, name, .. } => (
+                "POST",
+                format!(
+                    "/api/file-manager/disks/{}/directory-branches/from-history",
+                    api::segment(slot)
+                ),
+                json!({
+                    "path":display,"name":name.as_str(),
+                    "operation_id":operation,"source":source,
+                }),
+            ),
             Self::Checkout {
                 repository_id,
                 directory_branch_id,
@@ -182,6 +240,22 @@ impl DirectoryRequest {
                     && result["selected"] == false
                     && result["materialized"] == false
             }
+            Self::CreateHistorical {
+                source,
+                repository_path,
+                name,
+            } => {
+                result["directory_branch_id"].as_str().is_some_and(|id| {
+                    id.parse::<DirectoryBranchId>().is_ok()
+                        && id != source.current().directory_branch_id
+                }) && result["head_tree_id"] == source.tree_id().to_string()
+                    && result["path"] == repository_path.as_ref().map_or("", PortablePath::as_str)
+                    && result["name"] == name.as_str()
+                    && result["selected"] == false
+                    && result["materialized"] == false
+                    && result["copied_files"] == "0"
+                    && result["placeholder_files"] == "0"
+            }
             Self::Checkout {
                 directory_branch_id,
                 ..
@@ -197,6 +271,38 @@ impl DirectoryRequest {
     }
 }
 impl Record {
+    pub(in crate::files::mkdir) fn capture_historical_directory_branch(
+        state: &State,
+        operation: OperationId,
+        source: HistoricalDirectoryBranchSource,
+        name: String,
+    ) -> Result<Self, api::Error> {
+        if state.files.repository_id != source.current().repository_id
+            || state.files.namespace_head != source.current().namespace_head
+        {
+            return Err(failure(
+                "The reviewed historical branch source no longer matches this directory.",
+            ));
+        }
+        let repository_path = if state.files.repository_path.is_empty() {
+            None
+        } else {
+            Some(
+                PortablePath::parse(&state.files.repository_path)
+                    .map_err(|source| decode_error(source.into()))?,
+            )
+        };
+        Self::capture_directory(
+            state,
+            operation,
+            DirectoryRequest::CreateHistorical {
+                source,
+                repository_path,
+                name: BranchName::parse(&name).map_err(decode_error)?,
+            },
+        )
+    }
+
     pub(in crate::files::mkdir) fn capture_directory_branch(
         state: &State,
         operation: OperationId,

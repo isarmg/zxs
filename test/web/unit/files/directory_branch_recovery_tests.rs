@@ -40,6 +40,22 @@ fn create() -> Record {
     )
     .unwrap()
 }
+fn historical_source() -> storage_contract::directory_git::HistoricalDirectoryBranchSource {
+    storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+        source(),
+        id("dtree", 7).parse().unwrap(),
+    )
+    .unwrap()
+}
+fn historical_create() -> Record {
+    Record::capture_historical_directory_branch(
+        &state(),
+        id("op", 5).parse().unwrap(),
+        historical_source(),
+        "history-draft".into(),
+    )
+    .unwrap()
+}
 fn checkout() -> Record {
     let stored = Stored {
         format: Format::DirectoryBranch,
@@ -79,6 +95,28 @@ fn receipt(record: &Record) -> Value {
                 json!({
                     "directory_branch_id":id("dbr",10), "head_tree_id":source.working_tree_id,
                     "path":repository_path, "name":name, "selected":false, "materialized":false,
+                }),
+            )
+        }
+        DirectoryRequest::CreateHistorical {
+            source,
+            repository_path,
+            name,
+        } => {
+            let path = repository_path
+                .as_ref()
+                .map_or("", name_policy::PortablePath::as_str);
+            let input = json!({
+                "repository_id":source.current().repository_id, "path":path,
+                "name":name.as_str(), "source":source,
+            });
+            (
+                "directory.git.branch-create-history",
+                input,
+                json!({
+                    "directory_branch_id":id("dbr",10), "head_tree_id":source.tree_id(),
+                    "path":path, "name":name.as_str(), "selected":false, "materialized":false,
+                    "copied_files":"0", "placeholder_files":"0",
                 }),
             )
         }
@@ -247,7 +285,7 @@ fn malformed_source_and_recovery_records_are_rejected_without_changing_bytes() {
 
 #[test]
 fn receipt_needs_original_digest_kind_input_and_result_for_both_commands() {
-    for record in [create(), checkout()] {
+    for record in [create(), checkout(), historical_create()] {
         let valid = receipt(&record);
         assert!(record.matches_receipt(&valid, ReceiptOrigin::Lookup));
         assert!(record.matches_receipt(&valid, ReceiptOrigin::OriginalRequest));
@@ -278,7 +316,7 @@ fn receipt_needs_original_digest_kind_input_and_result_for_both_commands() {
 
 #[test]
 fn navigation_retry_uses_the_retained_request_and_is_fenced_by_owner_and_phase() {
-    for record in [create(), checkout()] {
+    for record in [create(), checkout(), historical_create()] {
         let record = Arc::new(record);
         let operation = record.operation();
         let original = record.request();
@@ -530,7 +568,7 @@ fn shared_encoding_keeps_each_original_shape_bytes_digest_and_request() {
     };
     let movement = Record::encode(moved, "object move is oversized").unwrap();
     let folder = Record::capture(&state(), id("op", 4).parse().unwrap(), "new").unwrap();
-    for record in [create(), checkout(), folder, movement] {
+    for record in [create(), checkout(), historical_create(), folder, movement] {
         let expected = storage_contract::canonical_json(&record.stored).unwrap();
         let encoded = Record::encode(record.stored, "request is oversized").unwrap();
         assert_eq!(encoded.bytes.as_bytes(), expected);
@@ -580,4 +618,374 @@ fn shared_encoding_preserves_binding_errors_and_their_source() {
         error.source.as_deref(),
         Some(api::ErrorSource::FolderCreationRecovery(_))
     ));
+}
+
+const HISTORICAL_ORIGINAL: &str = concat!(
+    "{\"format\":\"directory-branch-original-request\",",
+    "\"namespace\":{\"kind\":\"directory_branch\",\"request\":{",
+    "\"action\":\"create_historical\",\"name\":\"history-draft\",",
+    "\"repository_path\":\"folder\",\"source\":{\"current\":{",
+    "\"directory_branch_id\":\"dbr_00000000000000000000000000000003\",",
+    "\"directory_id\":\"entry_00000000000000000000000000000002\",",
+    "\"head_tree_id\":\"dtree_00000000000000000000000000000005\",",
+    "\"index_generation\":\"9007199254740993\",",
+    "\"namespace_head\":\"commit_00000000000000000000000000000006\",",
+    "\"repository_id\":\"repo_00000000000000000000000000000001\",",
+    "\"working_tree_id\":\"dtree_00000000000000000000000000000004\"},",
+    "\"tree_id\":\"dtree_00000000000000000000000000000007\"}}},",
+    "\"operation\":\"op_00000000000000000000000000000005\",",
+    "\"path\":\"named/folder\",\"principal\":\"alice\",\"slot\":\"P01\"}",
+);
+
+#[test]
+fn historical_registration_round_trip_keeps_canonical_bytes_and_the_distinct_tree() {
+    let record = historical_create();
+    let expected = HISTORICAL_ORIGINAL;
+    assert_eq!(record.bytes.as_ref(), expected);
+    let restored = Record::decode(&record.key(), "alice", expected).unwrap();
+    assert_eq!(restored.bytes, record.bytes);
+    assert_eq!(restored.request(), record.request());
+    assert_eq!(
+        storage_contract::canonical_json(&restored.stored).unwrap(),
+        expected.as_bytes()
+    );
+    let (method, url, body) = restored.request();
+    assert_eq!(method, "POST");
+    assert_eq!(
+        url,
+        "/api/file-manager/disks/P01/directory-branches/from-history"
+    );
+    assert_eq!(
+        body,
+        json!({
+            "path":"named/folder", "name":"history-draft", "operation_id":id("op",5),
+            "source":{"current":source(),"tree_id":id("dtree",7)},
+        })
+    );
+    assert_eq!(body["source"]["current"], json!(source()));
+    assert_eq!(
+        body["source"]["current"]["index_generation"],
+        "9007199254740993"
+    );
+    assert_eq!(body["source"]["tree_id"], id("dtree", 7));
+    assert_ne!(
+        body["source"]["tree_id"],
+        body["source"]["current"]["working_tree_id"]
+    );
+    assert_ne!(
+        body["source"]["tree_id"],
+        body["source"]["current"]["head_tree_id"]
+    );
+    let digest = storage_contract::object_hash(
+        "request",
+        &json!({
+            "kind":"directory.git.branch-create-history", "principal":"alice",
+            "body":{
+                "repository_id":id("repo",1), "path":"folder", "name":"history-draft",
+                "source":{"current":source(),"tree_id":id("dtree",7)},
+            },
+        }),
+    )
+    .unwrap();
+    assert_eq!(restored.digest.as_deref(), Some(digest.as_str()));
+    assert!(restored.can_lookup());
+    assert!(!restored.is_directory_checkout());
+}
+
+#[test]
+fn historical_root_requires_explicit_null_and_binds_current_namespace() {
+    for display in ["", "named"] {
+        let mut state = state();
+        state.files.directory = display.into();
+        state.files.repository_path.clear();
+        let mut current = source();
+        current.directory_id = current.repository_id.clone();
+        let source = storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
+            current,
+            id("dtree", 7).parse().unwrap(),
+        )
+        .unwrap();
+        let record = Record::capture_historical_directory_branch(
+            &state,
+            id("op", 5).parse().unwrap(),
+            source,
+            "root-history".into(),
+        )
+        .unwrap();
+        let restored = Record::decode(&record.key(), "alice", &record.bytes).unwrap();
+        let stored: Value = json_codec::from_str(&record.bytes).unwrap();
+        assert_eq!(stored["namespace"]["request"]["repository_path"], Value::Null);
+        assert_eq!(restored.request().2["path"], display);
+        assert_eq!(receipt(&restored)["result"]["input"]["path"], "");
+        assert!(restored.matches_receipt(&receipt(&restored), ReceiptOrigin::Lookup));
+    }
+    for change in 0..4 {
+        let mut state = state();
+        match change {
+            0 => state.files.repository_id = id("repo", 99),
+            1 => state.files.namespace_head = id("commit", 99),
+            2 => state.files.repository_path = "elsewhere".into(),
+            3 => state.files.repository_path.clear(),
+            _ => unreachable!(),
+        }
+        assert!(
+            Record::capture_historical_directory_branch(
+                &state,
+                id("op", 5).parse().unwrap(),
+                historical_source(),
+                "history-draft".into(),
+            )
+            .is_err(),
+            "{change}"
+        );
+    }
+}
+
+#[test]
+fn historical_recovery_requires_the_complete_current_source() {
+    let record = historical_create();
+    for field in [
+        "repository_id",
+        "directory_id",
+        "directory_branch_id",
+        "working_tree_id",
+        "head_tree_id",
+        "index_generation",
+        "namespace_head",
+    ] {
+        let mut stored: Value = json_codec::from_str(&record.bytes).unwrap();
+        stored["namespace"]["request"]["source"]["current"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        let bytes = json_codec::to_string(&stored).unwrap();
+        assert!(
+            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn historical_recovery_rejects_malformed_path_and_unknown_fields() {
+    let record = historical_create();
+    for change in 0..13 {
+        let mut stored: Value = json_codec::from_str(&record.bytes).unwrap();
+        let request = &mut stored["namespace"]["request"];
+        match change {
+            0 => {
+                request.as_object_mut().unwrap().remove("repository_path");
+            }
+            1 => request["repository_path"] = Value::Null,
+            2 => request["repository_path"] = "outside".into(),
+            3 => request["repository_path"] = "../outside".into(),
+            4 => {
+                request["source"].as_object_mut().unwrap().remove("tree_id");
+            }
+            5 => request["source"]["tree_id"] = id("tree", 7).into(),
+            6 => request["source"]["current"]["index_generation"] = "0".into(),
+            7 => request["source"]["current"]["index_generation"] = 2.into(),
+            8 => request["source"]["current"]["namespace_head"] = "invalid".into(),
+            9 => request["method"] = "GET".into(),
+            10 => request["name"] = "../invalid".into(),
+            11 => request["source"]["unknown"] = true.into(),
+            12 => request["source"]["current"]["unknown"] = true.into(),
+            _ => unreachable!(),
+        }
+        let bytes = json_codec::to_string(&stored).unwrap();
+        assert!(
+            Record::decode(&record.key(), "alice", &bytes).is_err(),
+            "{change}"
+        );
+    }
+    assert!(Record::decode(&record.key(), "bob", &record.bytes).is_err());
+    assert_eq!(record.request(), historical_create().request());
+}
+
+#[test]
+fn historical_receipt_binds_every_current_field_and_the_selected_historical_tree() {
+    let record = historical_create();
+    let valid = receipt(&record);
+    for (field, changed) in [
+        ("repository_id", json!(id("repo", 99))),
+        ("directory_id", json!(id("entry", 99))),
+        ("directory_branch_id", json!(id("dbr", 99))),
+        ("working_tree_id", json!(id("dtree", 99))),
+        ("head_tree_id", json!(id("dtree", 99))),
+        ("index_generation", json!("9007199254740994")),
+        ("namespace_head", json!(id("commit", 99))),
+    ] {
+        let mut wrong = valid.clone();
+        wrong["result"]["input"]["source"]["current"][field] = changed;
+        assert!(
+            !record.matches_receipt(&wrong, ReceiptOrigin::Lookup),
+            "{field}"
+        );
+    }
+    for change in 0..11 {
+        let mut wrong = valid.clone();
+        match change {
+            0 => wrong["result"]["input"]["source"]["tree_id"] = id("dtree", 99).into(),
+            1 => wrong["result"]["head_tree_id"] = source().working_tree_id.into(),
+            2 => wrong["result"]["head_tree_id"] = source().head_tree_id.into(),
+            3 => wrong["result"]["directory_branch_id"] = source().directory_branch_id.into(),
+            4 => wrong["result"]["selected"] = true.into(),
+            5 => wrong["result"]["materialized"] = true.into(),
+            6 => wrong["result"]["copied_files"] = "1".into(),
+            7 => wrong["result"]["placeholder_files"] = "1".into(),
+            8 => wrong["result"]["path"] = "elsewhere".into(),
+            9 => wrong["result"]["name"] = "another".into(),
+            10 => wrong["operation_kind"] = "directory.git.branch-create".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !record.matches_receipt(&wrong, ReceiptOrigin::Lookup),
+            "{change}"
+        );
+        assert!(!record.matches_receipt(&wrong, ReceiptOrigin::OriginalRequest));
+    }
+}
+
+#[test]
+fn historical_unknown_reload_and_session_change_keep_only_the_original_request() {
+    let record = Arc::new(historical_create());
+    let operation = record.operation();
+    let original = record.request();
+    let mut state = state();
+    state.files.mkdir.owner = Some((7, "alice".into()));
+    state.files.mkdir.restore_records(Ok(vec![Arc::clone(&record)]));
+    settle(
+        &mut state.files.mkdir,
+        &operation.to_string(),
+        SaveStatus::Unknown,
+    );
+    state.files.directory = "another".into();
+    state.files.repository_id = id("repo", 99);
+    state.files.mkdir.restore_records(Ok(vec![Arc::clone(&record)]));
+    assert_eq!(state.files.mkdir.records.len(), 1);
+    assert!(matches!(state.files.mkdir.records[0].phase, Phase::Pending));
+    assert!(poll_allowed(&state, &operation.to_string()));
+    assert!(!state.files.mutation_pending);
+    assert!(state.files.operations.is_empty());
+    assert!(state.files.default_operation.is_none());
+    assert_eq!(retry_record(&state, 7, operation).unwrap().request(), original);
+    state.session_epoch = 8;
+    assert!(!poll_allowed(&state, &operation.to_string()));
+    assert!(retry_record(&state, 7, operation).is_none());
+    assert!(!receipt_matches(
+        &state,
+        &operation.to_string(),
+        &receipt(&record)
+    ));
+    adopt_owner(&mut state, &(8, "alice".into()));
+    assert_eq!(retry_record(&state, 8, operation).unwrap().request(), original);
+    assert_eq!(state.files.mkdir.records[0].record.bytes, record.bytes);
+    state.session_epoch = 9;
+    state.principal = "bob".into();
+    adopt_owner(&mut state, &(9, "bob".into()));
+    assert!(state.files.mkdir.records.is_empty());
+    assert_eq!(record.request(), original);
+}
+
+#[test]
+fn historical_registration_never_clears_a_displayed_checkout_preview() {
+    use crate::files::model::{DirectoryPreview, DirectoryPreviewSource};
+    let record = Arc::new(historical_create());
+    let operation = record.operation().to_string();
+    let mut state = state();
+    state.files.directory_preview = Some(DirectoryPreview {
+        source: DirectoryPreviewSource::Branch(crate::files::test_entries::branch(json!({
+            "directory_branch_id":id("dbr",3), "head_tree_id":id("dtree",7),
+        }))),
+        path: "named/folder".into(),
+    });
+    state.files.mkdir.records.push(Retained {
+        record,
+        phase: Phase::Pending,
+    });
+    assert!(!default_completion_applies(&state, &operation));
+    settle(&mut state.files.mkdir, &operation, SaveStatus::Published);
+    assert!(!default_completion_applies(&state, &operation));
+    assert!(state.files.directory_preview.is_some());
+    assert!(state.files.default_operation.is_none());
+}
+
+#[test]
+fn historical_receipt_with_another_operation_cannot_settle_the_original() {
+    let record = Arc::new(historical_create());
+    let operation = record.operation().to_string();
+    let mut published = receipt(&record);
+    published["state"] = "completed".into();
+    published["commit_state"] = json!(storage_contract::CommitState::Published);
+    published["error"] = Value::Null;
+    published["protection_at_publish"] =
+        json!(storage_contract::ProtectionAtPublish::NotApplicable);
+    published["publication_sequence"] = "19".into();
+    assert!(record.matches_receipt(&published, ReceiptOrigin::Lookup));
+    assert_eq!(
+        FileOperation::from_receipt(&operation, &published).status(),
+        SaveStatus::Published
+    );
+    published["operation_id"] = id("op", 99).into();
+    let observed = FileOperation::from_receipt(&operation, &published);
+    assert_eq!(observed.id(), operation);
+    assert_eq!(observed.status(), SaveStatus::Unknown);
+    let mut model = Model::default();
+    model.restore_records(Ok(vec![Arc::clone(&record)]));
+    settle(&mut model, &operation, observed.status());
+    assert!(matches!(model.records[0].phase, Phase::Pending));
+    assert_eq!(model.records[0].record.bytes, record.bytes);
+}
+
+#[test]
+fn historical_recovery_byte_budget_keeps_the_exact_limit() {
+    let record = historical_create();
+    let mut bytes = record.bytes.to_string();
+    bytes.push_str(&" ".repeat(MAX_RECORD_BYTES - bytes.len()));
+    let restored = Record::decode(&record.key(), "alice", &bytes).unwrap();
+    assert_eq!(restored.bytes.as_ref(), bytes);
+    assert_eq!(restored.request(), record.request());
+    bytes.push(' ');
+    let error = match Record::decode(&record.key(), "alice", &bytes) {
+        Ok(_) => panic!("an oversized original must be refused"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::ResourceLimit);
+    assert_eq!(record.bytes.as_ref(), HISTORICAL_ORIGINAL);
+}
+
+#[test]
+fn historical_recovery_record_budget_preserves_all_originals() {
+    let originals = (1..=MAX_RECORDS)
+        .map(|number| {
+            Arc::new(
+                Record::capture_historical_directory_branch(
+                    &state(),
+                    id("op", u8::try_from(number).unwrap()).parse().unwrap(),
+                    historical_source(),
+                    "history-draft".into(),
+                )
+                .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut model = Model::default();
+    model.restore_records(Ok(originals.clone()));
+    assert!(model.error.is_none());
+    assert_eq!(model.records.len(), MAX_RECORDS);
+    let extra = Record::capture_historical_directory_branch(
+        &state(),
+        id("op", 99).parse().unwrap(),
+        historical_source(),
+        "history-draft".into(),
+    )
+    .unwrap();
+    model.restore_records(Ok(vec![Arc::new(extra)]));
+    assert_eq!(model.error.as_ref().unwrap().code, ErrorCode::ResourceLimit);
+    assert_eq!(model.records.len(), MAX_RECORDS);
+    for (retained, original) in model.records.iter().zip(originals) {
+        assert!(Arc::ptr_eq(&retained.record, &original));
+        assert!(matches!(retained.phase, Phase::Pending));
+        assert_eq!(retained.record.request(), original.request());
+    }
 }

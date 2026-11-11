@@ -145,6 +145,24 @@ pub(super) fn start_directory_branch(
     })
 }
 
+pub(super) fn start_historical_directory_branch(
+    state: RwSignal<State>,
+    source: storage_contract::directory_git::HistoricalDirectoryBranchSource,
+    name: String,
+) -> Option<String> {
+    if !state.with_untracked(|s| {
+        actions::write_allowed(s)
+            && s.files.loaded
+            && s.files.mkdir.ready(s)
+            && s.files.directory_branches_supported
+    }) {
+        return None;
+    }
+    capture_and_retain(state, |s, operation| {
+        Record::capture_historical_directory_branch(s, operation, source, name)
+    })
+}
+
 pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
     if !state.with_untracked(|s| {
         actions::default_write_allowed(s)
