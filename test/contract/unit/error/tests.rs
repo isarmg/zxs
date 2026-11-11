@@ -15,19 +15,6 @@ fn all_codes_roundtrip_exact_wire_spelling() {
 
 #[test]
 fn concrete_sources_survive_contract_conversion_and_retry_policy() {
-    let error = Error::from(std::io::Error::from_raw_os_error(28)).retryable();
-    assert_eq!(error.code(), ErrorCode::NoSpace);
-    assert!(error.is_retryable());
-    assert_eq!(
-        error
-            .source()
-            .unwrap()
-            .downcast_ref::<std::io::Error>()
-            .unwrap()
-            .raw_os_error(),
-        Some(28)
-    );
-    assert!(error.to_string().starts_with("NO_SPACE:"));
     let source = json_codec::from_str::<json_codec::Value>("{").unwrap_err();
     let line = source.line();
     let error = Error::from(source);
@@ -47,6 +34,50 @@ fn concrete_sources_survive_contract_conversion_and_retry_policy() {
     let error = Error::new(ErrorCode::InvalidRequest, "external validation failure");
     assert!(error.source().is_none());
     assert!(!error.is_retryable());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_enospc_preserves_original_os_error() {
+    let error = Error::from(std::io::Error::from_raw_os_error(28)).retryable();
+    assert_eq!(error.code(), ErrorCode::NoSpace);
+    assert!(error.is_retryable());
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(28)
+    );
+}
+
+#[test]
+fn io_kinds_preserve_storage_full_and_quota_wire_policy() {
+    use std::io::ErrorKind;
+
+    for (kind, expected) in [
+        (ErrorKind::StorageFull, ErrorCode::NoSpace),
+        (ErrorKind::QuotaExceeded, ErrorCode::IoError),
+        (ErrorKind::PermissionDenied, ErrorCode::IoError),
+        (ErrorKind::NotFound, ErrorCode::IoError),
+        (ErrorKind::Other, ErrorCode::IoError),
+    ] {
+        let error = Error::from(std::io::Error::new(kind, "operation failed"));
+        assert_eq!(error.code(), expected);
+        assert!(!error.is_retryable());
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            kind
+        );
+        assert_eq!(error.retryable().code(), expected);
+    }
 }
 
 #[test]

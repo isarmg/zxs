@@ -1,5 +1,9 @@
 # ZXS 当前任务清单
 
+- [ ] GitHub CI 验证 T13 contract 按 ErrorKind::StorageFull 识别磁盘满，保留 NO_SPACE 与来源；QuotaExceeded 继续 IO_ERROR。errno 28 回归仅 Linux，ErrorKind 回归覆盖所有目标。
+- [ ] GitHub CI 验证跨已提交目录的 object.move 恢复：双故障、原操作冷开重试、目标当前版本映射、两版本三盘独立容器、源 inode/正文与冻结视图、二次冷开无重复发布。
+- [ ] 校准 docs/design/branch-system-logic.md §23 单容器描述，区分同所有者路径移动与跨已提交目录／仓库完整历史复制及独立身份规则，保持用户跨仓库复制要求。
+
 - [ ] GitHub CI 验证 T02 新计数口径：14 个第一方范围、24 项指标及新基线；增长和未更新基线的下降均拒绝，行为测试覆盖计数、接线、排除范围与双向变化。
 
 - 待 CI 验证：保留的文件移动原意图遇到 source 身份改动时返回 IdempotencyKeyReused；首次捕获身份漂移继续 WorkspaceChanged。保留身份验证、原意图与 State 不变及准确重试回归。

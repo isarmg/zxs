@@ -304,7 +304,7 @@ pub enum Error {
     },
 }
 fn io_code(source: &std::io::Error) -> ErrorCode {
-    if source.raw_os_error() == Some(28) {
+    if source.kind() == std::io::ErrorKind::StorageFull {
         ErrorCode::NoSpace
     } else {
         ErrorCode::IoError
