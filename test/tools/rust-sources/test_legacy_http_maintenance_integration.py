@@ -7,11 +7,9 @@ alter manifests or features. This is not a Cargo metadata or behavior test.
 from contextlib import ExitStack, contextmanager, redirect_stdout
 from functools import wraps
 from copy import deepcopy
-import cProfile
 import io
 import json
 from pathlib import Path
-import pstats
 import shutil
 import sys
 import tempfile
@@ -81,36 +79,8 @@ def refresh_phases():
         yield
 
 
-@contextmanager
-def refresh_profile(enabled):
-    if not enabled:
-        yield
-        return
-    profiler = cProfile.Profile()
-    profiler.enable()
-    try:
-        yield
-    finally:
-        profiler.disable()
-        # Metadata only: no arguments, source bodies, objects or local values.
-        # Profiling adds overhead; these timings are not a throughput baseline.
-        try:
-            rows = pstats.Stats(profiler).stats
-            print('maintenance profile: first refresh; top 25 cumulative; profiling adds overhead',
-                  file=sys.stderr, flush=True)
-            for (filename, line, function), (primitive, calls, own, cumulative, _) in sorted(
-                    rows.items(), key=lambda item: item[1][3], reverse=True)[:25]:
-                print(json.dumps(dict(file=filename, line=line, function=function,
-                                      primitive_calls=primitive, calls=calls,
-                                      own_seconds=own, cumulative_seconds=cumulative)),
-                      file=sys.stderr, flush=True)
-        except Exception:
-            # Diagnostic output must not replace a refresh result or exception.
-            pass
-
-
-def observed_refresh(root, profile=False):
-    with refresh_phases(), refresh_profile(profile):
+def observed_refresh(root):
+    with refresh_phases():
         return observed('refresh', manage.refresh, root)
 
 
@@ -144,7 +114,6 @@ class HttpMaintenanceManager(unittest.TestCase):
                     patch.object(manage, 'cargo_metadata', side_effect=AssertionError('unexpected Cargo invocation')), \
                     redirect_stdout(io.StringIO()):
                 observed('verify', manage.verify, root)
-                profile_next_refresh = True
                 for old, new in ((b'//! # HTTP transport', b'//! # HTTP transport fixture one'),
                                  (b'//! # HTTP transport fixture one', b'//! # HTTP transport fixture two')):
                     before_bytes = (root / manage.CATALOG).read_bytes()
@@ -157,8 +126,7 @@ class HttpMaintenanceManager(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         observed('verify', manage.verify, root)
                     self.assertEqual((root / manage.CATALOG).read_bytes(), before_bytes)
-                    observed_refresh(root, profile=profile_next_refresh)
-                    profile_next_refresh = False
+                    observed_refresh(root)
                     observed('verify', manage.verify, root)
                     catalog = json.loads((root / manage.CATALOG).read_bytes())
                     self.assertEqual(catalog[legacy.KEY], list(legacy.RECEIPTS))

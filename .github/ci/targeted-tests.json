@@ -964,6 +964,31 @@
           "max_tests": 12
         }
       ]
+    },
+    "directory-lock-child-inheritance": {
+      "reason": "Real child inheritance keeps directory identity, parent close-on-exec flags and shared-description lock release observable without unsafe test callbacks",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "exact": [
+            "private_io::tests::dropping_draft_transaction_releases_lock_while_child_holds_parent_directory"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "platform-io",
+          "manifest": "src/platform/Cargo.toml",
+          "exact": [
+            "fs_safety::linux::tests::directory_lock_ownership_is_independent_of_anchor_handles",
+            "fs_safety::linux::tests::dropping_directory_lock_releases_shared_description_while_child_holds_it"
+          ],
+          "max_tests": 2
+        }
+      ]
     }
   },
   "rules": [
@@ -3024,6 +3049,25 @@
       "path": "test/helper/unit/samba_account_listing_tests.rs",
       "groups": [
         "helper-samba-observation-sources"
+      ]
+    },
+    {
+      "path": "test/helper/unit/private_io/tests.rs",
+      "groups": [
+        "directory-lock-child-inheritance",
+        "helper-samba-observation-sources"
+      ]
+    },
+    {
+      "path": "test/platform/unit/fs_safety/linux/tests.rs",
+      "groups": [
+        "directory-lock-child-inheritance"
+      ]
+    },
+    {
+      "path": "test/support/directory_child.rs",
+      "groups": [
+        "directory-lock-child-inheritance"
       ]
     }
   ],

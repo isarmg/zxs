@@ -1161,7 +1161,19 @@ fn workspace_body(method: &str, path: &str) -> Value {
         json!({"source_commit_id":"source","name":"Side","operation_id":"op_00000000000000000000000000000000"})
     } else if path.starts_with("/api/file-manager/disks/") && path.ends_with("/directory-branches")
     {
-        json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})
+        json!({
+            "name": "Side",
+            "operation_id": "op_00000000000000000000000000000000",
+            "source": {
+                "repository_id": "repo_00000000000000000000000000000000",
+                "directory_id": "repo_00000000000000000000000000000000",
+                "directory_branch_id": "dbr_00000000000000000000000000000000",
+                "working_tree_id": "dtree_00000000000000000000000000000000",
+                "head_tree_id": "dtree_00000000000000000000000000000000",
+                "index_generation": "1",
+                "namespace_head": "commit_00000000000000000000000000000000"
+            }
+        })
     } else if path.ends_with("/directory-git/initialize") {
         json!({"path":"","expected_namespace_head":"commit_00000000000000000000000000000000","operation_id":"op_00000000000000000000000000000000"})
     } else if path.ends_with("/directory-git/children/stage") {

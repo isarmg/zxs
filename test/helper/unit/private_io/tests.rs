@@ -1,11 +1,13 @@
 use super::*;
 use platform_io::publication::PublicationFailure;
-use std::io::Write;
 use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
     sync::Arc,
 };
+
+#[path = "../../../support/directory_child.rs"]
+mod directory_child;
 
 fn read_owned_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     AnchoredPath::open(path)?.read_owned_bytes(maximum)
@@ -199,49 +201,39 @@ fn draft_transaction_keeps_markers_backups_and_writes_on_the_held_parent() {
 }
 
 #[test]
-fn dropping_draft_transaction_releases_lock_before_an_unrelated_child_execs() {
-    use std::os::unix::{net::UnixStream, process::CommandExt};
-    use std::time::Duration;
-
+fn dropping_draft_transaction_releases_lock_while_child_holds_parent_directory() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("draft.json");
     write_new(&path, b"draft").unwrap();
     let transaction = DraftTransaction::open(&path).unwrap();
-    let (mut parent, child) = UnixStream::pair().unwrap();
-    parent
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    child
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    let spawned = std::thread::spawn(move || {
-        let mut command = std::process::Command::new("/bin/true");
-        // SAFETY: The child only uses async-signal-safe read/write on an already-owned socket;
-        // the inherited draft descriptors deliberately remain open until the parent releases it.
-        unsafe {
-            command.pre_exec(move || {
-                rustix::io::write(&child, b"r")?;
-                let mut release = [0_u8; 1];
-                if rustix::io::read(&child, &mut release)? != 1 {
-                    return Err(std::io::ErrorKind::UnexpectedEof.into());
-                }
-                Ok(())
-            });
-        }
-        command.spawn().unwrap().wait().unwrap()
-    });
-    let mut ready = [0_u8; 1];
-    parent.read_exact(&mut ready).unwrap();
+    let parent = transaction.target.directory.directory().try_clone().unwrap();
+    let identity = FileIdentity::from_fd(&parent).unwrap();
+    let mut child = directory_child::DirectoryChild::start(
+        parent.try_clone().unwrap(),
+        false,
+        "private_io::tests::inherited_directory_child",
+    );
+    assert!(
+        rustix::io::fcntl_getfd(&parent)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
     drop(transaction);
     let next = DraftTransaction::open(&path);
     // Release and reap the child even when the regression assertion below fails.
-    parent.write_all(b"x").unwrap();
-    assert!(spawned.join().unwrap().success());
+    child.release();
+    assert_eq!(FileIdentity::from_fd(&parent).unwrap(), identity);
     assert!(
         next.is_ok(),
-        "completed transaction left its lock in the child: {:#?}",
+        "completed transaction left its lock while directory handles remained: {:#?}",
         next.err()
     );
+}
+
+#[test]
+#[ignore = "launched by the directory-descriptor regression with inherited stdio"]
+fn inherited_directory_child() {
+    directory_child::hold_directory();
 }
 
 /// Run only through publication-io.sh, in one isolated libc-backend process.

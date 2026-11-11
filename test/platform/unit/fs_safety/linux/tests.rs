@@ -7,6 +7,9 @@ use std::{
     },
 };
 
+#[path = "../../../../support/directory_child.rs"]
+mod directory_child;
+
 #[test]
 fn same_mount_private_leaf_open_keeps_the_held_parent_and_file_constraints() {
     let temporary = tempfile::tempdir().unwrap();
@@ -204,6 +207,47 @@ fn directory_lock_ownership_is_independent_of_anchor_handles() {
     ));
     drop(next);
     AdvisoryLock::directory(&contender).unwrap();
+}
+
+#[test]
+fn dropping_directory_lock_releases_shared_description_while_child_holds_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let anchor = File::open(temporary.path()).unwrap();
+    let lock = AdvisoryLock::directory(&anchor).unwrap();
+    let retained = lock.directory.try_clone().unwrap();
+    let identity = FileIdentity::from_fd(&retained).unwrap();
+    // Stdio inherits the same open-file description without changing parent CLOEXEC flags.
+    let mut child = directory_child::DirectoryChild::start(
+        retained.try_clone().unwrap(),
+        true,
+        "fs_safety::linux::tests::inherited_directory_child",
+    );
+    assert!(
+        rustix::io::fcntl_getfd(&retained)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+    drop(lock);
+    let next = AdvisoryLock::directory(&anchor);
+    child.release();
+    assert_eq!(FileIdentity::from_fd(&retained).unwrap(), identity);
+    assert!(
+        next.is_ok(),
+        "dropped lock remains held through shared descriptions: {next:?}"
+    );
+    drop(retained);
+    assert!(matches!(
+        AdvisoryLock::directory(&anchor),
+        Err(Error::AlreadyLocked(_))
+    ));
+    drop(next);
+    AdvisoryLock::directory(&anchor).unwrap();
+}
+
+#[test]
+#[ignore = "launched by the directory-descriptor regression with inherited stdio"]
+fn inherited_directory_child() {
+    directory_child::hold_directory();
 }
 
 #[test]
