@@ -801,6 +801,13 @@
           "compile_target": "wasm32-unknown-unknown"
         }
       ]
+    },
+    "engineering-guidance": {
+      "reason": "Engineering standard rename exercises the existing real HTTP maintenance fixture through unittest wiring; CI selection regressions cover rename admission and the Python-only budget",
+      "python_tests": [
+        "test_engineering_guidance"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -2675,6 +2682,36 @@
       "path": "test/web/unit/ui/tests.rs",
       "groups": [
         "web-session-principals"
+      ]
+    },
+    {
+      "path": "AGENTS.md",
+      "groups": [
+        "engineering-guidance"
+      ]
+    },
+    {
+      "path": "禁止防御性编程.md",
+      "groups": [
+        "engineering-guidance"
+      ]
+    },
+    {
+      "path": "工程规范.md",
+      "groups": [
+        "engineering-guidance"
+      ]
+    },
+    {
+      "path": "test/tools/rust-sources/test_legacy_http_maintenance_integration.py",
+      "groups": [
+        "engineering-guidance"
+      ]
+    },
+    {
+      "path": "test/ci/test_engineering_guidance.py",
+      "groups": [
+        "engineering-guidance"
       ]
     }
   ],

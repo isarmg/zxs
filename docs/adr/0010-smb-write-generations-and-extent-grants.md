@@ -90,4 +90,4 @@ VFS 的 `pwrite`、`pwrite_send`、`ftruncate` 都经 `write_data`/`truncate` �
 
 ## 关联规则
 
-[编码规范 §2、§6、§7、§11](../../禁止防御性编程.md)；[事务与恢复](../10-transactions-and-recovery.md)；[写入语义](../11-write-semantics.md)；[SMB 组件](../components/smb.md)；[ADR 0008](0008-workspace-lifecycle-separation.md) 保留的 PrepareWrite/Dirty 授权承诺在本文中前移到修改之前，没有削弱。
+[编码规范 §2、§6、§7、§11](../../工程规范.md)；[事务与恢复](../10-transactions-and-recovery.md)；[写入语义](../11-write-semantics.md)；[SMB 组件](../components/smb.md)；[ADR 0008](0008-workspace-lifecycle-separation.md) 保留的 PrepareWrite/Dirty 授权承诺在本文中前移到修改之前，没有削弱。

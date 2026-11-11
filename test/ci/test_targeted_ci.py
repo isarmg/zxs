@@ -96,6 +96,45 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(plan['rust_targets'], [])
         self.assertTrue(plan['python_tests'])
 
+    def test_engineering_guidance_paths_select_only_the_real_maintenance_fixture(self):
+        paths = [
+            'AGENTS.md',
+            '禁止防御性编程.md',
+            '工程规范.md',
+            'test/tools/rust-sources/test_legacy_http_maintenance_integration.py',
+            'test/ci/test_engineering_guidance.py',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['engineering-guidance'])
+                self.assertEqual(plan['python_tests'], ['test_engineering_guidance'])
+                self.assertEqual(plan['rust_targets'], [])
+                self.assertTrue(plan['unexecuted'])
+
+    def test_engineering_guidance_rename_selects_one_group_for_both_paths(self):
+        plan = CI.select_plan(self.policy, ['禁止防御性编程.md', '工程规范.md'])
+        self.assertEqual(plan['groups'], ['engineering-guidance'])
+        self.assertEqual(plan['python_tests'], ['test_engineering_guidance'])
+        self.assertEqual(plan['rust_targets'], [])
+
+    def test_engineering_guidance_full_change_keeps_existing_python_budget(self):
+        plan = CI.select_plan(self.policy, [
+            'AGENTS.md', 'TASKS.md', '禁止防御性编程.md', '工程规范.md',
+            'docs/20-engineering.md', 'docs/README.md',
+            'docs/adr/0010-smb-write-generations-and-extent-grants.md',
+            'docs/architecture/test-layout.md',
+            'test/tools/rust-sources/test_legacy_http_maintenance_integration.py',
+            '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
+            'test/ci/test_engineering_guidance.py',
+        ])
+        self.assertEqual(plan['groups'], ['ci-selection', 'engineering-guidance'])
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_engineering_guidance']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assertEqual(plan['rust_targets'], [])
+
     def test_python_zero_tests_missing_import_and_skips_cannot_pass(self):
         CI.passed_python('Ran 2 tests in 0.001s\n\nOK\n', 2)
         for output in ['Ran 0 tests in 0.001s\n\nOK\n',

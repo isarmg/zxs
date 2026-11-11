@@ -36,7 +36,7 @@ class HttpMaintenanceManager(unittest.TestCase):
                 shutil.copytree(ROOT / name, root / name,
                                 ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'AGENTS.md',
-                         '禁止防御性编程.md', 'README.md', '.gitignore', '.gitattributes'):
+                         '工程规范.md', 'README.md', '.gitignore', '.gitattributes'):
                 shutil.copyfile(ROOT / name, root / name)
             catalog = json.loads((root / manage.CATALOG).read_bytes())
             original = deepcopy(catalog)
