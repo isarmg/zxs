@@ -236,7 +236,8 @@ class Run:
         self.root = Path(root)
         self.directory = self.root / 'target/targeted-ci'
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.summary = {'status': 'incomplete', 'commands': [], 'artifacts': [], 'passed': []}
+        self.summary = {'status': 'incomplete', 'commands': [], 'artifacts': [], 'passed': [],
+                        'compiled': [], 'failed': [], 'skipped': [], 'blocked': []}
         self.environment = dict(os.environ, CARGO_INCREMENTAL='0')
         # Disk admission needs a real filesystem rather than the runner's tmpfs.
         fixtures = self.directory / 'fixtures'
@@ -255,9 +256,16 @@ class Run:
         print('+ ' + ' '.join(args), flush=True)
         stdout = self.directory / f'{index:03}.stdout.log'
         stderr = self.directory / f'{index:03}.stderr.log'
-        with stdout.open('w') as out, stderr.open('w') as err:
-            result = subprocess.run(args, cwd=self.root, env=self.environment,
-                                    stdout=out, stderr=err, timeout=timeout)
+        record.update(stdout=str(stdout), stderr=str(stderr))
+        try:
+            with stdout.open('w') as out, stderr.open('w') as err:
+                result = subprocess.run(args, cwd=self.root, env=self.environment,
+                                        stdout=out, stderr=err, timeout=timeout)
+        except Exception as error:
+            record.update(status='timed-out' if isinstance(error, subprocess.TimeoutExpired)
+                          else 'error', error=f'{type(error).__name__}: {error}')
+            self.save()
+            raise
         record.update(returncode=result.returncode, status='passed' if result.returncode == 0 else 'failed')
         self.save()
         if result.returncode:
@@ -286,50 +294,110 @@ class Run:
         self.save()
         return value
 
+    def failure(self, stage, error, **scope):
+        record = dict(scope, stage=stage, error=f'{type(error).__name__}: {error}',
+                      kind='timeout' if isinstance(error, subprocess.TimeoutExpired)
+                      else type(error).__name__)
+        self.summary['failed'].append(record)
+        self.save()
+
+    def block_after_timeout(self, **scope):
+        # subprocess.run reaps its direct child, not every descendant. Do not reuse
+        # shared build/fixture state after a timeout with unproven process cleanup.
+        self.summary['blocked'].append(dict(scope, reason='timeout descendant cleanup unproven'))
+        self.save()
+
     def rust(self, target):
-        build = self.directory / 'build'
-        mode = target.get('mode', 'test')
-        command = cargo_command(target, build)
-        output = self.command(command, 1800)
-        artifact = current_artifact(output, target, self.root)
-        if mode == 'check':
-            files = []
-            for filename in artifact['filenames']:
-                path = Path(filename).resolve()
-                if not path.is_relative_to(build) or not path.is_file():
-                    raise ValueError('compile artifact outside current build')
-                files.append({'path': str(path), 'sha256': digest(path)})
-            if not files:
-                raise ValueError('compile check emitted no target artifact')
-            self.summary['artifacts'].append({'configuration': target, 'files': files})
-            self.summary.setdefault('compiled', []).append(target)
+        stage = 'compile'
+        try:
+            build = self.directory / 'build'
+            mode = target.get('mode', 'test')
+            command = cargo_command(target, build)
+            output = self.command(command, 1800)
+            stage = 'artifact'
+            artifact = current_artifact(output, target, self.root)
+            if mode == 'check':
+                files = []
+                for filename in artifact['filenames']:
+                    path = Path(filename).resolve()
+                    if not path.is_relative_to(build) or not path.is_file():
+                        raise ValueError('compile artifact outside current build')
+                    files.append({'path': str(path), 'sha256': digest(path)})
+                if not files:
+                    raise ValueError('compile check emitted no target artifact')
+                self.summary['artifacts'].append({'configuration': target, 'files': files})
+                self.summary['compiled'].append(target)
+                self.save()
+                return
+            binary = Path(artifact['executable']).resolve()
+            if not binary.is_relative_to(build) or not binary.is_file():
+                raise ValueError('test executable outside current build')
+            sha = digest(binary)
+            stage = 'inventory'
+            names = inventory(self.command([str(binary), '--list', '--format', 'terse']))
+            ignored = inventory(self.command([str(binary), '--list', '--ignored', '--format', 'terse']))
+            stage = 'selection'
+            selections = selection_evidence(names, ignored, target)
+            timeouts = test_timeouts(selections)
+            selected = sorted(timeouts)
+            evidence = {'configuration': target, 'package': target['package'], 'path': str(binary), 'sha256': sha,
+                        'inventory': names, 'ignored': ignored, 'selected': selected,
+                        'selections': selections, 'test_timeouts': timeouts,
+                        'unexecuted': sorted(set(names) - set(selected))}
+            self.summary['artifacts'].append(evidence)
+            self.save()
+        except Exception as error:
+            self.failure(stage, error, configuration=target)
+            if isinstance(error, subprocess.TimeoutExpired):
+                self.block_after_timeout(configuration=target, stage=stage)
+                raise
+            self.summary['skipped'].append({'configuration': target, 'stage': stage,
+                                            'reason': 'target prerequisite failed'})
             self.save()
             return
-        binary = Path(artifact['executable']).resolve()
-        if not binary.is_relative_to(build) or not binary.is_file():
-            raise ValueError('test executable outside current build')
-        sha = digest(binary)
-        names = inventory(self.command([str(binary), '--list', '--format', 'terse']))
-        ignored = inventory(self.command([str(binary), '--list', '--ignored', '--format', 'terse']))
-        selections = selection_evidence(names, ignored, target)
-        timeouts = test_timeouts(selections)
-        selected = sorted(timeouts)
-        evidence = {'configuration': target, 'package': target['package'], 'path': str(binary), 'sha256': sha,
-                    'inventory': names, 'ignored': ignored, 'selected': selected,
-                    'selections': selections, 'test_timeouts': timeouts,
-                    'unexecuted': sorted(set(names) - set(selected))}
-        self.summary['artifacts'].append(evidence)
-        self.save()
-        for name in selected:
-            if digest(binary) != sha:
-                raise ValueError('test executable changed after build')
-            output = self.command([str(binary), '--exact', name, '--test-threads=1'],
-                                  timeouts[name])
-            passed_test(output, len(names))
+        for index, name in enumerate(selected):
+            try:
+                if digest(binary) != sha:
+                    raise ValueError('test executable changed after build')
+            except Exception as error:
+                self.failure('integrity', error, configuration=target, name=name)
+                self.summary['skipped'].append({'configuration': target,
+                                                'names': selected[index:],
+                                                'reason': 'test executable integrity failed'})
+                self.save()
+                return
+            try:
+                output = self.command([str(binary), '--exact', name, '--test-threads=1'],
+                                      timeouts[name])
+                passed_test(output, len(names))
+            except Exception as error:
+                self.failure('test', error, configuration=target, name=name)
+                if isinstance(error, subprocess.TimeoutExpired):
+                    if selected[index + 1:]:
+                        self.block_after_timeout(configuration=target, names=selected[index + 1:])
+                    raise
+                continue
             self.summary['passed'].append({'configuration': target, 'name': name})
             self.save()
 
+    def python(self, name):
+        # Count first: unittest's successful zero-test exit cannot satisfy a plan.
+        if not (self.root / 'test/ci' / (name + '.py')).is_file():
+            raise ValueError(f'missing Python module: {name}')
+        sys.path.insert(0, str(self.root / 'test/ci'))
+        suite = unittest.defaultTestLoader.loadTestsFromName(name)
+        if suite.countTestCases() == 0:
+            raise ValueError(f'empty Python module: {name}')
+        index = len(self.summary['commands'])
+        self.command([sys.executable, '-m', 'unittest', 'discover',
+                      '-s', 'test/ci', '-p', name + '.py', '-v'], 120)
+        passed_python((self.directory / f'{index:03}.stderr.log').read_text(),
+                      suite.countTestCases())
+        self.summary['passed'].append({'python_module': name, 'tests': suite.countTestCases()})
+        self.save()
+
     def execute(self, action):
+        remaining_python, remaining_targets = [], []
         try:
             plan = self.plan()
             if action == 'plan':
@@ -337,28 +405,43 @@ class Run:
                 return
             lock = digest(self.root / 'Cargo.lock')
             self.summary['lockfile_sha256'] = lock
-            for name in plan['python_tests']:
-                # Count first: unittest's successful zero-test exit cannot satisfy a plan.
-                if not (self.root / 'test/ci' / (name + '.py')).is_file():
-                    raise ValueError(f'missing Python module: {name}')
-                sys.path.insert(0, str(self.root / 'test/ci'))
-                suite = unittest.defaultTestLoader.loadTestsFromName(name)
-                if suite.countTestCases() == 0:
-                    raise ValueError(f'empty Python module: {name}')
-                index = len(self.summary['commands'])
-                self.command([sys.executable, '-m', 'unittest', 'discover',
-                              '-s', 'test/ci', '-p', name + '.py', '-v'], 120)
-                passed_python((self.directory / f'{index:03}.stderr.log').read_text(),
-                              suite.countTestCases())
-                self.summary['passed'].append({'python_module': name, 'tests': suite.countTestCases()})
+            remaining_python = list(plan['python_tests'])
+            remaining_targets = list(plan['rust_targets'])
+            for index, name in enumerate(plan['python_tests']):
+                remaining_python = plan['python_tests'][index + 1:]
+                try:
+                    self.python(name)
+                except Exception as error:
+                    self.failure('python', error, python_module=name)
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        raise
+            cross_ready = True
             if any(t.get('compile_target') for t in plan['rust_targets']):
-                self.command(['rustup', 'target', 'add', 'wasm32-unknown-unknown'], 300)
-            for target in plan['rust_targets']:
+                try:
+                    self.command(['rustup', 'target', 'add', 'wasm32-unknown-unknown'], 300)
+                except Exception as error:
+                    self.failure('toolchain', error, compile_target='wasm32-unknown-unknown')
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        raise
+                    cross_ready = False
+            for index, target in enumerate(plan['rust_targets']):
+                remaining_targets = plan['rust_targets'][index + 1:]
+                if target.get('compile_target') and not cross_ready:
+                    self.summary['skipped'].append({'configuration': target,
+                                                    'reason': 'toolchain setup failed'})
+                    self.save()
+                    continue
                 self.rust(target)
             if digest(self.root / 'Cargo.lock') != lock:
                 raise ValueError('Cargo.lock changed during targeted run')
+            if self.summary['failed']:
+                raise RuntimeError('selected targeted work failed; see failed and skipped evidence')
             self.summary['status'] = 'selected-tests-passed'
         except Exception as error:
+            if (isinstance(error, subprocess.TimeoutExpired)
+                    and (remaining_python or remaining_targets)):
+                self.block_after_timeout(python_modules=remaining_python,
+                                         rust_targets=remaining_targets)
             self.summary.update(status='failed', error=f'{type(error).__name__}: {error}')
             raise
         finally:

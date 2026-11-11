@@ -3,7 +3,10 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('targeted_ci', ROOT / '.github/scripts/check-targeted-ci.py')
@@ -258,6 +261,336 @@ class TargetedSelection(unittest.TestCase):
         for invalid in ['unexpected output', 'x: test\nx: test\n']:
             with self.assertRaises(ValueError):
                 CI.inventory(invalid)
+
+class TargetedExecution(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / 'Cargo.lock').write_text('fixture lock\n')
+        self.run = CI.Run(self.root)
+        self.target = {'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+                       'prefixes': ['module::'], 'max_tests': 2,
+                       'selection_groups': ['fixture']}
+        self.calls = []
+        self.failures = {}
+        self.names = ['module::a', 'module::b', 'other::unselected']
+        self.ignored = []
+        self.plan = {'python_tests': [], 'rust_targets': [self.target]}
+        self.real_process = subprocess.run
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(self.run, 'plan', return_value=self.plan).start()
+        mock.patch.dict(CI.os.environ, {'GITHUB_STEP_SUMMARY': ''}).start()
+        mock.patch.object(CI.subprocess, 'run', side_effect=self.process).start()
+
+    def process(self, args, **kwargs):
+        self.calls.append(args)
+        key = args[args.index('--exact') + 1] if '--exact' in args else args[0]
+        failure = self.failures.get(key)
+        if isinstance(failure, Exception):
+            raise failure
+        if failure:
+            kwargs['stderr'].write('fixture process failed\n')
+            return subprocess.CompletedProcess(args, failure)
+        if args[0] == 'cargo':
+            package = args[args.index('-p') + 1]
+            build = Path(args[args.index('--target-dir') + 1])
+            build.mkdir(exist_ok=True)
+            binary = build / package
+            binary.write_text('current compiled fixture')
+            artifact = {'reason': 'compiler-artifact', 'target': {'name': package,
+                        'kind': ['lib']}, 'manifest_path': str(self.root / 'src' / package
+                                                             / 'Cargo.toml'),
+                        'profile': {'test': args[1] == 'test'}, 'features': [],
+                        'executable': str(binary), 'filenames': [str(binary)]}
+            output = json.dumps(artifact) + '\n' + json.dumps(
+                {'reason': 'build-finished', 'success': True})
+        elif '--list' in args:
+            names = self.ignored if '--ignored' in args else self.names
+            output = ''.join(name + ': test\n' for name in names)
+        else:
+            output = ('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; '
+                      f'{len(self.names) - 1} filtered out; finished in 0.1s\n')
+        kwargs['stdout'].write(output)
+        return subprocess.CompletedProcess(args, 0)
+
+    def persisted(self):
+        return json.loads((self.run.directory / 'summary.json').read_text())
+
+    def test_failure_continues_selected_tests_and_target_but_still_raises(self):
+        self.failures['module::a'] = 101
+        check = {'package': 'consumer', 'manifest': 'src/consumer/Cargo.toml', 'mode': 'check'}
+        self.plan['rust_targets'].append(check)
+        with self.assertRaises(RuntimeError):
+            self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::b'])
+        self.assertEqual(summary['compiled'], [check])
+        self.assertEqual(summary['skipped'], [])
+        self.assertEqual([(item['stage'], item['name']) for item in summary['failed']],
+                         [('test', 'module::a')])
+        executed = [args[args.index('--exact') + 1] for args in self.calls if '--exact' in args]
+        self.assertEqual(executed, ['module::a', 'module::b'])
+        self.assertEqual(summary['artifacts'][0]['selected'], executed)
+        self.assertEqual(summary['artifacts'][0]['unexecuted'], ['other::unselected'])
+
+    def test_failed_compile_never_runs_stale_binary_and_continues_next_target(self):
+        stale = self.run.directory / 'build/fixture'
+        stale.parent.mkdir()
+        stale.write_text('stale binary')
+        second = dict(self.target, package='consumer', manifest='src/consumer/Cargo.toml')
+        self.plan['rust_targets'].append(second)
+        original = self.process
+        def process(args, **kwargs):
+            if args[:2] == ['cargo', 'test'] and args[args.index('-p') + 1] == 'fixture':
+                self.calls.append(args)
+                return subprocess.CompletedProcess(args, 101)
+            return original(args, **kwargs)
+        with mock.patch.object(CI.subprocess, 'run', side_effect=process):
+            with self.assertRaises(RuntimeError):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertFalse(any(args[0] == str(stale) for args in self.calls))
+        self.assertEqual([item['configuration'] for item in summary['passed']], [second, second])
+        self.assertEqual(summary['failed'][0]['stage'], 'compile')
+        self.assertEqual(summary['skipped'][0]['configuration'], self.target)
+
+    def test_inventory_and_selection_failures_are_failed_not_successful_skips(self):
+        cases = [(['module::a', 'module::a'], [], 2, 'inventory'),
+                 (['other::unselected'], [], 2, 'selection'),
+                 (['module::a'], ['module::a'], 2, 'selection'),
+                 (['module::a', 'module::b'], [], 1, 'selection')]
+        for names, ignored, maximum, stage in cases:
+            with self.subTest(stage=stage, names=names):
+                self.run = CI.Run(self.root)
+                self.names, self.ignored = names, ignored
+                self.target['max_tests'] = maximum
+                with mock.patch.object(self.run, 'plan', return_value=self.plan):
+                    with self.assertRaises(RuntimeError):
+                        self.run.execute('run')
+                summary = self.persisted()
+                self.assertEqual(summary['status'], 'failed')
+                self.assertEqual(summary['failed'][0]['stage'], stage)
+                self.assertEqual(summary['passed'], [])
+                self.assertEqual(summary['compiled'], [])
+                self.assertEqual(len(summary['skipped']), 1)
+        self.assertFalse(any('--exact' in args for args in self.calls))
+
+    def test_launch_error_is_classified_and_does_not_stop_next_test(self):
+        self.failures['module::a'] = OSError('fixture launch error')
+        with self.assertRaises(RuntimeError):
+            self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['failed'][0]['kind'], 'OSError')
+        self.assertEqual(summary['commands'][3]['status'], 'error')
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::b'])
+        self.assertEqual(summary['blocked'], [])
+
+    def test_test_timeout_preserves_completed_results_and_blocks_remaining_scope(self):
+        self.names.insert(2, 'module::c')
+        self.target['max_tests'] = 3
+        self.failures['module::b'] = subprocess.TimeoutExpired(['fixture'], 1)
+        later = dict(self.target, package='consumer', manifest='src/consumer/Cargo.toml')
+        self.plan['rust_targets'].append(later)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(summary['failed'][0]['kind'], 'timeout')
+        self.assertEqual(summary['commands'][-1]['status'], 'timed-out')
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::a'])
+        self.assertEqual(summary['blocked'][0]['names'], ['module::c'])
+        self.assertEqual(summary['blocked'][1]['rust_targets'], [later])
+        executed = [args[args.index('--exact') + 1] for args in self.calls if '--exact' in args]
+        self.assertEqual(executed, ['module::a', 'module::b'])
+        self.assertEqual(len([args for args in self.calls if args[0] == 'cargo']), 1)
+
+    def test_real_subprocess_timeout_stops_before_next_selected_test(self):
+        original = self.process
+        def process(args, **kwargs):
+            if '--exact' in args:
+                self.calls.append(args)
+                kwargs['timeout'] = 0.1
+                return self.real_process([CI.sys.executable, '-c',
+                                          'import time; time.sleep(30)'], **kwargs)
+            return original(args, **kwargs)
+        later = dict(self.target, package='consumer', manifest='src/consumer/Cargo.toml')
+        self.plan['rust_targets'].append(later)
+        with mock.patch.object(CI.subprocess, 'run', side_effect=process):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(summary['commands'][-1]['status'], 'timed-out')
+        self.assertEqual(summary['failed'][0]['kind'], 'timeout')
+        self.assertEqual(summary['failed'][0]['name'], 'module::a')
+        self.assertEqual(summary['passed'], [])
+        self.assertEqual(summary['blocked'][0]['names'], ['module::b'])
+        self.assertEqual(summary['blocked'][1]['rust_targets'], [later])
+        self.assertEqual(len(self.calls), 4)
+
+    def test_compile_and_inventory_timeout_stop_all_later_targets(self):
+        later = dict(self.target, package='consumer', manifest='src/consumer/Cargo.toml')
+        self.plan['rust_targets'].append(later)
+        for stage, key in [('compile', 'cargo'),
+                           ('inventory', str(self.run.directory / 'build/fixture'))]:
+            with self.subTest(stage=stage):
+                self.run = CI.Run(self.root)
+                self.calls.clear()
+                self.failures = {key: subprocess.TimeoutExpired([key], 1)}
+                with mock.patch.object(self.run, 'plan', return_value=self.plan):
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        self.run.execute('run')
+                summary = self.persisted()
+                self.assertEqual(summary['failed'][0]['stage'], stage)
+                self.assertEqual(summary['commands'][-1]['status'], 'timed-out')
+                self.assertEqual(summary['passed'], [])
+                self.assertEqual(summary['blocked'][0]['configuration'], self.target)
+                self.assertEqual(summary['blocked'][1]['rust_targets'], [later])
+                self.assertEqual(len(self.calls), 1 if stage == 'compile' else 2)
+
+    def test_python_timeout_stops_remaining_modules_and_all_rust_targets(self):
+        self.plan['python_tests'] = ['test_first', 'test_timeout', 'test_later']
+        visited = []
+        def python(name):
+            visited.append(name)
+            if name == 'test_timeout':
+                self.run.command(['python-fixture'], 1)
+            self.run.summary['passed'].append({'python_module': name, 'tests': 1})
+        self.failures['python-fixture'] = subprocess.TimeoutExpired(['python-fixture'], 1)
+        with mock.patch.object(self.run, 'python', side_effect=python):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(visited, ['test_first', 'test_timeout'])
+        self.assertEqual(summary['failed'][0]['stage'], 'python')
+        self.assertEqual(summary['commands'][-1]['status'], 'timed-out')
+        self.assertEqual(summary['passed'], [{'python_module': 'test_first', 'tests': 1}])
+        self.assertEqual(summary['blocked'][0]['python_modules'], ['test_later'])
+        self.assertEqual(summary['blocked'][0]['rust_targets'], [self.target])
+        self.assertEqual(self.calls, [['python-fixture']])
+
+    def test_toolchain_timeout_blocks_native_and_cross_targets(self):
+        cross = dict(self.target, mode='check', compile_target='wasm32-unknown-unknown')
+        self.plan['rust_targets'].insert(0, cross)
+        self.failures['rustup'] = subprocess.TimeoutExpired(['rustup'], 1)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['failed'][0]['stage'], 'toolchain')
+        self.assertEqual(summary['commands'][-1]['status'], 'timed-out')
+        self.assertEqual(summary['blocked'][0]['rust_targets'], [cross, self.target])
+        self.assertEqual(summary['passed'], [])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_python_failure_continues_other_module_and_selected_rust(self):
+        self.plan['python_tests'] = ['test_first', 'test_second']
+        visited = []
+        def python(name):
+            visited.append(name)
+            if name == 'test_first':
+                raise ValueError('fixture invalid Python evidence')
+            self.run.summary['passed'].append({'python_module': name, 'tests': 1})
+        with mock.patch.object(self.run, 'python', side_effect=python):
+            with self.assertRaises(RuntimeError):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(visited, self.plan['python_tests'])
+        self.assertEqual(summary['failed'][0]['stage'], 'python')
+        self.assertEqual(len(summary['passed']), 3)
+
+    def test_toolchain_failure_skips_only_cross_target(self):
+        cross = dict(self.target, mode='check', compile_target='wasm32-unknown-unknown')
+        self.plan['rust_targets'].insert(0, cross)
+        self.failures['rustup'] = 1
+        with self.assertRaises(RuntimeError):
+            self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['failed'][0]['stage'], 'toolchain')
+        self.assertEqual(summary['skipped'][0]['configuration'], cross)
+        self.assertEqual(len(summary['passed']), 2)
+        self.assertFalse(any('--target' in args for args in self.calls))
+
+    def test_success_and_compile_only_evidence_stay_distinct(self):
+        self.plan['rust_targets'].append(dict(self.target, mode='check'))
+        self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['status'], 'selected-tests-passed')
+        self.assertEqual(len(summary['passed']), 2)
+        self.assertEqual(len(summary['compiled']), 1)
+        self.assertEqual(summary['failed'], [])
+        self.assertEqual(summary['skipped'], [])
+
+    def test_failed_run_exits_nonzero_after_retaining_later_pass(self):
+        script = """
+import json
+import sys
+sys.path.insert(0, 'test/ci')
+from test_targeted_ci import TargetedExecution
+case = TargetedExecution()
+case.setUp()
+case.failures['module::a'] = 101
+try:
+    case.run.execute('run')
+finally:
+    print('RESULT_JSON=' + json.dumps(case.persisted()))
+    case.doCleanups()
+"""
+        # Popen is not the mocked subprocess.run used by the synthetic Cargo boundary.
+        with subprocess.Popen([CI.sys.executable, '-c', script], cwd=ROOT,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True) as child:
+            stdout, stderr = child.communicate(timeout=30)
+        self.assertNotEqual(child.returncode, 0, stderr)
+        results = [line.removeprefix('RESULT_JSON=') for line in stdout.splitlines()
+                   if line.startswith('RESULT_JSON=')]
+        self.assertEqual(len(results), 1, stderr)
+        summary = json.loads(results[0])
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::b'])
+        self.assertEqual(summary['failed'][0]['name'], 'module::a')
+
+    def test_zero_exit_with_invalid_test_evidence_still_fails_and_continues(self):
+        original = self.process
+        def process(args, **kwargs):
+            if '--exact' in args and args[args.index('--exact') + 1] == 'module::a':
+                self.calls.append(args)
+                kwargs['stdout'].write('test result: ok. 0 passed; 0 failed; 0 ignored; '
+                                       '0 measured; 3 filtered out; finished in 0.1s\n')
+                return subprocess.CompletedProcess(args, 0)
+            return original(args, **kwargs)
+        with mock.patch.object(CI.subprocess, 'run', side_effect=process):
+            with self.assertRaises(RuntimeError):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['failed'][0]['stage'], 'test')
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::b'])
+
+    def test_modified_binary_stops_remaining_tests_of_only_that_target(self):
+        original = self.process
+        def process(args, **kwargs):
+            result = original(args, **kwargs)
+            if '--exact' in args:
+                Path(args[0]).write_text('replaced executable')
+            return result
+        check = {'package': 'consumer', 'manifest': 'src/consumer/Cargo.toml', 'mode': 'check'}
+        self.plan['rust_targets'].append(check)
+        with mock.patch.object(CI.subprocess, 'run', side_effect=process):
+            with self.assertRaises(RuntimeError):
+                self.run.execute('run')
+        summary = self.persisted()
+        self.assertEqual(summary['failed'][0]['stage'], 'integrity')
+        self.assertEqual(summary['skipped'][0]['names'], ['module::b'])
+        self.assertEqual([item['name'] for item in summary['passed']], ['module::a'])
+        self.assertEqual(summary['compiled'], [check])
+
+    def test_invalid_plan_stops_before_any_execution(self):
+        with mock.patch.object(self.run, 'plan', side_effect=ValueError('invalid selection')):
+            with self.assertRaises(ValueError):
+                self.run.execute('run')
+        self.assertEqual(self.persisted()['status'], 'failed')
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == '__main__':
