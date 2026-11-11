@@ -499,3 +499,6 @@ fn empty_file_projection_preserves_current_namespace_admission_errors() {
     );
     assert!(projection.paths.is_empty());
 }
+
+#[path = "deletion_tests.rs"]
+mod deletion_tests;

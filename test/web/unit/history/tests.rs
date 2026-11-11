@@ -277,3 +277,13 @@ fn activity_history_keeps_current_response_budget() {
     assert!(decode(json_codec::json!({"events": vec![row.clone(); 200], "limit": 200})).is_ok());
     assert!(decode(json_codec::json!({"events": vec![row; 201], "limit": 200})).is_err());
 }
+
+#[test]
+fn file_lifecycle_operations_have_specific_labels() {
+    for action in ["file.delete", "file.delete.batch"] {
+        assert_eq!(action_label(action), "Soft-deleted file");
+    }
+    for action in ["file.delete.undo", "file.delete.batch.undo"] {
+        assert_eq!(action_label(action), "Restored file");
+    }
+}

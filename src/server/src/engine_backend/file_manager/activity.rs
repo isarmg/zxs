@@ -8,6 +8,8 @@ use json_codec::Value;
 use std::{cmp::Reverse, collections::BTreeMap};
 use storage_engine::Engine;
 
+mod deletion;
+
 // Operation receipts retain an open JSON payload on disk. Parse only fields
 // consumed here; malformed retained rows are external state errors, not bugs.
 fn optional_field<'a, T: data_serialization::Deserialize<'a>>(
@@ -356,9 +358,15 @@ fn file_operation_events<'a>(
     events: &mut ActivityRows<'a>,
 ) -> Result<(), ApiError> {
     let mut files = None;
-    for operation in engine.state().operations.values().filter(|op| {
-        matches!(
-            op.kind.as_str(),
+    for operation in engine.state().operations.values() {
+        if !history_sequence_may_fit(events, operation.sequence) {
+            continue;
+        }
+        if deletion::record_operation(engine, events, operation)? {
+            continue;
+        }
+        if !matches!(
+            operation.kind.as_str(),
             "file.metadata"
                 | "version.metadata"
                 | "file.branch.rename"
@@ -366,9 +374,8 @@ fn file_operation_events<'a>(
                 | "file.path.metadata"
                 | "file.branches.merge"
                 | "file.tags.update"
-        ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
-    }) {
-        if !history_sequence_may_fit(events, operation.sequence) {
+        ) || operation.result.get("no_change").and_then(Value::as_bool) == Some(true)
+        {
             continue;
         }
         let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {

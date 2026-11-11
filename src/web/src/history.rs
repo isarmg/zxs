@@ -109,6 +109,8 @@ fn action_label(action: &str) -> String {
         "directory.branches.select" => t("切换目录分支", "Switched folder branch"),
         "directory_selection" | "directory_select" => t("切换目录分支", "Switched folder branches"),
         "directory.branch.rename" => t("重命名目录分支", "Renamed folder branch"),
+        "file.delete" | "file.delete.batch" => t("软删除文件", "Soft-deleted file"),
+        "file.delete.undo" | "file.delete.batch.undo" => t("恢复文件", "Restored file"),
         "file.path.rename" => t("文件路径变化", "File path changed"),
         "file.path.metadata" => t("更新节点备注", "Updated node note"),
         "file.branch.rename" => t("重命名文件分支", "Renamed file branch"),
