@@ -1621,6 +1621,83 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "version-metadata-read": {
+      "reason": "Typed Engine version metadata query, preserved sparse disposition and borrowed lifetime, current admission before absent or retired metadata, wire responses and cold reads",
+      "python_tests": [
+        "test_version_read_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::read_view::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "engine_backend::version_read_tests::"
+          ],
+          "exact": [
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed",
+            "engine_backend::read_projection::tests::authorization_tests::narrow_authorization_matches_old_tree_metadata_decisions_and_error_precedence",
+            "engine_backend::read_projection::tests::authorization_tests::narrow_authorization_after_held_lock_binding_change_rechecks_current_generation"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "authentication_applies_to_direct_content_graph_and_write_paths",
+            "file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name",
+            "optional_identities::typed_version_metadata_preserves_frozen_history_and_current_wire"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "exact": [
+            "soft_deletion::public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file",
+            "soft_deletion::public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -4129,7 +4206,37 @@
         "held-directory-layout",
         "checkpoint-layout"
       ]
+    },
+    {
+      "path": "src/engine/src/engine/read_view.rs",
+      "groups": [
+        "version-metadata-read"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/read_view_tests.rs",
+      "groups": [
+        "version-metadata-read"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend.rs",
+      "groups": [
+        "version-metadata-read"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/version_read_tests.rs",
+      "groups": [
+        "version-metadata-read"
+      ]
+    },
+    {
+      "path": "test/ci/test_version_read_targeted_ci.py",
+      "groups": [
+        "version-metadata-read"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted."
 }

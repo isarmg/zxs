@@ -7,6 +7,7 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+use storage_contract::{ContentState, FileVersion, VersionId};
 use storage_engine::{Engine, NamespaceOperation, Repository};
 mod admission;
 use admission::AdmissionEngine;
@@ -296,15 +297,14 @@ fn repo_for_branch_in_state<'a>(
 fn authorized_version<'a>(
     engine: &'a Engine,
     id: &str,
-) -> Result<&'a storage_contract::FileVersion, ApiError> {
-    let version = engine
-        .state()
-        .versions
-        .get(id)
-        .filter(|version| {
-            engine.state().content_states.get(&version.version_id)
-                != Some(&storage_contract::ContentState::Retired)
-        })
+) -> Result<(&'a FileVersion, Option<ContentState>), ApiError> {
+    // This is the single Backend text -> Engine ID boundary, after
+    // lock_current. Noncanonical text remains indistinguishable from absence.
+    let (version, disposition) = id
+        .parse::<VersionId>()
+        .ok()
+        .and_then(|id| engine.version_metadata(id))
+        .filter(|(_, state)| *state != Some(ContentState::Retired))
         .ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -313,7 +313,7 @@ fn authorized_version<'a>(
             )
         })?;
     repo_for_history(engine, &version.history_tree_id)?;
-    Ok(version)
+    Ok((version, disposition))
 }
 fn workspace_authorize<'a>(
     engine: &'a Engine,
@@ -589,12 +589,10 @@ impl Backend for EngineBackend {
         version: &str,
     ) -> Result<crate::VersionSnapshot, crate::ApiError> {
         let (engine, _) = self.lock_current(identity)?;
-        let version = authorized_version(&engine, version)?.clone();
-        let content_state = wire::stored_version_content_state(
-            engine.state().content_states.get(&version.version_id),
-        );
+        let (version, disposition) = authorized_version(&engine, version)?;
+        let content_state = wire::stored_version_content_state(disposition.as_ref());
         Ok(crate::VersionSnapshot {
-            version,
+            version: version.clone(),
             content_state,
         })
     }
@@ -604,7 +602,7 @@ impl Backend for EngineBackend {
         version: &str,
     ) -> Result<(), crate::ApiError> {
         let (engine, current) = self.lock_current(identity)?;
-        let version = authorized_version(&engine, version)?;
+        let (version, _) = authorized_version(&engine, version)?;
         if current.smb_binding.is_some() && engine.file_deletion(&version.file_id).is_some() {
             return Err(ApiError::new(
                 http::StatusCode::NOT_FOUND,
@@ -2331,6 +2329,9 @@ mod authorization_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/event_tests.rs"]
 mod event_tests;
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/version_read_tests.rs"]
+mod version_read_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/readiness_tests.rs"]
 mod readiness_tests;
