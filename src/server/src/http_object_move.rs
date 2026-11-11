@@ -24,18 +24,12 @@ pub(crate) async fn submit(
         name_policy::SlotId::parse(&source_slot_id).map_err(ApiError::invalid_source)?;
     let body: Body = json_codec::from_value(crate::json_body(request).await?)
         .map_err(ApiError::invalid_source)?;
-    name_policy::validate_slot(&body.movement.target_slot_id).map_err(ApiError::invalid_source)?;
+    let command = MoveDiskObject::new(source_slot_id, body.movement, body.operation_id)
+        .map_err(ApiError::invalid_source)?;
     crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
         .run(move |backend| {
             backend
-                .move_disk_object(
-                    &identity,
-                    MoveDiskObject {
-                        source_slot_id,
-                        movement: body.movement,
-                        operation_id: body.operation_id,
-                    },
-                )
+                .move_disk_object(&identity, command)
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await

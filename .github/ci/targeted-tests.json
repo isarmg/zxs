@@ -261,7 +261,8 @@
           "package": "storage-server",
           "manifest": "src/server/Cargo.toml",
           "prefixes": [
-            "backend_listing::tests::"
+            "backend_listing::tests::",
+            "backend_object_move::tests::"
           ],
           "max_tests": 16,
           "features": [
@@ -1431,6 +1432,12 @@
     },
     {
       "path": "test/server/unit/backend_listing.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_object_move.rs",
       "groups": [
         "typed-name-consumers"
       ]

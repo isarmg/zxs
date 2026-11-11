@@ -856,11 +856,10 @@ pub(super) fn move_object(
     if identity.smb_binding.is_some() {
         return Err(ApiError::forbidden());
     }
-    let request = &command.movement;
     let source = engine
         .state()
         .repositories
-        .get(request.source_repository_id.as_str())
+        .get(command.source_repository_id.as_str())
         .ok_or_else(|| {
             ApiError::invalid("the captured source repository is no longer registered")
         })?;
@@ -869,7 +868,7 @@ pub(super) fn move_object(
             "the source repository is not on the requested primary disk",
         ));
     }
-    for slot in [command.source_slot_id.as_str(), request.target_slot_id.as_str()] {
+    for slot in [command.source_slot_id.as_str(), command.target_slot_id.as_str()] {
         if disk(engine, slot)?.level != 1 {
             return Err(ApiError::new(
                 ::http::StatusCode::FORBIDDEN,
@@ -878,8 +877,10 @@ pub(super) fn move_object(
             ));
         }
     }
+    let operation_id = command.operation_id;
+    let request = command.into_request();
     engine
-        .move_object(request, &identity.principal, command.operation_id)
+        .move_object(&request, &identity.principal, operation_id)
         .map_err(error)
 }
 

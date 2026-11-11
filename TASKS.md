@@ -31,6 +31,8 @@
 - [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
 - [ ] GitHub 定向 CI 验证 T08 HTTP 备注兼容切片：ApiJson<NoteBody> 与 Authenticated 接线、路径目标独立传递及两处 unreachable 删除已完成；验证同名／重复键、未知字段、认证／body／目标查找错误顺序和节点允许域。ApiPath 与 NoteTarget 的类型化 ID 构造仍未完成，后续保留原错误码和先后顺序；文本棘轮按现有函数更新 server json_value 277→278、wildcard_arm 86→87、unreachable 58→56，未本地编译、测试或运行 formatter。
 
+- [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。
+
 - [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
 
 - [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。
