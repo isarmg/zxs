@@ -39,8 +39,6 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             'test/engine/integration/directory_git_index/historical_branch.rs',
             'test/engine/unit/engine/current_directory_branch_proof_tests.rs',
             'test/server/integration/http_engine/historical_directory_branch.rs',
-            'test/server/unit/authorized_backend.rs',
-            'test/server/unit/engine_backend/revocation_tests.rs',
         ]:
             with self.subTest(path=path):
                 plan = CI.select_plan(self.policy, [path])
@@ -50,6 +48,83 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 selected = [target for target in plan['rust_targets']
                             if 'historical-directory-runtime' in target['selection_groups']]
                 self.assertEqual(len(selected), 4)
+
+    def test_server_authorization_fixtures_preserve_the_complete_server_selection(self):
+        group = self.policy['groups']['server-authorization']
+        self.assertEqual(group['rust_targets'], [self.group['rust_targets'][2]])
+        self.assertEqual(group['rust_targets'][0]['max_tests'], 7)
+        for path in [
+            'test/server/unit/authorized_backend.rs',
+            'test/server/unit/engine_backend/revocation_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('server-authorization', plan['groups'])
+                self.assertNotIn('historical-directory-runtime', plan['groups'])
+                self.assertIn('test_historical_directory_targeted_ci', plan['python_tests'])
+                selected = [target for target in plan['rust_targets']
+                            if 'server-authorization' in target['selection_groups']]
+                self.assertEqual(len(selected), 1)
+                self.assertEqual(selected[0]['package'], 'storage-server')
+
+    def test_note_constructors_select_existing_smb_and_retained_metadata_behavior(self):
+        group = self.policy['groups']['note-target-consumers']
+        unit, integration = group['rust_targets']
+        self.assertEqual(unit['exact'], [
+            'engine_backend::authorization_tests::retained_metadata::'
+            'retained_metadata_d3_preserves_current_authorization_for_edits_and_receipts',
+            'smb_rpc::tests::default_share_tests::phase1_new_file_tests::'
+            'phase1_primary_source_read_to_new_target_keeps_independent_history',
+        ])
+        self.assertEqual(integration['exact'], [
+            'public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart',
+            'soft_deletion::'
+            'public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file',
+            'soft_deletion::'
+            'public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity',
+        ])
+        self.assertEqual([unit['max_tests'], integration['max_tests']], [2, 3])
+        self.assertEqual(integration['name'], 'phase1_smb_rpc')
+        for target in group['rust_targets']:
+            self.assertEqual(target['features'], ['core'])
+            self.assertEqual(target['timeout_seconds'], 900)
+            self.assertEqual(target.get('mode', 'test'), 'test')
+        for path in [
+            'test/server/integration/phase1_smb_rpc.rs',
+            'test/server/integration/phase1_smb_rpc/soft_deletion.rs',
+            'test/server/unit/engine_backend/retained_metadata_tests.rs',
+            'test/server/unit/smb_rpc/phase1_new_file_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('note-target-consumers', plan['groups'])
+                self.assertEqual(len(plan['rust_targets']), 2)
+
+    def test_note_target_batch_has_complete_mapping_within_sixteen_builds(self):
+        plan = CI.select_plan(self.policy, [
+            '.github/ci/targeted-tests.json',
+            'TASKS.md',
+            'src/server/src/backend_note.rs',
+            'src/server/src/engine_backend.rs',
+            'src/server/src/http_note.rs',
+            'src/server/src/lib.rs',
+            'test/server/integration/http_engine/note_boundary.rs',
+            'test/server/integration/phase1_smb_rpc.rs',
+            'test/server/integration/phase1_smb_rpc/soft_deletion.rs',
+            'test/server/unit/authorized_backend.rs',
+            'test/server/unit/engine_backend/retained_metadata_tests.rs',
+            'test/server/unit/engine_backend/revocation_tests.rs',
+            'test/server/unit/http_note.rs',
+            'test/server/unit/smb_rpc/phase1_new_file_tests.rs',
+        ])
+        self.assertEqual(len(plan['changed_paths']), 14)
+        self.assertEqual(len(plan['rust_targets']), 16)
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assertIn('portable-path-consumers', plan['groups'])
+        self.assertIn('paged-deletion-review', plan['groups'])
+        self.assertIn('note-http-boundary', plan['groups'])
+        self.assertIn('server-authorization', plan['groups'])
+        self.assertIn('note-target-consumers', plan['groups'])
 
     def test_native_targets_preserve_core_features_exact_scope_and_each_budget(self):
         targets = self.group['rust_targets']

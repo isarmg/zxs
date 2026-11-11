@@ -641,6 +641,68 @@
           "max_tests": 52
         }
       ]
+    },
+    "server-authorization": {
+      "reason": "Server HTTP argument forwarding and current credential admission, including historical directory source authorization",
+      "python_tests": [
+        "test_historical_directory_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_disk_directory::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::historical_directory_branch_override_preserves_both_sources_and_revocation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "note-target-consumers": {
+      "reason": "Version note constructor consumers across independent SMB file history, deleted identity freezing and retained metadata authorization",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::authorization_tests::retained_metadata::retained_metadata_d3_preserves_current_authorization_for_edits_and_receipts",
+            "smb_rpc::tests::default_share_tests::phase1_new_file_tests::phase1_primary_source_read_to_new_target_keeps_independent_history"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart",
+            "soft_deletion::public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file",
+            "soft_deletion::public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -1201,7 +1263,8 @@
     {
       "path": "src/server/src/engine_backend.rs",
       "groups": [
-        "paged-deletion-review"
+        "paged-deletion-review",
+        "note-http-boundary"
       ]
     },
     {
@@ -2134,13 +2197,14 @@
     {
       "path": "test/server/unit/authorized_backend.rs",
       "groups": [
-        "historical-directory-runtime"
+        "server-authorization"
       ]
     },
     {
       "path": "test/server/unit/engine_backend/revocation_tests.rs",
       "groups": [
-        "historical-directory-runtime"
+        "server-authorization",
+        "note-http-boundary"
       ]
     },
     {
@@ -2268,6 +2332,36 @@
       "path": "test/engine/unit/disk_authority/journal.rs",
       "groups": [
         "projection-cache-layout"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_note.rs",
+      "groups": [
+        "note-http-boundary"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc.rs",
+      "groups": [
+        "note-target-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_smb_rpc/soft_deletion.rs",
+      "groups": [
+        "note-target-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/retained_metadata_tests.rs",
+      "groups": [
+        "note-target-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/phase1_new_file_tests.rs",
+      "groups": [
+        "note-target-consumers"
       ]
     }
   ],
