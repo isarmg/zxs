@@ -418,7 +418,11 @@ fn orthogonal_turns_have_circular_arcs_and_short_runs_limit_both_corner_radii() 
 fn typed_metadata_ignores_notes_and_current_context_markers() {
     let mut records = vec![
         json_codec::json!({"node_id":"a","version_id":"a","sequence":"1","parent_node_ids":[],"note":"initial"}),
-        json_codec::json!({"file_id":"selected","node_id":"b","version_id":"b","parent_node_ids":["outside","a","a"]}),
+        // Model the admitted boundary: external parents are explicit and
+        // duplicate edges have already been rejected by response admission.
+        json_codec::json!({"file_id":"selected","node_id":"b","version_id":"b",
+            "parent_edges":[{"node_id":"outside","endpoint":"outside_window"},
+                {"node_id":"a","endpoint":"in_window"}]}),
     ];
     let before = metadata(&typed(&records));
     records[0]["note"] = "typing stays mounted".into();

@@ -423,7 +423,7 @@ class TargetedSelection(unittest.TestCase):
                 web = next(target for target in plan['rust_targets']
                            if target['package'] == 'web-app'
                            and target.get('mode', 'test') == 'test')
-                prefixes = {prefix for selection in web['selections']
+                prefixes = {prefix for selection in web.get('selections', [web])
                             for prefix in selection.get('prefixes', [])}
                 self.assertTrue({
                     'files::history::ingress::tests::',
