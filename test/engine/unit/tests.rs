@@ -2458,7 +2458,7 @@ fn pending_first_write_keeps_selected_ancestry_and_creates_a_real_empty_version(
 }
 
 #[test]
-fn first_write_identical_to_source_is_not_an_unwritten_or_shared_version() {
+fn unchanged_pending_save_retains_source_until_content_changes() {
     for source_bytes in [b"same bytes".as_slice(), b"".as_slice()] {
         let fixture = Fixture::new();
         let mut engine = fixture.initialize();
@@ -2477,15 +2477,45 @@ fn first_write_identical_to_source_is_not_an_unwritten_or_shared_version() {
             .branch_id
             .unwrap();
         let before = engine.state().versions.len();
-        save(&mut engine, &branch, "file.txt", source_bytes);
+        let pending = engine.state().branches[&branch].clone();
+        let unchanged = save(&mut engine, &branch, "file.txt", source_bytes);
         let entry = engine.list_tree(&branch).unwrap().remove(0);
-        assert_ne!(entry.version_id, source.version_id);
-        assert_eq!(engine.state().versions.len(), before + 1);
+        assert_eq!(unchanged.result["no_change"], true);
+        assert_eq!(entry.version_id, source.version_id);
+        assert_eq!(engine.state().versions.len(), before);
+        assert_eq!(engine.state().branches[&branch], pending);
         assert_eq!(bytes(&engine, &entry.version_id), source_bytes);
+
+        save(&mut engine, &branch, "file.txt", b"changed content");
+        let changed = engine.list_tree(&branch).unwrap().remove(0);
+        assert_ne!(changed.version_id, source.version_id);
+        assert_eq!(engine.state().versions.len(), before + 1);
+        assert_eq!(
+            engine.state().versions[&changed.version_id].source_version_ids,
+            vec![source.version_id.clone()]
+        );
+        assert!(engine.state().versions[&changed.version_id].created_as_full_checkpoint);
         assert!(
             engine.state().branches[&branch]
                 .pending_file_versions
                 .is_empty()
+        );
+
+        save(&mut engine, &branch, "file.txt", source_bytes);
+        let restored = engine.list_tree(&branch).unwrap().remove(0);
+        assert_ne!(restored.version_id, source.version_id);
+        assert_ne!(restored.version_id, changed.version_id);
+        assert_eq!(engine.state().versions.len(), before + 2);
+        assert_eq!(
+            engine.state().versions[&restored.version_id].source_version_ids,
+            vec![changed.version_id]
+        );
+        drop(engine);
+        let engine = Engine::open(&fixture.root).unwrap();
+        assert_eq!(bytes(&engine, &restored.version_id), source_bytes);
+        assert_eq!(
+            engine.list_tree(&branch).unwrap()[0].version_id,
+            restored.version_id
         );
     }
 }

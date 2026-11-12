@@ -519,6 +519,80 @@ fn current_archival_keeps_selected_guard_and_archives_unselected_file_branch() {
     );
 }
 
+#[test]
+fn current_pending_unchanged_saves_preserve_projection_and_cold_replay() {
+    let mut fixture = Fixture::new();
+    let root = fixture
+        .engine
+        .create_disk_root("D04", "admin", op())
+        .unwrap();
+    save(
+        &mut fixture.engine,
+        &root.main_branch_id,
+        "selected",
+        b"unchanged",
+    );
+    let entry = fixture
+        .engine
+        .namespace_tree(&root.main_branch_id)
+        .unwrap()
+        .get("selected")
+        .unwrap()
+        .clone();
+    let pending = fixture
+        .engine
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
+            &name("unchanged pending"),
+            "admin",
+            op(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    fixture
+        .engine
+        .select_file_branch(&entry.file_id, &pending, "admin", op())
+        .unwrap();
+    fixture.exit(0, MembershipExitAction::Deregister);
+    let old_view = fixture.engine.current_namespaces.clone().unwrap();
+    let branches = fixture.engine.state.branches.clone();
+    let versions = fixture.engine.state.versions.clone();
+    let mut completed = Vec::new();
+    for branch in [&pending, &root.main_branch_id] {
+        let workspace = fixture.engine.create_workspace(branch, "admin").unwrap();
+        fixture
+            .engine
+            .stage_bytes(&workspace.workspace_id, "selected", b"unchanged")
+            .unwrap();
+        let request = request(&workspace);
+        let receipt = fixture.engine.commit_workspace(request.clone()).unwrap();
+        assert_eq!(receipt.result["no_change"], true);
+        assert_eq!(fixture.engine.state.branches, branches);
+        assert_eq!(fixture.engine.state.versions, versions);
+        let view = fixture.engine.current_namespaces.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&old_view.branches, &view.branches));
+        assert!(Arc::ptr_eq(&old_view.directories, &view.directories));
+        completed.push((request, receipt));
+    }
+    let sequence = fixture.engine.state.sequence;
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    let mut engine = Engine::open(&system).unwrap();
+    assert!(engine.current_namespaces.is_some());
+    for (request, receipt) in completed {
+        assert_eq!(engine.commit_workspace(request).unwrap(), receipt);
+        assert_eq!(engine.state.sequence, sequence);
+    }
+    assert_eq!(engine.state.branches, branches);
+    assert_eq!(engine.state.versions, versions);
+    assert_eq!(
+        engine.pending_file_source(&pending, &entry.file_id),
+        Some(entry.version_id.as_str())
+    );
+}
+
 fn decoded(state: &State) -> State {
     json_codec::from_slice(&canonical_json(state).unwrap()).unwrap()
 }

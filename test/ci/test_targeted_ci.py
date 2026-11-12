@@ -686,9 +686,12 @@ class TargetedSelection(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.select_plan(policy, ['change'])
 
-    def test_path_consumer_repairs_and_layout_policy_share_sixteen_builds(self):
+    def test_container_save_and_layout_batches_preserve_the_sixteen_build_ceiling(self):
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, ['src/engine/src/business/directory.rs',
+                           'src/engine/src/business/workspace.rs',
+                           'test/ci/test_layout_targeted_ci.py'])
         plan = CI.select_plan(self.policy, ['src/engine/src/business/directory.rs',
-                            'src/engine/src/business/workspace.rs',
                             'test/ci/test_layout_targeted_ci.py'])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'historical-directory-runtime', 'portable-path-consumers',
@@ -701,6 +704,37 @@ class TargetedSelection(unittest.TestCase):
                           'portable-path-consumers', 'projection-cache-layout'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
                          [190, 6, 160, 52])
+
+    def test_container_unchanged_save_keeps_tests_product_check_and_overlapping_coverage(self):
+        paths = ['src/engine/src/business/workspace.rs', 'test/engine/unit/tests.rs',
+                 'test/engine/unit/business/file/pending_regressions.rs',
+                 'test/engine/unit/engine/current_branch_archive_tests.rs',
+                 'test/engine/integration/branch_alias_operations.rs',
+                 '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py']
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'],
+                         ['ci-selection', 'container-unchanged-save', 'portable-path-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 15)
+        self.assertEqual(len(plan['python_tests']), 7)
+        engine = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-engine'
+                      and target.get('kind', 'lib') == 'lib'
+                      and target.get('mode', 'test') == 'test')
+        self.assertEqual(engine['selection_groups'],
+                         ['container-unchanged-save', 'portable-path-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in engine['selections']], [24, 160])
+        first = engine['selections'][0]
+        self.assertEqual(first['prefixes'], ['business::file::pending_regressions::'])
+        self.assertEqual(len(first['exact']), 6)
+        self.assertIn(
+            'engine::disk_registry::current::branch_archives::tests::'
+            'current_pending_unchanged_saves_preserve_projection_and_cold_replay',
+            first['exact'])
+        product = next(target for target in plan['rust_targets']
+                       if target['package'] == 'storage-engine'
+                       and target.get('mode') == 'check')
+        self.assertFalse(product['default_features'])
+        self.assertEqual(CI.cargo_command(product, '/build')[1], 'check')
 
     def test_typed_name_source_and_provenance_paths_are_admitted(self):
         paths = [

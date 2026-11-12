@@ -53,6 +53,175 @@ fn file(engine: &Engine, branch: &str) -> Entry {
         .unwrap()
 }
 
+fn select_pending(engine: &mut Engine, source: &Entry) -> String {
+    let branch = engine
+        .create_file_branch(
+            &source.file_id,
+            &source.version_id,
+            &storage_contract::BranchName::parse("unchanged draft").unwrap(),
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    engine
+        .select_file_branch(
+            &source.file_id,
+            &branch,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    branch
+}
+
+fn unchanged_request(engine: &mut Engine, branch: &str, bytes: &[u8]) -> CommitRequest {
+    let workspace = engine.create_workspace(branch, "admin").unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "report.txt", bytes)
+        .unwrap();
+    CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "unchanged content".into(),
+        request_digest: None,
+    }
+}
+
+#[test]
+fn selected_pending_unchanged_save_replays_without_materializing_content() {
+    for bytes in [b"same bytes".as_slice(), b"".as_slice()] {
+        let (root, mut engine, repo) = fixture();
+        save(&mut engine, &repo.main_branch_id, bytes);
+        let source = file(&engine, &repo.main_branch_id);
+        let selected = select_pending(&mut engine, &source);
+        let request = unchanged_request(&mut engine, &repo.main_branch_id, bytes);
+        let branches = engine.state().branches.clone();
+        let commits = engine.state().commits.clone();
+        let versions = engine.state().versions.clone();
+        let contexts = engine.state().file_contexts.clone();
+        let receipt = engine.commit_workspace(request.clone()).unwrap();
+        assert_eq!(receipt.result["no_change"], true);
+        assert_eq!(engine.state().branches, branches);
+        assert_eq!(engine.state().commits, commits);
+        assert_eq!(engine.state().versions, versions);
+        assert_eq!(engine.state().file_contexts, contexts);
+        assert_eq!(
+            engine.pending_file_source(&selected, &source.file_id),
+            Some(source.version_id.as_str())
+        );
+        let sequence = engine.state().sequence;
+        assert_eq!(engine.commit_workspace(request.clone()).unwrap(), receipt);
+        assert_eq!(engine.state().sequence, sequence);
+        drop(engine);
+
+        let mut engine = Engine::open(&root.path().join("system")).unwrap();
+        assert_eq!(engine.commit_workspace(request.clone()).unwrap(), receipt);
+        assert_eq!(engine.operation(request.operation_id).unwrap(), receipt);
+        assert_eq!(engine.state().sequence, sequence);
+        assert_eq!(engine.state().branches, branches);
+        assert_eq!(engine.state().versions, versions);
+        assert_eq!(file(&engine, &selected).version_id, source.version_id);
+        assert_eq!(
+            engine.workspace(&request.workspace_id).unwrap().state,
+            WorkspaceState::Committed
+        );
+    }
+}
+
+#[test]
+fn pending_unchanged_save_fault_recovery_keeps_original_node() {
+    for (fault, accepted) in [("after_prepare_1", false), ("after_accept_1", true)] {
+        let (root, mut engine, repo) = fixture();
+        save(&mut engine, &repo.main_branch_id, b"same bytes");
+        let source = file(&engine, &repo.main_branch_id);
+        let selected = select_pending(&mut engine, &source);
+        let request = unchanged_request(&mut engine, &selected, b"same bytes");
+        let branches = engine.state().branches.clone();
+        let versions = engine.state().versions.clone();
+        engine.inject_fault_once(fault);
+        assert_eq!(
+            engine.commit_workspace(request.clone()).unwrap_err().code(),
+            if accepted {
+                storage_contract::ErrorCode::InDoubt
+            } else {
+                storage_contract::ErrorCode::InjectedFailure
+            }
+        );
+        drop(engine);
+
+        let mut engine = Engine::open(&root.path().join("system")).unwrap();
+        assert_eq!(
+            engine.state().operations.contains_key(&request.operation_id),
+            accepted
+        );
+        let receipt = engine.commit_workspace(request.clone()).unwrap();
+        assert_eq!(receipt.result["no_change"], true);
+        assert_eq!(engine.state().branches, branches);
+        assert_eq!(engine.state().versions, versions);
+        let sequence = engine.state().sequence;
+        drop(engine);
+
+        let mut engine = Engine::open(&root.path().join("system")).unwrap();
+        assert_eq!(engine.commit_workspace(request).unwrap(), receipt);
+        assert_eq!(engine.state().sequence, sequence);
+        assert_eq!(engine.state().branches, branches);
+        assert_eq!(engine.state().versions, versions);
+    }
+}
+
+#[test]
+fn pending_unchanged_file_keeps_its_head_when_sibling_content_is_published() {
+    let (root, mut engine, repo) = fixture();
+    save(&mut engine, &repo.main_branch_id, b"same bytes");
+    let source = file(&engine, &repo.main_branch_id);
+    let selected = select_pending(&mut engine, &source);
+    let branch = engine.state().branches[&selected].clone();
+    let versions = engine.state().versions.len();
+    let request = unchanged_request(&mut engine, &repo.main_branch_id, b"same bytes");
+    engine
+        .stage_bytes(&request.workspace_id, "sibling.txt", b"new sibling")
+        .unwrap();
+    engine.commit_workspace(request).unwrap();
+    assert_eq!(engine.state().branches[&selected], branch);
+    assert_eq!(engine.state().versions.len(), versions + 1);
+    assert_eq!(file(&engine, &selected).version_id, source.version_id);
+    drop(engine);
+
+    let engine = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(engine.state().branches[&selected], branch);
+    assert_eq!(engine.state().versions.len(), versions + 1);
+}
+
+#[test]
+fn pending_unchanged_save_still_rejects_a_changed_selection() {
+    let (_root, mut engine, repo) = fixture();
+    save(&mut engine, &repo.main_branch_id, b"same bytes");
+    let source = file(&engine, &repo.main_branch_id);
+    let original = engine.state().file_selections[&source.file_id].clone();
+    select_pending(&mut engine, &source);
+    let request = unchanged_request(&mut engine, &repo.main_branch_id, b"same bytes");
+    engine
+        .select_file_branch(
+            &source.file_id,
+            &original,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    assert_eq!(
+        engine.commit_workspace(request.clone()).unwrap_err().code(),
+        storage_contract::ErrorCode::FileBranchConflict
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(!engine.state().operations.contains_key(&request.operation_id));
+}
+
 #[test]
 fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
     for state in [BranchState::Archived, BranchState::Merged] {

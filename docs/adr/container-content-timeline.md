@@ -1,8 +1,8 @@
 # 文件容器标签、内容树与操作时间线
 
-状态：设计候选，尚未实现。
+状态：标签与操作时间线仍为设计候选；同正文保存的文件容器切片已接入，等待准确提交的 GitHub 定向 CI 验证。其余内容节点分离仍未实现。
 
-核查基线：`isarmg/zxs` 的 `main`，提交 `cae7608111919637398004a0a3140eebb477c7bc`。本候选只新增本文，不修改运行时、数据、TASKS 或现有材料；没有运行编译、测试、rustfmt 或验证脚本。
+初始设计核查基线：`isarmg/zxs` 的 `main`，提交 `cae7608111919637398004a0a3140eebb477c7bc`。初始候选仅新增本文。后续同正文保存切片基于 `8dc004a569e5c41a9f48f1eb83055b10ce8f7dcf`，见第 7 节；没有本地运行编译、测试、rustfmt 或验证脚本。
 
 ## 1. 已确认的产品要求
 
@@ -217,7 +217,7 @@ A、B 均有两节点，A 的最上卡片高度为 40，B 为 120。两者同为
 - 标签：business/file_tags 与 current/file_tags 的规划、发布、重放、写集合验证必须改为容器级标签和事件。
 - 路径：file_paths 与 current/file_synchronization 目前要求 fnode 及关联提交结构，需要更新真实发布证明。
 - 合并：file_merges 与 current/history_merges 目前存在强制新 fmeta 的规则，需要同步改准入和恢复。
-- 保存：普通同正文保存已有 no_change；pending 分支首次同正文保存仍强制新 ver，需取消例外并闭合 pending/materialized 转换。
+- 保存：普通与 pending 文件分支都以当前可见版本的正文 hash／长度判定 no_change；相同正文不新增 ver、不清除 pending 来源，也不提前触发继承分叉。真正修改时沿原来源生成完整版本并清除 pending；回写旧字节不是全历史去重。仍保留提交前的工作区、选择、身份与幂等校验。GitHub 定向 CI 尚待验；此项不代表标签、路径、合并和删除已完成分离。
 - SMB：最终进入 upload/commit_workspace，必须复用同一判定和 operation_id 幂等链。
 - 删除：保留冻结、branch_heads/frontier、精确 undo、位置恢复及批量/目录删除证明。删除事件从显示 DAG 分离不等于删除真实生命周期记录。
 - 持久化：State projection、owner 索引、文件 DB、history_package、history_copy、备份、冷恢复和完整性校验必须包含新状态与事件。

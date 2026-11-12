@@ -1,5 +1,34 @@
 {
   "groups": {
+    "container-unchanged-save": {
+      "reason": "Container content-only history: pending same-body and empty saves, selected ownership, mixed uploads, exact replay and cold recovery, and unchanged-save selection fencing",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::file::pending_regressions::"
+          ],
+          "exact": [
+            "tests::unchanged_pending_save_retains_source_until_content_changes",
+            "tests::pending_first_write_keeps_selected_ancestry_and_creates_a_real_empty_version",
+            "tests::pending_range_write_edits_parent_before_publishing_its_own_complete_version",
+            "tests::switching_pending_destinations_fences_old_directory_writes_with_same_source",
+            "tests::unchanged_save_recovery_persists_operation_without_creating_content_history",
+            "engine::disk_registry::current::branch_archives::tests::current_pending_unchanged_saves_preserve_projection_and_cold_replay"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "backup-entity-entry-budget": {
       "reason": "Bound complete file-container backup images after missing-ancestor creation, including ordinary locator entries; keep existing no-clobber storage and one complete native Backup transaction regression.",
       "python_tests": [],
@@ -2023,6 +2052,30 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-unchanged-save"
+      ]
+    },
+    {
+      "path": "test/engine/unit/tests.rs",
+      "groups": [
+        "container-unchanged-save"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file/pending_regressions.rs",
+      "groups": [
+        "container-unchanged-save"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_branch_archive_tests.rs",
+      "groups": [
+        "container-unchanged-save"
+      ]
+    },
     {
       "path": "src/engine/src/container_storage/backup_entities.rs",
       "groups": [

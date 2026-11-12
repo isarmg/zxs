@@ -1407,6 +1407,16 @@ impl crate::engine::PlanningContext<'_> {
                     let path = location.as_str();
                     let final_location = upload_locations.get(&file.item_id).expect("invariant: workspace preview covers every upload");
                     written_paths.push(final_location.as_str().to_owned());
+                    // An unchanged save retains the selected content node and
+                    // pending source. Fork only when the visible bytes change.
+                    if existing.as_ref().is_some_and(|entry| {
+                        state.versions.get(&entry.version_id).is_some_and(|version| {
+                            version.content_hash == file.content_hash
+                                && version.logical_size == file.size
+                        })
+                    }) {
+                        continue;
+                    }
                     let file_id = match existing.as_ref() { Some(entry) => entry.file_id.clone(), None => new_id("file")? };
                     if existing.is_some() {
                         super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
@@ -1416,14 +1426,6 @@ impl crate::engine::PlanningContext<'_> {
                     let file_context = existing.as_ref().and_then(|_| directory::branch_context_at_key(state,&w.branch_id,location.key()));
                     let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
                         .or_else(||existing.as_ref().and_then(|_| directory::unwritten_source_at(state,&w.branch_id,location.key()).map(str::to_owned)));
-                    // A first write is a new branch-owned version even when its
-                    // bytes equal the source or are genuinely empty.
-                    if pending_source.is_none() && existing.as_ref().is_some_and(|entry| {
-                        state.versions.get(&entry.version_id).is_some_and(|version|
-                            version.content_hash == file.content_hash && version.logical_size == file.size)
-                    }) {
-                        continue;
-                    }
                     draft.ensure_parents(existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path))?;
                     let source_ids:Vec<String> = pending_source.as_ref().cloned()
                         .or_else(|| existing.as_ref().map(|entry| entry.version_id.clone()))

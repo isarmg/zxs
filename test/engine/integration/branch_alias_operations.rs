@@ -1240,6 +1240,20 @@ fn inherited_first_write_truncates_a_multibyte_collision_label_and_reopens() {
         )
         .unwrap();
     p.select("docs", &origin);
+    let branches = p.engine.state().branches.clone();
+    let versions = p.engine.state().versions.clone();
+    let inherited = p
+        .engine
+        .file_context(&p.repo.repository_id, "docs/report.txt")
+        .unwrap();
+    assert!(inherited.inherited_from.is_some());
+    p.save("docs/report.txt", b"source");
+    assert_eq!(p.engine.state().branches, branches);
+    assert_eq!(p.engine.state().versions, versions);
+    assert_eq!(
+        p.engine.file_context(&p.repo.repository_id, "docs/report.txt"),
+        Some(inherited)
+    );
     p.save("docs/report.txt", b"first own body");
     let context = p
         .engine
