@@ -555,6 +555,62 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
         delegated.budget().reads, delegated.budget().bytes,
     );
 
+    let mut stage_source = DelegatedSource {
+        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        objects: std::time::Duration::ZERO,
+        journals: std::time::Duration::ZERO,
+        object_calls: 0,
+        journal_calls: 0,
+    };
+    let mut costs = ArchiveStageCosts::default();
+    let started = std::time::Instant::now();
+    let staged = decomposed_verify_observed(
+        &manifest, &manifest_bytes, task.selection.first(), &mut stage_source, &mut costs,
+    ).unwrap();
+    let stage_total = started.elapsed();
+    assert_eq!(staged.0, before.0);
+    assert_eq!(
+        canonical_json(staged.1.state()).unwrap(),
+        canonical_json(before.1.state()).unwrap(),
+    );
+    assert_eq!(stage_source.budget().reads, before.0.metadata_read_steps);
+    assert_eq!(stage_source.budget().bytes, before.0.verified_metadata_bytes);
+    assert_eq!(stage_source.object_calls, delegated.object_calls);
+    assert_eq!(stage_source.journal_calls, delegated.journal_calls);
+    // Stages are inclusive. Their Source subset is timed in this same execution;
+    // subtraction still includes harness overhead and is not production profiling.
+    costs.report(stage_total);
+
+    let mut wrong: Manifest = decode_proof(&manifest_bytes).unwrap();
+    wrong.through_snapshot.push('x');
+    let wrong_bytes = canonical_json(&wrong).unwrap();
+    let wrong_hash = object_hash(FORMAT, &wrong).unwrap();
+    let manifest_file = manifest_path(root.path());
+    fs::write(&manifest_file, &wrong_bytes).unwrap();
+    let damaged_files = fixture_file_bytes(fixture._temp.path());
+    // The modified manifest authenticates against its own digest, but not the
+    // frozen Job. This reaches an actual outer gate, not a Source read failure.
+    let expected = read_observed(
+        &root, task.selection.first(), &wrong_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).err().unwrap();
+    let mut failed_source = DelegatedSource {
+        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        objects: std::time::Duration::ZERO,
+        journals: std::time::Duration::ZERO,
+        object_calls: 0,
+        journal_calls: 0,
+    };
+    let actual = decomposed_verify_observed(
+        &wrong, &wrong_bytes, task.selection.first(), &mut failed_source,
+        &mut ArchiveStageCosts::default(),
+    ).err().unwrap();
+    assert_eq!(error_signature(&actual), error_signature(&expected));
+    assert_eq!(failed_source.budget().reads, 0);
+    assert_eq!(failed_source.budget().bytes, 0);
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), damaged_files);
+    fs::write(&manifest_file, &manifest_bytes).unwrap();
+
     compare_object_failures(&root, &manifest);
 
     // Both Sources must preserve cancellation and actual corrupt-byte failures.
@@ -575,6 +631,20 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
             &manifest, &manifest_bytes, task.selection.first(), &mut observed,
             &mut |_, _, _, _| Ok(()),
         ).err().unwrap();
+        let mut staged_source = DelegatedSource {
+            target: Target { root: &root, stop: &stop, budget: Budget::default() },
+            objects: std::time::Duration::ZERO,
+            journals: std::time::Duration::ZERO,
+            object_calls: 0,
+            journal_calls: 0,
+        };
+        let staged_error = decomposed_verify_observed(
+            &manifest, &manifest_bytes, task.selection.first(), &mut staged_source,
+            &mut ArchiveStageCosts::default(),
+        ).err().unwrap();
+        assert_eq!(error_signature(&staged_error), error_signature(&expected));
+        assert_eq!(staged_source.budget().bytes, production.budget().bytes);
+        assert_eq!(staged_source.budget().reads, production.budget().reads);
         assert_eq!(error_signature(&actual), error_signature(&expected));
         assert_eq!(observed.budget().bytes, production.budget().bytes);
         assert_eq!(observed.budget().reads, production.budget().reads);
@@ -830,4 +900,204 @@ fn real_finalize_structural_equality_preserves_payload_rejection_and_bytes() {
         canonical_json(restored.1.state()).unwrap(),
         canonical_json(baseline.1.state()).unwrap(),
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ArchiveStage {
+    Configuration, Journals, Candidate, Publication, Seal, PublicationSeal,
+    JournalReceipts, Finalize, Snapshot, SnapshotAdmission, ReceiptPrefix,
+    HistoryBinding, Payloads, Observer, ReportArchive, ReportState,
+}
+
+#[derive(Default)]
+struct ArchiveStageCost {
+    calls: usize,
+    elapsed: std::time::Duration,
+    source_elapsed: std::time::Duration,
+    objects: usize,
+    journals: usize,
+    reads: usize,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct ArchiveStageCosts(BTreeMap<ArchiveStage, ArchiveStageCost>);
+
+impl ArchiveStageCosts {
+    fn measure<'a, T>(
+        &mut self,
+        stage: ArchiveStage,
+        source: &mut DelegatedSource<'a>,
+        action: impl FnOnce(&mut DelegatedSource<'a>) -> Result<T>,
+    ) -> Result<T> {
+        let source_elapsed = source.objects + source.journals;
+        let objects = source.object_calls;
+        let journals = source.journal_calls;
+        let reads = source.budget().reads;
+        let bytes = source.budget().bytes;
+        let started = std::time::Instant::now();
+        let result = action(source);
+        let elapsed = started.elapsed();
+        let cost = self.0.entry(stage).or_default();
+        cost.calls += 1;
+        cost.elapsed += elapsed;
+        cost.source_elapsed += source.objects + source.journals - source_elapsed;
+        cost.objects += source.object_calls - objects;
+        cost.journals += source.journal_calls - journals;
+        cost.reads += source.budget().reads - reads;
+        cost.bytes += source.budget().bytes - bytes;
+        result
+    }
+
+    fn report(&self, total: std::time::Duration) {
+        // Diagnostic I/O must not replace behavior; all labels are fixed enum variants.
+        let _ = writeln!(
+            std::io::stderr(),
+            "[backup-archive-stages-us] whole_inclusive={}",
+            total.as_micros(),
+        );
+        for (stage, cost) in &self.0 {
+            let _ = writeln!(
+                std::io::stderr(),
+                concat!(
+                    "[backup-archive-stage-us] stage={:?} calls={} inclusive={} ",
+                    "source_inclusive={} objects={} journals={} reads={} bytes={}"
+                ),
+                stage, cost.calls, cost.elapsed.as_micros(), cost.source_elapsed.as_micros(),
+                cost.objects, cost.journals, cost.reads, cost.bytes,
+            );
+        }
+    }
+}
+
+// Bounded test-only orchestration; actual stage algorithms remain production functions.
+fn decomposed_verify_observed(
+    manifest: &Manifest,
+    bytes: &[u8],
+    job: &Job,
+    source: &mut DelegatedSource<'_>,
+    costs: &mut ArchiveStageCosts,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    if manifest.format != FORMAT
+        || manifest.publications.is_empty()
+        || manifest.publications.len() > MAX_PUBLICATIONS
+        || manifest.through_sequence != job.request.expected_sequence
+        || manifest.through_snapshot != job.snapshot
+        || manifest.config.pool_id != job.pool_id
+        || object_hash("backup-preparation-config", &manifest.config)? != job.configuration_hash
+    {
+        return Err(invalid(
+            "native prefix does not bind the complete frozen task",
+        ));
+    }
+    let config = costs.measure(ArchiveStage::Configuration, source, |_| {
+        crate::ValidatedConfig::try_from(manifest.config.clone())
+    })?;
+    source.account(bytes.len())?;
+    let (journals, journal_frames) = costs.measure(ArchiveStage::Journals, source, |source| {
+        original_journals(manifest, source)
+    })?;
+    let mut previous: Option<AdmittedState> = None;
+    let mut snapshot: Option<String> = None;
+    for (index, published) in manifest.publications.iter().enumerate() {
+        let candidate: Candidate = costs.measure(ArchiveStage::Candidate, source, |source| {
+            typed(source, "candidate", &published.candidate)
+        })?;
+        config.verify_original_candidate_membership(&candidate)?;
+        if candidate.generation().is_some()
+            || candidate.registry().is_some()
+            || candidate.sequence != index as u64 + 1
+            || candidate.pool_id != job.pool_id
+            || candidate.previous_snapshot != snapshot
+        {
+            return Err(invalid(
+                "native prefix does not extend the exact genesis publication chain",
+            ));
+        }
+        let publication: Publication = costs.measure(ArchiveStage::Publication, source, |source| {
+            typed(source, "publication", &published.publication)
+        })?;
+        let seal: PublicationSeal = costs.measure(ArchiveStage::Seal, source, |source| {
+            typed(source, "backup-publication-seal", &published.seal)
+        })?;
+        if publication.recovery.is_some() {
+            return Err(invalid(
+                "degraded native publication is not supported by this control archive",
+            ));
+        }
+        costs.measure(ArchiveStage::PublicationSeal, source, |_| {
+            verify_publication_seal(&candidate, &publication, &seal)
+        })?;
+        costs.measure(ArchiveStage::JournalReceipts, source, |_| {
+            verify_journal_receipts(
+                &candidate, &publication, &seal, published, &manifest.members, &journals,
+            )
+        })?;
+        let finalize_hash = object_hash("finalize", &publication.finalize)?;
+        let finalize: crate::journal::Finalize =
+            costs.measure(ArchiveStage::Finalize, source, |source| {
+                typed(source, "finalize", &finalize_hash)
+            })?;
+        if finalize != publication.finalize {
+            return Err(invalid("original FINALIZE differs"));
+        }
+        let descriptor: Snapshot = costs.measure(ArchiveStage::Snapshot, source, |source| {
+            typed(source, "snapshot", &candidate.snapshot_hash)
+        })?;
+        let admitted = costs.measure(ArchiveStage::SnapshotAdmission, source, |source| {
+            resolve_admitted_snapshot(descriptor, |kind, hash| source.object(kind, hash))
+        })?;
+        let state = admitted.state();
+        if state.sequence != candidate.sequence
+            || state.operations.get(&candidate.operation_id) != Some(&publication.result)
+            || !state
+                .operation_principals
+                .contains_key(&candidate.operation_id)
+        {
+            return Err(invalid(
+                "native publication omits or changes its exact original receipt",
+            ));
+        }
+        costs.measure(ArchiveStage::ReceiptPrefix, source, |_| {
+            verify_receipt_prefix(previous.as_ref().map(AdmittedState::state), state, &candidate)
+        })?;
+        costs.measure(ArchiveStage::HistoryBinding, source, |source| {
+            bound_history_objects_with(&candidate, Some(&admitted), |kind, hash| {
+                source.object(kind, hash)
+            })
+        })?;
+        costs.measure(ArchiveStage::Payloads, source, |source| {
+            verify_payloads(&manifest.config, &candidate, &publication, source)
+        })?;
+        // The observer can build bounded in-memory derived material. It must
+        // not install/authorize anything until this entire prefix returns.
+        costs.measure(ArchiveStage::Observer, source, |_| {
+            // The compared production calls use the same no-op observer.
+            Ok(())
+        })?;
+        snapshot = Some(candidate.snapshot_hash.clone());
+        previous = Some(admitted);
+    }
+    let state = previous.expect("invariant: admitted nonempty native prefix");
+    if state.state().sequence != manifest.through_sequence
+        || snapshot.as_deref() != Some(manifest.through_snapshot.as_str())
+    {
+        return Err(invalid("native archive stops before the frozen boundary"));
+    }
+    let report = BackupNativeControlReport {
+        archive_hash: costs.measure(ArchiveStage::ReportArchive, source, |_| {
+            object_hash(FORMAT, manifest)
+        })?,
+        state_hash: costs.measure(ArchiveStage::ReportState, source, |_| {
+            object_hash("backup-prepared-state", state.state())
+        })?,
+        snapshot_hash: manifest.through_snapshot.clone(),
+        sequence: manifest.through_sequence,
+        publications: manifest.publications.len(),
+        original_members: manifest.members.len(),
+        journal_frames,
+        metadata_read_steps: source.budget().reads,
+        verified_metadata_bytes: source.budget().bytes,
+    };
+    Ok((report, state))
 }

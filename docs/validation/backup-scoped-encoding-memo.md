@@ -647,3 +647,28 @@ Publication、journal、原始收据、State、历史和 payload 语义检查均
 https://github.com/isarmg/zxs/actions/runs/43267501783/artifacts/13969035340
 ZIP SHA256：
 `e790de511c06ee7480c30efebb9db3e1655921f4ecb8a03dcbeae334a55167fb`。
+
+## Source 之外的测试侧顺序分解
+
+为继续区分 snapshot 准入、history 绑定、publication/journal receipts、
+payload 与报告编码，根测试沿现有小型 Genesis 夹具追加一次顺序参考编排。
+它调用生产的真实分段函数，不复制函数内部算法，也不新增生产接口、
+Observer 参数、TLS、字段、钩子或另一套缓存。
+
+16 个固定枚举阶段聚合每次 inclusive 时间，以及同次 DelegatedSource 的
+object/journal 时间、调用数和读取计费增量。原生产调用前后保留，
+完整 Report、State、总读取预算以及 object/journal 次数相同。
+另将取消、坏 JSON 对照扩到此编排，并把自建 manifest 重算真实摘要写入夹具，
+使其绕过摘要拒绝后实际到达 frozen Job 绑定拒绝；核对错误/source 链、
+零读取计费和全夹具文件字节不被验证器改变，随后仅恢复自建坏字节。
+
+固定桶不是所有语句的排它分割：Configuration 只含 ValidatedConfig 准入，
+初始 manifest 条件与 config 摘要、candidate membership、单独 finalize 摘要、
+部分关联条件及编排/析构开销仍在桶外。Observer 桶固定为空操作，只对应本夹具的 noop，
+不覆盖真实派生 observer。Source 时间是同一次分段内的子集，
+差值仍带测试编排、分配和计时开销，不能作为生产函数采样结果。
+
+日志仅固定标签/阶段与数字；诊断写失败不替代行为结果。
+该参考编排有维护漂移风险，必须对照生产顺序、完整结果/预算和拒绝行为。
+已有 Source 两种观察、Finalize 差分和原 exact/max1/900 事务均保持。
+新分解尚待 GitHub 实测，不先断言余下热点或超时已解决。
