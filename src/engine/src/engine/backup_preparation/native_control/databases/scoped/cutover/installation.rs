@@ -43,7 +43,10 @@ impl Task {
         )
     }
     pub(super) fn bytes(&self) -> Result<Vec<u8>> {
-        let bytes = canonical_json(self)?;
+        Self::check_intent_bytes(canonical_json(self)?)
+    }
+
+    fn check_intent_bytes(bytes: Vec<u8>) -> Result<Vec<u8>> {
         if bytes.len() > MAX_INTENT {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
@@ -441,8 +444,8 @@ pub(super) fn verify_installed_with_encodings(
             "installed entities extend different original cutover inputs",
         ));
     }
-    let hash = object_hash(FORMAT, task)?;
-    let intent = task.bytes()?;
+    let (intent, hash) = storage_contract::encode_hashed_object(FORMAT, task)?;
+    let intent = Task::check_intent_bytes(intent)?;
     let mut acceptances = Vec::with_capacity(targets.len());
     for (index, target) in targets.iter().enumerate() {
         let accepted = with_image(task, target, index, stop, |image| {
@@ -478,3 +481,7 @@ pub(super) fn verify_installed_with_encodings(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../test/engine/unit/backup_installation_encoding_tests.rs"]
+mod encoding_tests;

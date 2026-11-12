@@ -100,4 +100,14 @@ perf 版本为 7.0.14，但 true/false 两次功能探测均返回 1、分类为
 保留三份完整 workflow 与两份 SQLite 例外的原准入规则。
 新增回归覆盖实际文件准入、自动触发、写权限、预算、凭据、
 安装/命令/HEAD/吞错/工件失败门漂移与未批准名称的拒绝。
-修复后的 GitHub 回归结果仍待核实，原 900 秒事务不因这次诊断而视为通过。
+修复后的 #1317 已在准确 `258d7a7b1265bcda32792d9199b10153f2cef571`
+及比较基线 `20fe040f4991eda82f03a487bb6b9ca3e7a4a9d1` 执行通过：
+8 个 Python 模块共 176 项，含 helper 21 项及 development 23 项，
+新增五项入口准入/拒绝回归均实际通过；failed/skipped/blocked 为空，
+聚合 coverage 通过。本轮没有 Rust 测试或产品编译检查。
+这不改变实际工具未证明可用及原 900 秒事务仍失败的结论。
+
+#1317 工件：
+https://github.com/isarmg/zxs/actions/runs/43256731847/artifacts/13959869934
+ZIP SHA256：
+`bc92c6dbf12c9af993de647214c2b001fea57ae6d4ab49a6153f3692aca01a5d`。

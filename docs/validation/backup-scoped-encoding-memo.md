@@ -478,5 +478,54 @@ JSON Value 树。之后完整 `to_value(parsed) == value` 检查原样保留。
 差分夹具只含该 archive 接受的 Genesis Candidate，不声称 generation/registry
 envelope 或 degraded Publication 的完整覆盖；原完整 archive 前后报告相等
 以及取消对照继续保留。没有生产测试钩子、扩大可见性、源码计数器或新缓存。
-该借用解码及新增差分尚未执行 GitHub 验证；#1308 的结果属于修改前基线，
-不证明这处 clone 是热函数、已带来收益或解决原 900 秒超时。
+该借用解码及新增差分已在 #1312 的准确 d1a/24a 相关比较基线通过，
+连同旧格式拒绝、两项 pending 与全部 21 项 readmission：
+共 330 项 Rust、176 项 Python 和 Engine 无默认特性产品检查通过，
+唯一失败仍是原 900 秒事务。完整工件记录见
+[外部工具能力探测](backup-profiler-capability.md)。
+这不证明此处 clone 是热函数、已带来收益或解决完整事务超时。
+
+## 安装 Task 的同值双编码合并
+
+在 `verify_installed_with_encodings` 中，原来先 `object_hash(FORMAT, task)`，
+随后 `task.bytes()` 对同一不可变 Task 再做一次规范化编码。
+前者本就调用现有 `encode_hashed_object`，只是丢弃返回的 bytes；
+本片直接保留该次 bytes 与同域摘要，再调用集中后的原 16 MiB 意图限额检查。
+两次原编码之间没有修改、I/O 或取消点，因此只消除第二次相同纯计算。
+首次域验证、规范化和哈希仍先于原限额错误，不新增错误类型或摘要解析。
+
+其它 `Task::bytes` 调用仍只编码并使用同一个原大小守卫；
+`run` 中原 bytes → hash 的调用顺序不动。
+没有新 memo、State/Report 缓存、完成证明、生产测试钩子或扩大的 API。
+之前的完整 cutover/scoped 验证和之后的 Image、INTENT、ACCEPTANCE、
+COMPLETE 真实读回、目标名称/物理/锁检查以及最终取消门全部保留。
+SYSTEM 的递归 observation 数量不因这次局部合并减少。
+
+新增一个真实三原盘、两目标、一文件两版本的测试，推进到 TargetEntities：
+对照原双编码的完整 bytes/hash，覆盖 16 MiB 前一字节、恰好及超一字节；
+限额填充只作为编码样本，不声称通过 Task 准入。
+坏 INTENT/ACCEPTANCE/COMPLETE 与目标替换仍实际调用验证器并断言拒绝，
+取消则对照原错误码/source 链及其优先于坏材料的顺序。
+拒绝前后比较整个夹具的目录结构与文件字节，不覆盖权限、mtime 等元数据。
+测试只恢复它自己改坏的字节/路径，再次执行真实验证；不修复用户材料。
+本片尚待 GitHub 定向运行，不能以静态等价或单项通过宣称端到端加速。
+
+## #1315 原完整事务仍失败
+
+准确 head `e73c61d2d6a6a1382763976fad5276ff54000b6d`，
+比较基线 `39bcae218116b2d8f925120d9a8f34cea791df5a`。
+隔离 shard 1 的六个 Python 模块共 161 项通过，
+唯一失败仍是原 exact/max1/900 事务，selected skipped/blocked 为空。
+该结果属于此 Task 编码合并之前，不能作为合并后的验证结果。
+
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM
+约为 40/58/104/168/294/432/718 秒，native metadata 未报告完成。
+180 个有效外部样本至约 895.21 秒，进程 user/system 为 818.67/78.69 秒，
+主工作线程 CPU 829.529 秒、调度等待 0.174 秒；
+逻辑读取 5,671,612,107 字节、11,161,279 次，物理 read_bytes 为 0。
+这仍只支持持续计算/逻辑读取，不是具体函数的热点或死锁结论。
+
+工件：
+https://github.com/isarmg/zxs/actions/runs/43253328028/artifacts/13962105785
+ZIP SHA256：
+`a8f8946d86154c6d4f49fdce757297060798e679b8e96a61814506294c9bf92c`。

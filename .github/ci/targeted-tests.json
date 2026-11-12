@@ -2329,7 +2329,7 @@
       ]
     },
     "backup-scoped-encoding-memo": {
-      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact. Native archive decoding borrows the freshly authenticated Value instead of cloning its tree; owned-reference differential admission retains roundtrip equality, actual reads, errors, budgets and cancellation.",
+      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact. Native archive decoding borrows the freshly authenticated Value instead of cloning its tree; owned-reference differential admission retains roundtrip equality, actual reads, errors, budgets and cancellation. Installed target verification reuses one canonical Task encoding for its intent bytes and domain digest, preserving the existing intent bound and every target read.",
       "python_tests": [
         "test_backup_encoding_memo_ci"
       ],
@@ -2347,7 +2347,8 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving::cost_tests::",
             "engine::backup_preparation::native_control::databases::scoped::encoding_memo::tests::",
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::original_scope_encoding_tests::",
-            "engine::backup_preparation::native_control::archive::decode_tests::"
+            "engine::backup_preparation::native_control::archive::decode_tests::",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::installation::encoding_tests::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900
@@ -7974,6 +7975,12 @@
       "groups": [
         "backup-profiler-capability",
         "ci-selection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_installation_encoding_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
       ]
     }
   ],
