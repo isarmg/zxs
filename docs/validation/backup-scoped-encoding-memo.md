@@ -410,4 +410,73 @@ scoped capture 包含另一次完整 archive、派生盘观察、编码/命中�
 同精确 binding 的局部事务在 capture 返回时丢弃，不提交 pending。
 原 18 次层级测量、原有其他标签/断言和末尾决定/名字/取消门全部保留。
 新增桶仍是独立 inclusive、非冷缓存，不能相加或相减替代排它 profiling。
-这 14 次观察尚未执行 GitHub 验证，原 900 秒也未因此放宽。
+这 14 次观察已在下述 #1308 执行，原 900 秒也未因此放宽。
+
+
+## #1308：归档、派生 capture 与实际 store 的分项结果
+
+准确 head 为 `9af37ef4d68e2310272471a8002e8c52e3e16c11`，
+比较基线为 `ac7711126764a66ae286c261ce5dbc5bb45a5233`。
+shard 0 的 69 项 Rust、8 个 Python 模块共 174 项测试，以及 Engine 无默认
+特性产品检查全部通过；该片 failed/skipped/blocked 均为空。
+组件耗时 60.61 秒，`051.stdout.log` / `051.stderr.log` 保留实际结果。
+本提交只增加测试观察，没有性能算法改动；不能把它与 #1304 的 88.85 秒
+跨 runner 比较为优化收益，更不能替代原完整事务的成功证据。
+
+新增 14 次固定调用的结果如下，单位为毫秒。target 0/1 是同一完整选择中的
+两个目标；selection material 是整个目标集合的一次验证，不是单目标值。
+
+| 独立入口 | 第 0 轮 | 第 1 轮 |
+| --- | ---: | ---: |
+| selection material，全目标 | 17.820 | 18.102 |
+| archive noop，target 0 | 26.516 | 26.870 |
+| archive noop，target 1 | 27.129 | 27.331 |
+| scoped capture，target 0 | 46.817 | 45.585 |
+| scoped capture，target 1 | 46.255 | 46.163 |
+| scoped store verify，target 0 | 0.491 | 0.510 |
+| scoped store verify，target 1 | 0.485 | 0.486 |
+
+同轮 original native 整体约 72.4 毫秒，scoped 整体为 183.245–184.570 毫秒，
+registry 整体为 227.415–232.601 毫秒。所有条目仍是各自独立的 inclusive
+调用；scoped capture 包含另一遍完整 archive 与派生 observer，不是 archive
+的同一次外层测量。不能相减成精确内部成本，也没有证据支持跳过或缓存
+store 的真实 inventory、manifest、SQLite 原字节读取。
+
+备份 unit 工件：
+https://github.com/isarmg/zxs/actions/runs/43243579291/artifacts/13957005597
+ZIP SHA256：`a794a8a67238df145bba308a73627b59b1ad3069380ab71375406d1ed3ac5399`。
+
+独立 shard 1 的原 exact/max1/900 事务仍超时，selected skipped/blocked
+为空；整个 #1308 因此失败，不是完整通过。首次见到 serving/scopes/common/
+Current/aliases/盘根库/SYSTEM 约为 38/58/102/166/298/432/702 秒，
+native metadata 未报告完成。180 次有效外部观测至 895.197 秒，
+user/system CPU 约 818.33/77.24 秒，主工作线程 CPU 828.617 秒、
+调度等待 0.146 秒；逻辑读取约 5.79 GB、1,139 万次，物理 read_bytes 为 0。
+这些仍只支持持续计算/逻辑读取，不是具体热函数证明。
+
+原完整事务工件：
+https://github.com/isarmg/zxs/actions/runs/43243579291/artifacts/13958015406
+ZIP SHA256：`0c52d3c7909f2bb4592dc2ac7c2c33da4006ecdd36a4c65910d59362853e9365`。
+
+## Native archive 的局部借用解码
+
+仅将 `archive::typed` 在当前真实读取/认证之后的
+`from_value(value.clone())` 改为 `T::deserialize(&value)`，避免这一处预先深克隆
+JSON Value 树。之后完整 `to_value(parsed) == value` 检查原样保留。
+未缓存归档、State、准入结论或业务成功；现场读取、认证、大小/次数预算、
+取消、原 journal/receipt/history/payload 验证和旧格式拒绝门均不改变。
+
+本仓 owned 与 borrowed Value 使用同一 JSON 错误类型，但字符串 visitor
+入口不同；`DeserializeOwned` 本身不证明任意自定义解析器等价。
+新增差分用真实三盘、一文件的 native archive，逐个读七类实际对象，
+将原 owned 算法仅作为测试参考；两边各自执行真实 Target 读取与认证，
+对比完整成功编码、错误 code/source 链/JSON 分类位置及 read/byte 计费。
+反例重算摘要后写入独立测试对象，使未知/缺失/null、枚举、类型化 ID/hash、
+数值字符串和嵌套收据错误真正到达解码或投影拒绝，而非提前停在 hash 不符。
+合法可选字段与既有裸摘要文本的解码语义保持，不把后续语义检查假装成解码规则。
+
+差分夹具只含该 archive 接受的 Genesis Candidate，不声称 generation/registry
+envelope 或 degraded Publication 的完整覆盖；原完整 archive 前后报告相等
+以及取消对照继续保留。没有生产测试钩子、扩大可见性、源码计数器或新缓存。
+该借用解码及新增差分尚未执行 GitHub 验证；#1308 的结果属于修改前基线，
+不证明这处 clone 是热函数、已带来收益或解决原 900 秒超时。

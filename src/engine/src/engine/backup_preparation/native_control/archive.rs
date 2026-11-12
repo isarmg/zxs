@@ -147,7 +147,7 @@ fn typed<T: DeserializeOwned + Serialize>(
     hash: &str,
 ) -> Result<T> {
     let value = source.object(kind, hash)?.into_value();
-    let parsed: T = json_codec::from_value(value.clone())?;
+    let parsed: T = T::deserialize(&value)?;
     if json_codec::to_value(&parsed)? != value {
         return Err(invalid(
             "native proof projection differs from its authenticated bytes",
@@ -874,3 +874,7 @@ pub(super) fn read_observed(
 #[cfg(test)]
 #[path = "../../../../../../test/engine/unit/backup_native_format_tests.rs"]
 mod format_tests;
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/backup_native_decode_tests.rs"]
+mod decode_tests;

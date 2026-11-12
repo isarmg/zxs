@@ -88,6 +88,34 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertEqual(transaction['timeout_seconds'], 900)
 
 
+    def test_archive_decode_keeps_existing_admission_and_backup_budgets(self):
+        archive = ('src/engine/src/engine/backup_preparation/'
+                   'native_control/archive.rs')
+        fixture = 'test/engine/unit/backup_native_decode_tests.rs'
+        prefix = 'engine::backup_preparation::native_control::archive::decode_tests::'
+        for path in (archive, fixture):
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('backup-scoped-encoding-memo', plan['groups'])
+                self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
+        plan = CI.select_plan(self.policy, [archive, fixture])
+        self.assertIn('container-tags-format', plan['groups'])
+        self.assertIn('held-directory-layout', plan['groups'])
+        group = self.policy['groups']['backup-scoped-encoding-memo']
+        unit, product, transaction = group['rust_targets']
+        self.assertIn(prefix, unit['prefixes'])
+        self.assertEqual(unit['max_tests'], 96)
+        self.assertEqual(unit['timeout_seconds'], 900)
+        self.assertEqual(product['mode'], 'check')
+        self.assertFalse(product['default_features'])
+        self.assertTrue(transaction['isolate'])
+        self.assertEqual(transaction['max_tests'], 1)
+        self.assertEqual(transaction['timeout_seconds'], 900)
+        self.assertEqual(transaction['exact'], [
+            'backup_preparation::transaction_serving::'
+            'same_backup_switch_serves_and_replays_normal_successor_publications'])
+
+
 # External diagnostics tests: these do not contribute to Rust test outcomes.
 import importlib.util as _sampling_import
 import io as _sampling_io
