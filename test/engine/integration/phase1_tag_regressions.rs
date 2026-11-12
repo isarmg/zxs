@@ -2,6 +2,10 @@
 //! or phase-two model is substituted. HTTP/Samba are covered by other owners.
 use std::{collections::BTreeSet, io::Read};
 use storage_engine::*;
+use storage_engine as engine_api;
+use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 
 fn op() -> OperationId {
     OperationId::generate().unwrap()
@@ -21,42 +25,29 @@ fn save(e: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Entry {
     .unwrap();
     e.namespace_tree(branch).unwrap().get(path).unwrap().clone()
 }
-fn target(e: &Engine, branch: &str, source: &str) -> FileTagTarget {
-    FileTagTarget {
-        branch_id: branch.into(),
-        source_node_id: source.into(),
-        expected_node_id: e.file_branch_head(branch).unwrap(),
+fn command(e: &Engine, repo: &Repository, file: &str, path: &str, tags: &[&str]) -> ReplaceCommand {
+    let read = ReadRequest {
+        file_id: file.parse().unwrap(),
+        context: Context {
+            repository_id: repo.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse(path).unwrap(),
+        },
+    };
+    ReplaceCommand {
+        expected_generation: e.file_container_tags(&read).unwrap().generation,
+        file_id: read.file_id,
+        context: read.context,
+        tags: TagSet::new(tags.iter().map(|tag| Tag::parse((*tag).into()).unwrap())).unwrap(),
     }
 }
-fn edit(
-    e: &mut Engine,
-    file: &str,
-    targets: &[FileTagTarget],
-    add: &[String],
-    location: Option<&FileLocation>,
-    operation_id: OperationId,
-) -> storage_engine::Result<OperationResult> {
-    e.update_file_node_tags(FileNodeTagsUpdateRequest {
-        file_id: file,
-        targets,
-        add,
-        remove: &[],
-        location,
-        principal: "admin",
-        operation_id,
-    })
+fn edit(e: &mut Engine, request: &ReplaceCommand, operation: OperationId) -> Result<OperationResult> {
+    e.replace_container_tags(request, &"admin".parse().unwrap(), operation)
 }
 fn bytes(e: &Engine, version: &str) -> Vec<u8> {
     let mut opened = e.open_content(version).unwrap();
     let mut result = Vec::new();
     opened.file.read_to_end(&mut result).unwrap();
     result
-}
-fn node(receipt: &OperationResult) -> String {
-    receipt.result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .into()
 }
 fn namespace(
     e: &mut Engine,
@@ -85,7 +76,7 @@ fn selected_tree(e: &Engine, repo: &str) -> String {
 }
 
 #[test]
-fn fresh_duplicate_input_is_one_tag_but_exact_receipt_still_binds_raw_request() {
+fn container_replacement_keeps_content_graph_and_replays_exact_cas() {
     let temp = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &temp.path().join("system"),
@@ -94,78 +85,40 @@ fn fresh_duplicate_input_is_one_tag_but_exact_receipt_still_binds_raw_request() 
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
     let first = save(&mut e, &repo.main_branch_id, "报告.txt", b"first body");
-    let branch = e
-        .file_context(&repo.repository_id, "报告.txt")
-        .unwrap()
-        .branch_id;
-    let t = target(&e, &branch, &first.version_id);
+    let request = command(&e, &repo, &first.file_id, "报告.txt", &["审核"]);
     let operation = op();
-    let before_versions = e.state().versions.len();
-    let receipt = edit(
-        &mut e,
-        &first.file_id,
-        std::slice::from_ref(&t),
-        &["审核".into(), "审核".into()],
-        None,
-        operation,
-    )
-    .unwrap();
-    let tagged = node(&receipt);
-    assert_eq!(
-        e.file_node_tags(&first.file_id, &tagged).unwrap(),
-        BTreeSet::from(["审核".into()])
-    );
-    assert_eq!(e.state().versions.len(), before_versions);
-    assert_eq!(bytes(&e, &first.version_id), b"first body");
-    let before = json_codec::to_value(e.state()).unwrap();
-    assert_eq!(
-        edit(
-            &mut e,
-            &first.file_id,
-            std::slice::from_ref(&t),
-            &["审核".into()],
-            None,
-            operation
-        )
-        .unwrap_err()
-        .code(),
-        ErrorCode::IdempotencyKeyReused
-    );
-    assert_eq!(json_codec::to_value(e.state()).unwrap(), before);
+    let before = e.state().clone();
+    let receipt = edit(&mut e, &request, operation).unwrap();
+    assert_eq!(e.state().versions, before.versions);
+    assert_eq!(e.state().file_metadata_nodes, before.file_metadata_nodes);
+    assert_eq!(e.state().branches, before.branches);
+    assert_eq!(e.state().commits, before.commits);
+    assert_eq!(container_tags_fixture::tags(&e, &first.file_id), BTreeSet::from(["审核".into()]));
     let second = save(&mut e, &repo.main_branch_id, "报告.txt", b"second body");
     assert_eq!(second.file_id, first.file_id);
     assert_eq!(
-        e.file_node_parents(&first.file_id, &second.version_id)
-            .unwrap(),
-        vec![tagged]
-    );
-    assert_eq!(
-        e.file_node_tags(&first.file_id, &second.version_id)
-            .unwrap(),
-        BTreeSet::from(["审核".into()])
+        e.file_node_parents(&first.file_id, &second.version_id).unwrap(),
+        vec![first.version_id.clone()],
     );
     drop(e);
     let mut e = Engine::open(&temp.path().join("system")).unwrap();
-    let retry = edit(
-        &mut e,
-        &first.file_id,
-        &[t],
-        &["审核".into(), "审核".into()],
-        None,
-        operation,
-    )
-    .unwrap();
-    assert_eq!(retry.result, receipt.result);
-    assert_eq!(bytes(&e, &second.version_id), b"second body");
+    let before = e.state().clone();
+    assert_eq!(edit(&mut e, &request, operation).unwrap(), receipt);
+    assert_eq!(e.state(), &before);
+    let mut changed = request.clone();
+    changed.tags = TagSet::empty();
     assert_eq!(
-        e.file_node_tags(&first.file_id, &second.version_id)
-            .unwrap(),
-        BTreeSet::from(["审核".into()])
+        edit(&mut e, &changed, operation).unwrap_err().code(),
+        ErrorCode::IdempotencyKeyReused,
     );
+    assert_eq!(edit(&mut e, &request, op()).unwrap_err().code(), ErrorCode::HeadConflict);
+    assert_eq!(e.state(), &before);
+    assert_eq!(bytes(&e, &first.version_id), b"first body");
+    assert_eq!(bytes(&e, &second.version_id), b"second body");
 }
 
 #[test]
-fn reused_old_path_does_not_retarget_file_tags_or_break_exact_replay() {
+fn reused_old_path_does_not_retarget_container_tags_or_break_exact_replay() {
     let temp = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &temp.path().join("system"),
@@ -174,26 +127,9 @@ fn reused_old_path_does_not_retarget_file_tags_or_break_exact_replay() {
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
     let a = save(&mut e, &repo.main_branch_id, "a.txt", b"original");
-    let branch = e
-        .file_context(&repo.repository_id, "a.txt")
-        .unwrap()
-        .branch_id;
-    let t = target(&e, &branch, &a.version_id);
-    let location = FileLocation {
-        repository_id: repo.repository_id.clone(),
-        path: "a.txt".into(),
-    };
+    let request = command(&e, &repo, &a.file_id, "a.txt", &["saved"]);
     let operation = op();
-    let add = vec!["saved".into()];
-    let receipt = edit(
-        &mut e,
-        &a.file_id,
-        std::slice::from_ref(&t),
-        &add,
-        Some(&location),
-        operation,
-    )
-    .unwrap();
+    let receipt = edit(&mut e, &request, operation).unwrap();
     namespace(
         &mut e,
         &repo.repository_id,
@@ -201,54 +137,22 @@ fn reused_old_path_does_not_retarget_file_tags_or_break_exact_replay() {
         "a.txt",
         Some("moved.txt"),
     );
-    let b = save(
-        &mut e,
-        &repo.main_branch_id,
-        "a.txt",
-        b"new independent file",
-    );
+    let b = save(&mut e, &repo.main_branch_id, "a.txt", b"new independent file");
     assert_ne!(a.file_id, b.file_id);
-    let before = json_codec::to_value(e.state()).unwrap();
-    let retry = edit(&mut e, &a.file_id, &[t], &add, Some(&location), operation).unwrap();
-    assert_eq!(retry.result, receipt.result);
-    assert_eq!(json_codec::to_value(e.state()).unwrap(), before);
-    let a_head = e.file_branch_head(&branch).unwrap();
-    let fresh = target(&e, &branch, &a_head);
-    assert_eq!(
-        edit(
-            &mut e,
-            &a.file_id,
-            &[fresh],
-            &["wrong-file".into()],
-            Some(&location),
-            op()
-        )
-        .unwrap_err()
-        .code(),
-        ErrorCode::FileNotFound
-    );
-    assert_eq!(json_codec::to_value(e.state()).unwrap(), before);
-    assert!(
-        e.file_node_tags(&b.file_id, &b.version_id)
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(bytes(&e, &b.version_id), b"new independent file");
+    let before = e.state().clone();
+    assert_eq!(edit(&mut e, &request, operation).unwrap(), receipt);
+    assert_eq!(edit(&mut e, &request, op()).unwrap_err().code(), ErrorCode::FileNotFound);
+    assert_eq!(e.state(), &before);
+    assert!(container_tags_fixture::tags(&e, &b.file_id).is_empty());
+    assert_eq!(container_tags_fixture::tags(&e, &a.file_id), BTreeSet::from(["saved".into()]));
     drop(e);
     let e = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(
-        e.namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .get("a.txt")
-            .unwrap()
-            .file_id,
-        b.file_id
+        e.namespace_tree(&repo.main_branch_id).unwrap().get("a.txt").unwrap().file_id,
+        b.file_id,
     );
-    assert!(
-        e.file_node_tags(&b.file_id, &b.version_id)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(container_tags_fixture::tags(&e, &b.file_id).is_empty());
+    assert_eq!(bytes(&e, &b.version_id), b"new independent file");
 }
 
 #[test]
@@ -349,25 +253,15 @@ fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
             .unwrap()
             .branch_id;
         let head = e.file_branch_head(&branch).unwrap();
-        let t = target(&e, &branch, &head);
+        let request = command(&e, &repo, &file.file_id, "live.txt", &["phase-one"]);
         let operation = op();
-        let add = vec!["phase-one".into()];
-        let receipt = edit(
-            &mut e,
-            &file.file_id,
-            std::slice::from_ref(&t),
-            &add,
-            None,
-            operation,
-        )
-        .unwrap();
-        assert!(
-            receipt.result["namespace_tags"].is_object(),
-            "must exercise current-registry tag planner"
-        );
+        let receipt = edit(&mut e, &request, operation).unwrap();
         assert_eq!(e.state().versions.len(), versions);
-        assert_eq!(e.state().file_metadata_nodes.len(), metadata + 1);
-        let tagged = node(&receipt);
+        assert_eq!(e.state().file_metadata_nodes.len(), metadata);
+        let tagged = head;
+        let expected_context = e.file_context(&repo.repository_id, "live.txt").unwrap().node_id;
+        let expected_tree_context = e.state().directory_trees[&root_before]
+            .file_contexts["live.txt"].node_id.clone();
         let assert_current = |engine: &Engine| {
             assert_eq!(engine.file_branch_head(&branch).unwrap(), tagged);
             assert_eq!(
@@ -376,14 +270,14 @@ fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
                     .unwrap()
                     .node_id
                     .as_deref(),
-                Some(tagged.as_str())
+                expected_context.as_deref()
             );
-            let selected = engine.state().directory_tree_selections[&repo.repository_id].clone();
+            let selected = selected_tree(engine, &repo.repository_id);
             assert_eq!(
                 engine.state().directory_trees[&selected].file_contexts["live.txt"]
                     .node_id
                     .as_deref(),
-                Some(tagged.as_str())
+                expected_tree_context.as_deref()
             );
             assert_eq!(engine.state().directory_selections[&old_id], old_branch);
             assert_eq!(
@@ -394,7 +288,7 @@ fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
             selected
         };
         let root_after = assert_current(&e);
-        assert_ne!(root_after, root_before);
+        assert_eq!(root_after, root_before);
         assert_eq!(
             json_codec::to_value(&e.state().directory_branches[&old_branch]).unwrap(),
             old_branch_record
@@ -405,12 +299,12 @@ fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
         let mut e = Engine::open(&temp.path().join("system")).unwrap();
         assert_eq!(assert_current(&e), root_after);
         let before_retry = json_codec::to_value(e.state()).unwrap();
-        let retry = edit(&mut e, &file.file_id, &[t], &add, None, operation).unwrap();
+        let retry = edit(&mut e, &request, operation).unwrap();
         assert_eq!(retry, receipt);
         assert_eq!(json_codec::to_value(e.state()).unwrap(), before_retry);
         assert_eq!(assert_current(&e), root_after);
         assert_eq!(
-            e.file_node_tags(&file.file_id, &node(&receipt)).unwrap(),
+            container_tags_fixture::tags(&e, &file.file_id),
             BTreeSet::from(["phase-one".into()])
         );
         assert_eq!(

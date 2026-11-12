@@ -1,26 +1,7 @@
 //! Canonical metadata mutation requests, including optional namespace context.
-use crate::{Engine, Error, FileMergeInput, FileTagTarget, Result};
+use crate::{Engine, Error, FileMergeInput, Result};
 use json_codec::{Value, json};
 use storage_contract::{FileLocation, NamespaceEntryKind, OperationId};
-
-pub struct FileNodeTagsUpdateRequest<'a> {
-    pub file_id: &'a str,
-    pub targets: &'a [FileTagTarget],
-    pub add: &'a [String],
-    pub remove: &'a [String],
-    pub location: Option<&'a FileLocation>,
-    pub principal: &'a str,
-    pub operation_id: OperationId,
-}
-
-impl FileNodeTagsUpdateRequest<'_> {
-    pub(super) fn body(&self) -> Value {
-        // Explicit null binds the absence of context too. A receipt produced
-        // before location was bound must never match by dropping its location.
-        json!({"file_id":self.file_id,"targets":self.targets,"add":self.add,
-            "remove":self.remove,"location":self.location})
-    }
-}
 
 pub struct FileBranchMergeRequest<'a> {
     pub file_id: &'a str,

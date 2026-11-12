@@ -1,256 +1,306 @@
-use super::*;
-use web_interface::components::{Select, SelectOption};
+//! A container-wide editor, deliberately outside the version graph.
+use crate::{
+    files::{
+        actions, model, review,
+        tags::{
+            Target, accept_current, add_input, cancel, edit, reload, remove, start, submit,
+        },
+    },
+    ui::State,
+};
+use web_interface::{i18n::t, prelude::*};
 
-const SELECTED_ROWS: usize = super::super::page::PAGE_SIZE;
-
-fn cancel(state: &mut State, instance: u64) {
-    if !actions::pending(state)
-        && state
-            .files
-            .tag_edit
-            .as_ref()
-            .is_some_and(|draft| draft.instance == instance)
-    {
-        state.files.history_aux.cancel_review(ReviewOwner {
-            kind: review::Kind::Tags,
-            instance,
-        });
-        state.files.tag_edit = None;
-        state.files.publications.remove(&review::Kind::Tags);
-    }
-}
-
-pub(crate) fn chips(id: String) -> impl IntoView {
-    let id = StoredValue::new(id);
-    let history = super::super::history_index::shared();
-    let labels = Memo::new(move |_| {
-        history.with(|history| {
-            id.with_value(|id| {
-                history
-                    .node(id)
-                    .map(|(_, node)| tags(node))
-                    .unwrap_or_default()
-            })
+pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
+    // ui::app owns this signal above the detail view. Construction is synchronous;
+    // only the later cleanup/async callbacks may observe owner disposal.
+    let mount = state
+        .try_update(|state| {
+            state.files.container_tags.mount += 1;
+            state.files.container_tags.mount
         })
-    });
+        .expect("invariant: mounted container tag panel owns its read");
+    let target = Memo::new(move |_| state.with(Target::capture));
+    Effect::new(move |_| synchronize_target(state, mount, target.get()));
+    on_cleanup(move || clear_mount(state, mount));
+    let disabled = Signal::derive(move || state.with(write_disabled));
     view! {
-        <span class="zxs-node-tags zxs-flow" aria-label=t("节点标签","Node tags")>
-            {move ||labels.get().into_iter().map(|name|view!{<span class="zxs-node-tag zxs-input zxs-input--compact">{name}</span>}).collect_view()}
-        </span>
+        <section
+            class="zxs-entry-section zxs-stack"
+            aria-label=t("容器标签", "Container tags")
+        >
+            <h3
+                class="zxs-row"
+            >
+                {t("容器标签", "Container tags")}
+            </h3>
+            <p
+                class="zxs-row"
+            >
+                {t(
+                    "同一文件的全部版本和分支共享这些标签。",
+                    "All versions and branches of this file share these tags.",
+                )}
+            </p>
+            <p
+                class="zxs-row"
+                role="status"
+            >
+                {move || state.with(read_status)}
+            </p>
+            <div
+                class="zxs-file-toolbar zxs-flow"
+            >
+                <button
+                    class="zxs-button"
+                    disabled=move || state.with(reload_disabled)
+                    on:click=move |_| reload(state)
+                >
+                    {t("重新读取标签", "Reload tags")}
+                </button>
+                <button
+                    class="zxs-button"
+                    disabled=move || disabled.get() || state.with(start_disabled)
+                    on:click=move |_| start(state)
+                >
+                    {t("编辑容器标签", "Edit container tags")}
+                </button>
+            </div>
+            <For
+                each=move || state.with(editor_instances)
+                key=|instance| *instance
+                children=move |instance| editor(state, instance, disabled)
+            />
+        </section>
     }
 }
 
-fn move_page(state: RwSignal<State>, instance: u64, next: bool, delta: bool) {
-    state.update(|s| {
-        if let Some(draft) = s
-            .files
-            .tag_edit
-            .as_mut()
-            .filter(|draft| draft.instance == instance)
-        {
-            let (page, count) = if delta {
-                (&mut draft.delta_page, draft.add.len() + draft.remove.len())
-            } else {
-                (&mut draft.target_page, draft.targets.len())
-            };
-            if next && (*page + 1) * SELECTED_ROWS < count {
-                *page += 1;
-            } else if !next && *page > 0 {
-                *page -= 1;
-            }
+fn synchronize_target(state: RwSignal<State>, mount: u64, target: Option<Target>) {
+    if state.with_untracked(|state| state.files.container_tags.mount != mount) {
+        return;
+    }
+    state.update(|state| state.files.container_tags.set_target(target.clone()));
+    if target.is_some() {
+        reload(state);
+    }
+}
+
+fn clear_mount(state: RwSignal<State>, mount: u64) {
+    let _ = state.try_update(|state| {
+        if state.files.container_tags.mount == mount {
+            state.files.container_tags.clear();
         }
     });
 }
 
-pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
-    let instances =
-        Memo::new(move |_| state.with(|s| s.files.tag_edit.as_ref().map(|draft| draft.instance)));
-    let sources = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .tag_edit
-                .as_ref()
-                .map(|draft| {
-                    draft
-                        .targets
-                        .keys()
-                        .skip(draft.target_page * SELECTED_ROWS)
-                        .take(SELECTED_ROWS)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
+fn write_disabled(state: &State) -> bool {
+    !actions::write_allowed(state) || model::selected_entry_read_only(&state.files)
+}
+
+fn reload_disabled(state: &State) -> bool {
+    actions::pending(state)
+        || state.files.container_tags.loading
+        || Target::capture(state).is_none()
+}
+
+fn start_disabled(state: &State) -> bool {
+    state.files.tag_edit.is_some() || state.files.container_tags.snapshot.is_none()
+}
+
+fn read_status(state: &State) -> String {
+    let read = &state.files.container_tags;
+    if read.loading {
+        return t("正在读取标签…", "Loading tags…");
+    }
+    if let Some(error) = &read.error {
+        return error.to_string();
+    }
+    read.snapshot
+        .as_ref()
+        .map(|snapshot| {
+            if snapshot.tags.is_empty() {
+                t("无标签", "No tags")
+            } else {
+                snapshot.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>().join(" / ")
+            }
         })
-    });
-    let review_needed = Signal::derive(move || {
-        state.with(|s| {
-            s.files.tag_edit.as_ref().is_some_and(|draft| {
-                draft.requires_review()
-                    || !s.files.file_history.ready()
-                    || s.files.file_history.root() != Some(draft.root())
-            })
-        })
-    });
-    let disabled = Signal::derive(move || {
-        state.with(|s| !actions::history_write_allowed(s)) || review_needed.get()
-    });
-    let branch_disabled =
-        Signal::derive(move || state.with(|s| !actions::history_write_allowed(s)));
-    let navigation_disabled =
-        Signal::derive(move || state.with(|s| !actions::history_navigation_ready(s)));
-    let inherited_options = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .tag_edit
-                .as_ref()
-                .map(|draft| {
-                    draft
-                        .targets
-                        .keys()
-                        .skip(draft.target_page * SELECTED_ROWS)
-                        .take(SELECTED_ROWS)
-                        .filter_map(|id| s.files.checked_nodes.get(id))
-                        .flat_map(|node| node.tags.iter().cloned())
-                        .collect::<BTreeSet<_>>()
-                })
-                .unwrap_or_default()
-        })
-    });
-    let changes = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .tag_edit
-                .as_ref()
-                .map(|draft| {
-                    draft
-                        .add
-                        .iter()
-                        .map(|name| (true, name))
-                        .chain(draft.remove.iter().map(|name| (false, name)))
-                        .skip(draft.delta_page * SELECTED_ROWS)
-                        .take(SELECTED_ROWS)
-                        .map(|(add, name)| (add, name.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
-    });
-    view! {
-        <div class="zxs-file-toolbar zxs-flow">
-            <button class="zxs-button" disabled=move ||state.with(|s|!actions::write_allowed(s)||s.files.checked_nodes.is_empty()||!s.files.file_history.ready()) on:click=move |_|start(state)>{t("编辑所选节点标签","Edit selected node tags")}</button>
-            <span class="zxs-row">{move ||state.with(|s|format!("{} {}",s.files.checked_nodes.len(),t("个节点已选择","nodes selected")))}</span>
-        </div>
-        <For
-            each={move || instances.get().into_iter().collect::<Vec<_>>()}
-            key={|instance| *instance}
-            children={move |instance| view! {
-            <section class="zxs-frame zxs-stack zxs-tag-review" aria-label=t("节点标签编辑","Node tag editor")>
-                <div class="zxs-file-toolbar zxs-flow">
-                    <h3 class="zxs-row">{t("节点标签","Node tags")}</h3>
-                    <button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|state.update(|s|cancel(s,instance))>{t("取消","Cancel")}</button>
-                </div>
-                <p class="zxs-row">{t("标签编辑新增继承原标签和正文的元数据子节点。换页保留全部所选节点；历史节点不会使较新内容回退。","Tag edits add metadata child nodes inheriting the existing labels and content. Page changes preserve every selected node; historical nodes do not roll back newer content.")}</p>
-                <Show when=move ||review_needed.get()>
-                    <p class="zxs-row" role="status">{review_required()}</p>
-                    <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|actions::review_history_tags(state,instance)>{t("读取全部节点及分支以重新审阅","Load every selected node and branch for review")}</button>
-                </Show>
-                <Show when=move ||state.with(|s|s.files.tag_edit.as_ref().is_some_and(|draft|draft.resolved.is_some()))>
-                    <div class="zxs-frame zxs-stack">
-                        <p class="zxs-row">{t("全部身份已重新读取。请检查旧标签、新标签及分支依据，再明确接受。","Every selected identity has been read again. Check previous and current labels and branch bases, then explicitly accept the review.")}</p>
-                        {move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|{
-                            draft.targets.iter().skip(draft.target_page*SELECTED_ROWS).take(SELECTED_ROWS).filter_map(|(id,branch)|{
-                                let review=draft.resolved.as_ref()?;
-                                let old=s.files.checked_nodes.get(id)?;
-                                let new=review.nodes.iter().find(|node|node.id==*id)?;
-                                let old_head=branch.as_ref().and_then(|id|draft.branches.get(id)).map(|branch|branch.expected.as_str()).unwrap_or("");
-                                let new_head=branch.as_ref().and_then(|id|review.branches.get(id)).map(|branch|branch.expected.as_str()).unwrap_or("");
-                                Some(format!("{}: {} → {} · {} → {}",id,old.tags.iter().cloned().collect::<Vec<_>>().join(" / "),new.tags.iter().cloned().collect::<Vec<_>>().join(" / "),old_head,new_head))
-                            }).collect::<Vec<_>>()
-                        }).unwrap_or_default()).into_iter().map(|line|view!{<p class="zxs-row">{line}</p>}).collect_view()}
-                        <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|accept_review(state,instance)>{t("接受全部重新审阅的依据","Accept every reviewed base")}</button>
-                    </div>
-                </Show>
-                <div class="zxs-stack">
-                    {move ||sources.get().into_iter().map(move |id|{
-                        let source=StoredValue::new(id);
-                        let selected=Signal::derive(move ||state.with(|s|s.files.tag_edit.as_ref()
-                            .and_then(|draft|draft.targets.get(&source.get_value())).cloned().flatten().unwrap_or_default()));
-                        let options=Signal::derive(move ||state.with(|s|{
-                            let mut options=s.files.file_history.branches().iter().filter(|branch|branch.writable())
-                                .map(|branch|SelectOption::new(branch.id(),branch.name())).collect::<Vec<_>>();
-                            if let Some(branch)=s.files.tag_edit.as_ref().and_then(|draft|draft.targets.get(&source.get_value())
-                                .and_then(|id|id.as_ref()).and_then(|id|draft.branches.get(id)))
-                                && !s.files.file_history.branches().iter().any(|candidate|candidate.id()==branch.id)
-                            {
-                                options.push(SelectOption::new(&branch.id,&branch.name));
-                            }
-                            options
-                        }));
-                        let preview=Memo::new(move |_|{
-                            if review_needed.get() {
-                                return None;
-                            }
-                            state.with(|s|{
-                                let draft=s.files.tag_edit.as_ref().filter(|draft|draft.instance==instance)?;
-                                let node=s.files.checked_nodes.get(&source.get_value())?;
-                                let projected=result_tags(node,&draft.add,&draft.remove);
-                                let labels=|tags:&BTreeSet<String>|{
-                                    if tags.is_empty(){t("无标签","No tags")}
-                                    else{tags.iter().cloned().collect::<Vec<_>>().join(" / ")}
-                                };
-                                Some(format!("{}: {} → {} · {}/{}",t("标签预览","Tag preview"),
-                                    labels(&node.tags),labels(&projected),projected.len(),storage_contract::MAX_FILE_TAGS))
-                            })
-                        });
-                        view!{<div class="zxs-stack">
-                            <div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{source.get_value()}</span><Select label=t("关联分支","Associated branch") options=options value=selected disabled=branch_disabled on_change=Callback::new(move |value:String|assign_branch(state,instance,source.get_value(),value))/></div>
-                            <p class="zxs-row">{move ||preview.get()}</p>
-                        </div>}
-                    }).collect_view()}
-                </div>
-                <div class="zxs-file-toolbar zxs-flow">
-                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.tag_edit.as_ref().is_none_or(|draft|draft.target_page==0)) on:click=move |_|move_page(state,instance,false,false)>{t("上一页所选节点","Previous selected nodes")}</button>
-                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.tag_edit.as_ref().is_none_or(|draft|(draft.target_page+1)*SELECTED_ROWS>=draft.targets.len())) on:click=move |_|move_page(state,instance,true,false)>{t("下一页所选节点","Next selected nodes")}</button>
-                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.previous_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,false)>{t("上一页分支","Previous branches")}</button>
-                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.next_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,true)>{t("下一页分支","Next branches")}</button>
-                </div>
-                <div class="zxs-file-toolbar zxs-flow">
-                    <label class="zxs-form-field"><span class="zxs-row">{t("新增标签","Add tags")}</span>
-                        <input class="zxs-input zxs-input--compact" aria-label=t("新增标签","Add tag") maxlength=128 data-max-bytes=storage_contract::MAX_TAG_BYTES.to_string() disabled=disabled prop:value=move ||state.with(|s|s.files.tag_edit.as_ref().map(|draft|draft.input.clone()).unwrap_or_default()) on:input=move |event|edit_input(state,instance,event_target_value(&event)) on:keydown=move |event:web_sys::KeyboardEvent|{if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();add_input(state,instance);}}/>
-                    </label>
-                    <button class="zxs-button" disabled=disabled on:click=move |_|add_input(state,instance)>{t("添加标签","Add tag")}</button>
-                    <span class="zxs-row">{move ||state.with(|s|s.files.tag_edit.as_ref()
-                        .filter(|draft|draft.instance==instance)
-                        .map(|draft|format!("{} {}/{} · {} {}/{}",t("新增","Add"),draft.add.len(),storage_contract::MAX_FILE_TAGS,
-                            t("移除","Remove"),draft.remove.len(),storage_contract::MAX_FILE_TAGS)))}</span>
-                </div>
-                <div class="zxs-node-tags zxs-flow">
-                    {move ||changes.get().into_iter().map(move |(add,name)|{
-                        let value=name.clone();
-                        let label=format!("{} {name}",t("撤销标签更改","Undo tag change"));
-                        let text=format!("{} {name}",if add{"+"}else{"−"});
-                        view!{<button class="zxs-button zxs-tag-choice" aria-label=label disabled=disabled on:click=move |_|update(state,instance,|draft|{if add{draft.add.remove(&value);}else{draft.remove.remove(&value);}})><span class="zxs-node-tag zxs-input zxs-input--compact">{text}</span></button>}
-                    }).collect_view()}
-                </div>
-                <div class="zxs-file-toolbar zxs-flow">
-                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.tag_edit.as_ref().is_none_or(|draft|draft.delta_page==0)) on:click=move |_|move_page(state,instance,false,true)>{t("上一页标签更改","Previous tag changes")}</button>
-                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.tag_edit.as_ref().is_none_or(|draft|(draft.delta_page+1)*SELECTED_ROWS>=draft.add.len()+draft.remove.len())) on:click=move |_|move_page(state,instance,true,true)>{t("下一页标签更改","Next tag changes")}</button>
-                </div>
-                <fieldset class="zxs-review-choices">
-                    <legend class="zxs-row">{t("从所选节点移除本页标签","Remove this page's tags from selected nodes")}</legend>
-                    {move ||inherited_options.get().into_iter().map(move |name|{
-                        let pressed=name.clone();let value=name.clone();
-                        let label=format!("{} {name}",t("移除标签","Remove tag"));
-                        view!{<button class="zxs-button zxs-tag-choice" aria-label=label aria-pressed=move ||state.with(|s|s.files.tag_edit.as_ref().is_some_and(|draft|draft.remove.contains(&pressed))).to_string() disabled=disabled on:click=move |_|update(state,instance,|draft|{if !draft.remove.remove(&value){draft.add.remove(&value);draft.remove.insert(value.clone());}})><span class="zxs-node-tag zxs-input zxs-input--compact">{name}</span></button>}
-                    }).collect_view()}
-                </fieldset>
-                <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Tags))}</p>
-                <button class="zxs-button" disabled=disabled on:click=move |_|submit(state,instance)>{t("保存标签子节点","Save tag child nodes")}</button>
-            </section>
-        }}/>
+        .unwrap_or_else(|| t("标签尚未读取。", "Tags have not been read."))
+}
+
+fn editor_instances(state: &State) -> Vec<u64> {
+    state.files.tag_edit.as_ref().map(|draft| vec![draft.instance()]).unwrap_or_default()
+}
+
+fn editor_is_stale(state: &State, instance: u64) -> bool {
+    state.files.tag_edit
+        .as_ref()
+        .filter(|draft| draft.instance() == instance)
+        .is_none_or(|draft| Target::capture(state).as_ref() != Some(&draft.owner.target))
+}
+
+fn editor_tags(state: &State, instance: u64) -> Vec<String> {
+    state.files.tag_edit
+        .as_ref()
+        .filter(|draft| draft.instance() == instance)
+        .map(|draft| draft.command.tags.iter().map(|tag| tag.as_str().to_owned()).collect())
+        .unwrap_or_default()
+}
+
+fn input_value(state: &State) -> String {
+    state.files.tag_edit.as_ref().map(|draft| draft.input.clone()).unwrap_or_default()
+}
+
+fn needs_review(state: &State) -> bool {
+    state.files.tag_edit.as_ref().is_some_and(|draft| draft.requires_review())
+}
+
+fn save_disabled(state: &State) -> bool {
+    state.files.tag_edit.as_ref().is_none_or(|draft| draft.requires_review())
+}
+
+fn accept_disabled(state: &State) -> bool {
+    state.files.container_tags.loading || state.files.container_tags.snapshot.is_none()
+}
+
+fn edit_input(state: RwSignal<State>, instance: u64, event: web_sys::Event) {
+    edit(state, instance, |draft| draft.input = event_target_value(&event));
+}
+
+fn input_keydown(state: RwSignal<State>, instance: u64, event: web_sys::KeyboardEvent) {
+    if event.key() == "Enter" && !event.is_composing() {
+        event.prevent_default();
+        add_input(state, instance);
     }
 }
 
-#[cfg(test)]
-#[path = "../../../../../test/web/unit/files/tags/view_tests.rs"]
-mod tests;
+fn tag_button(
+    state: RwSignal<State>,
+    instance: u64,
+    disabled: Signal<bool>,
+    tag: String,
+) -> impl IntoView {
+    let remove_tag = tag.clone();
+    view! {
+        <button
+            class="zxs-button"
+            disabled=disabled
+            on:click=move |_| remove(state, instance, &remove_tag)
+        >
+            {format!("{} {tag}", t("移除", "Remove"))}
+        </button>
+    }
+}
+
+fn editor(state: RwSignal<State>, instance: u64, disabled: Signal<bool>) -> impl IntoView {
+    let stale = Memo::new(move |_| state.with(|state| editor_is_stale(state, instance)));
+    let disabled = Signal::derive(move || disabled.get() || stale.get());
+    let tags = Memo::new(move |_| state.with(|state| editor_tags(state, instance)));
+    view! {
+        <div
+            class="zxs-stack"
+            data-container-tag-editor=""
+        >
+            <Show
+                when=move || stale.get()
+            >
+                <p
+                    class="zxs-row"
+                    role="status"
+                >
+                    {t(
+                        "文件上下文已刷新，原草稿已保留但不能提交。取消后按当前上下文重新编辑。",
+                        "The file context changed. Your draft is kept but cannot be submitted. \
+                         Cancel it and edit again in the current context.",
+                    )}
+                </p>
+            </Show>
+            <div
+                class="zxs-node-tags zxs-flow"
+            >
+                <For
+                    each=move || tags.get()
+                    key=|tag| tag.clone()
+                    children=move |tag| tag_button(state, instance, disabled, tag)
+                />
+            </div>
+            <label
+                class="zxs-form-field"
+            >
+                <span
+                    class="zxs-row"
+                >
+                    {t("新增标签", "Add tag")}
+                </span>
+                <input
+                    class="zxs-input"
+                    disabled=disabled
+                    data-max-bytes=storage_contract::file_container_tags::MAX_TAG_BYTES.to_string()
+                    prop:value=move || state.with(input_value)
+                    on:input=move |event| edit_input(state, instance, event)
+                    on:keydown=move |event| input_keydown(state, instance, event)
+                />
+            </label>
+            <div
+                class="zxs-file-toolbar zxs-flow"
+            >
+                <button
+                    class="zxs-button"
+                    disabled=disabled
+                    on:click=move |_| add_input(state, instance)
+                >
+                    {t("添加标签", "Add tag")}
+                </button>
+                <button
+                    class="zxs-button"
+                    disabled=move || state.with(actions::pending)
+                    on:click=move |_| cancel(state, instance)
+                >
+                    {t("取消", "Cancel")}
+                </button>
+                <button
+                    class="zxs-button"
+                    disabled=move || disabled.get() || state.with(save_disabled)
+                    on:click=move |_| submit(state, instance)
+                >
+                    {t("保存标签", "Save tags")}
+                </button>
+            </div>
+            {review_confirmation(state, instance, disabled)}
+            <p
+                class="zxs-row zxs-inline-error"
+                role="status"
+            >
+                {move || state.with(|state| review::error_text(state, review::Kind::Tags))}
+            </p>
+        </div>
+    }
+}
+
+fn review_confirmation(
+    state: RwSignal<State>,
+    instance: u64,
+    disabled: Signal<bool>,
+) -> impl IntoView {
+    view! {
+        <Show
+            when=move || state.with(needs_review)
+        >
+            <p
+                class="zxs-row"
+                role="status"
+            >
+                {t(
+                    "标签已改变。重新读取后核对当前标签，再明确确认替换。草稿不会自动合并。",
+                    "Tags changed. Reload and review current tags, then confirm replacement. \
+                     Your draft is not merged automatically.",
+                )}
+            </p>
+            <button
+                class="zxs-button"
+                disabled=move || disabled.get() || state.with(accept_disabled)
+                on:click=move |_| accept_current(state, instance)
+            >
+                {t("按重读结果确认替换", "Confirm replacement against reloaded tags")}
+            </button>
+        </Show>
+    }
+}

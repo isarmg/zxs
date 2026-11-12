@@ -527,9 +527,7 @@ impl Engine {
             // Prove the authenticated transition before repairing any of this
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.
-            if self.current_namespaces.is_some() {
-                self.verify_current_recovery_candidate(&candidate, next)?;
-            }
+            self.verify_current_recovery_candidate(&candidate, next)?;
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
             }) && next

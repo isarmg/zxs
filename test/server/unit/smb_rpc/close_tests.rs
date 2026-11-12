@@ -309,12 +309,12 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.merge_file_branches(identity, request)
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         identity: &crate::auth::Identity,
-        request: crate::UpdateFileNodeTags,
+        request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-        self.inner.update_file_node_tags(identity, request)
+        self.inner.replace_container_tags(identity, request)
     }
     fn create_disk_directory(
         &self,

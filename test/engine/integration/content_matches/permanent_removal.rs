@@ -179,27 +179,7 @@ fn permanent_removal_analysis_couples_body_metadata_without_treating_soft_delete
         .unwrap()
         .branch_id
         .unwrap();
-    let head = pool.engine.file_branch_head(&branch).unwrap();
-    let tag = pool
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &a.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch.clone(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["kept".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap();
-    let tag_node = tag.result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let merge_node = metadata_node(&mut pool, &a);
     pool.engine
         .soft_delete_file(storage_engine::DeleteFileRequest {
             target: storage_engine::FileDeletionTarget {
@@ -227,7 +207,7 @@ fn permanent_removal_analysis_couples_body_metadata_without_treating_soft_delete
         .map(|id| id.as_str())
         .collect::<BTreeSet<_>>();
     assert!(coupled.contains(a.version_id.as_str()));
-    assert!(coupled.contains(tag_node.as_str()));
+    assert!(coupled.contains(merge_node.as_str()));
     assert!(!coupled.contains(deletion.node_id.as_str()));
     assert_eq!(
         result.frozen_files(),

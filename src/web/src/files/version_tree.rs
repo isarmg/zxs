@@ -684,7 +684,7 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
             .as_ref()
             .expect("invariant: rendered node belongs to the installed window");
         match node.kind() {
-            NodeKind::Rename | NodeKind::Tags | NodeKind::Merge => NoteTarget::Node(id.get_value()),
+            NodeKind::Rename | NodeKind::Merge => NoteTarget::Node(id.get_value()),
             NodeKind::Content => NoteTarget::Version(
                 node.version_id()
                     .expect("invariant: visible content node references a body")
@@ -698,7 +698,6 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
     let (note, edit) = inline::version_note(
         state,
         inline::Target::Note(note_target),
-        id.get_value(),
         disabled,
     );
     let card_title = Signal::derive(move || {
@@ -715,7 +714,6 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
             {node_card::summary(card_title,card_actions,current)}
             <div class="zxs-content-panel zxs-node-detail zxs-frame zxs-stack zxs-stack--flush">
             <div class="zxs-version-date zxs-row zxs-row--center" title=id.get_value()>
-                <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
                 <span>{t("日期未加载","Date not loaded")}</span>
                 <button class="zxs-button" data-history-field="created_at" disabled=move ||navigation_disabled.get() on:click=move |_|actions::load_history_field(state,id.get_value(),HistoryField::CreatedAt,None)>{t("读取日期","Load date")}</button>
                 <Show when=move ||current.get()><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
@@ -733,7 +731,6 @@ fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String)
             <div class="zxs-version-actions zxs-flow zxs-flow--start">
                 {edit}
                 <Show when=move ||can_modify.get() fallback=move ||view!{<span class="zxs-row">{t("只读","Read only")}</span>}>
-                <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|super::tags::edit_node(state,id.get_value())>{t("编辑标签","Edit tags")}</button>
                 {branch::control(state,t("创建分支","Create branch"),branch::Target::HistoryNode(id.get_value()),disabled)}
                 {merge::node_control(state,id.get_value())}
                 </Show>
@@ -762,7 +759,6 @@ fn kind_name(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Content => "content",
         NodeKind::Rename => "rename",
-        NodeKind::Tags => "tags",
         NodeKind::Merge => "merge",
     }
 }

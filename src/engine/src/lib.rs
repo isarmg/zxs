@@ -7,6 +7,7 @@
 pub use storage_contract::offline_maintenance;
 mod error;
 pub use error::{
+    ContainerTagsError,
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
     RecoveryReconciliationStage,
 };
@@ -172,7 +173,7 @@ mod wire;
 pub use business::{
     CurrentObject, DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection,
     DirectoryGitStatusRead, FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
-    FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest, NamespaceTree,
+    FileNodeProjectionRequest, FileNodeSummary, NamespaceTree,
     PreparedUpload, UploadPreparation,
 };
 pub use degraded_recovery::RecoveryPlan;

@@ -327,6 +327,10 @@ class Run:
         fixtures = self.directory / 'fixtures'
         fixtures.mkdir(exist_ok=True)
         self.environment['TMPDIR'] = str(fixtures)
+        wire = self.directory / 'wire'
+        wire.mkdir(exist_ok=True)
+        self.environment['ZXS_TEST_WIRE_EVIDENCE_DIR'] = str(wire)
+        self.summary['wire_evidence_directory'] = str(wire)
         self.save()
 
     def save(self):

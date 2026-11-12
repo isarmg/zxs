@@ -1,4 +1,7 @@
 //! Non-publishing production projection. No fixture installs a projected State.
+use crate as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 
 struct Fixture {
@@ -227,21 +230,7 @@ fn move_projection_preserves_tags_notes_and_undone_lifecycle_without_importing_n
         .file_context(&fixture.source.repository_id, "source.txt")
         .unwrap();
     let head = fixture.engine.file_branch_head(&context.branch_id).unwrap();
-    fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &fixture.file.file_id,
-            targets: &[FileTagTarget {
-                branch_id: context.branch_id,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["kept-tag".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: operation(),
-        })
+    container_tags_fixture::edit(&mut fixture.engine, &fixture.file.file_id, &["kept-tag".into()], &[], "admin", operation())
         .unwrap();
     fixture
         .engine
@@ -281,9 +270,10 @@ fn move_projection_preserves_tags_notes_and_undone_lifecycle_without_importing_n
     let next = &projection.writes.next;
     assert_eq!(next.file_notes[target], "retained note");
     assert!(
-        next.file_metadata_nodes
-            .values()
-            .any(|node| { node.file_id == target && node.tags.contains("kept-tag") })
+        next.container_tags
+            .get(&target.parse::<storage_contract::FileId>().unwrap())
+            .unwrap()
+            .tags().iter().any(|tag| tag.as_str() == "kept-tag")
     );
     assert_eq!(projection.retained_lifecycle_events(), 2);
     let events = &projection.writes.lifecycle.events;

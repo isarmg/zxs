@@ -8,8 +8,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(has_tag_replay)>
             <section class="zxs-frame zxs-stack" data-tag-request-recovery="" aria-label=t("标签请求恢复","Tag request recovery")>
                 <p class="zxs-row" role="status">{t(
-                    "标签保存结果尚未确认，系统会继续查询原请求。重试会保留原来的文件、节点和标签。",
-                    "The tag save has not been confirmed. The original request is still being checked. Retrying keeps the same file, nodes and tags.",
+                    "标签保存结果尚未确认，系统会继续查询原请求。重试会保留原来的容器、路径、标签代数和标签。",
+                    "The tag save has not been confirmed. The original request is still being checked. Retrying keeps the same container, path, tag generation and tags.",
                 )}</p>
                 <div class="zxs-row">
                     <button class="zxs-button" data-tag-request-retry=""

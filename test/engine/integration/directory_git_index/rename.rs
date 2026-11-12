@@ -1,4 +1,7 @@
 //! Real namespace/workspace publication at initialized directory boundaries.
+use storage_engine as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use std::os::unix::fs::MetadataExt;
 use storage_contract::{Entry, NamespaceOperation, NamespaceOperationKind};
@@ -44,20 +47,7 @@ fn directory_git_rename_uncommitted_round_trip_keeps_history_tags_and_container(
     let source = entry(&engine, &repo, "outside");
     let context = engine.file_context(&repo.repository_id, "outside").unwrap();
     let node = engine.file_branch_head(&context.branch_id).unwrap();
-    engine
-        .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-            file_id: &source.file_id,
-            targets: &[storage_contract::FileTagTarget {
-                branch_id: context.branch_id,
-                source_node_id: node.clone(),
-                expected_node_id: node,
-            }],
-            add: &["retained".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    container_tags_fixture::edit(&mut engine, &source.file_id, &["retained".into()], &[], "admin", op())
         .unwrap();
     let metadata = engine.state().file_metadata_nodes.clone();
     let versions = engine.file_history(&source.file_id).unwrap();

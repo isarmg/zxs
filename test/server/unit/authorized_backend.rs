@@ -807,20 +807,33 @@ impl Backend for RecordingBackend {
             "merge_file_history",
         ))
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         identity: &crate::auth::Identity,
-        request: crate::UpdateFileNodeTags,
+        request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.record(
-            "update_file_node_tags",
+            "replace_container_tags",
             Some(identity),
-            json!({"file_id":request.file_id,"targets":request.targets,"add":request.add,"remove":request.remove,"location":request.location,"operation_id":request.operation_id}),
+            json!({"command":request.command,"operation_id":request.operation_id}),
         )?;
         Ok(recorded_operation(
             request.operation_id,
-            "update_file_node_tags",
+            "replace_container_tags",
         ))
+    }
+    fn file_container_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::file_container_tags::ReadRequest,
+    ) -> Result<storage_contract::file_container_tags::Snapshot, crate::ApiError> {
+        self.record("file_container_tags", Some(identity), json!(request))?;
+        Ok(storage_contract::file_container_tags::Snapshot {
+            file_id: request.file_id,
+            context: request.context,
+            tags: crate::container_tags_tests::sample_command().tags,
+            generation: storage_contract::Generation::new(7),
+        })
     }
     fn create_disk_directory(
         &self,
@@ -2017,8 +2030,28 @@ impl Fixture {
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
             ("merge_file_branches", {backend.merge_file_branches(identity,crate::MergeFileBranches {file_id:"file".into(),inputs:vec![storage_contract::FileMergeInput {branch_id:"branch".into(),expected_node_id:"head".into()}],chosen_node_id:"chosen".into(),surviving_branch_id:"branch".into(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_branches"));json!({"returned_by":"merge_file_branches"})})}),
             ("merge_file_history", {backend.merge_file_history(identity,crate::MergeFileHistory {file_id:"file".into(),inputs:vec![storage_contract::FileHistoryMergeInput {branch_id:"branch".into(),source_node_id:"old".into(),expected_node_id:"head".into()}],chosen_node_id:"old".into(),name:storage_contract::BranchName::parse("History result").unwrap(),confirmed:true,location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"merge_file_history"));json!({"returned_by":"merge_file_history"})})}),
-            ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:None,operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
-            ("update_file_node_tags", {backend.update_file_node_tags(identity,crate::UpdateFileNodeTags {file_id:"file".into(),targets:vec![storage_contract::FileTagTarget {branch_id:"branch".into(),expected_node_id:"head".into(),source_node_id:"source".into()}],add:vec!["added".into()],remove:vec!["removed".into()],location:Some(storage_contract::FileLocation {repository_id:"repo".into(),path:"file.txt".into()}),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"update_file_node_tags"));json!({"returned_by":"update_file_node_tags"})})}),
+            ("replace_container_tags", {
+                backend.replace_container_tags(identity, crate::ReplaceContainerTags {
+                    command: crate::container_tags_tests::sample_command(),
+                    operation_id,
+                }).map(|result| {
+                    assert_eq!(result, recorded_operation(operation_id, "replace_container_tags"));
+                    json!({"returned_by":"replace_container_tags"})
+                })
+            }),
+            ("file_container_tags", {
+                let command = crate::container_tags_tests::sample_command();
+                backend.file_container_tags(
+                    identity,
+                    storage_contract::file_container_tags::ReadRequest {
+                        file_id: command.file_id,
+                        context: command.context,
+                    },
+                ).map(|snapshot| {
+                    assert_eq!(snapshot.generation.get(), 7);
+                    json!({"returned_by":"file_container_tags"})
+                })
+            }),
             ("create_disk_directory", {backend.create_disk_directory(identity,crate::CreateDiskDirectory {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/folder").unwrap(),operation_id}).map(|result|{assert_eq!(result,recorded_operation(operation_id,"create_disk_directory"));json!({"returned_by":"create_disk_directory"})})}),
             ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:None}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),
             ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:Some("br_00000000000000000000000000000000".to_owned().try_into().unwrap())}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),

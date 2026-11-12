@@ -1417,7 +1417,17 @@ impl crate::engine::PlanningContext<'_> {
                     }) {
                         continue;
                     }
-                    let file_id = match existing.as_ref() { Some(entry) => entry.file_id.clone(), None => new_id("file")? };
+                    let file_id = match existing.as_ref() {
+                        Some(entry) => entry.file_id.clone(),
+                        None => {
+                            let file = new_id("file")?;
+                            state.container_tags.insert(
+                                file.parse()?,
+                                storage_contract::file_container_tags::ContainerTags::empty(),
+                            );
+                            file
+                        }
+                    };
                     if existing.is_some() {
                         super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
                     }

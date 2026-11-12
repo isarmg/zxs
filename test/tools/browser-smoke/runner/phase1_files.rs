@@ -135,17 +135,44 @@ pub(super) fn disk_read(browser: &Browser) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn reload_container_tags(browser: &Browser) -> Result<()> {
+    let before = browser.script(
+        "return (window.__zxsPhase1Tags||window.__zxsTagUnknown).tagReads.length",
+    )?;
+    check(
+        browser,
+        "container tag reload is available",
+        r#"
+        return Array.from(document.querySelectorAll('button')).some(button=>
+            ['Reload tags','重新读取标签'].includes(button.textContent.trim())&&!button.disabled);
+    "#,
+    )?;
+    browser.click(&browser.button("Reload tags", "重新读取标签")?)?;
+    check(
+        browser,
+        "fresh real container tag GET",
+        &format!(
+            r#"
+        const p=window.__zxsPhase1Tags||window.__zxsTagUnknown;
+        if(p.tagReads.length<={before})return false;
+        const tags=p.tagReads.at(-1).body.tags;
+        const panel=document.querySelector(
+            'section[aria-label="Container tags"],section[aria-label="容器标签"]');
+        const status=panel?.querySelector('[role=status]')?.textContent.trim();
+        return tags.length?status===tags.join(' / '):['No tags','无标签'].includes(status);
+    "#
+        ),
+    )
+}
+
 pub(super) fn edit_current_tags(browser: &Browser) -> Result<()> {
-    node_cards::open_current(browser)?;
-    browser.click(&browser.element("xpath", "//article[contains(@class,'zxs-version-node')][.//span[contains(@class,'zxs-version-current')]]//button[normalize-space(.)='Edit tags' or normalize-space(.)='编辑标签']")?)?;
-    browser.css(".zxs-tag-review input:not([disabled])")?;
+    browser.click(&browser.button("Edit container tags", "编辑容器标签")?)?;
+    browser.css("[data-container-tag-editor] input:not([disabled])")?;
     Ok(())
 }
 
 fn enter_tag(browser: &Browser) -> Result<()> {
-    let input = browser.css(
-        ".zxs-tag-review input[aria-label='Add tag'],.zxs-tag-review input[aria-label='新增标签']",
-    )?;
+    let input = browser.css("[data-container-tag-editor] input:not([disabled])")?;
     browser.keys(&input, "一期已审核")?;
     browser.keys(&input, "\u{e007}")
 }
@@ -157,38 +184,67 @@ fn saved_render(browser: &Browser, index: usize) -> Result<()> {
         &format!(
             r#"
         const p=window.__zxsPhase1Tags,id=p.verify({index});
-        if(!id||document.querySelector('.zxs-tag-review')||document.querySelector('.zxs-header-refresh').disabled)return false;
+        if(!id||document.querySelector('[data-container-tag-editor]')
+            ||document.querySelector('.zxs-header-refresh').disabled)return false;
         const node=document.querySelector('[data-node-id="'+id+'"]');
         const saved=p.snapshots[{index}+1].nodes.find(node=>node.node_id===id);
-        return node?.dataset.nodeKind==='tags'&&node.dataset.bodyVersionId===saved.version_id
+        const tags=p.tagSnapshots[{index}+1];
+        const panel=document.querySelector(
+            'section[aria-label="Container tags"],section[aria-label="容器标签"]');
+        const status=panel?.querySelector('[role=status]')?.textContent.trim();
+        return node?.dataset.nodeKind===saved.kind&&node.dataset.bodyVersionId===saved.version_id
             &&!!node.querySelector('.zxs-version-current')
-            &&JSON.stringify(Array.from(node.querySelectorAll('.zxs-node-tag'),tag=>tag.textContent))===JSON.stringify(saved.tags);
+            &&(tags.tags.length?status===tags.tags.join(' / '):['No tags','无标签'].includes(status));
     "#
         ),
     )
 }
 
 fn publish_tags(browser: &Browser, index: usize) -> Result<()> {
-    browser.click(&browser.button("Save tag child nodes", "保存标签子节点")?)?;
+    browser.click(&browser.button("Save tags", "保存标签")?)?;
     check(
         browser,
         "actual tag publication is held before response delivery",
         &format!(
-            "const p=window.__zxsPhase1Tags;return p.writes.length==={index}+1&&!!p.writes[{index}].release&&p.writes[{index}].status===200&&!p.writes[{index}].delivered"
+            "const p=window.__zxsPhase1Tags;\
+             return p.writes.length==={index}+1&&!!p.writes[{index}].release\
+             &&p.writes[{index}].status===200&&!p.writes[{index}].delivered"
         ),
     )?;
     // Stimulate the real disabled controls, never the API or private Rust model.
-    browser.script(r#"
-        const panel=document.querySelector('.zxs-tag-review');
-        const save=Array.from(panel.querySelectorAll('button')).find(button=>['Save tag child nodes','保存标签子节点'].includes(button.textContent.trim()));
-        const cancel=Array.from(panel.querySelectorAll('button')).find(button=>['Cancel','取消'].includes(button.textContent.trim()));
-        if(!save?.disabled||!cancel?.disabled)throw new Error('tag mutation does not fence repeat save/cancel');
-        save.click();save.click();cancel.click();return true;
-    "#)?;
-    if browser.script(&format!("return window.__zxsPhase1Tags.writes.length==={index}+1&&!!document.querySelector('.zxs-tag-review')"))? != true {
+    browser.script(
+        r#"
+        const panel=document.querySelector('[data-container-tag-editor]');
+        const save=Array.from(panel.querySelectorAll('button')).find(button=>
+            ['Save tags','保存标签'].includes(button.textContent.trim()));
+        const cancel=Array.from(panel.querySelectorAll('button')).find(button=>
+            ['Cancel','取消'].includes(button.textContent.trim()));
+        if(!save?.disabled||!cancel?.disabled)
+            throw new Error('tag mutation does not fence repeat save/cancel');
+        save.click();
+        save.click();
+        cancel.click();
+        return true;
+    "#,
+    )?;
+    if browser.script(&format!(
+        "return window.__zxsPhase1Tags.writes.length==={index}+1\
+         &&!!document.querySelector('[data-container-tag-editor]')"
+    ))? != true {
         return Err("duplicate tag interaction escaped the pending publication fence".into());
     }
     browser.script("window.__zxsPhase1Tags.release();return true")?;
+    check(
+        browser,
+        "delivered container tag edit closes",
+        &format!(
+            "const p=window.__zxsPhase1Tags;return p.writes[{index}].delivered\
+             &&!document.querySelector('[data-container-tag-editor]')\
+             &&!document.querySelector('.zxs-header-refresh').disabled"
+        ),
+    )?;
+    reload_container_tags(browser)?;
+    browser.click(&browser.css(".zxs-header-refresh:not([disabled])")?)?;
     saved_render(browser, index)?;
     let after = browser.script("return window.__zxsPhase1Tags.reads.length")?;
     browser.click(&browser.button("Files", "文件")?)?;
@@ -214,16 +270,25 @@ pub(super) fn tags(browser: &Browser) -> Result<()> {
             check(
                 browser,
                 "real current history before editing tags",
-                "const p=window.__zxsPhase1Tags;return p.reads.length>0&&!document.querySelector('.zxs-header-refresh').disabled&&!!document.querySelector('.zxs-version-current')",
+                "const p=window.__zxsPhase1Tags;return p.reads.length>0\
+                 &&!document.querySelector('.zxs-header-refresh').disabled\
+                 &&!!document.querySelector('.zxs-version-current')",
             )?;
+            reload_container_tags(browser)?;
             browser.script("window.__zxsPhase1Tags.capture();return true")?;
             edit_current_tags(browser)?;
             enter_tag(browser)?;
-            browser.click(&browser.element("xpath", "//section[contains(@class,'zxs-tag-review')]//button[normalize-space(.)='Cancel' or normalize-space(.)='取消']")?)?;
+            browser.click(&browser.element(
+                "xpath",
+                "//*[@data-container-tag-editor]//button[normalize-space(.)='Cancel' \
+                 or normalize-space(.)='取消']",
+            )?)?;
             check(
                 browser,
                 "cancelling tags does not publish",
-                "const p=window.__zxsPhase1Tags;return !document.querySelector('.zxs-tag-review')&&p.writes.length===0&&p.unexpected.length===0",
+                "const p=window.__zxsPhase1Tags;\
+                 return !document.querySelector('[data-container-tag-editor]')\
+                 &&p.writes.length===0&&p.unexpected.length===0",
             )?;
             edit_current_tags(browser)?;
             enter_tag(browser)?;
@@ -231,15 +296,48 @@ pub(super) fn tags(browser: &Browser) -> Result<()> {
             evidence(
                 browser,
                 "tag-added",
-                "const p=window.__zxsPhase1Tags,{release,...write}=p.writes[0];return {scope:'real tag publication and navigation reread',write,history:p.snapshots[1],unexpected:p.unexpected}",
+                "const p=window.__zxsPhase1Tags,{release,...write}=p.writes[0];\
+                 return {scope:'real tag publication and navigation reread',\
+                 write,history:p.snapshots[1],unexpected:p.unexpected}",
+            )?;
+            let before_selection = browser.script("return window.__zxsPhase1Tags.tagReads.length")?;
+            let selected = browser.script(
+                r#"
+                const p=window.__zxsPhase1Tags,page=p.reads.at(-1).body;
+                const node=page.nodes.find(node=>node.node_id!==page.identity.context.current_node_id);
+                if(!node)throw new Error('retained version selection missing');
+                return '#'+node.sequence+' · '+node.node_id;
+            "#,
+            )?;
+            let selected = selected.as_str().ok_or("history node label missing")?;
+            let combo = browser.css(
+                "[role=combobox][aria-label='Node on this page'],[role=combobox][aria-label='本页节点']",
+            )?;
+            let panel = browser.command(
+                "GET",
+                &format!("/element/{combo}/attribute/aria-controls"),
+                None,
+            )?;
+            let panel = panel.as_str().ok_or("history selector has no listbox")?;
+            browser.click(&combo)?;
+            browser.click(&browser.element("xpath", &select_option_xpath(panel, selected))?)?;
+            reload_container_tags(browser)?;
+            check(
+                browser,
+                "historical node selection preserves container tags",
+                &format!(
+                    "return window.__zxsPhase1Tags.versionSelection(0,{before_selection})"
+                ),
             )?;
             edit_current_tags(browser)?;
-            browser.click(&browser.css(".zxs-tag-review button[aria-label='Remove tag 一期已审核'],.zxs-tag-review button[aria-label='移除标签 一期已审核']")?)?;
+            browser.click(&browser.button("Remove 一期已审核", "移除 一期已审核")?)?;
             publish_tags(browser, 1)?;
             evidence(
                 browser,
                 "tag-removed",
-                "const p=window.__zxsPhase1Tags,{release,...write}=p.writes[1];return {scope:'real removal child and navigation reread',write,history:p.snapshots[2],unexpected:p.unexpected}",
+                "const p=window.__zxsPhase1Tags,{release,...write}=p.writes[1];\
+                 return {scope:'real container replacement and navigation reread',\
+                 write,history:p.snapshots[2],unexpected:p.unexpected}",
             )?;
             assert_metadata_only(browser)?;
             Ok(())
@@ -263,7 +361,9 @@ pub(super) fn tags(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS real Chrome tag cancel/add/remove, exact publication receipts, duplicate-click fencing and fresh history after navigation; original nodes and content versions retained, no Web body transfer"
+        "PASS real Chrome tag cancel/add/remove, exact publication receipts, duplicate-click \
+         fencing and fresh history after navigation; original nodes and content versions retained, \
+         no Web body transfer"
     );
     Ok(())
 }

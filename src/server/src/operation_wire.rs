@@ -1,9 +1,27 @@
 use crate::ApiError;
 use json_codec::{Value, json};
 
+#[derive(Debug, error_definition::Error)]
+pub(crate) enum ContainerTagsWireError {
+    #[error("container tag receipt is invalid")]
+    Decode(#[source] json_codec::Error),
+    #[error("container tag receipt differs from its request")]
+    Validation(#[source] storage_contract::file_container_tags::TagsError),
+    #[error("container tag outcome cannot be encoded")]
+    Encode(#[source] json_codec::Error),
+}
+
 pub(crate) fn operation_wire(
     mut op: storage_contract::OperationOutcome,
 ) -> Result<Value, ApiError> {
+    if op.kind == storage_contract::file_container_tags::KIND
+        && matches!(
+            op.commit_state,
+            storage_contract::CommitState::Published | storage_contract::CommitState::Acked
+        )
+    {
+        op.result = container_tags_result(op.result)?;
+    }
     let content_save = op.kind == "workspace.commit"
         && op.protection_at_publish != storage_contract::ProtectionAtPublish::NotApplicable;
     if content_save {
@@ -121,6 +139,26 @@ pub(crate) fn operation_wire(
     }
 }
 
+/// The public tag outcome is typed. Transaction-only publication fields stay
+/// in the immutable receipt and are not accepted as arbitrary DTO extensions.
+fn container_tags_result(mut value: Value) -> Result<Value, ApiError> {
+    if let Some(fields) = value.as_object_mut() {
+        for name in ["timestamp", "membership_epoch", "version_protection"] {
+            fields.remove(name);
+        }
+    }
+    let result: storage_contract::file_container_tags::Replacement =
+        json_codec::from_value(value).map_err(|source| {
+            ApiError::container_tags_wire(ContainerTagsWireError::Decode(source))
+        })?;
+    result.validate(&result.request).map_err(|source| {
+        ApiError::container_tags_wire(ContainerTagsWireError::Validation(source))
+    })?;
+    json_codec::to_value(result).map_err(|source| {
+        ApiError::container_tags_wire(ContainerTagsWireError::Encode(source))
+    })
+}
+
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
     value
         .get(key)
@@ -151,3 +189,7 @@ enum OperationPhase {
     InDoubt,
     Processing,
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/container_tags_wire.rs"]
+mod container_tags_tests;

@@ -205,7 +205,6 @@ impl<'a> Query<'a> {
             ),
             Node::Metadata(node) => (
                 match node.kind {
-                    crate::FileMetadataKind::Tags => HistoryNodeKind::Tags,
                     crate::FileMetadataKind::Merge => HistoryNodeKind::Merge,
                 },
                 Some(HistoryBranchId::parse(&node.branch_id)?),
@@ -236,11 +235,6 @@ impl<'a> Query<'a> {
             .into(),
             previous_path,
             note: note.map_or("", String::as_str).into(),
-            tags: nodes::tags(self.state, self.scope(), node.id(), self.cancel)?
-                .into_iter()
-                .flatten()
-                .cloned()
-                .collect(),
             size: version.logical_size,
             content_hash: version.content_hash,
             content_state: self.state.content_states.get(&version.version_id).copied(),

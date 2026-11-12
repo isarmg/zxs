@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum MergeResultPolicy<'a> {
     ReuseChosenInput,
     AlwaysNewNode {
-        tags: &'a BTreeSet<String>,
         current_inputs: Option<&'a super::file_history_merges::CurrentHistoryMergeInputs>,
     },
 }
@@ -568,12 +567,6 @@ pub(super) fn merge_change(
                 parent_node_ids: edges.clone(),
                 branch_id: survivor.into(),
                 kind: FileMetadataKind::Merge,
-                tags: match policy {
-                    MergeResultPolicy::AlwaysNewNode { tags, .. } => tags.clone(),
-                    MergeResultPolicy::ReuseChosenInput => {
-                        super::file_nodes::node_tags(state, chosen_node)
-                    }
-                },
                 operation_id: operation,
                 author: principal.into(),
                 sequence: state.sequence,

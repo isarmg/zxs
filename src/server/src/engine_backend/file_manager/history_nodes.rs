@@ -10,7 +10,7 @@ struct PendingSummary {
     summary: storage_engine::FileNodeSummary,
 }
 
-/// Consume the last row so parent/tag buffers do not live alongside the JSON
+/// Consume the last row so parent buffers do not live alongside the JSON
 /// graph. Repeated or overlapping IDs retain the same facts for earlier rows.
 fn take_summary(
     summaries: &mut BTreeMap<String, PendingSummary>,
@@ -69,10 +69,10 @@ impl NodePaths<'_> {
                     .unwrap_or_else(|| version.creation_name.clone());
             }
             if let Some(metadata) = state.file_metadata_nodes.get(&current) {
-                let source = if metadata.kind == storage_contract::FileMetadataKind::Merge {
-                    self.chosen.get(current.as_str()).copied()
-                } else {
-                    metadata.parent_node_ids.first().map(String::as_str)
+                let source = match metadata.kind {
+                    storage_contract::FileMetadataKind::Merge => {
+                        self.chosen.get(current.as_str()).copied()
+                    }
                 };
                 if let Some(source) = source {
                     current = source.into();
@@ -193,7 +193,6 @@ pub(super) fn unified_history(
                     },
                     node_id: id.into(),
                     kind: ContentNodeKind::Content,
-                    tags: summary.tags,
                     parent_node_ids: summary
                         .parent_node_ids
                         .into_iter()
@@ -245,7 +244,6 @@ pub(super) fn unified_history(
                 operation_id: path.operation_id,
                 author: path.author.clone(),
                 message: String::new(),
-                tags: summary.tags,
             })),
         ));
     }
@@ -272,7 +270,6 @@ pub(super) fn unified_history(
                     .into_iter()
                     .filter(|parent| visible.contains_key(parent.as_str()))
                     .collect(),
-                tags: revision.tags.clone(),
                 path,
                 previous_path: None,
                 branch_id: revision.branch_id.clone(),

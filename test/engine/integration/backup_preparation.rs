@@ -1,5 +1,8 @@
 //! Real background history preparation. HistoryPrepared is NOT topology activation.
 //! Owner restart coverage below is not a physical-power-loss certification.
+use storage_engine as engine_api;
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 #[path = "backup_preparation_batch.rs"]
 mod batch;
 #[path = "backup_preparation_progress_io.rs"]
@@ -18,7 +21,7 @@ use std::{
 use storage_engine::{
     BackupPreparationPhase, BackupPreparationRequest, BranchName, CommitRequest, Config,
     DeleteFileRequest, DiskExitPhase, Engine, Entry, ErrorCode, FileDeletionTarget,
-    FileNodeTagsUpdateRequest, FileTagTarget, MembershipExitAction, OperationId, Repository,
+    MembershipExitAction, OperationId, Repository,
     RepositoryName,
     history_window::{HistoryFileId, HistoryRepositoryId},
     offline_check_history_package,
@@ -119,20 +122,7 @@ fn preparation_automatically_copies_and_verifies_whole_histories_without_activat
         .branch_id
         .unwrap();
     let head = engine.file_branch_head(&branch).unwrap();
-    let tags = engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &old.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["must-survive-copy".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    let tags = container_tags_fixture::edit(&mut engine, &old.file_id, &["must-survive-copy".into()], &[], "admin", op())
         .unwrap();
     let hidden = save(&mut engine, &repository, "hidden", b"hidden retained body");
     let repository_id = HistoryRepositoryId::parse(&repository.repository_id).unwrap();

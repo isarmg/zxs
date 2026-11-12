@@ -1633,3 +1633,90 @@ fn purge_head_projection_matches_legacy_rejections_and_precedence() {
             .is_ok()
     );
 }
+
+#[test]
+fn split_copies_nonempty_container_tags_into_an_independent_generation_zero_domain() {
+    use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
+    use storage_contract::Generation;
+
+    let (temp, mut engine, repository) = fixture();
+    let prefix = save(&mut engine, &repository.main_branch_id, b"retained prefix");
+    let original = engine
+        .list_tree(&repository.main_branch_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
+    let source = ReadRequest {
+        file_id: original.file_id.parse().unwrap(),
+        context: Context {
+            repository_id: repository.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse(original.path()).unwrap(),
+        },
+    };
+    let replace = |engine: &mut Engine, read: &ReadRequest, label: &str| {
+        let current = engine.file_container_tags(read).unwrap();
+        let tags = TagSet::new([Tag::parse(label.into()).unwrap()]).unwrap();
+        engine.replace_container_tags(
+            &ReplaceCommand {
+                file_id: read.file_id,
+                context: read.context.clone(),
+                expected_generation: current.generation,
+                tags: tags.clone(),
+            },
+            &"alice".parse().unwrap(),
+            storage_contract::OperationId::generate().unwrap(),
+        ).unwrap();
+        let observed = engine.file_container_tags(read).unwrap();
+        assert_eq!(observed.tags, tags);
+        observed
+    };
+    replace(&mut engine, &source, "first label");
+    let captured = replace(&mut engine, &source, "shared at split");
+    assert_eq!(captured.generation, Generation::new(2));
+
+    // Only the side branch moves. The original main remains a live, writable
+    // context so independence is exercised through both real public APIs.
+    let side = engine.create_branch(
+        &prefix,
+        &storage_contract::BranchName::parse("split-side").unwrap(),
+        "alice",
+        storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let cut = save(&mut engine, &side.branch_id, b"side continuation");
+    let plan = engine.create_split_plan(&repository.history_tree_id, &cut, "alice").unwrap();
+    let result = engine.commit_plan(
+        &plan.plan_id, "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let copied_repository =
+        engine.state.repositories[result.result["repository_id"].as_str().unwrap()].clone();
+    let copied = engine
+        .list_tree(&copied_repository.main_branch_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
+    let destination = ReadRequest {
+        file_id: copied.file_id.parse().unwrap(),
+        context: Context {
+            repository_id: copied_repository.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse(copied.path()).unwrap(),
+        },
+    };
+    assert_ne!(source.file_id, destination.file_id);
+    let initial = engine.file_container_tags(&destination).unwrap();
+    assert_eq!(initial.tags, captured.tags);
+    assert_eq!(initial.generation, Generation::new(0));
+    assert_eq!(engine.file_container_tags(&source).unwrap(), captured);
+
+    let destination_changed = replace(&mut engine, &destination, "destination only");
+    assert_eq!(destination_changed.generation, Generation::new(1));
+    assert_eq!(engine.file_container_tags(&source).unwrap(), captured);
+    let source_changed = replace(&mut engine, &source, "source only");
+    assert_eq!(source_changed.generation, Generation::new(3));
+    assert_eq!(engine.file_container_tags(&destination).unwrap(), destination_changed);
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("state")).unwrap();
+    assert_eq!(reopened.file_container_tags(&source).unwrap(), source_changed);
+    assert_eq!(reopened.file_container_tags(&destination).unwrap(), destination_changed);
+}

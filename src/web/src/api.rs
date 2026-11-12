@@ -102,6 +102,8 @@ pub enum ErrorSource {
     RetirementRecovery(#[source] json_codec::Error),
     #[error("invalid file-history branches: {0}")]
     FileHistory(#[source] crate::files::FileHistoryError),
+    #[error("{0}")]
+    ContainerTags(#[source] crate::files::ContainerTagsError),
     #[error("invalid directory repository status: {0}")]
     DirectoryGit(#[source] json_codec::Error),
     #[error("invalid directory layout result: {0}")]

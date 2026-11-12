@@ -3,7 +3,6 @@
 pub(crate) enum NodeKind {
     Content,
     Rename,
-    Tags,
     Merge,
 }
 
@@ -43,7 +42,6 @@ pub(crate) struct FileNode {
     pub(super) kind: NodeKind,
     pub(super) note: String,
     pub(super) body_note: Option<String>,
-    pub(super) tags: Vec<String>,
     pub(super) path: Option<String>,
     pub(super) previous_path: Option<String>,
     pub(super) parents: Vec<Parent>,
@@ -87,10 +85,6 @@ impl FileNode {
 
     pub(crate) fn body_note(&self) -> Option<&str> {
         self.body_note.as_deref()
-    }
-
-    pub(crate) fn tags(&self) -> &[String] {
-        &self.tags
     }
 
     pub(crate) fn path(&self) -> Option<&str> {

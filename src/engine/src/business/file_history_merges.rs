@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct PreparedSources {
     pub(crate) versions: Vec<String>,
-    pub(crate) tags: BTreeSet<String>,
 }
 
 /// Only this explicit history consumer can construct a same-mutation input.
@@ -187,8 +186,7 @@ fn sources(state: &State, request: &FileHistoryMergeRequest<'_>) -> Result<Prepa
             "historical merge chosen node belongs to another history",
         ));
     }
-    let tags = file_ancestry::chosen_tags(state, request.chosen_node_id, &mut budget)?;
-    Ok(PreparedSources { versions, tags })
+    Ok(PreparedSources { versions })
 }
 
 impl Engine {
@@ -263,7 +261,6 @@ impl Engine {
                         operation_id: request.operation_id,
                     },
                     file_merges::MergeResultPolicy::AlwaysNewNode {
-                        tags: &prepared.tags,
                         current_inputs: current_inputs.as_ref(),
                     },
                 )?;

@@ -38,10 +38,6 @@
       "path": "report.txt",
       "previous_path": null,
       "note": "",
-      "tags": [
-        "work",
-        "已审核"
-      ],
       "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
@@ -72,7 +68,6 @@
       "path": "renamed.txt",
       "previous_path": null,
       "note": "",
-      "tags": [],
       "size": "10",
       "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
       "content_state": "AVAILABLE",
@@ -96,17 +91,13 @@
     {
       "node_id": "fmeta_c5fab1c7b33d4fcbaa1f73e81de023e8",
       "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "kind": "tags",
+      "kind": "merge",
       "sequence": "12",
       "current": false,
       "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
       "note": "",
-      "tags": [
-        "已审核",
-        "归档"
-      ],
       "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
@@ -137,10 +128,6 @@
       "path": "renamed.txt",
       "previous_path": null,
       "note": "",
-      "tags": [
-        "work",
-        "已审核"
-      ],
       "size": "9",
       "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
       "content_state": "AVAILABLE",
@@ -171,10 +158,6 @@
       "path": "renamed.txt",
       "previous_path": "report.txt",
       "note": "",
-      "tags": [
-        "work",
-        "已审核"
-      ],
       "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
@@ -198,17 +181,13 @@
     {
       "node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
       "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "kind": "tags",
+      "kind": "merge",
       "sequence": "8",
       "current": false,
       "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
       "note": "独立标签备注",
-      "tags": [
-        "work",
-        "已审核"
-      ],
       "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
@@ -239,7 +218,6 @@
       "path": "report.txt",
       "previous_path": null,
       "note": "",
-      "tags": [],
       "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",

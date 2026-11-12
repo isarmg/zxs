@@ -76,7 +76,7 @@ pub(crate) struct Model {
     pub recursive_backup: Option<super::backup::recursive::Draft>,
     pub placement: Option<super::placement::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
-    pub checked_nodes: super::tags::Selection,
+    pub container_tags: super::tags::ReadModel,
     pub node_retirement: super::node_retirement::Model,
     pub publications: super::review::Publications,
     pub tag_submission: Option<super::review::TagSubmission>,
@@ -209,7 +209,7 @@ impl Model {
         self.recursive_backup = None;
         self.placement = None;
         self.tag_edit = None;
-        self.checked_nodes.clear();
+        self.container_tags.clear();
         self.selected = None;
         self.file_preview = None;
         self.file_history = Default::default();

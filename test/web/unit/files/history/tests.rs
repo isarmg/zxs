@@ -72,7 +72,6 @@ pub(crate) fn node(value: Value) -> FileNode {
     let kind = match value["kind"].as_str().unwrap_or("content") {
         "content" => NodeKind::Content,
         "rename" => NodeKind::Rename,
-        "tags" => NodeKind::Tags,
         "merge" => NodeKind::Merge,
         kind => panic!("unknown UI fixture node kind: {kind}"),
     };
@@ -112,17 +111,6 @@ pub(crate) fn node(value: Value) -> FileNode {
         },
         state => panic!("unknown UI fixture parent set: {state}"),
     };
-    let tags = value["tags"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|tag| tag.as_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
-    assert!(tags.len() <= storage_contract::MAX_FILE_TAGS);
-    assert!(
-        tags.iter()
-            .all(|tag| tag.len() <= storage_contract::MAX_TAG_BYTES)
-    );
     let field = |name| HistoryFieldInfo {
         byte_length: number(&value["fields"][name], "byte_length", 0),
     };
@@ -134,7 +122,6 @@ pub(crate) fn node(value: Value) -> FileNode {
         kind,
         note,
         body_note,
-        tags,
         path: text(&value, "path"),
         previous_path: text(&value, "previous_path"),
         parents,
@@ -287,9 +274,9 @@ fn node_value(node: &FileNode) -> Value {
         "node_id":node.id(), "version_id":node.version_id(), "sequence":node.sequence().to_string(),
         "kind":match node.kind() {
             NodeKind::Content => "content", NodeKind::Rename => "rename",
-            NodeKind::Tags => "tags", NodeKind::Merge => "merge",
+            NodeKind::Merge => "merge",
         },
-        "note":node.note(), "tags":node.tags(), "path":node.path(), "previous_path":node.previous_path(),
+        "note":node.note(), "path":node.path(), "previous_path":node.previous_path(),
         "content_state":node.content_state(),
         "parent_edges":node.parents().iter().map(|parent| json!({
             "node_id":parent.id(), "endpoint":match parent.endpoint() {
@@ -422,7 +409,6 @@ fn admitted_node_page(note: &str) -> HistoryWindowPage {
             path: "folder/file.txt".into(),
             previous_path: None,
             note: note.into(),
-            tags: vec![],
             size: 0,
             content_hash: "c".repeat(64).parse().unwrap(),
             content_state: None,

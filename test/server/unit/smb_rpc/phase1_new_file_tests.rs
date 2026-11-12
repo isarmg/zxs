@@ -53,38 +53,20 @@ fn file_entry(shared: &Shared, branch: &str, path: &str) -> Entry {
         .unwrap()
 }
 
-fn annotate_source(shared: &Shared, repository: &str, source: &Entry) -> String {
+fn annotate_source(shared: &Shared, repository: &str, source: &Entry) {
     let identity = identity(shared);
-    let request = || {
-        crate::ReadFileHistory::parse(
-            source.file_id.clone(),
-            Some(repository.into()),
-            Some(source.path().into()),
-        )
-        .unwrap()
-    };
-    let history = shared
-        .backend
-        .file_history_snapshot(&identity, request())
-        .unwrap();
-    let node = history.current_node_id.unwrap();
     shared
         .backend
-        .update_file_node_tags(
+        .replace_container_tags(
             &identity,
-            crate::UpdateFileNodeTags {
-                file_id: source.file_id.clone(),
-                targets: vec![storage_contract::FileTagTarget {
-                    branch_id: history.selected_branch_id.unwrap(),
-                    source_node_id: node.clone(),
-                    expected_node_id: node,
-                }],
-                add: vec!["source-only".into()],
-                remove: vec![],
-                location: Some(storage_contract::FileLocation {
-                    repository_id: repository.into(),
-                    path: source.path().into(),
-                }),
+            crate::ReplaceContainerTags {
+                command: crate::container_tags_tests::command(
+                    &source.file_id,
+                    repository,
+                    source.path(),
+                    0,
+                    &["source-only"],
+                ),
                 operation_id: OperationId::generate().unwrap(),
             },
         )
@@ -113,12 +95,7 @@ fn annotate_source(shared: &Shared, repository: &str, source: &Entry) -> String 
             )
             .unwrap();
     }
-    shared
-        .backend
-        .file_history_snapshot(&identity, request())
-        .unwrap()
-        .current_node_id
-        .unwrap()
+
 }
 
 fn assert_initial_history(shared: &Shared, repository: &str, target: &Entry) {
@@ -180,7 +157,7 @@ fn phase1_primary_source_read_to_new_target_keeps_independent_history() {
     assert_eq!(source.entry_id, original.entry_id);
     assert_eq!(source.file_id, original.file_id);
     assert_ne!(source.version_id, original.version_id);
-    let tagged_source_node = annotate_source(&shared, &repository.repository_id, &source);
+    annotate_source(&shared, &repository.repository_id, &source);
 
     // A normal client reads current bytes, then creates a separate target.
     // The descriptor returned for a reader is a placeholder: use Read RPC.
@@ -233,8 +210,8 @@ fn phase1_primary_source_read_to_new_target_keeps_independent_history() {
     );
     assert!(
         engine
-            .file_node_tags(&target.file_id, &target.version_id)
-            .unwrap()
+            .state().container_tags[&target.file_id.parse::<storage_contract::FileId>().unwrap()]
+            .tags()
             .is_empty()
     );
     assert!(!engine.state().file_notes.contains_key(&target.file_id));
@@ -250,10 +227,10 @@ fn phase1_primary_source_read_to_new_target_keeps_independent_history() {
         "source note"
     );
     assert_eq!(
-        engine
-            .file_node_tags(&source.file_id, &tagged_source_node)
-            .unwrap(),
-        BTreeSet::from(["source-only".into()])
+        engine.state().container_tags[
+            &source.file_id.parse::<storage_contract::FileId>().unwrap()
+        ].tags().iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+        ["source-only"]
     );
     assert_eq!(exported_bytes(&engine, &temp, &target.version_id), b"later");
 }

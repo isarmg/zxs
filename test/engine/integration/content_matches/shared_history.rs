@@ -126,34 +126,10 @@ fn shared_history_new_file_joins_soft_deleted_history_and_remains_writable_after
     let mut pool = Pool::new();
     pool.save(&[("old", b"shared")]);
     let old = pool.entry("old");
-    let branch = pool
-        .engine
-        .create_file_branch(
-            &old.file_id,
-            &old.version_id,
-            &BranchName::parse("review").unwrap(),
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .branch_id
-        .unwrap();
-    let head = pool.engine.file_branch_head(&branch).unwrap();
-    pool.engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &old.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["keep".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap();
+    container_tags_fixture::edit(
+        &mut pool.engine, &old.file_id, &["keep".into()], &[], "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
     delete(&mut pool, &old);
     pool.save(&[("new", b"shared")]);
     let new = pool.entry("new");
@@ -170,12 +146,9 @@ fn shared_history_new_file_joins_soft_deleted_history_and_remains_writable_after
     assert!(deletion.version_id.is_none());
     assert_eq!(deletion.file_id.as_str(), old.file_id);
     assert!(!deletion.parent_node_ids.is_empty());
-    assert!(
-        joined
-            .nodes
-            .iter()
-            .any(|node| node.kind == SharedHistoryNodeKind::Tags)
-    );
+    assert_eq!(container_tags_fixture::tags(&pool.engine, &old.file_id),
+        BTreeSet::from(["keep".into()]));
+    assert!(container_tags_fixture::tags(&pool.engine, &new.file_id).is_empty());
     assert_eq!(
         graph(&pool, &old.file_id).shared_contents,
         joined.shared_contents

@@ -1485,42 +1485,39 @@ fn disk_exit_historical_three_level_tags_keep_exact_nodes_and_working_projection
     let old_grand = f.engine.state.directory_trees[&grand_tree].clone();
     let entry = old_grand.entries.iter()
         .find(|entry| entry.path() == "triple/child/grand/file").unwrap();
-    let context = &old_grand.file_contexts[entry.lookup_key()];
-    let targets = [FileTagTarget {
-        branch_id: context.branch_id.clone(),
-        source_node_id: context.node_id.clone().unwrap_or_else(|| entry.version_id.clone()),
-        expected_node_id: f.engine.file_branch_head(&context.branch_id).unwrap(),
-    }];
-    let tags = ["historical hierarchy".to_owned()];
+    let branch_before = f.engine.state.directory_branches[id].clone();
+    let read = storage_contract::file_container_tags::ReadRequest {
+        file_id: entry.file_id.parse().unwrap(),
+        context: storage_contract::file_container_tags::Context {
+            repository_id: f.repo.repository_id.parse().unwrap(),
+            path: entry.path.clone(),
+        },
+    };
+    let snapshot = f.engine.file_container_tags(&read).unwrap();
+    let request = storage_contract::file_container_tags::ReplaceCommand {
+        file_id: read.file_id,
+        context: read.context,
+        expected_generation: snapshot.generation,
+        tags: storage_contract::file_container_tags::TagSet::new([
+            storage_contract::file_container_tags::Tag::parse("historical hierarchy".into())
+                .unwrap(),
+        ]).unwrap(),
+    };
     let operation = op();
     let apply = |engine: &mut Engine| {
-        engine.update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &entry.file_id,
-            targets: &targets,
-            add: &tags,
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: operation,
-        })
+        engine.replace_container_tags(&request, &"admin".parse().unwrap(), operation)
     };
+    let metadata_before = f.engine.state.file_metadata_nodes.clone();
     let namespace_before_tags = f.engine.list_tree(&f.repo.main_branch_id).unwrap();
     let tagged = apply(&mut f.engine).unwrap();
     assert_eq!(f.engine.list_tree(&f.repo.main_branch_id).unwrap(), namespace_before_tags);
-    let node = tagged.result["nodes"][0]["node_id"].as_str().unwrap();
-    assert_eq!(f.engine.state.file_metadata_nodes[node].version_id, entry.version_id);
+    assert_eq!(f.engine.state.file_metadata_nodes, metadata_before);
     let branch = &f.engine.state.directory_branches[id];
-    assert!(branch.materialized);
-    assert_eq!(branch.file_contexts[entry.lookup_key()].node_id.as_deref(), Some(node));
-    assert_eq!(branch.directory_refs.len(), 2);
-    for (directory, reference) in old_parent.directory_refs.iter()
-        .chain(&old_child.directory_refs)
-    {
-        assert_eq!(
-            branch.directory_refs[directory].directory_branch_id,
-            reference.directory_branch_id,
-        );
-    }
+    assert_eq!(branch, &branch_before);
+    assert_eq!(
+        f.engine.state.container_tags[&request.file_id].tags(),
+        &request.tags,
+    );
     let view = f.engine.current_namespaces.as_ref().unwrap();
     let projection = view.directory_projection(&f.engine.state, id).unwrap();
     assert_eq!(projection.nodes.len(), 3);

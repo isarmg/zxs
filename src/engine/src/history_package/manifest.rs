@@ -24,6 +24,10 @@ use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryManifest {
+    pub container_tags: BTreeMap<
+        storage_contract::FileId,
+        storage_contract::file_container_tags::ContainerTags,
+    >,
     pub repository: Repository,
     pub history: HistoryTree,
     pub branches: BTreeMap<String, Branch>,
@@ -264,6 +268,10 @@ impl HistoryManifest {
                 .iter()
                 .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
                 .map(|(directory, tree)| (directory.clone(), tree.clone()))
+                .collect(),
+            container_tags: state.container_tags.iter()
+                .filter(|(file, _)| file_ids.contains(file.to_string().as_str()))
+                .map(|(file, tags)| (*file, tags.clone()))
                 .collect(),
             file_notes: state
                 .file_notes
@@ -667,20 +675,8 @@ impl HistoryManifest {
                 || branch.history_tree_id != node.history_tree_id
                 || node.author.is_empty()
                 || node.parent_node_ids.is_empty()
-                || node.tags.len() > storage_contract::MAX_FILE_TAGS
-                || node
-                    .tags
-                    .iter()
-                    .any(|tag| storage_contract::validate_tag(tag).is_err())
             {
-                return Err(invalid("file metadata identity, scope or labels differ"));
-            }
-            if node.kind == FileMetadataKind::Tags
-                && (node.parent_node_ids.len() != 1
-                    || self.file_node_version(&node.parent_node_ids[0])?.version_id
-                        != node.version_id)
-            {
-                return Err(invalid("tag event changes its body content"));
+                return Err(invalid("file metadata identity or scope differs"));
             }
             graph.insert(id, node.parent_node_ids.clone());
         }
@@ -1285,6 +1281,12 @@ impl HistoryManifest {
                     "canonical file name differs from its physical location",
                 ));
             }
+        }
+        let files = self.versions.values()
+            .map(|version| version.file_id.parse::<storage_contract::FileId>())
+            .collect::<std::result::Result<BTreeSet<_>, _>>()?;
+        if files.iter().ne(self.container_tags.keys()) {
+            return Err(invalid("container tags do not exactly cover retained files"));
         }
         if self.file_notes.iter().any(|(file, note)| {
             storage_contract::validate_note(note).is_err() || !file_ids.contains(file.as_str())

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct FileRow {
+    pub container_tags: storage_contract::file_container_tags::ContainerTags,
     pub file_id: String,
     pub note: Option<String>,
     pub selected_branch_id: Option<String>,
@@ -18,7 +19,6 @@ pub(super) struct FileRow {
 pub(super) struct VersionRow {
     pub version: FileVersion,
     pub parent_node_ids: Vec<String>,
-    pub tags: BTreeSet<String>,
     pub note: Option<String>,
     pub content_state: ContentState,
 }
@@ -47,7 +47,6 @@ pub(super) struct AnchorRow {
     pub version_id: String,
     pub parent_node_ids: Vec<String>,
     pub branch_id: String,
-    pub tags: BTreeSet<String>,
     pub note: Option<String>,
     pub operation_id: OperationId,
     pub author: String,

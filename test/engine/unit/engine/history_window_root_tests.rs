@@ -1,3 +1,6 @@
+use crate as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use crate::journal::{Candidate, RecordType, load_object, scan};
 use storage_contract::history_window::{
@@ -211,24 +214,10 @@ fn tags_and_pending_file_branch_selection_each_change_the_exact_root() {
     let context = engine
         .file_context(&repository.repository_id, "file.txt")
         .unwrap();
-    let target = FileTagTarget {
-        branch_id: context.branch_id.clone(),
-        source_node_id: file.version_id.clone(),
-        expected_node_id: engine.file_branch_head(&context.branch_id).unwrap(),
-    };
     let original = observed_root(&engine, history);
     let bodies = engine.state.versions.len();
     let generation = engine.state.histories[history].generation;
-    engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &file.file_id,
-            targets: &[target],
-            add: &["review".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
+    container_tags_fixture::edit(&mut engine, &file.file_id, &["review".into()], &[], "admin", OperationId::generate().unwrap())
         .unwrap();
     assert_ne!(observed_root(&engine, history), original);
     assert_catalog_matches(&engine);

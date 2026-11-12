@@ -474,7 +474,7 @@ pub struct HistoryContextSummary {
     pub note: String,
     pub content: Option<HistoryContentDisposition>,
 }
-string_enum!(HistoryNodeKind { Content => "content", Rename => "rename", Tags => "tags", Merge => "merge" });
+string_enum!(HistoryNodeKind { Content => "content", Rename => "rename", Merge => "merge" });
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryParentSet {
@@ -518,7 +518,6 @@ pub struct HistoryNodeSummary {
     pub path: String,
     pub previous_path: Option<String>,
     pub note: String,
-    pub tags: Vec<String>,
     #[serialization(with = "crate::u64_string")]
     pub size: u64,
     pub content_hash: ContentHash,

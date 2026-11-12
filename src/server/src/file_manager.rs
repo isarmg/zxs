@@ -125,7 +125,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/api/file-manager/files/{file}/tags",
-            post(http_file_tags::submit),
+            get(http_file_tags::read).post(http_file_tags::submit),
         )
         .route(
             "/api/repositories/{repository}/placement-configuration",

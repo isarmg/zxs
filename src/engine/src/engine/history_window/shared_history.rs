@@ -191,7 +191,6 @@ fn metadata_events(
             && !crate::node_retirement_engine::is_retired(state, &node.version_id)
         {
             let kind = match node.kind {
-                crate::FileMetadataKind::Tags => SharedHistoryNodeKind::Tags,
                 crate::FileMetadataKind::Merge => SharedHistoryNodeKind::Merge,
             };
             events.insert(

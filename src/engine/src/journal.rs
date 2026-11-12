@@ -1440,3 +1440,7 @@ mod proof_decoding_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/version_publication_fixture.rs"]
 pub(crate) mod version_publication_fixture;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/container_tags_fixture.rs"]
+pub(crate) mod container_tags_fixture;

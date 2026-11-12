@@ -10,6 +10,8 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    ContainerTags(ContainerTagsError),
+    #[error(transparent)]
     ConversionNameBudget(crate::directory_conversion::NameBudgetError),
     #[error(transparent)]
     HistoricalBranch(#[from] HistoricalBranchError),
@@ -102,6 +104,7 @@ impl Error {
                 source,
             },
             source @ (Self::HistoricalBranch(_)
+            | Self::ContainerTags(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -133,6 +136,7 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
+            | Self::ContainerTags(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -158,6 +162,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::HistoricalBranch(error) => error.code(),
+            Self::ContainerTags(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
             Self::ConversionNameBudget(_) => ErrorCode::PlanInvalid,
             Self::DirectoryLayout(error) => match error.as_ref() {
@@ -209,6 +214,7 @@ impl Error {
     pub fn message(&self) -> Cow<'_, str> {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
+            Self::ContainerTags(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
             Self::ConversionNameBudget(error) => error.to_string().into(),
             Self::DirectoryLayout(error) => error.to_string().into(),
@@ -264,6 +270,7 @@ impl Error {
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
+            | Self::ContainerTags(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -432,6 +439,39 @@ impl HistoricalBranchError {
             | Self::Scope
             | Self::Uncommitted
             | Self::Unavailable => ErrorCode::DirectoryBranchConflict,
+        }
+    }
+}
+
+/// Failures at the container-label request or persisted publication boundary.
+#[derive(Debug, error_definition::Error)]
+pub enum ContainerTagsError {
+    #[error("container is not present in the requested writable context")]
+    Context,
+    #[error("container label generation changed")]
+    Conflict,
+    #[error("container label publication does not match its request")]
+    Publication,
+    #[error("container label response does not match its persisted request")]
+    Response(#[source] storage_contract::file_container_tags::TagsError),
+    #[error("container label publication cannot advance the persisted business generation")]
+    PublicationGeneration(#[source] storage_contract::GenerationExhausted),
+    #[error("container label generation is exhausted")]
+    Exhausted(#[source] storage_contract::GenerationExhausted),
+    #[error("container label envelope could not be encoded or decoded")]
+    Encoding(#[source] json_codec::Error),
+}
+
+impl ContainerTagsError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Context => ErrorCode::FileNotFound,
+            Self::Conflict => ErrorCode::HeadConflict,
+            Self::Publication
+            | Self::Response(_)
+            | Self::PublicationGeneration(_)
+            | Self::Encoding(_) => ErrorCode::PublicationInvalid,
+            Self::Exhausted(_) => ErrorCode::ResourceLimit,
         }
     }
 }

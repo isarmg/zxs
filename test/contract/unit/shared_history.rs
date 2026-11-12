@@ -122,7 +122,7 @@ fn shared_history_contract_rejects_cycles_and_oversized_complete_claims() {
     graph.nodes.push(SharedHistoryNode {
         node_id,
         file_id: graph.files[0].file_id.clone(),
-        kind: SharedHistoryNodeKind::Tags,
+        kind: SharedHistoryNodeKind::Merge,
         version_id: Some(graph.versions[0].version_id.clone()),
         sequence: 2,
         parent_node_ids: vec![parent],
@@ -287,7 +287,7 @@ fn shared_history_contract_removing_file_local_metadata_keeps_shared_membership(
     retained.nodes.push(SharedHistoryNode {
         node_id: metadata.clone(),
         file_id: retained.files[0].file_id.clone(),
-        kind: SharedHistoryNodeKind::Tags,
+        kind: SharedHistoryNodeKind::Merge,
         version_id: Some(retained.versions[0].version_id.clone()),
         sequence: 3,
         parent_node_ids: vec![retained.nodes[0].node_id.clone()],

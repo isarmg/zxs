@@ -101,7 +101,7 @@ fn shared_history_skips_unrelated_updates_and_replaces_positions_on_new_snapshot
 fn indexed_lookup_matches_a_scan_of_each_replaced_window() {
     for count in [1, 16, 64] {
         let nodes: Vec<_> = (0..count).rev().map(|i| json!({
-            "node_id":format!("node-{i}"), "note":format!("note {i}"), "tags":[format!("tag-{i}")]
+            "node_id":format!("node-{i}"), "note":format!("note {i}")
         })).collect();
         let snapshot = history(json!({"nodes":nodes}));
         let index = HistoryIndex::new(snapshot.clone());

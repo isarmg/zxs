@@ -36,6 +36,7 @@ impl Remap<'_> {
             file_backup_paths,
             file_backup_policies,
             file_selection_generations,
+            container_tags,
             file_notes,
             version_notes,
             file_names,
@@ -134,6 +135,13 @@ impl Remap<'_> {
         self.pairs(file_backup_policies, Domain::File, Domain::ProtectionPolicy)?;
         *file_selection_generations =
             self.keys(std::mem::take(file_selection_generations), Domain::File)?;
+        *container_tags = std::mem::take(container_tags).into_iter()
+            .map(|(file, tags)| {
+                let mapped = self.id(Domain::File, &file.to_string())?.parse()?;
+                Ok((mapped, storage_contract::file_container_tags::ContainerTags::new(
+                    tags.tags().clone(), storage_contract::Generation::new(0),
+                )))
+            }).collect::<Result<_>>()?;
         *file_notes = self.keys(std::mem::take(file_notes), Domain::File)?;
         *version_notes = self.keys(std::mem::take(version_notes), Domain::Version)?;
         *file_names = self.keys(std::mem::take(file_names), Domain::File)?;

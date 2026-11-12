@@ -1605,7 +1605,7 @@ impl Engine {
                 |_, next, prepared| change(self, next, prepared),
             );
         }
-        if kind == "file.tags.update" {
+        if kind == storage_contract::file_container_tags::KIND {
             return context.plan_file_tags_mutation(
                 principal,
                 operation_id,

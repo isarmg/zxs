@@ -1,3 +1,6 @@
+use crate as engine_api;
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use crate::{
     BranchKind, BranchState, Commit, Config, FileMetadataKind, FileMetadataNode, FilePathNode,
@@ -102,8 +105,7 @@ impl Fixture {
                 version_id: id("ver", 2),
                 parent_node_ids: vec![id("fnode", 2)],
                 branch_id: id("br", 3),
-                kind: FileMetadataKind::Tags,
-                tags: ["retained".into()].into(),
+                kind: FileMetadataKind::Merge,
                 sequence: 4,
                 created_at: 1,
                 operation_id: operation(),
@@ -590,27 +592,13 @@ fn fork_preflight_branch(engine: &mut Engine, file: &str, node: &str, name: &str
         .unwrap()
 }
 
-fn tag_preflight_branch(engine: &mut Engine, file: &str, branch: &str, tag: &str) -> String {
+fn label_preflight_container(engine: &mut Engine, file: &str, branch: &str, tag: &str) -> String {
     let head = engine.file_branch_head(branch).unwrap();
-    engine
-        .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-            file_id: file,
-            targets: &[crate::FileTagTarget {
-                branch_id: branch.into(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &[tag.into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .into()
+    container_tags_fixture::edit(
+        engine, file, &[tag.into()], &[], "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(engine.file_branch_head(branch).unwrap(), head);
+    head
 }
 
 struct ExpectedHead {
@@ -709,7 +697,7 @@ fn create_distinct_preflight_heads(
 ) -> Vec<ExpectedHead> {
     let survivor = engine.file_context(repository, "A.txt").unwrap().branch_id;
     let content = fork_preflight_branch(engine, &original.file_id, &original.version_id, "content");
-    let first_tag = tag_preflight_branch(engine, &original.file_id, &survivor, "first");
+    let first_tag = label_preflight_container(engine, &original.file_id, &survivor, "first");
     let tagged = fork_preflight_branch(engine, &original.file_id, &first_tag, "tagged");
     let rename = engine
         .file_namespace(
@@ -729,7 +717,7 @@ fn create_distinct_preflight_heads(
         .unwrap()
         .to_owned();
     let renamed = fork_preflight_branch(engine, &original.file_id, &rename, "renamed");
-    let second_tag = tag_preflight_branch(engine, &original.file_id, &survivor, "second");
+    let second_tag = label_preflight_container(engine, &original.file_id, &survivor, "second");
     let consumed = fork_preflight_branch(engine, &original.file_id, &second_tag, "consumed");
     let versions = engine.state().versions.len();
     let merged = merge_preflight_branches(
@@ -752,13 +740,13 @@ fn create_distinct_preflight_heads(
             FileDeletionNodeKind::Content,
             None,
         ),
-        expected_head(&tagged, &first_tag, FileDeletionNodeKind::Tags, None),
+        expected_head(&tagged, &first_tag, FileDeletionNodeKind::Content, None),
         expected_head(&renamed, &rename, FileDeletionNodeKind::Rename, None),
         expected_head(&survivor, &merged, FileDeletionNodeKind::Merge, None),
         expected_head(
             &consumed,
             &second_tag,
-            FileDeletionNodeKind::Tags,
+            FileDeletionNodeKind::Rename,
             Some(&survivor),
         ),
     ]

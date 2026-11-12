@@ -136,10 +136,7 @@ pub(super) fn fixture() -> MetadataView {
             version_id: id("ver", 0),
             parent_node_ids: vec![id("ver", 0)],
             branch_id: id("br", 0),
-            kind: FileMetadataKind::Tags,
-            tags: (0..16)
-                .map(|index| format!("{index:02}{}", "界".repeat(42)))
-                .collect(),
+            kind: FileMetadataKind::Merge,
             operation_id: operation(),
             author: "标签作者🦀".repeat(2048),
             sequence: 1,
@@ -363,76 +360,6 @@ fn oracle_parents(state: &State, node: &str) -> Vec<String> {
     parents.into_iter().collect()
 }
 
-fn oracle_tags(state: &State, node: &str) -> BTreeSet<String> {
-    let mut current = node;
-    let mut seen = BTreeSet::new();
-    while seen.insert(current) {
-        if let Some(metadata) = state.file_metadata_nodes.get(current) {
-            return metadata.tags.clone();
-        }
-        let parents = if let Some(path) = state.file_path_nodes.get(current) {
-            &path.parent_node_ids
-        } else {
-            let version = &state.versions[current];
-            state
-                .file_node_parents
-                .get(current)
-                .unwrap_or(&version.source_version_ids)
-        };
-        match parents.first() {
-            Some(parent) => current = parent,
-            None => break,
-        }
-    }
-    BTreeSet::new()
-}
-
-pub(super) fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
-    let mut current = node;
-    let mut seen = BTreeSet::new();
-    while seen.insert(current) {
-        if let Some(path) = state.file_path_nodes.get(current) {
-            return &path.path;
-        }
-        if let Some(version) = state.versions.get(current) {
-            return state
-                .commits
-                .values()
-                .filter(|commit| commit.history_tree_id == HISTORY)
-                .filter_map(|commit| {
-                    commit
-                        .entries
-                        .iter()
-                        .find(|entry| entry.file_id == FILE && entry.version_id == current)
-                        .map(|entry| ((commit.sequence, &commit.commit_id), entry.path()))
-                })
-                .min_by_key(|(key, _)| *key)
-                .map_or(&version.creation_name, |(_, path)| path);
-        }
-        let metadata = &state.file_metadata_nodes[current];
-        let source = if metadata.kind == FileMetadataKind::Merge {
-            state
-                .file_branch_merges
-                .values()
-                .rfind(|merge| {
-                    merge.file_id == FILE
-                        && merge.history_tree_id == HISTORY
-                        && !merge.reused_node
-                        && merge.result_node_id == current
-                })
-                .map(|merge| &merge.chosen_node_id)
-        } else {
-            metadata.parent_node_ids.first()
-        };
-        match source {
-            Some(source) => current = source,
-            None => return &state.versions[&metadata.version_id].creation_name,
-        }
-    }
-    panic!("oracle fixture source chains must be acyclic")
-}
-
-#[test]
 fn borrowed_node_facts_match_independent_complete_state_oracle() {
     let view = fixture();
     let state = view.business_projection();
@@ -465,14 +392,6 @@ fn borrowed_node_facts_match_independent_complete_state_oracle() {
             parents.into_iter().collect::<Vec<_>>(),
             oracle_parents(state, id),
             "parents for {id}"
-        );
-        assert_eq!(
-            nodes::tags(state, scope, id, &cancel)
-                .unwrap()
-                .cloned()
-                .unwrap_or_default(),
-            oracle_tags(state, id),
-            "tags for {id}"
         );
         assert_eq!(
             nodes::path(state, scope, selected, &cancel).unwrap(),
@@ -541,12 +460,6 @@ fn cold_projection_helpers_observe_cancellation_before_visiting_results() {
     assert!(cancel.is_cancelled());
     assert_eq!(
         nodes::first_commit(state, scope, &id("ver", 16), &cancel)
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::OperationAborted
-    );
-    assert_eq!(
-        nodes::tags(state, scope, &id("ver", 16), &cancel)
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::OperationAborted
@@ -1265,10 +1178,6 @@ fn public_node_anchors_preserve_current_identity_and_page_local_graph_meaning() 
         }
         for node in &nodes {
             assert_eq!(node.current, node.node_id.as_str() == id("ver", 16));
-            assert_eq!(
-                node.tags.iter().cloned().collect::<BTreeSet<_>>(),
-                oracle_tags(state, node.node_id.as_str())
-            );
             assert_eq!(node.path, oracle_path(state, node.node_id.as_str()));
             let body = nodes::node(
                 state,

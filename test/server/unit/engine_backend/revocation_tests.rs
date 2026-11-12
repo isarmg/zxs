@@ -309,13 +309,21 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.merge_file_branches(identity, request)
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         identity: &crate::auth::Identity,
-        request: crate::UpdateFileNodeTags,
+        request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.enter();
-        self.inner.update_file_node_tags(identity, request)
+        self.inner.replace_container_tags(identity, request)
+    }
+    fn file_container_tags(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::file_container_tags::ReadRequest,
+    ) -> Result<storage_contract::file_container_tags::Snapshot, crate::ApiError> {
+        self.enter();
+        self.inner.file_container_tags(identity, request)
     }
     fn create_disk_directory(
         &self,
@@ -957,8 +965,8 @@ enum Request {
     NodeNote,
     MergeFileBranches,
     MergeFileBranchesAt,
-    FileNodeTags,
-    FileNodeTagsAt,
+    ContainerTagsWrite,
+    ContainerTagsRead,
     CreateDiskDirectory,
     DiskWriteSession,
     DiskWriteSessionOnBranch,
@@ -1230,43 +1238,25 @@ impl Request {
                     },
                 )
                 .map(|_| ()),
-            Self::FileNodeTags => backend
-                .update_file_node_tags(
+            Self::ContainerTagsWrite => backend
+                .replace_container_tags(
                     identity,
-                    crate::UpdateFileNodeTags {
-                        file_id: "file".into(),
-                        targets: vec![storage_contract::FileTagTarget {
-                            branch_id: "branch".into(),
-                            expected_node_id: "head".into(),
-                            source_node_id: "source".into(),
-                        }],
-                        add: vec!["added".into()],
-                        remove: vec!["removed".into()],
-                        location: None,
+                    crate::ReplaceContainerTags {
+                        command: crate::container_tags_tests::sample_command(),
                         operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
-            Self::FileNodeTagsAt => backend
-                .update_file_node_tags(
+            Self::ContainerTagsRead => {
+                let command = crate::container_tags_tests::sample_command();
+                backend.file_container_tags(
                     identity,
-                    crate::UpdateFileNodeTags {
-                        file_id: "file".into(),
-                        targets: vec![storage_contract::FileTagTarget {
-                            branch_id: "branch".into(),
-                            expected_node_id: "head".into(),
-                            source_node_id: "source".into(),
-                        }],
-                        add: vec!["added".into()],
-                        remove: vec!["removed".into()],
-                        location: Some(storage_contract::FileLocation {
-                            repository_id: "repo".into(),
-                            path: "file.txt".into(),
-                        }),
-                        operation_id: storage_contract::OperationId::generate().unwrap(),
+                    storage_contract::file_container_tags::ReadRequest {
+                        file_id: command.file_id,
+                        context: command.context,
                     },
-                )
-                .map(|_| ()),
+                ).map(|_| ())
+            }
             Self::CreateDiskDirectory => backend
                 .create_disk_directory(
                     identity,
@@ -1873,8 +1863,8 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::DiskWriteSessionOnBranch,
                 Request::DiskWriteSession,
                 Request::CreateDiskDirectory,
-                Request::FileNodeTagsAt,
-                Request::FileNodeTags,
+                Request::ContainerTagsRead,
+                Request::ContainerTagsWrite,
                 Request::MergeFileBranchesAt,
                 Request::MergeFileBranches,
                 Request::CommitWorkspace,
@@ -2122,8 +2112,8 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::DiskWriteSessionOnBranch,
         Request::DiskWriteSession,
         Request::CreateDiskDirectory,
-        Request::FileNodeTagsAt,
-        Request::FileNodeTags,
+        Request::ContainerTagsRead,
+        Request::ContainerTagsWrite,
         Request::MergeFileBranchesAt,
         Request::MergeFileBranches,
         Request::CommitWorkspace,

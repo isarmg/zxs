@@ -1,9 +1,5 @@
-//! One atomic update of explicitly reviewed file-node tag targets.
-pub struct UpdateFileNodeTags {
-    pub file_id: String,
-    pub targets: Vec<storage_contract::FileTagTarget>,
-    pub add: Vec<String>,
-    pub remove: Vec<String>,
-    pub location: Option<storage_contract::FileLocation>,
+//! One current-context CAS replacement of the file container's shared tags.
+pub struct ReplaceContainerTags {
+    pub command: storage_contract::file_container_tags::ReplaceCommand,
     pub operation_id: storage_contract::OperationId,
 }

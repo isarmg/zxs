@@ -254,6 +254,7 @@ TARGETED_JOB = """
           path: |
             target/targeted-ci/summary.json
             target/targeted-ci/*.log
+            target/targeted-ci/wire/
           if-no-files-found: error
           retention-days: 7
 

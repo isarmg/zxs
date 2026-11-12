@@ -107,7 +107,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
         )?;
         let value: json_codec::Value = decode_strict(&seal_bytes)?;
         let current_seal = if value.get("format").and_then(json_codec::Value::as_str)
-            == Some("membership-pending")
+            == Some("container-tags-membership-pending")
         {
             let seal: PendingDiskSeal = json_codec::from_value(value)?;
             let identity = FileIdentity::from_fd(root.directory(root.path())?)?;
@@ -184,7 +184,9 @@ pub(crate) fn predecessor_seal_matches(
         dependency.verify_local(root)?;
     }
     let value: json_codec::Value = decode_strict(bytes)?;
-    if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
+    if value.get("format").and_then(json_codec::Value::as_str)
+        != Some("container-tags-membership-pending")
+    {
         let stored = decode_seal(bytes)?;
         if stored.format == expected.format {
             if (generation.portable.is_abort() || generation.registry().is_some())

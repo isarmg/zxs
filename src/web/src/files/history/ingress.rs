@@ -290,7 +290,6 @@ fn nodes_page(
         if let Some(previous) = &node.previous_path {
             path(previous)?;
         }
-        node_tags(&node.tags)?;
         if let wire::HistoryParentSet::More { cursor } = &node.parents {
             parent_cursor(cursor, &node.node_id, identity, request)?;
         }
@@ -521,18 +520,6 @@ fn note_and_names(note: &str, download: &str, stored: &str) -> Result<(), Decode
 
 fn path(value: &str) -> Result<(), DecodeError> {
     name_policy::validate_path(value).map_err(DecodeError::Path)
-}
-
-fn node_tags(tags: &[String]) -> Result<(), DecodeError> {
-    bounded(tags.len(), storage_contract::MAX_FILE_TAGS)?;
-    let mut seen = BTreeSet::new();
-    for tag in tags {
-        storage_contract::validate_tag(tag).map_err(DecodeError::Name)?;
-        if !seen.insert(tag) {
-            return Err(DecodeError::Relation("history node tags repeat"));
-        }
-    }
-    Ok(())
 }
 
 struct FieldFragment<'a> {

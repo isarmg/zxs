@@ -295,19 +295,20 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 当前能力声明 `full_only:true`、`full_branches:false`、`branch_creation:"record-until-write"`、`branch_content:"inherit-parent-until-first-write"`，`directory_branch_creation:"inherit-directory-tree"`、`namespace_batch:true`，区分内容必须 FULL 与登记分支只保存冻结引用。历史另存、合并关系标记、清除、独立树拆分和用户备份拓扑按各自能力及已开放入口报告。SMB 暴露用户所选默认根目录分支的基础操作，管理 API 能力不能被解释为 SMB 也支持。画线请求固定节点，不要求固定当前 HEAD、解决冲突或提供文件内容。客户端请求不支持的保存方式或操作时明确拒绝，不能近似执行。
 
-当前另开放文件合并、节点标签与scope备份配置，具体字段见[机器契约](contracts/openapi.json)和[合并、标签、备份规则](design/file-merge-tags-backup.md)。`merge_behavior:"explicit-file-node-adoption"` 区分文件结果采用与旧 `merge-links` 纯关系登记；`directory_branch_merge:false`、`directory_merge_status:"design-pending"` 明确目录分支合并待用户确认，暂不实现且无执行入口。
+当前另开放文件合并、容器标签与scope备份配置，具体字段见[机器契约](contracts/openapi.json)和[合并、标签、备份规则](design/file-merge-tags-backup.md)。`merge_behavior:"explicit-file-node-adoption"` 区分文件结果采用与旧 `merge-links` 纯关系登记；`directory_branch_merge:false`、`directory_merge_status:"design-pending"` 明确目录分支合并待用户确认，暂不实现且无执行入口。
 
 | 已实现入口 | 写入基线与结果 |
 | --- | --- |
 | `POST /api/file-manager/files/{file}/merge` | 每个公共文件分支 `expected_node_id`、结果 `chosen_node_id`、归属 `surviving_branch_id` 与 `confirmed:true`；只推进参与引用，被合并分支成为只读历史别名 |
 | `POST /api/file-manager/files/{file}/merge-history` | 历史来源 `inputs:[{branch_id,source_node_id,expected_node_id}]`、结果 `chosen_node_id`、新结果分支名 `name` 与 `confirmed:true`；单次原子派生并合并，保留全部原分支和默认引用 |
-| `POST /api/file-manager/files/{file}/tags` | 每个显式 `source_node_id` 与所关联分支当前 `expected_node_id`，按 `add/remove` 增量创建继承标签的元数据子节点；最多16标签、每项128 UTF-8字节；历史源不推进分支head |
-| `PATCH /api/file-manager/files/{file}/nodes/{node}` | 路径、标签与合并节点的独立128字节备注；不修改正文备注或正文proof |
+| `GET /api/file-manager/files/{file}/tags` | 必需 `repository_id,path`；返回准确 file_id/context、完整 tags 与独立 generation，不受节点、分支或历史分页影响 |
+| `POST /api/file-manager/files/{file}/tags` | 必需 `repository_id,path,expected_generation,tags,operation_id`；按标签独立代数 CAS 整体替换最多16项，每项128 UTF-8字节，不自动trim或去重，不创建节点/正文或推进分支HEAD |
+| `PATCH /api/file-manager/files/{file}/nodes/{node}` | 路径与合并节点的独立128字节备注；不修改正文备注或正文proof |
 | `GET/PUT /api/repositories/{repo}/backup-configuration` | GET返回自身与有效策略代数、scope身份及实际备份路线，不返回账户权限投影；PUT固定 `expected_scope_id`/`expected_generation`、含主盘总份数和每个备份slot的用户逻辑前缀，并回填可用历史版本 |
 
 保护规则必填 `inheritable`：`true` 表示当前可按 scope／路径继承的规则，`false` 表示仅经文件绑定生效的保留设置，不允许缺省或旧格式推断。重配沿用现行 `policy_id` 并推进 `generation`，仅把范围外仍绑定旧规则的文件转到共享的旧设置快照，保留其份数和路径。保留设置不参加精确 scope／祖先查找，不受父目录配置覆盖；显式文件配置可以重新绑定。GET 对保留设置返回 `inherited:false`，`effective_policy_id`／`effective_generation` 描述绑定设置；自身 `policy_id`／`generation` 仍只描述精确现行规则，不存在时为 `null`／`"0"`。没有绑定的保留设置清理，空 scope 的现行规则继续保留。
 
-节点标签和合并复用已有正文，`versions`仍只包含真实正文版本。统一 `nodes` 增加 `tags`/`merge` 类型与 `tags` 快照；独立 `merges` 保存全部输入来源，图边略去会形成环的关系。只读别名可通过历史节点下载和派生新分支，不能直接选择为可写分支。条件冲突返回409，标签限制/无效prefix返回400；不能因客户端先筛选了分支就省略服务端校验。
+标签只属于文件容器，不属于节点或分支，修改不生成任何历史节点；历史 `nodes` 不含 `tags` 字段或 `tags` 种类。合并复用已有正文，`versions`仍只包含真实正文版本；独立 `merges` 保存全部输入来源。只读别名可通过历史节点下载和派生新分支，不能直接选择为可写分支。标签 CAS 冲突返回409 `HEAD_CONFLICT`，保留草稿并在重读后明确接受新代数；标签限制/无效prefix返回400。成功回执 `operation_kind=file.container-tags.replace` 的 result 为精确 Replacement，完整 request/tags/changed/generation 必须一致。同值发布不增加标签代数。未知结果保留原 ID、路径和完整原请求，不把查询404认作未执行，也不换新代数自动重试。
 
 主盘文件列表把命名仓库的虚拟目录与磁盘根仓库的顶层条目放在同一显示命名空间。
 若二者名称按同一命名策略规范化后相同，根列表及该首级路径下的读取、建目录、写会话和目录分支操作返回
@@ -468,7 +469,7 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 祖先索引硬上限：同文件 65,536 个节点、262,144 条不同父边；扫描所有文件的 version/path/metadata/merge header 合计不超过 1,048,576，原始 parent record 合计不超过 1,048,576（重复记录不重复增加 distinct edge，但扫描仍计费）。来源候选分支 header、查 head 与最终 branch summary 投影所需 commit entry（包括明确作者/直接 head 成功路径）共享 1,048,576 上限。read 每步检查取消，查询为 O(上述全局 header + parent record + scoped graph 的索引/遍历工作)，不宣称 O(scoped) 或常数 CPU。全局索引容量不足或搜索不完整，明确 `RESOURCE_LIMIT_EXCEEDED` (429)，不能报“无来源”。响应最多 64 KiB，读取前后重查当前鉴权与 exact root。
 
-`merge-history` 在派生分支前，对相同 snapshot 完成 CAS、归属与有界祖先预验证；所有输入与 chosen 必须属于同一 history，混用返回 FILE_NODE_NOT_FOUND。`head == source` 与不可变节点明确作者不需要建图；其余来源按 reviewed head 分组，共用一次索引，一次 BFS 同时验证该 head 的所有来源。写请求累计搜索上限为 262,144 次唯一-per-head 节点访问与 1,048,576 次唯一-per-head 父边访问；chosen 标签继承只借用原始 first base parent，不克隆宽父数组，也共用该工作预算。前置预算失败不派生分支、不记录新回执、不发布状态。此处有界的是新增祖先搜索和标签继承，不改变旧分支命名/派生、路径核验、正文健康检查和持久发布的全局扫描或 I/O 成本，也不宣称整个合并耗时为常数。
+`merge-history` 在派生分支前，对相同 snapshot 完成 CAS、归属与有界祖先预验证；所有输入与 chosen 必须属于同一 history，混用返回 FILE_NODE_NOT_FOUND。`head == source` 与不可变节点明确作者不需要建图；其余来源按 reviewed head 分组，共用一次索引，一次 BFS 同时验证该 head 的所有来源。写请求累计搜索上限为 262,144 次唯一-per-head 节点访问与 1,048,576 次唯一-per-head 父边访问；容器标签不参与该搜索或合并结果选择。前置预算失败不派生分支、不记录新回执、不发布状态。此处有界的是新增祖先搜索，不改变旧分支命名/派生、路径核验、正文健康检查和持久发布的全局扫描或 I/O 成本，也不宣称整个合并耗时为常数。
 
 
 ### 目录暂存与显式提交接口

@@ -593,6 +593,10 @@ impl Engine {
                         };
                     if entry.file_id.starts_with("new-file:") {
                         entry.file_id = new_id("file")?;
+                        state.container_tags.insert(
+                            entry.file_id.parse()?,
+                            storage_contract::file_container_tags::ContainerTags::empty(),
+                        );
                     }
                     let (primary, copies) = match (&primary_override, copies_override) {
                         (Some(primary), Some(copies)) => (primary.clone(), copies),

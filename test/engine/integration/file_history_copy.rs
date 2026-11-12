@@ -1,5 +1,8 @@
 //! Actual online publication on independent temporary roots, including current
 //! registry activation and cold replay. This is not SMB transport certification.
+use storage_engine as engine_api;
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -183,20 +186,7 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
             .file_context(&source.repository_id, "source.txt")
             .unwrap();
         let head = engine.file_branch_head(&context.branch_id).unwrap();
-        engine
-            .update_file_node_tags(FileNodeTagsUpdateRequest {
-                file_id: &original.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: context.branch_id,
-                    source_node_id: head.clone(),
-                    expected_node_id: head,
-                }],
-                add: &["keep-label".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: op(),
-            })
+        container_tags_fixture::edit(&mut engine, &original.file_id, &["keep-label".into()], &[], "admin", op())
             .unwrap();
         engine
             .set_file_note(
@@ -323,10 +313,25 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
             .file_context(&target.repository_id, "copied.txt")
             .unwrap();
         assert!(
-            engine
-                .file_node_tags(&copied.file_id, copied_context.node_id.as_ref().unwrap())
-                .unwrap()
+            container_tags_fixture::tags(&engine, &copied.file_id)
                 .contains("keep-label")
+        );
+        let copied_id = copied.file_id.parse::<storage_contract::FileId>().unwrap();
+        assert_eq!(
+            engine.state().container_tags.get(&copied_id).unwrap().generation(),
+            storage_contract::Generation::new(0),
+        );
+        container_tags_fixture::edit(
+            &mut engine,
+            &copied.file_id,
+            &["copy-only".into()],
+            &["keep-label".into()],
+            "admin",
+            op(),
+        ).unwrap();
+        assert_eq!(
+            container_tags_fixture::tags(&engine, &original.file_id),
+            BTreeSet::from(["keep-label".into()]),
         );
         drop(engine);
         let mut engine = Engine::open(&temp.path().join("system")).unwrap();

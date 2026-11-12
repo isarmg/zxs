@@ -2,31 +2,27 @@
   "commit_state": "PUBLISHED",
   "error": null,
   "operation_id": "op_fa7dd197da224891920cf2180bda2d9d",
-  "operation_kind": "file.tags.update",
+  "operation_kind": "file.container-tags.replace",
   "protection_at_publish": "NOT_APPLICABLE",
   "publication_sequence": "5",
   "request_digest": "83fc4826ded57c17a1aa3a9a8cbe51afafd76f0f3d07a3db5e78d4570421bf6c",
   "result": {
-    "content_versions_created": "0",
-    "file_id": "file_c3df00e6913643d4b6898bde8df9f5ab",
-    "membership_epoch": "1",
-    "nodes": [
-      {
-        "advanced": true,
-        "branch_id": "br_53a00b7a81dd4887bd28385cb4e4600c",
-        "directory_branch_ids": [
-          "dbr_09844821eb1a48428b3f06ca1915cc68"
-        ],
-        "no_change": false,
-        "node_id": "fmeta_5e53c81644bb4a4a92d98bb6dfeaa35d",
-        "source_node_id": "ver_e88f026c96fb4a28970f0cac1f6d4643",
-        "tags": [
-          "reviewed"
-        ]
-      }
+    "request": {
+      "file_id": "file_00000000000000000000000000000001",
+      "context": {
+        "repository_id": "repo_00000000000000000000000000000001",
+        "path": "a.txt"
+      },
+      "expected_generation": "7",
+      "tags": [
+        "saved"
+      ]
+    },
+    "tags": [
+      "saved"
     ],
-    "timestamp": "1793949853",
-    "version_protection": []
+    "generation": "8",
+    "changed": true
   },
   "state": "completed"
 }

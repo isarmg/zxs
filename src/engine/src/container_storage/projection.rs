@@ -33,7 +33,6 @@ impl HistoryRows<'_> {
         let versions = self.versions.iter().map(|version| json!({
             "version_id": version.version_id,
             "parent_node_ids": nodes.parents(&version.version_id),
-            "tags": nodes.tags(&version.version_id),
             "storage_name": version.storage_name,
             "created_at": version.created_at,
             "size": version.logical_size.to_string(),
@@ -65,7 +64,6 @@ impl HistoryRows<'_> {
         });
         let paths = self.paths.iter().map(|node| json!({
             "node": node,
-            "tags": nodes.tags(&node.node_id),
             "note": state.file_path_notes.get(&node.node_id).map(String::as_str).unwrap_or(""),
         })).collect();
         let metadata = self.metadata.iter().map(|node| json!({

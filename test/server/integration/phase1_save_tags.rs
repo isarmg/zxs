@@ -1,4 +1,4 @@
-//! Phase-one body saves and file-node tags through the real authenticated HTTP
+//! Phase-one body saves and container tags through the real authenticated HTTP
 //! router. Temporary level-one roots do not require a Samba daemon or a browser.
 #[path = "phase1_save_tags/content_matches.rs"]
 mod content_matches;
@@ -194,23 +194,46 @@ impl Fixture {
         page["versions"].clone()
     }
 
-    async fn tags(&self, file: &str, add: &[&str], remove: &[&str]) -> Value {
+    async fn read_tags(&self, file: &str) -> Value {
         let page = self.history(file).await;
         let context = &page["identity"]["context"];
+        let query = url_encoding::form::Serializer::new(String::new())
+            .append_pair("repository_id", context["repository_id"].as_str().unwrap())
+            .append_pair("path", context["path"].as_str().unwrap())
+            .finish();
+        self.json("GET", &format!("/api/file-manager/files/{file}/tags?{query}"), None).await
+    }
+
+    async fn replace_tags(&self, file: &str, tags: &[&str]) -> Value {
+        let snapshot = self.read_tags(file).await;
         self.json(
             "POST",
             &format!("/api/file-manager/files/{file}/tags"),
             Some(json!({
-                "targets":[{
-                    "branch_id":context["selected_branch_id"],
-                    "source_node_id":context["current_node_id"],
-                    "expected_node_id":context["current_node_id"]
-                }],
-                "repository_id":context["repository_id"], "path":context["path"],
-                "add":add, "remove":remove, "operation_id":new_id("op").unwrap()
+                "repository_id": snapshot["context"]["repository_id"],
+                "path": snapshot["context"]["path"],
+                "expected_generation": snapshot["generation"],
+                "tags": tags,
+                "operation_id": new_id("op").unwrap(),
             })),
-        )
-        .await
+        ).await
+    }
+
+    async fn assert_tag_receipt(&self, original: &Value) {
+        let operation = original["operation_id"].as_str().unwrap();
+        for suffix in ["", "/outcome"] {
+            let queried = self.json(
+                "GET", &format!("/api/operations/{operation}{suffix}"), None,
+            ).await;
+            assert_eq!(queried["state"], "completed");
+            for field in ["operation_id", "operation_kind", "request_digest",
+                "publication_sequence", "result"] {
+                assert_eq!(queried[field], original[field], "{field}");
+            }
+            let replacement: storage_contract::file_container_tags::Replacement =
+                json_codec::from_value(queried["result"].clone()).unwrap();
+            replacement.validate(&replacement.request).unwrap();
+        }
     }
 
     async fn body(&self, version: &str) -> Vec<u8> {
@@ -301,11 +324,11 @@ async fn unicode_save_tags_unchanged_body_and_replacement_survive_cold_open() {
     let entry = fixture.entry("D01", path).await;
     let file = entry["file_id"].as_str().unwrap();
     let original = entry["version_id"].as_str().unwrap();
-    let added = fixture.tags(file, &["review", "已审核"], &[]).await;
-    assert_eq!(added["result"]["content_versions_created"], "0");
+    let added = fixture.replace_tags(file, &["review", "已审核"]).await;
+    assert_eq!(added["result"]["changed"], true);
     let tagged = fixture.history(file).await;
     assert_eq!(current_node(&tagged)["version_id"], original);
-    assert_eq!(current_node(&tagged)["tags"], json!(["review", "已审核"]));
+    assert_eq!(fixture.read_tags(file).await["tags"], json!(["review", "已审核"]));
     assert_eq!(
         fixture
             .versions(file, &tagged)
@@ -322,7 +345,7 @@ async fn unicode_save_tags_unchanged_body_and_replacement_survive_cold_open() {
     assert_eq!(
         current_node(&unchanged),
         current_node(&tagged),
-        "unchanged bytes must retain the tag node"
+        "unchanged bytes must retain the same content node"
     );
     assert_eq!(unchanged["nodes"], tagged["nodes"]);
     assert_eq!(
@@ -338,13 +361,13 @@ async fn unicode_save_tags_unchanged_body_and_replacement_survive_cold_open() {
     let second = b"second body, shorter";
     fixture.save("D01", path, second).await;
     let written = fixture.history(file).await;
-    assert_eq!(current_node(&written)["tags"], json!(["review", "已审核"]));
+    assert_eq!(fixture.read_tags(file).await["tags"], json!(["review", "已审核"]));
     let replacement = current_node(&written)["version_id"].as_str().unwrap();
     assert_ne!(replacement, original);
-    fixture.tags(file, &["final"], &["review"]).await;
+    let replacement_receipt = fixture.replace_tags(file, &["final", "已审核"]).await;
     let final_history = fixture.history(file).await;
     assert_eq!(
-        current_node(&final_history)["tags"],
+        fixture.read_tags(file).await["tags"],
         json!(["final", "已审核"])
     );
     assert_eq!(
@@ -362,15 +385,19 @@ async fn unicode_save_tags_unchanged_body_and_replacement_survive_cold_open() {
         .iter()
         .find(|node| node["node_id"] == original)
         .unwrap();
-    assert_eq!(
-        original_node["tags"],
-        json!([]),
-        "prior node labels are immutable"
-    );
+    assert!(original_node.get("tags").is_none());
+    assert!(final_history["nodes"].as_array().unwrap().iter().all(|node| {
+        node.get("tags").is_none() && node["kind"] != "tags"
+    }));
     assert_eq!(fixture.body(original).await, first);
     assert_eq!(fixture.body(replacement).await, second);
 
+    let tags = fixture.read_tags(file).await;
+    fixture.assert_tag_receipt(&replacement_receipt).await;
     let fixture = fixture.reopen().await;
+    assert_eq!(fixture.read_tags(file).await, tags);
+    fixture.assert_tag_receipt(&added).await;
+    fixture.assert_tag_receipt(&replacement_receipt).await;
     assert_eq!(fixture.history(file).await, final_history);
     assert_eq!(fixture.entry("D01", path).await["file_id"], file);
     assert_eq!(fixture.body(original).await, first);
@@ -378,7 +405,7 @@ async fn unicode_save_tags_unchanged_body_and_replacement_survive_cold_open() {
 }
 
 #[tokio::test]
-async fn empty_file_and_truncate_to_empty_keep_identity_and_node_labels() {
+async fn empty_file_and_truncate_to_empty_keep_identity_and_container_tags() {
     let fixture = Fixture::new(&["primary"]).await;
     fixture.save("D01", "empty.bin", b"").await;
     let empty = fixture.entry("D01", "empty.bin").await;
@@ -390,7 +417,7 @@ async fn empty_file_and_truncate_to_empty_keep_identity_and_node_labels() {
             .await
             .is_empty()
     );
-    fixture.tags(file, &["keep"], &[]).await;
+    fixture.replace_tags(file, &["keep"]).await;
     // Cross the configured 262144-byte checksum boundary with non-text bytes.
     let bytes = (0..=255).cycle().take(262144 + 17).collect::<Vec<u8>>();
     fixture.save("D01", "empty.bin", &bytes).await;
@@ -405,8 +432,10 @@ async fn empty_file_and_truncate_to_empty_keep_identity_and_node_labels() {
     assert_eq!(truncated["file_id"], file);
     assert_eq!(truncated["size"], "0");
     let history = fixture.history(file).await;
-    assert_eq!(current_node(&history)["tags"], json!(["keep"]));
+    assert_eq!(fixture.read_tags(file).await["tags"], json!(["keep"]));
+    let tags = fixture.read_tags(file).await;
     let fixture = fixture.reopen().await;
+    assert_eq!(fixture.read_tags(file).await, tags);
     assert_eq!(fixture.history(file).await, history);
     assert!(
         fixture
@@ -431,17 +460,21 @@ async fn same_named_files_on_two_level_one_disks_keep_independent_tags() {
     let left = alpha["file_id"].as_str().unwrap();
     let right = beta["file_id"].as_str().unwrap();
     assert_ne!(left, right);
-    fixture.tags(left, &["alpha"], &[]).await;
+    fixture.replace_tags(left, &["alpha"]).await;
     assert_eq!(
-        current_node(&fixture.history(right).await)["tags"],
+        fixture.read_tags(right).await["tags"],
         json!([])
     );
-    fixture.tags(right, &["beta"], &[]).await;
+    fixture.replace_tags(right, &["beta"]).await;
     let left_history = fixture.history(left).await;
     let right_history = fixture.history(right).await;
-    assert_eq!(current_node(&left_history)["tags"], json!(["alpha"]));
-    assert_eq!(current_node(&right_history)["tags"], json!(["beta"]));
+    assert_eq!(fixture.read_tags(left).await["tags"], json!(["alpha"]));
+    assert_eq!(fixture.read_tags(right).await["tags"], json!(["beta"]));
+    let left_tags = fixture.read_tags(left).await;
+    let right_tags = fixture.read_tags(right).await;
     let fixture = fixture.reopen().await;
+    assert_eq!(fixture.read_tags(left).await, left_tags);
+    assert_eq!(fixture.read_tags(right).await, right_tags);
     assert_eq!(fixture.history(left).await, left_history);
     assert_eq!(fixture.history(right).await, right_history);
     assert_eq!(

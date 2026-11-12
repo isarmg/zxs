@@ -101,7 +101,9 @@ fn choose(browser: &Browser, english: &str, chinese: &str, choice: Choice<'_>) -
 pub(super) fn run(browser: &Browser) -> Result<()> {
     browser.script(r#"
         const original=window.fetch;
-        const p=window.__zxsHistoryWindows={roots:[],pending:[],calls:[],seed:null,actualRoot:null,root:null,expected:null,reviewing:false,
+        const p=window.__zxsHistoryWindows={
+            roots:[],pending:[],calls:[],tagReads:[],tagWrites:0,seed:null,
+            actualRoot:null,root:null,expected:null,reviewing:false,
             fieldText:'first-fragment\n'+'文'.repeat(12000)+'\nlast-fragment',
             restore:()=>{window.fetch=original;for(const pending of p.pending)pending.release();}};
         const copy=value=>structuredClone(value),encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
@@ -117,8 +119,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             const older=p.seed.nodes.find(node=>node.node_id!==current.node_id);
             if(!current||!older)throw new Error('two real nodes required for bounded history fixture');
             p.current=current.node_id;p.older=older.node_id;
+            // Synthetic content summaries are pagination data, never resolved or submitted.
             const fake=(offset,count,sequence)=>Array.from({length:count},(_,index)=>({...copy(current),
-                node_id:'fmeta_'+(offset+index).toString(16).padStart(32,'0'),kind:'tags',sequence:sequence(index),
+                node_id:'ver_'+(offset+index).toString(16).padStart(32,'0'),
+                version_id:'ver_'+(offset+index).toString(16).padStart(32,'0'),
+                kind:'content',sequence:sequence(index),
                 current:false,note:'',parents:{state:'complete'}}));
             return [ordered(fake(0x1000,32,index=>String(BigInt(current.sequence)+100n-BigInt(index)))),
                 ordered([...fake(0x2000,31,()=>current.sequence),copy(current)]),
@@ -126,6 +131,15 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         };
         window.fetch=async function(...args){
             const request=args[0],url=new URL(typeof request==='string'?request:request.url,location.href);
+            if(/^\/api\/file-manager\/files\/[^/]+\/tags$/.test(url.pathname)){
+                if(request.method!=='GET'){
+                    p.tagWrites++;
+                    throw new Error('read-only window fixture must not submit container tags');
+                }
+                const response=await original.apply(this,args);
+                if(response.ok)p.tagReads.push({url:url.href,body:await response.clone().json()});
+                return response;
+            }
             if(request.method==='GET'&&/^\/api\/file-manager\/files\/[^/]+\/merge-history\/source$/.test(url.pathname)){
                 if(url.searchParams.get('history_root')!==p.root)throw new Error('source resolution used a stale synthetic root');
                 const actual=new URL(url);actual.searchParams.set('history_root',p.actualRoot);
@@ -197,7 +211,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         "return document.querySelectorAll('.zxs-version-node').length===2&&!document.querySelector('.zxs-header-refresh').disabled",
     )?;
     println!(
-        "PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)"
+        concat!(
+            "PASS synthetic 32-node window replacement/observer disposal, ",
+            "container-wide tag draft and real-ID merge basis review, ",
+            "replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)"
+        )
     );
     Ok(())
 }
@@ -225,53 +243,95 @@ fn exercise(browser: &Browser) -> Result<()> {
         click(browser, "Next history page", "下一页历史")?;
         graph(browser, 2)?;
     }
-    browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-node-id=\"'+p.older+'\"] .zxs-node-checkbox').click();return true")?;
-    click(browser, "Previous history page", "上一页历史")?;
-    graph(browser, 1)?;
-    browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-node-id=\"'+p.current+'\"] .zxs-node-checkbox').click();return true")?;
-    click(browser, "Edit selected node tags", "编辑所选节点标签")?;
+    container_tag_draft(browser)?;
+    merge_review(browser)?;
+    graph_merge_review(browser)?;
+    fields_and_cancellation(browser)
+}
+
+fn container_tag_draft(browser: &Browser) -> Result<()> {
+    browser.script("window.__zxsHistoryWindows.tagReads.length=0;return true")?;
     check(
         browser,
-        "both real tag sources retained across pages",
-        "const p=window.__zxsHistoryWindows,text=document.querySelector('.zxs-tag-review')?.textContent||'';return text.includes(p.current)&&text.includes(p.older)&&/2\\s*(nodes selected|个节点已选择)/.test(document.querySelector('.zxs-entry-version-history').textContent)",
+        "real container tag reload is enabled",
+        r#"
+        return Array.from(document.querySelectorAll('button')).some(button=>
+            ['Reload tags','重新读取标签'].includes(button.textContent.trim())&&!button.disabled);
+    "#,
     )?;
-    let tag = browser.css(
-        ".zxs-tag-review input[aria-label='Add tag'],.zxs-tag-review input[aria-label='新增标签']",
+    click(browser, "Reload tags", "重新读取标签")?;
+    check(
+        browser,
+        "independent real container tag snapshot is displayed",
+        r#"
+        const p=window.__zxsHistoryWindows,read=p.tagReads.at(-1);
+        const panel=document.querySelector(
+            'section[aria-label="Container tags"],section[aria-label="容器标签"]');
+        if(!read||!panel||read.body.file_id!==p.seed.identity.file_id)return false;
+        const status=panel.querySelector('[role=status]')?.textContent.trim();
+        const tags=read.body.tags;
+        return tags.length?status===tags.join(' / '):['No tags','无标签'].includes(status);
+    "#,
     )?;
+    phase1_files::edit_current_tags(browser)?;
+    let tag = browser.css("[data-container-tag-editor] input:not([disabled])")?;
     browser.keys(&tag, "window-proof")?;
     browser.keys(&tag, "\u{e007}")?;
+    browser.script(
+        r#"
+        const p=window.__zxsHistoryWindows;
+        p.tagEditor=document.querySelector('[data-container-tag-editor]');
+        p.tagSnapshot=structuredClone(p.tagReads.at(-1));
+        return true;
+    "#,
+    )?;
+    click(browser, "Previous history page", "上一页历史")?;
+    graph(browser, 1)?;
+    check(
+        browser,
+        "one container draft survives historical page replacement without node selection",
+        r#"
+        const p=window.__zxsHistoryWindows;
+        const panel=document.querySelector('[data-container-tag-editor]');
+        const sameSnapshot=JSON.stringify(p.tagReads.at(-1))===JSON.stringify(p.tagSnapshot);
+        return panel===p.tagEditor&&panel.textContent.includes('window-proof')&&sameSnapshot
+            &&document.querySelectorAll('[data-container-tag-editor]').length===1
+            &&Array.from(panel.querySelectorAll('button')).some(button=>
+                ['Save tags','保存标签'].includes(button.textContent.trim())&&!button.disabled)
+            &&p.tagWrites===0;
+    "#,
+    )?;
     browser.script("window.__zxsHistoryWindows.root='d'.repeat(64);return true")?;
     click(browser, "Refresh", "刷新")?;
     check(
         browser,
-        "root change closes stale tag confirmation",
-        "const panel=document.querySelector('.zxs-tag-review');return panel?.textContent.includes('window-proof')&&Array.from(panel.querySelectorAll('button')).some(button=>['Save tag child nodes','保存标签子节点'].includes(button.textContent.trim())&&button.disabled)",
+        "file-context refresh retains the container draft but closes submission",
+        r#"
+        const p=window.__zxsHistoryWindows;
+        const panel=document.querySelector('[data-container-tag-editor]');
+        return panel?.textContent.includes('window-proof')&&p.tagWrites===0
+            &&!document.querySelector('.zxs-header-refresh').disabled
+            &&p.calls.some(call=>call.kind==='nodes'&&call.root==='d'.repeat(64))
+            &&Array.from(panel.querySelectorAll('button')).some(button=>
+                ['Save tags','保存标签'].includes(button.textContent.trim())&&button.disabled);
+    "#,
     )?;
-    browser.script("window.__zxsHistoryWindows.reviewing=true;return true")?;
-    click(
-        browser,
-        "Load every selected node and branch for review",
-        "读取全部节点及分支以重新审阅",
+    browser.script(
+        r#"
+        const panel=document.querySelector('[data-container-tag-editor]');
+        Array.from(panel.querySelectorAll('button')).find(button=>
+            ['Cancel','取消'].includes(button.textContent.trim())).click();
+        return true;
+    "#,
     )?;
     check(
         browser,
-        "tag review requires explicit acceptance",
-        "const panel=document.querySelector('.zxs-tag-review'),buttons=Array.from(panel.querySelectorAll('button'));return buttons.some(button=>['Accept every reviewed base','接受全部重新审阅的依据'].includes(button.textContent.trim())&&!button.disabled)&&buttons.some(button=>['Save tag child nodes','保存标签子节点'].includes(button.textContent.trim())&&button.disabled)",
-    )?;
-    click(
-        browser,
-        "Accept every reviewed base",
-        "接受全部重新审阅的依据",
-    )?;
-    check(
-        browser,
-        "tag confirmation opens only after the complete explicit review",
-        "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-tag-review');return panel.textContent.includes(p.current)&&panel.textContent.includes(p.older)&&Array.from(panel.querySelectorAll('button')).some(button=>['Save tag child nodes','保存标签子节点'].includes(button.textContent.trim())&&!button.disabled)",
-    )?;
-    browser.script("window.__zxsHistoryWindows.reviewing=false;Array.from(document.querySelectorAll('.zxs-tag-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
-    merge_review(browser)?;
-    graph_merge_review(browser)?;
-    fields_and_cancellation(browser)
+        "cancelling stale container draft submits no tag write",
+        r#"
+        return !document.querySelector('[data-container-tag-editor]')
+            &&window.__zxsHistoryWindows.tagWrites===0;
+    "#,
+    )
 }
 
 fn merge_review(browser: &Browser) -> Result<()> {

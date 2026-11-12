@@ -1,4 +1,4 @@
-//! Common identity, ancestry and inherited labels for every public file node.
+//! Common identity and ancestry for every public file node.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +13,6 @@ pub struct FileNodeProjectionRequest<'a> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileNodeSummary {
     pub parent_node_ids: Vec<String>,
-    pub tags: BTreeSet<String>,
 }
 
 pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<String> {
@@ -136,28 +135,10 @@ pub(crate) fn belongs_to_branch(state: &State, branch: &str, head: &str, source:
     false
 }
 
-/// Ordinary child nodes inherit their first parent's immutable tag snapshot.
-/// A merge revision stores the explicitly selected result node's tags.
-pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
-    let mut current = node.to_owned();
-    let mut seen = BTreeSet::new();
-    while seen.insert(current.clone()) {
-        if let Some(n) = state.file_metadata_nodes.get(&current) {
-            return n.tags.clone();
-        }
-        let Some(parent) = base_parents(state, &current).into_iter().next() else {
-            break;
-        };
-        current = parent;
-    }
-    BTreeSet::new()
-}
-
 /// A call-local projection over one immutable generation. Metadata nodes and
 /// merge provenance from a later publication must never enter this projection.
 pub(crate) struct NodeProjection<'a> {
     state: &'a State,
-    tags: std::collections::BTreeMap<String, std::rc::Rc<BTreeSet<String>>>,
     merges: std::collections::BTreeMap<&'a str, Vec<&'a FileBranchMerge>>,
 }
 
@@ -180,7 +161,6 @@ impl<'a> NodeProjection<'a> {
         }
         Self {
             state,
-            tags: Default::default(),
             merges,
         }
     }
@@ -199,52 +179,6 @@ impl<'a> NodeProjection<'a> {
         parents
     }
 
-    pub(crate) fn tags(&mut self, node: &str) -> &BTreeSet<String> {
-        if !self.tags.contains_key(node) {
-            let mut current = node;
-            let mut path = Vec::new();
-            let mut seen = BTreeSet::new();
-            let tags = loop {
-                if let Some(tags) = self.tags.get(current) {
-                    break tags.clone();
-                }
-                if !seen.insert(current) {
-                    break std::rc::Rc::new(BTreeSet::new());
-                }
-                path.push(current);
-                // Metadata wins even for overlapping IDs and cyclic parents.
-                if let Some(metadata) = self.state.file_metadata_nodes.get(current) {
-                    break std::rc::Rc::new(metadata.tags.clone());
-                }
-                let parents = if let Some(path) = self.state.file_path_nodes.get(current) {
-                    Some(&path.parent_node_ids)
-                } else if let Some(version) = self.state.versions.get(current) {
-                    Some(
-                        self.state
-                            .file_node_parents
-                            .get(current)
-                            .unwrap_or(&version.source_version_ids),
-                    )
-                } else {
-                    None
-                };
-                let Some(parent) = parents.and_then(|parents| parents.first()) else {
-                    break std::rc::Rc::new(BTreeSet::new());
-                };
-                current = parent;
-            };
-            // Every visited first-parent prefix has the same snapshot, including
-            // dangling tails and cycles without metadata. Share the snapshot.
-            for visited in path {
-                self.tags.insert(visited.to_owned(), tags.clone());
-            }
-        }
-        self.tags
-            .get(node)
-            .expect("visited node is memoized")
-            .as_ref()
-    }
-
     fn summaries(
         &mut self,
         request: FileNodeProjectionRequest<'_>,
@@ -255,7 +189,6 @@ impl<'a> NodeProjection<'a> {
                 node_version(self.state, request.file_id, node)?;
                 Ok(FileNodeSummary {
                     parent_node_ids: display_parents(self.state, &self.parents(node))?,
-                    tags: self.tags(node).clone(),
                 })
             });
         }
@@ -338,10 +271,6 @@ impl Engine {
 
     pub fn file_node_version(&self, file: &str, node: &str) -> Result<String> {
         node_version(&self.state, file, node)
-    }
-    pub fn file_node_tags(&self, file: &str, node: &str) -> Result<BTreeSet<String>> {
-        node_version(&self.state, file, node)?;
-        Ok(node_tags(&self.state, node))
     }
     pub fn file_node_parents(&self, file: &str, node: &str) -> Result<Vec<String>> {
         node_version(&self.state, file, node)?;

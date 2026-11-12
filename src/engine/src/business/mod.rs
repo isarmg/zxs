@@ -49,7 +49,6 @@ pub(crate) use directory::record_restored_namespace_with_ids;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
 pub use file_requests::{
     FileBranchMergeRequest, FileDefaultSelection, FileHistoryMergeRequest,
-    FileNodeTagsUpdateRequest,
 };
 pub use namespace::{CurrentObject, NamespaceTree};
 pub(crate) use namespace::{

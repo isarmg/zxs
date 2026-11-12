@@ -127,6 +127,19 @@ fn verify_selections(previous: &State, next: &State) -> Result<()> {
 }
 
 fn verify_notes(previous: &State, next: &State) -> Result<()> {
+    let keys = match next.container_tags.changes_since(&previous.container_tags) {
+        MapChanges::Keys(keys) => (*keys).clone(),
+        MapChanges::All => previous.container_tags.keys()
+            .chain(next.container_tags.keys()).copied().collect(),
+    };
+    for key in keys {
+        if previous.container_tags.get(&key) != next.container_tags.get(&key)
+            && previous.file_deletions.contains_key(&key.to_string())
+        {
+            return Err(frozen());
+        }
+    }
+
     for key in changed_keys(&previous.file_notes, &next.file_notes) {
         if previous.file_notes.get(&key) != next.file_notes.get(&key)
             && previous.file_deletions.contains_key(&key)

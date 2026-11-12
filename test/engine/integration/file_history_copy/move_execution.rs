@@ -1,5 +1,8 @@
 //! Native move success and interruption scenarios on disposable roots. These
 //! sources are not an executed result or physical power-loss / SMB certificate.
+use storage_engine as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use std::fs;
 use storage_contract::file_relocation::OBJECT_MOVE_KIND;
@@ -106,21 +109,7 @@ fn native_move_publishes_all_retained_bodies_labels_branches_and_three_scopes_to
         .file_context(&fixture.source.repository_id, "source.txt")
         .unwrap();
     let node = fixture.engine.file_branch_head(&context.branch_id).unwrap();
-    fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &old.file_id,
-            targets: &[FileTagTarget {
-                branch_id: context.branch_id,
-                source_node_id: node.clone(),
-                expected_node_id: node,
-            }],
-            add: &["move-label".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    container_tags_fixture::edit(&mut fixture.engine, &old.file_id, &["move-label".into()], &[], "admin", op())
         .unwrap();
     fixture
         .engine
@@ -156,10 +145,7 @@ fn native_move_publishes_all_retained_bodies_labels_branches_and_three_scopes_to
         .file_context(&fixture.target.repository_id, "moved.txt")
         .unwrap();
     assert!(
-        fixture
-            .engine
-            .file_node_tags(&moved.file_id, moved_context.node_id.as_ref().unwrap())
-            .unwrap()
+        container_tags_fixture::tags(&fixture.engine, &moved.file_id)
             .contains("move-label")
     );
     let copies = fixture.engine.file_history(&moved.file_id).unwrap();

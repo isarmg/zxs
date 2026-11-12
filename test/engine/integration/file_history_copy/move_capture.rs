@@ -1,4 +1,7 @@
 //! Production capture API only. These tests never claim a move was published.
+use storage_engine as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 
@@ -230,21 +233,7 @@ fn move_capture_includes_tag_only_branch_changes() {
         .unwrap();
     let before = capture(&fixture);
     let head = fixture.engine.file_branch_head(&branch).unwrap();
-    fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &original.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch.clone(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["retained-label".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    container_tags_fixture::edit(&mut fixture.engine, &original.file_id, &["retained-label".into()], &[], "admin", op())
         .unwrap();
     assert_eq!(
         recheck_error(&fixture.engine, &before),

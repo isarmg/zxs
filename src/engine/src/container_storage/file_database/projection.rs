@@ -70,6 +70,10 @@ fn with_events(
         file,
         &FileRow {
             file_id: file.to_owned(),
+            container_tags: state.container_tags
+                .get(&file.parse::<storage_contract::FileId>()?)
+                .ok_or_else(|| invalid("file container tags are missing"))?
+                .clone(),
             note: state.file_notes.get(file).cloned(),
             selected_branch_id: state.file_selections.get(file).cloned(),
         },
@@ -81,7 +85,6 @@ fn with_events(
             &VersionRow {
                 version: state.versions[id].clone(),
                 parent_node_ids: nodes.parents(id),
-                tags: nodes.tags(id).clone(),
                 note: state.version_notes.get(id).cloned(),
                 content_state: state
                     .content_states
@@ -122,7 +125,6 @@ fn with_events(
                     version_id: node.version_id.clone(),
                     branch_id: node.branch_id.clone(),
                     parent_node_ids: nodes.parents(id),
-                    tags: nodes.tags(id).clone(),
                     note: state.file_path_notes.get(id).cloned(),
                     operation_id: node.operation_id,
                     author: node.author.clone(),

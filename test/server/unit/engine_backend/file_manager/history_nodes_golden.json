@@ -22,10 +22,6 @@
       "body-old"
     ],
     "storage_name": "<storage_name>",
-    "tags": [
-      "review",
-      "草稿"
-    ],
     "version_id": "body-new"
   },
   {
@@ -43,45 +39,13 @@
     "note": "",
     "operation_id": "<operation_id>",
     "parent_node_ids": [
-      "tags"
+      "body-old"
     ],
     "path": "after.txt",
     "previous_path": "before.txt",
     "sequence": "4",
     "size": "3",
     "storage_name": "<storage_name>",
-    "tags": [
-      "review",
-      "草稿"
-    ],
-    "version_id": "body-old"
-  },
-  {
-    "author": "owner",
-    "branch_id": "branch",
-    "content_hash": "96a4257289f9ebcbc94bfc49276f89ed87f8c951e3fa832d44dceb9b220520a5",
-    "content_state": "AVAILABLE",
-    "created_at": "<created_at>",
-    "current": false,
-    "download_name": "after.txt",
-    "file_id": "file",
-    "kind": "tags",
-    "message": "",
-    "node_id": "tags",
-    "note": "",
-    "operation_id": "<operation_id>",
-    "parent_node_ids": [
-      "body-old"
-    ],
-    "path": "before.txt",
-    "previous_path": null,
-    "sequence": "3",
-    "size": "3",
-    "storage_name": "<storage_name>",
-    "tags": [
-      "review",
-      "草稿"
-    ],
     "version_id": "body-old"
   },
   {
@@ -103,7 +67,6 @@
     "size": "3",
     "source_version_ids": [],
     "storage_name": "<storage_name>",
-    "tags": [],
     "version_id": "body-old"
   }
 ]

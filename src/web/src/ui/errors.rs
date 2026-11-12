@@ -41,6 +41,7 @@ impl State {
         self.notices.clear_success();
         if error.status == 401 {
             self.authenticated = false;
+            self.files.container_tags.clear();
         }
         let key = context.map(|(session_epoch, context)| ErrorKey {
             session_epoch,

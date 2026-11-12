@@ -91,7 +91,6 @@ fn node(number: u64) -> wire::HistoryNodeSummary {
         path: "folder/file.txt".into(),
         previous_path: None,
         note: String::new(),
-        tags: Vec::new(),
         size: 0,
         content_hash: "b".repeat(64).parse().unwrap(),
         content_state: None,
@@ -245,6 +244,7 @@ fn node_identity_order_current_markers_and_small_fields_are_admitted_together() 
         json!({"note":"n".repeat(129)}),
         json!({"path":"../escape.txt"}),
         json!({"tags":["same","same"]}),
+        json!({"kind":"tags"}),
         json!({"created_at":"2026-01-01T00:00:00Z"}),
     ] {
         let mut page = value(&nodes(&request, 1));

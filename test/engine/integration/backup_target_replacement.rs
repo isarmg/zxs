@@ -1,11 +1,13 @@
 //! Safety boundary only: an unimplemented topology replacement cannot become
 //! a future-only policy edit or an ordinary membership addition. These are not
 //! successful migration tests and must not be reported as that capability.
+use storage_engine as engine_api;
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use std::{io::Read, os::unix::fs::DirBuilderExt, path::PathBuf};
 use storage_engine::{
-    BranchName, DeleteFileRequest, FileDeletionTarget, FileNodeTagsUpdateRequest, FileTagTarget,
-    PendingMemberDirectory, ValidatedConfig,
+    BranchName, DeleteFileRequest, FileDeletionTarget, PendingMemberDirectory, ValidatedConfig,
     history_window::{HistoryFileId, HistoryRepositoryId},
 };
 
@@ -154,26 +156,8 @@ fn current_replacement_rejection_preserves_hidden_history_tags_tree_and_receipts
         .branch_id
         .unwrap();
     let head = fixture.engine.file_branch_head(&branch).unwrap();
-    let tag_receipt = fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &old.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["must-migrate".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: operation(),
-        })
+    let tag_receipt = container_tags_fixture::edit(&mut fixture.engine, &old.file_id, &["must-migrate".into()], &[], "admin", operation())
         .unwrap();
-    let tagged_node = tag_receipt.result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     let hidden = fixture.save("docs/hidden", b"deleted does not mean purged");
     let repository = HistoryRepositoryId::parse(&fixture.repository.repository_id).unwrap();
     let file = HistoryFileId::parse(&hidden.file_id).unwrap();
@@ -237,10 +221,7 @@ fn current_replacement_rejection_preserves_hidden_history_tags_tree_and_receipts
         rows
     );
     assert_eq!(
-        fixture
-            .engine
-            .file_node_tags(&old.file_id, &tagged_node)
-            .unwrap(),
+        container_tags_fixture::tags(&fixture.engine, &old.file_id),
         ["must-migrate".to_owned()].into_iter().collect()
     );
     assert_eq!(body(&fixture.engine, &old.version_id), b"retained old body");

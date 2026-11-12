@@ -10,7 +10,6 @@ pub(super) enum Action {
     Rename,
     Move,
     PathChange,
-    Tags,
     Merge,
 }
 
@@ -21,7 +20,6 @@ impl Action {
             Self::Rename => "rename",
             Self::Move => "move",
             Self::PathChange => "path-change",
-            Self::Tags => "tags",
             Self::Merge => "merge",
         }
     }
@@ -32,7 +30,6 @@ impl Action {
             Self::Rename => t("重命名", "Renamed"),
             Self::Move => t("移动", "Moved"),
             Self::PathChange => t("路径变化", "Path changed"),
-            Self::Tags => t("标签更改", "Tags changed"),
             Self::Merge => t("分支合并", "Branches merged"),
         }
     }
@@ -49,7 +46,7 @@ pub(super) fn title(note: &str, sequence: u64) -> String {
 pub(super) fn file_title(node: &FileNode) -> String {
     let note = match node.kind() {
         NodeKind::Content => node.body_note().unwrap_or_default(),
-        NodeKind::Rename | NodeKind::Tags | NodeKind::Merge => node.note(),
+        NodeKind::Rename | NodeKind::Merge => node.note(),
     };
     title(note, node.sequence())
 }
@@ -57,7 +54,6 @@ pub(super) fn file_title(node: &FileNode) -> String {
 pub(super) fn file_actions(node: &FileNode) -> &'static [Action] {
     match node.kind() {
         NodeKind::Content => &[Action::Content],
-        NodeKind::Tags => &[Action::Tags],
         NodeKind::Merge => &[Action::Merge],
         NodeKind::Rename => path_actions(node.previous_path(), node.path()),
     }

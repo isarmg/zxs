@@ -1,11 +1,7 @@
 use super::*;
 
 fn fixture() -> State {
-    let fixture: json_codec::Value = json_codec::from_str(include_str!(
-        "../journal/fixtures/canonical_publication.json"
-    ))
-    .unwrap();
-    json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap()
+    crate::journal::container_tags_fixture::state()
 }
 fn dirty(before: &State, after: &State) -> BTreeSet<String> {
     changes::HistoryChanges::between(before, after).histories

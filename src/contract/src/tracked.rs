@@ -315,3 +315,35 @@ impl<V> FromIterator<(crate::OperationId, V)> for TrackedOperations<V> {
         Self::new(iter.into_iter().collect())
     }
 }
+
+/// File-owned authority with typed incremental dirty keys.
+pub type TrackedFiles<T> = Tracked<SharedRecords<T, crate::FileId>, crate::FileId>;
+
+impl<V: Clone> TrackedFiles<V> {
+    pub fn insert(&mut self, key: crate::FileId, value: V) -> Option<V> {
+        // Canonical file ID is "file_" followed by 32 hexadecimal digits.
+        self.key_changed(&key, 37);
+        Arc::make_mut(&mut self.value).insert(key, value)
+    }
+}
+
+impl<V: Clone> TrackedFiles<V> {
+    pub fn remove(&mut self, key: &crate::FileId) -> Option<V> {
+        self.key_changed(key, 37);
+        Arc::make_mut(&mut self.value).remove(key)
+    }
+}
+
+impl<V> FromIterator<(crate::FileId, V)> for TrackedFiles<V> {
+    fn from_iter<I: IntoIterator<Item = (crate::FileId, V)>>(iter: I) -> Self {
+        Self::new(iter.into_iter().collect())
+    }
+}
+
+impl<V: Clone> Extend<(crate::FileId, V)> for TrackedFiles<V> {
+    fn extend<I: IntoIterator<Item = (crate::FileId, V)>>(&mut self, iter: I) {
+        for (key, value) in iter {
+            self.insert(key, value);
+        }
+    }
+}

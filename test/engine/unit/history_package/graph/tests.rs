@@ -48,6 +48,7 @@ fn resolve(root: Value, load: impl FnMut(&str, &str) -> Result<Value>) -> Result
 
 fn manifest() -> HistoryManifest {
     let mut value = json!({
+        "container_tags": {},
         "repository": {
             "repository_id": "repository",
             "name": "history graph",
@@ -738,4 +739,13 @@ fn manifest_structural_equality_matches_canonical_closed_fields() {
         canonical_json(&manifest()).unwrap(),
         canonical_json(&explicit).unwrap()
     );
+}
+
+#[test]
+fn prior_history_root_format_is_rejected_without_loading_dependencies() {
+    let manifest = manifest();
+    let (_, objects) = prepare(&manifest, MAX_METADATA).unwrap();
+    let mut root: Value = json_codec::from_slice(objects.last().unwrap().bytes()).unwrap();
+    root["format"] = json!("radix-map-roots");
+    assert!(resolve(root, |_, _| panic!("unsupported root must reject before dependencies")).is_err());
 }

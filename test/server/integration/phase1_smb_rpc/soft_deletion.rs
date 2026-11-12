@@ -390,6 +390,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
     let a = tree.get("A.txt").unwrap().clone();
     let b = tree.get("B.txt").unwrap().clone();
+    let original_branch = engine.file_context(&repo.repository_id, "A.txt").unwrap().branch_id;
     let review = engine
         .create_file_branch(
             &a.file_id,
@@ -401,26 +402,31 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         .unwrap()
         .branch_id
         .unwrap();
-    let head = engine.file_branch_head(&review).unwrap();
-    let tagged = engine
-        .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-            file_id: &a.file_id,
-            targets: &[storage_contract::FileTagTarget {
-                branch_id: review.clone(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["retained-head".into()],
-            remove: &[],
-            location: None,
-            principal: "alice",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    engine.select_file_branch(&a.file_id, &review, "alice", OperationId::generate().unwrap())
+        .unwrap();
+    for (source, target) in [("A.txt", "review.txt"), ("review.txt", "A.txt")] {
+        engine.file_namespace(
+            &repo.repository_id,
+            storage_contract::NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                source,
+                Some(target),
+            ).unwrap(),
+            "alice",
+            OperationId::generate().unwrap(),
+        ).unwrap();
+    }
+    let retained_node = engine.file_branch_head(&review).unwrap();
+    engine.select_file_branch(
+        &a.file_id, &original_branch, "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    engine
+        .replace_container_tags(
+            &tag_command(&a.file_id, &repo.repository_id, "A.txt", 0, &["retained-head"]),
+            &"alice".parse::<storage_contract::Principal>().unwrap(),
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
     let retained_note = storage_contract::Note::parse("before deletion".into()).unwrap();
     for version in [None, Some(a.version_id.as_str())] {
         engine
@@ -436,7 +442,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     engine
         .set_file_node_note(
             &a.file_id,
-            &tagged,
+            &retained_node,
             &retained_note,
             "alice",
             OperationId::generate().unwrap(),
@@ -499,7 +505,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         .unwrap();
     assert_eq!(d.branch_heads.len(), 2);
     assert_eq!(d.parent_node_ids.len(), 2);
-    assert_eq!(d.branch_heads[&review], tagged);
+    assert_eq!(d.branch_heads[&review], retained_node);
     assert!(d.parent_node_ids.contains(&a.version_id));
     assert!(backend.authorize_version(&smb, &a.version_id).is_err());
     assert!(
@@ -531,24 +537,17 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     );
     assert_eq!(
         backend
-            .update_file_node_tags(
+            .replace_container_tags(
                 &management,
-                storage_server::UpdateFileNodeTags {
-                    file_id: a.file_id.clone(),
-                    targets: vec![storage_contract::FileTagTarget {
-                        branch_id: review.clone(),
-                        source_node_id: tagged.clone(),
-                        expected_node_id: tagged.clone(),
-                    }],
-                    add: vec!["blocked".into()],
-                    remove: vec![],
-                    location: None,
+                storage_server::ReplaceContainerTags {
+                    command: tag_command(&a.file_id, &repo.repository_id, "A.txt", 1,
+                        &["blocked"]),
                     operation_id: OperationId::generate().unwrap(),
                 },
             )
             .unwrap_err()
             .code,
-        ErrorCode::BranchNotActive
+        ErrorCode::FileNotFound
     );
     assert_eq!(
         backend_save(&backend, &management, &review, "A.txt", b"blocked")
@@ -569,7 +568,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
             ),
             storage_server::NoteTarget::Node {
                 file: a.file_id.parse::<storage_contract::FileId>().unwrap().into(),
-                node: tagged.parse::<storage_server::NoteNodeId>().unwrap().into(),
+                node: retained_node.parse::<storage_server::NoteNodeId>().unwrap().into(),
             },
         ] {
             assert_eq!(
@@ -717,7 +716,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         engine.state().version_notes[&a.version_id],
         "before deletion"
     );
-    assert_eq!(engine.state().file_path_notes[&tagged], "before deletion");
+    assert_eq!(engine.state().file_path_notes[&retained_node], "before deletion");
     assert_eq!(engine.state().file_notes[&b.file_id], "B remains editable");
     for (name, bytes) in [
         ("A.txt", b"retained A".as_slice()),

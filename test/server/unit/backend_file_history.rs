@@ -36,7 +36,6 @@ fn history_wire_keeps_numeric_facts_sparse_disposition_and_field_whitelist() {
             },
             node_id: "version".into(),
             kind: ContentNodeKind::Content,
-            tags: BTreeSet::new(),
             parent_node_ids: vec![],
             path: "report.txt".into(),
             previous_path: None,

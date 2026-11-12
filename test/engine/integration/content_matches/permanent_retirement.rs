@@ -412,12 +412,16 @@ fn detached_last_node_retires_and_resumes_without_reviving_the_old_file_identity
             .code(),
         ErrorCode::FileNodeNotFound
     );
+    let tags = storage_contract::file_container_tags::ReadRequest {
+        file_id: old.file_id.parse().unwrap(),
+        context: storage_contract::file_container_tags::Context {
+            repository_id: pool.repository.parse().unwrap(),
+            path: name_policy::PortablePath::parse("gone").unwrap(),
+        },
+    };
     assert_eq!(
-        pool.engine
-            .file_node_tags(&old.file_id, &old.version_id)
-            .unwrap_err()
-            .code(),
-        ErrorCode::FileNodeNotFound
+        pool.engine.file_container_tags(&tags).unwrap_err().code(),
+        ErrorCode::FileNotFound,
     );
     assert_eq!(
         pool.engine

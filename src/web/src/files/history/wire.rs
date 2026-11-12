@@ -38,7 +38,6 @@ pub(super) fn nodes(nodes: Vec<HistoryNodeSummary>, edges: Vec<HistoryGraphEdge>
                 path,
                 previous_path,
                 note,
-                tags,
                 size: _,
                 content_hash: _,
                 content_state,
@@ -50,7 +49,6 @@ pub(super) fn nodes(nodes: Vec<HistoryNodeSummary>, edges: Vec<HistoryGraphEdge>
             let kind = match kind {
                 HistoryNodeKind::Content => NodeKind::Content,
                 HistoryNodeKind::Rename => NodeKind::Rename,
-                HistoryNodeKind::Tags => NodeKind::Tags,
                 HistoryNodeKind::Merge => NodeKind::Merge,
             };
             let mut node_parents = parents.remove(&node_id).unwrap_or_default();
@@ -63,7 +61,6 @@ pub(super) fn nodes(nodes: Vec<HistoryNodeSummary>, edges: Vec<HistoryGraphEdge>
                 kind,
                 body_note: (kind == NodeKind::Content).then(|| note.clone()),
                 note,
-                tags,
                 path: Some(path),
                 previous_path,
                 parents: node_parents,

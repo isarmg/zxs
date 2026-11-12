@@ -424,7 +424,57 @@ fn history_graph_requires_complete_original_identity_material_before_writes() {
 }
 #[test]
 fn every_lower_derives_equal_mapped_graphs_without_turning_missing_bodies_into_ready() {
-    let f = fixture();
+    use storage_contract::file_container_tags::{
+        ContainerTags, Context, ReadRequest, ReplaceCommand, Tag, TagSet,
+    };
+    use storage_contract::{FileId, Generation};
+
+    let mut f = fixture();
+    let repositories = f
+        .engine
+        .state()
+        .repositories
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut sources = std::collections::BTreeMap::new();
+    for repository in repositories {
+        let entry = f
+            .engine
+            .list_tree(&repository.main_branch_id)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.kind == NamespaceEntryKind::File)
+            .unwrap();
+        let read = ReadRequest {
+            file_id: entry.file_id.parse().unwrap(),
+            context: Context {
+                repository_id: repository.repository_id.parse().unwrap(),
+                path: name_policy::PortablePath::parse(entry.path()).unwrap(),
+            },
+        };
+        let tags = TagSet::new([Tag::parse(format!("captured-{}", repository.name)).unwrap()])
+            .unwrap();
+        f.engine.replace_container_tags(
+            &ReplaceCommand {
+                file_id: read.file_id,
+                context: read.context.clone(),
+                expected_generation: Generation::new(0),
+                tags: tags.clone(),
+            },
+            &"admin".parse().unwrap(),
+            OperationId::generate().unwrap(),
+        ).unwrap();
+        let observed = f.engine.file_container_tags(&read).unwrap();
+        assert_eq!(observed.tags, tags);
+        assert_eq!(observed.generation, Generation::new(1));
+        sources.insert(repository.history_tree_id, (read, tags));
+    }
+    let original_ids = sources
+        .values()
+        .map(|(read, _)| read.file_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut captured_graphs = Vec::new();
     let operation = OperationId::generate().unwrap();
     let (roots, digests) = identity_capsules(&f, operation);
     let (current, target) = identity_targets(&f, operation, &roots);
@@ -447,15 +497,29 @@ fn every_lower_derives_equal_mapped_graphs_without_turning_missing_bodies_into_r
                 report: Box::new(report.clone())
             }
         );
-        let graph: json_codec::Value = json_codec::from_slice(
-            &fs::read(root.join(format!(".zxs-foreign-graphs-{operation}.json"))).unwrap(),
-        )
-        .unwrap();
+        let graph_path = root.join(format!(".zxs-foreign-graphs-{operation}.json"));
+        let graph_bytes = fs::read(&graph_path).unwrap();
+        let graph: json_codec::Value = json_codec::from_slice(&graph_bytes).unwrap();
+        captured_graphs.push((graph_path, graph_bytes));
         assert_eq!(
             graph["format"],
             "zxs-foreign-source-scoped-mapped-history-graphs"
         );
         for history in graph["histories"].as_array().unwrap() {
+            let (source, expected_tags) = &sources[history["original_history_id"].as_str().unwrap()];
+            let records: std::collections::BTreeMap<FileId, ContainerTags> =
+                json_codec::from_value(history["graph"]["container_tags"].clone()).unwrap();
+            assert_eq!(records.len(), 1);
+            let (mapped, record) = records.first_key_value().unwrap();
+            assert!(!original_ids.contains(mapped));
+            assert_eq!(record.tags(), expected_tags);
+            assert_eq!(record.generation(), Generation::new(0));
+            for version in history["graph"]["versions"].as_object().unwrap().values() {
+                assert_eq!(version["file_id"].as_str().unwrap(), mapped.to_string());
+            }
+            let retained = f.engine.file_container_tags(source).unwrap();
+            assert_eq!(&retained.tags, expected_tags);
+            assert_eq!(retained.generation, Generation::new(1));
             assert_ne!(
                 history["original_history_id"],
                 history["graph"]["history"]["history_tree_id"]
@@ -475,6 +539,28 @@ fn every_lower_derives_equal_mapped_graphs_without_turning_missing_bodies_into_r
     assert_eq!(reports[0], reports[1]);
     assert_eq!(json_codec::to_vec(current.state()).unwrap(), before);
     current.recheck_foreign_identity_target(&target).unwrap();
+
+    // These are prepared source-scoped graphs, not installed live containers.
+    // A later source mutation must not rewrite their already captured authority.
+    let (source, _) = sources.values().next().unwrap();
+    let later = TagSet::new([Tag::parse("changed after capture".into()).unwrap()]).unwrap();
+    f.engine.replace_container_tags(
+        &ReplaceCommand {
+            file_id: source.file_id,
+            context: source.context.clone(),
+            expected_generation: Generation::new(1),
+            tags: later.clone(),
+        },
+        &"admin".parse().unwrap(),
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let observed = f.engine.file_container_tags(source).unwrap();
+    assert_eq!(observed.tags, later);
+    assert_eq!(observed.generation, Generation::new(2));
+    for (path, captured) in captured_graphs {
+        assert_eq!(fs::read(path).unwrap(), captured);
+    }
+    assert_eq!(json_codec::to_vec(current.state()).unwrap(), before);
 }
 #[test]
 fn completed_history_graph_loss_cannot_be_recreated_from_another_lower() {

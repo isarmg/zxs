@@ -412,7 +412,7 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
-    /// Tags can only leave planning after the exact metadata/occurrence proof.
+    /// Tags leave planning only after their request and complete write-set proof.
     pub(super) fn plan_file_tags_mutation<F>(
         &self,
         principal: &str,
@@ -431,8 +431,13 @@ impl<'a> PlanningContext<'a> {
         {
             return Err(super::disk_registry::current::pending_publication());
         }
-        let plan =
-            self.prepare_new_mutation("file.tags.update", principal, operation_id, digest, change)?;
+        let plan = self.prepare_new_mutation(
+            storage_contract::file_container_tags::KIND,
+            principal,
+            operation_id,
+            digest,
+            change,
+        )?;
         let MutationPlan::Prepared {
             next,
             prepared,
@@ -442,14 +447,14 @@ impl<'a> PlanningContext<'a> {
             unreachable!("invariant: new mutation preparation does not replay old receipts");
         };
         if !prepared.is_empty() {
-            return Err(Error::new(
-                ErrorCode::PublicationInvalid,
-                "file tags cannot prepare payload writes",
-            ));
+            return Err(crate::business::file_tags::invalid());
         }
-        if let Some(view) = self.current_namespaces {
-            view.verify_new_file_tags(self.state, next, result)?;
-        }
+        super::disk_registry::current::verify_container_tags(
+            self.state,
+            next,
+            self.current_namespaces.map(AsRef::as_ref),
+            Some(result),
+        )?;
         Ok(plan)
     }
 
@@ -544,6 +549,9 @@ impl<'a> PlanningContext<'a> {
             &result,
         )? {
             crate::file_deletion::freeze::verify(self.state, &next)?;
+        }
+        if kind != storage_contract::file_container_tags::KIND {
+            crate::business::file_tags::preserve_existing(self.state, &next)?;
         }
         crate::container_storage::capture_changed_names(self.state, &mut next);
         if super::CurrentNamespaces::recursive_namespace_kind(kind) {

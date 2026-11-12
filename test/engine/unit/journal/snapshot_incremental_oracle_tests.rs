@@ -5,6 +5,7 @@
 use super::*;
 
 const REQUIRED_FIELDS: &[&str] = &[
+    "container_tags",
     "repositories",
     "histories",
     "branches",
@@ -48,6 +49,7 @@ const OPTIONAL_FIELDS: &[&str] = &[
 
 macro_rules! every_tracked_field {
     ($apply:ident) => {
+        $apply!(container_tags);
         $apply!(repositories);
         $apply!(histories);
         $apply!(branches);
@@ -89,7 +91,7 @@ macro_rules! every_tracked_field {
 }
 
 fn fixture() -> json_codec::Value {
-    json_codec::from_slice(include_bytes!("fixtures/canonical_publication.json")).unwrap()
+    crate::journal::container_tags_fixture::publication()
 }
 
 fn fixture_state() -> State {
@@ -159,7 +161,7 @@ fn populated_state() -> State {
     }});
     value["file_metadata_nodes"] = json_codec::json!({"metadata-node": {
         "node_id": "metadata-node", "history_tree_id": "history", "file_id": "file", "version_id": "version",
-        "parent_node_ids": ["parent"], "branch_id": "branch", "kind": "tags", "tags": ["标签", "\u{10000}"],
+        "parent_node_ids": ["parent"], "branch_id": "branch", "kind": "merge",
         "operation_id": "op_00000000000000000000000000000000", "author": "作者", "sequence": "9007199254740992", "created_at": "18446744073709551615"
     }});
     value["file_deletions"] = json_codec::json!({"file": {
@@ -319,7 +321,7 @@ fn assert_only_field_encoded(counts: &BTreeMap<String, usize>, changed: Option<&
 }
 
 #[test]
-fn incremental_snapshot_retains_fixed_publication_root_and_every_raw_object_byte() {
+fn incremental_snapshot_retains_current_publication_root_and_every_raw_object_byte() {
     let before = fixture_state();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
@@ -398,6 +400,10 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
     let basis = baseline(&before, &config.disks);
     let descriptor = prepare_snapshot(&before, MAX_METADATA).unwrap().descriptor;
     macro_rules! new_key {
+        (container_tags) => {
+            "file_ffffffffffffffffffffffffffffffff".parse().unwrap()
+        };
+
         (operations) => {
             "op_ffffffffffffffffffffffffffffffff".parse().unwrap()
         };

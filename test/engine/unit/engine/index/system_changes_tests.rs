@@ -490,3 +490,32 @@ fn catalog_rejects_missing_and_extra_first_rows_without_false_empty_success() {
         assert!(matches!(engine.index_health(), IndexHealth::Unavailable(_)));
     }
 }
+
+#[test]
+fn container_tag_catalog_coexists_with_permanent_audit_families() {
+    let (_temp, mut engine) = fixture();
+    let repository = repository(&mut engine, "tag-catalog");
+    save(&mut engine, &repository, "file.txt");
+    let page = engine.system_catalog_records(SystemCatalogKind::ContainerTags, None, 10).unwrap();
+    assert_eq!(page.records.len(), 1);
+    let SystemCatalogValue::ContainerTags(tags) = &page.records[0].value else {
+        panic!("container tag family must decode its own typed record");
+    };
+    assert!(tags.tags().is_empty());
+    assert_eq!(tags.generation(), storage_contract::Generation::new(0));
+    let counts: (i64, i64) = platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut connection = platform_io::sqlite::open_index_read_connection(
+            &engine.root.join("index.sqlite"),
+        ).await.unwrap();
+        let tags = sqlite_access::query_scalar(
+            "SELECT count(*) FROM system_changes WHERE kind=39",
+        ).fetch_one(&mut connection).await.unwrap();
+        let principals = sqlite_access::query_scalar(
+            "SELECT count(*) FROM system_changes WHERE kind=36",
+        ).fetch_one(&mut connection).await.unwrap();
+        connection.close().await.unwrap();
+        (tags, principals)
+    });
+    assert_eq!(counts.0, 1);
+    assert!(counts.1 > 0);
+}

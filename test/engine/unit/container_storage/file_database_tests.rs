@@ -1,5 +1,8 @@
 //! Actual projection/SQLite codec over public Engine state. Installation is
 //! separately exercised after the shared held-resource installer is integrated.
+use crate as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use crate::*;
 use platform_io::sqlite::block_on_sqlite_connection;
@@ -166,21 +169,7 @@ fn file_database_has_retained_nodes_branches_tags_and_no_exterior_path_records()
         .unwrap()
         .clone();
     let head = fixture.engine.file_branch_head(&branch).unwrap();
-    fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &fixture.file.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch.clone(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["retained-label".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    container_tags_fixture::edit(&mut fixture.engine, &fixture.file.file_id, &["retained-label".into()], &[], "admin", op())
         .unwrap();
     fixture
         .engine
@@ -212,7 +201,7 @@ fn file_database_has_retained_nodes_branches_tags_and_no_exterior_path_records()
     );
     assert!(
         data.values()
-            .any(|row| row["node"]["tags"] == json_codec::json!(["retained-label"]))
+            .any(|row| row["container_tags"]["tags"] == json_codec::json!(["retained-label"]))
     );
     for row in data.values() {
         let text = json_codec::to_string(row).unwrap();
@@ -841,4 +830,65 @@ fn file_database_storage_integer_admission_preserves_cause_order_and_bytes() {
     assert_eq!(maximum, maximum_before);
     assert_eq!(good, good_before);
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state_before);
+}
+
+#[test]
+fn container_tag_record_is_file_owned_and_rescue_preserves_its_cas_generation() {
+    let fixture = Fixture::new();
+    let mut state = fixture.engine.state().clone();
+    let file = fixture.file.file_id.parse::<storage_contract::FileId>().unwrap();
+    let tags = storage_contract::file_container_tags::TagSet::new([
+        storage_contract::file_container_tags::Tag::parse("review".into()).unwrap(),
+    ]).unwrap();
+    let record = storage_contract::file_container_tags::ContainerTags::new(
+        tags, storage_contract::Generation::new(7),
+    );
+    state.container_tags.insert(file, record.clone());
+    let empty = State::default();
+    let projection = crate::state_projection::ProjectionTransition::new(&empty, &state, None)
+        .unwrap();
+    let prepared = prepare(projection.next(), &fixture.file.file_id, &fixture.repo.history_tree_id)
+        .unwrap();
+    let records = decoded(&prepared.bytes);
+    let row = &records[&("file".into(), fixture.file.file_id.clone())];
+    assert_eq!(row["container_tags"], json_codec::to_value(&record).unwrap());
+    for ((kind, _), row) in &records {
+        if kind != "file" {
+            assert!(row.get("tags").is_none());
+        }
+    }
+    let material = read_material(&prepared.bytes).unwrap();
+    let rebuilt = reconstruct_material(
+        &material, &fixture.file.file_id, &fixture.repo.history_tree_id,
+    ).unwrap();
+    assert_eq!(read_material(&rebuilt).unwrap(), material);
+    state.container_tags.remove(&file);
+    let projection = crate::state_projection::ProjectionTransition::new(&empty, &state, None)
+        .unwrap();
+    assert!(prepare(projection.next(), &fixture.file.file_id, &fixture.repo.history_tree_id).is_err());
+}
+
+#[test]
+fn container_tags_snapshot_admission_requires_exact_file_coverage() {
+    let fixture = Fixture::new();
+    let file = fixture.file.file_id.parse::<storage_contract::FileId>().unwrap();
+    let mut state = fixture.engine.state().clone();
+    let tags = storage_contract::file_container_tags::ContainerTags::new(
+        storage_contract::file_container_tags::TagSet::empty(),
+        storage_contract::Generation::new(9),
+    );
+    state.container_tags.insert(file, tags.clone());
+    let members = fixture.engine.members();
+    let hash = crate::journal::store_snapshot(&members, &state).unwrap();
+    let admitted = crate::publication_evidence::verified_snapshot(&members, &hash).unwrap();
+    assert_eq!(admitted.state().container_tags.get(&file), Some(&tags));
+    state.container_tags.remove(&file);
+    let hash = crate::journal::store_snapshot(&members, &state).unwrap();
+    assert!(crate::publication_evidence::verified_snapshot(&members, &hash).is_err());
+    state.container_tags.insert(file, tags.clone());
+    state.container_tags.insert(
+        "file_ffffffffffffffffffffffffffffffff".parse().unwrap(), tags,
+    );
+    let hash = crate::journal::store_snapshot(&members, &state).unwrap();
+    assert!(crate::publication_evidence::verified_snapshot(&members, &hash).is_err());
 }

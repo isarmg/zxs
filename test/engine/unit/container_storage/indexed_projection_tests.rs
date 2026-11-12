@@ -86,7 +86,6 @@ fn full_descriptor(
         .map(|version| json!({
             "version_id":version.version_id,
             "parent_node_ids":crate::business::file_nodes::node_parents(state, &version.version_id),
-            "tags":crate::business::file_nodes::node_tags(state, &version.version_id),
             "storage_name":version.storage_name, "created_at":version.created_at,
             "size":version.logical_size.to_string(), "content_hash":version.content_hash,
             "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
@@ -157,7 +156,7 @@ fn full_descriptor(
         .into_iter()
         .map(|node| {
             json!({
-                "node":node, "tags":crate::business::file_nodes::node_tags(state, &node.node_id),
+                "node":node,
                 "note":state.file_path_notes.get(&node.node_id).map(String::as_str).unwrap_or("")
             })
         })
@@ -172,7 +171,8 @@ fn full_descriptor(
         .filter(|event| event.file_id == file && event.history_tree_id == history)
         .collect::<Vec<_>>();
     canonical_json(&json!({
-        "cache_only":true, "file_id":file, "history_tree_id":history, "name":name,
+        "cache_only":true, "file_id":file,
+        "container_tags": state.container_tags.get(&file.parse::<storage_contract::FileId>().unwrap()), "history_tree_id":history, "name":name,
         "location":location, "primary_location":state.file_locations.get(file),
         "backup_policy_id":state.file_backup_policies.get(file), "metadata_nodes":metadata_nodes,
         "branch_merges":merges, "branch_aliases":aliases,
@@ -336,6 +336,8 @@ impl Fixture {
                 inherited_from: Some(id("br", 1)),
             },
         );
+        state.container_tags.insert(file.parse().unwrap(),
+            storage_contract::file_container_tags::ContainerTags::empty());
         let metadata = FileMetadataNode {
             node_id: id("fmeta", 1),
             history_tree_id: h1.clone(),
@@ -343,8 +345,7 @@ impl Fixture {
             version_id: id("ver", 1),
             parent_node_ids: vec![id("ver", 1)],
             branch_id: id("br", 2),
-            kind: FileMetadataKind::Tags,
-            tags: BTreeSet::from(["blue".into(), "重要".into()]),
+            kind: FileMetadataKind::Merge,
             operation_id: OperationId::generate().unwrap(),
             author: "author".into(),
             sequence: 10,

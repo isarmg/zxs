@@ -23,6 +23,13 @@ struct RecordRef<'a> {
 /// One declaration binds every supported row family to its exact State map,
 /// durable discriminator and typed result. No field-name reflection or JSON
 /// filtering determines scope.
+macro_rules! catalog_get {
+    ($state:ident, container_tags, $id:ident) => {
+        $id.parse::<storage_contract::FileId>().ok()
+            .and_then(|key| $state.container_tags.get(&key))
+    };
+    ($state:ident, $field:ident, $id:ident) => { $state.$field.get($id) };
+}
 macro_rules! catalog_families {
     ($( $variant:ident => ($number:literal, $field:ident, $(#[$codec:meta])* $value:ty) ),+ $(,)?) => {
         /// Catalog families are independent of operation/path event families.
@@ -44,11 +51,11 @@ macro_rules! catalog_families {
                 match self { $( Self::$variant => $number ),+ }
             }
             pub(super) fn contains(self, state: &State, id: &str) -> bool {
-                match self { $( Self::$variant => state.$field.contains_key(id) ),+ }
+                match self { $( Self::$variant => catalog_get!(state, $field, id).is_some() ),+ }
             }
             pub(super) fn payload(self, state: &State, id: &str) -> Result<Vec<u8>> {
                 let value = match self {
-                    $( Self::$variant => ValueRef::$variant(state.$field.get(id)
+                    $( Self::$variant => ValueRef::$variant(catalog_get!(state, $field, id)
                         .expect("invariant: trusted catalog key belongs to admitted State")) ),+
                 };
                 encode(&RecordRef { id, value })
@@ -84,26 +91,26 @@ macro_rules! catalog_families {
 macro_rules! changed_keys {
     ($before:ident, $after:ident, $field:ident) => {{
         match $before {
-            None => $after.$field.keys().cloned().collect(),
+            None => $after.$field.keys().map(ToString::to_string).collect(),
             Some(before) => match $after.$field.changes_since(&before.$field) {
                 MapChanges::Keys(keys) => keys
                     .iter()
                     .filter(|id| before.$field.get(*id) != $after.$field.get(*id))
-                    .cloned()
+                    .map(ToString::to_string)
                     .collect(),
                 MapChanges::All => {
                     let mut changed = Vec::new();
                     let mut old = before.$field.iter().peekable();
                     for (id, value) in $after.$field.iter() {
                         while let Some((id, _)) = old.next_if(|(old, _)| *old < id) {
-                            changed.push(id.clone());
+                            changed.push(id.to_string());
                         }
                         let previous = old.next_if(|(old, _)| *old == id).map(|(_, v)| v);
                         if previous != Some(value) {
-                            changed.push(id.clone());
+                            changed.push(id.to_string());
                         }
                     }
-                    changed.extend(old.map(|(id, _)| id.clone()));
+                    changed.extend(old.map(|(id, _)| id.to_string()));
                     changed
                 }
             },
@@ -146,6 +153,7 @@ catalog_families! {
     Plan => (33, plans, Plan),
     PlacementRule => (34, placement_rules, PlacementRule),
     ProtectionPolicy => (35, protection_policies, ProtectionPolicy),
+    ContainerTags => (39, container_tags, storage_contract::file_container_tags::ContainerTags),
 }
 
 pub(super) struct FamilyDelta {

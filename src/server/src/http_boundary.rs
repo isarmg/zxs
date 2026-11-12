@@ -15,6 +15,10 @@ use json_codec::json;
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ApiErrorSource {
     #[error("{0}")]
+    ContainerTagsWire(#[source] crate::operation_wire::ContainerTagsWireError),
+    #[error("{0}")]
+    AuthenticatedPrincipal(#[source] storage_contract::EmptyPrincipal),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Join(#[from] tokio::task::JoinError),
@@ -113,6 +117,22 @@ pub struct ApiError {
     pub(crate) source: Option<Box<ApiErrorSource>>,
 }
 impl ApiError {
+    pub(crate) fn container_tags_wire(source: crate::operation_wire::ContainerTagsWireError) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::StateInvalid,
+            source.to_string(),
+        )
+        .with_source(ApiErrorSource::ContainerTagsWire(source))
+    }
+    pub(crate) fn invalid_authenticated_principal(source: storage_contract::EmptyPrincipal) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::InternalError,
+            "authenticated principal is invalid",
+        )
+        .with_source(ApiErrorSource::AuthenticatedPrincipal(source))
+    }
     pub fn new(
         status: StatusCode,
         code: storage_contract::ErrorCode,

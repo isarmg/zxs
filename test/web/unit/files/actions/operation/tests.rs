@@ -24,9 +24,9 @@ fn navigation_clears_the_local_review_but_preserves_original_operation_recovery(
             s.management.storage = crate::management::Storage::Ready;
             s.files.writable = true;
             s.files.selected = Some(crate::files::test_entries::entry(json!({})));
-            s.files.checked_nodes = crate::files::tags::tests::selection(&["node"]);
+            crate::files::tags::tests::seed(s);
             s.files.file_history = crate::files::history::tests::history(
-                json!({"nodes":[{"node_id":"node","tags":[]}]}),
+                json!({"nodes":[{"node_id":"node"}]}),
             );
         });
         crate::files::tags::start(state);
@@ -52,7 +52,7 @@ fn navigation_clears_the_local_review_but_preserves_original_operation_recovery(
         ] {
             state.update(|s| s.files.navigate(destination));
             state.with_untracked(|s| {
-                assert!(s.files.tag_edit.is_none() && s.files.checked_nodes.is_empty());
+                assert!(s.files.tag_edit.is_none() && !crate::files::tags::tests::has_snapshot(&s.files.container_tags));
                 assert!(super::super::pending(s));
                 assert!(!super::super::write_allowed(s));
                 assert_eq!(s.files.operations, [FileOperation::unknown("original")]);
@@ -128,9 +128,9 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 s.files.selected = Some(crate::files::test_entries::entry(
                     json!({"file_id":"file", "name":"file.txt"}),
                 ));
-                s.files.checked_nodes = crate::files::tags::tests::selection(&["node"]);
+                crate::files::tags::tests::seed(s);
                 s.files.file_history = crate::files::history::tests::history(
-                    json!({"nodes":[{"node_id":"node", "tags":[]}]}),
+                    json!({"nodes":[{"node_id":"node"}]}),
                 );
             });
             crate::files::tags::start(state);
@@ -152,7 +152,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 assert!(super::super::pending(s));
                 assert!(!super::super::write_allowed(s));
                 assert!(s.files.tag_edit.is_some());
-                assert!(s.files.checked_nodes.contains("node"));
+                assert!(crate::files::tags::tests::has_snapshot(&s.files.container_tags));
                 assert_eq!(
                     s.files.publications[&crate::files::review::Kind::Tags]
                         .operation_id
@@ -171,7 +171,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 assert!(!super::super::pending(s));
                 assert!(super::super::write_allowed(s));
                 assert!(s.files.tag_edit.is_none());
-                assert!(s.files.checked_nodes.is_empty());
+                assert!(!crate::files::tags::tests::has_snapshot(&s.files.container_tags));
                 assert!(s.files.publications.is_empty());
                 assert_eq!(s.files.operations.len(), 1);
             });

@@ -156,10 +156,10 @@ macro_rules! methods {
                     request: $crate::MergeFileBranches,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
 
-                fn update_file_node_tags(
+                fn replace_container_tags(
                     &self,
                     identity: &$crate::Identity,
-                    request: $crate::UpdateFileNodeTags,
+                    request: $crate::ReplaceContainerTags,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
 
                 fn create_disk_directory(
@@ -465,6 +465,14 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn file_container_tags(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: storage_contract::file_container_tags::ReadRequest,
+                ) -> Result<storage_contract::file_container_tags::Snapshot, $crate::ApiError> {
+                    let _ = (identity, request);
+                    Err($crate::ApiError::unsupported())
+                }
                 fn directory_snapshot_source(
                     &self,
                     _identity: &$crate::Identity,

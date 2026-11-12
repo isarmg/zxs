@@ -8,7 +8,6 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
         "move" => "M4 4v7a5 5 0 0 0 5 5h11m-5-5 5 5-5 5",
         "delete" => "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
         "rename" => "m4 17-1 4 4-1L21 6l-4-4L4 17m10-12 4 4",
-        "tags" => "M3 3h8l10 10-8 8L3 11V3m4 4h.01",
         "content" => "M6 3h8l4 4v14H6V3m8 0v5h4M9 12h6m-6 4h4",
         "merge" => "M6 3v5c0 4 12 4 12 8v5M18 3v18m-4-4 4 4 4-4",
         "path-change" => "M3 6h7l3 4h8M3 18h7l3-4h8m-3-7 3 3-3 3m-12 2-3 3 3 3",

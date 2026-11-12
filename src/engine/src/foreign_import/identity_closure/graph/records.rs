@@ -262,7 +262,6 @@ impl Remap<'_> {
             parent_node_ids,
             branch_id,
             kind: _,
-            tags: _,
             operation_id: _,
             author: _,
             sequence: _,

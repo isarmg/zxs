@@ -18,30 +18,31 @@ function history() {
         context: {repository_id: id('repo', 1), history_tree_id: id('history', 1),
             path: 'browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
         page: {previous_cursor: null, next_cursor: null}, edges: [], nodes: [{node_id: id('ver', 1),
-            version_id: id('ver', 1), current: true, kind: 'content', tags: [], size: '7',
+            version_id: id('ver', 1), current: true, kind: 'content', size: '7',
             content_hash: 'b'.repeat(64), branch_id: id('br', 1), note: 'retained', parents: {state: 'complete'}}]};
 }
 function fixture() {
     const base = history(), after = copy(base), operation = id('op', 1), label = '恢复原请求';
-    const context = base.identity.context, old = base.nodes[0];
-    const next = {...copy(old), node_id: id('fmeta', 2), kind: 'tags', tags: [label]};
-    after.nodes[0].current = false;
-    after.nodes.unshift(next);
+    const context = base.identity.context, next = after.nodes[0];
     after.identity.history_root = '2'.repeat(64);
-    after.identity.context.current_node_id = next.node_id;
-    after.edges.push({node_id: next.node_id, parent_node_id: old.node_id, endpoint: 'in_window'});
+    const baseTags = {file_id: base.identity.file_id,
+        context: {repository_id: context.repository_id, path: context.path},
+        tags: [], generation: '0'};
+    const afterTags = {...copy(baseTags), tags: [label], generation: '1'};
     const body = {operation_id: operation, repository_id: context.repository_id, path: context.path,
-        targets: [{branch_id: context.selected_branch_id, source_node_id: old.node_id, expected_node_id: old.node_id}],
-        add: [label], remove: []};
-    const receipt = {operation_id: operation, operation_kind: 'file.tags.update', state: 'completed', error: null,
-        commit_state: 'PUBLISHED', protection_at_publish: 'NOT_APPLICABLE', request_digest: 'd'.repeat(64),
-        publication_sequence: '2', result: {file_id: base.identity.file_id, content_versions_created: '0',
-            nodes: [{node_id: next.node_id, source_node_id: old.node_id, branch_id: context.selected_branch_id,
-                no_change: false, advanced: true, tags: next.tags}]}};
+        expected_generation: '0', tags: [label]};
+    const receipt = {operation_id: operation, operation_kind: 'file.container-tags.replace',
+        state: 'completed', error: null, commit_state: 'PUBLISHED',
+        protection_at_publish: 'NOT_APPLICABLE', request_digest: 'd'.repeat(64),
+        publication_sequence: '2', result: {request: {file_id: base.identity.file_id,
+            context: copy(baseTags.context), expected_generation: '0', tags: [label]},
+            tags: [label], generation: '1', changed: true}};
     const calls = [], responses = [];
-    const fixture = {base, after, next, body, receipt, history: base, post: null, outcome: null,
+    const fixture = {base, after, next, baseTags, afterTags, tagRead: baseTags,
+        body, receipt, history: base, post: null, outcome: null,
         beforeResponse: null, calls, responses,
         tagsUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/tags`,
+        tagReadUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/tags?repository_id=${context.repository_id}&path=browser-smoke.txt`,
         historyUrl: `${origin}/api/file-manager/files/${base.identity.file_id}/history`,
         outcomeUrl: `${origin}/api/operations/${operation}/outcome`};
     const original = async (...args) => {
@@ -50,7 +51,8 @@ function fixture() {
         const request = args[0], url = new URL(typeof request === 'string' ? request : request.url);
         const method = request.method || args[1]?.method || 'GET';
         const value = url.pathname.endsWith('/history') ? fixture.history
-            : method === 'POST' ? fixture.post ?? fixture.receipt : fixture.outcome ?? fixture.receipt;
+            : method === 'POST' ? fixture.post ?? fixture.receipt
+                : url.pathname.endsWith('/tags') ? fixture.tagRead : fixture.outcome ?? fixture.receipt;
         const response = value instanceof Response ? value : new Response(JSON.stringify(value), {
             headers: {'content-type': 'application/json', 'x-original': 'unchanged'}
         });
@@ -69,6 +71,7 @@ function request(f, body = f.body, url = f.tagsUrl) {
 }
 async function lose(f) {
     await f.window.fetch(f.historyUrl);
+    await f.window.fetch(f.tagReadUrl);
     assert.equal(f.state.capture(), f.base.nodes[0].node_id);
     const req = request(f);
     await assert.rejects(f.window.fetch(req), /published POST response delivery lost/);
@@ -97,7 +100,9 @@ async function recovered(f) {
     f.state.release();
     assert.equal(await pending, f.responses.at(-1));
     f.history = f.after;
+    f.tagRead = f.afterTags;
     await f.window.fetch(f.historyUrl);
+    await f.window.fetch(f.tagReadUrl);
     assert.equal(f.state.verify(), f.next.node_id);
 }
 
@@ -122,14 +127,16 @@ test('only a completed matching real publication can lose delivery; wrong contex
         f => { f.receipt.operation_id = id('op', 9); },
         f => { f.receipt.kind = f.receipt.operation_kind; delete f.receipt.operation_kind; },
         f => { f.receipt.operation_kind = 'directory.namespace.batch'; },
-        f => { f.receipt.result.file_id = id('file', 9); },
-        f => { f.receipt.result.content_versions_created = '1'; },
+        f => { f.receipt.result.request.file_id = id('file', 9); },
+        f => { f.receipt.result.changed = false; },
         f => { f.body.path = 'another.txt'; },
-        f => { f.body.targets[0].expected_node_id = id('ver', 9); },
+        f => { f.body.expected_generation = '9'; },
         f => { f.body.extra = 'unreviewed'; },
     ]) {
         const f = fixture(); mutate(f);
-        await f.window.fetch(f.historyUrl); f.state.capture();
+        await f.window.fetch(f.historyUrl);
+        await f.window.fetch(f.tagReadUrl);
+        f.state.capture();
         const response = await f.window.fetch(request(f));
         assert.equal(response, f.responses.at(-1));
         assert.equal(f.state.writes[0].lost, false);
@@ -141,13 +148,15 @@ test('only a completed matching real publication can lose delivery; wrong contex
 test('real 429, authentication errors and malformed bodies pass through without success or 404 substitution', async () => {
     for (const status of [401, 429, 500]) {
         const f = fixture();
-        await f.window.fetch(f.historyUrl); f.state.capture();
+        await f.window.fetch(f.historyUrl);
+        await f.window.fetch(f.tagReadUrl);
+        f.state.capture();
         const bytes = JSON.stringify({error: {code: status === 429 ? 'RESOURCE_LIMIT_EXCEEDED' : 'HTTP_ERROR', message: 'real fixture error'}});
         f.post = new Response(bytes, {status, headers: {'x-original': 'error'}});
         const result = await f.window.fetch(request(f));
         assert.equal(result, f.post);
         assert.equal(await result.text(), bytes);
-        assert.equal(f.calls.length, 2, 'no retry by probe');
+        assert.equal(f.calls.length, 3, 'no retry by probe');
         f.state.restore();
         const g = fixture(); await lose(g);
         g.outcome = new Response(bytes, {status});
@@ -181,7 +190,7 @@ test('replay proof rejects changed method, URL, operation ID, complete body or e
         write => { write.method = 'PUT'; }, write => { write.url += '?another=scope'; },
         write => { write.body.operation_id = id('op', 2); },
         write => { write.body.remove = ['unreviewed']; }, write => { write.text += ' '; },
-        write => { write.body.targets[0].branch_id = id('br', 2); },
+        write => { write.body.expected_generation = '5'; },
     ]) {
         const f = fixture(); await recovered(f);
         mutate(f.state.writes[1]);
@@ -207,13 +216,13 @@ test('a concurrent outcome or additional mutation cannot be reported as an exclu
     h.state.restore();
 });
 
-test('fresh history proof rejects duplicate child, changed body, missing parent, altered old node and wrong identity', async () => {
+test('fresh history proof rejects extra node, changed body or edges, altered old node and wrong identity', async () => {
     for (const mutate of [
         page => { page.nodes.push(copy(page.nodes[0])); },
         page => { page.nodes[0].content_hash = 'c'.repeat(64); },
         page => { page.nodes[0].version_id = id('ver', 99); },
-        page => { page.nodes[1].note = 'lost'; },
-        page => { page.edges = []; },
+        page => { page.nodes[0].note = 'lost'; },
+        page => { page.edges.push({node_id: id('ver', 1), parent_node_id: id('ver', 99)}); },
         page => { page.identity.context.repository_id = id('repo', 99); },
         page => { page.identity.context.history_tree_id = id('history', 99); },
         page => { page.identity.context.selected_branch_id = id('br', 99); },
@@ -227,7 +236,7 @@ test('fresh history proof rejects duplicate child, changed body, missing parent,
 });
 
 test('cleanup before first response or during retry hold cannot leave a request stranded', async () => {
-    const f = fixture(); await f.window.fetch(f.historyUrl); f.state.capture();
+    const f = fixture(); await f.window.fetch(f.historyUrl); await f.window.fetch(f.tagReadUrl); f.state.capture();
     let release;
     f.beforeResponse = () => new Promise(resolve => { release = resolve; });
     const first = f.window.fetch(request(f));
@@ -263,12 +272,26 @@ test('capture rejects incomplete or foreign history and duplicate installation',
         page => { page.page.next_cursor = 'more'; },
         page => { page.identity.context.selected_branch_id = null; },
         page => { page.identity.context.path = 'another.txt'; },
-        page => { page.nodes[0].tags = ['恢复原请求']; },
     ]) {
         const f = fixture(); mutate(f.history);
         await f.window.fetch(f.historyUrl);
+        await f.window.fetch(f.tagReadUrl);
         assert.throws(() => f.state.capture(), /complete real writable/);
         assert.throws(f.install, /already installed/);
+        f.state.restore();
+    }
+});
+
+test('recovery rejects a fresh container read with wrong CAS or identity', async () => {
+    for (const mutate of [
+        tags => { tags.generation = '2'; },
+        tags => { tags.file_id = id('file', 9); },
+        tags => { tags.tags = []; },
+        tags => { tags.context.path = 'other.txt'; },
+    ]) {
+        const f = fixture(); await recovered(f);
+        mutate(f.state.tagReads.at(-1).body);
+        assert.throws(() => f.state.verify(), /container CAS/);
         f.state.restore();
     }
 });

@@ -111,7 +111,6 @@ impl Target {
             && let Some(node) = node
         {
             match node.kind() {
-                NodeKind::Tags => return t("标签变化", "Tags changed"),
                 NodeKind::Merge => return t("合并分支", "Merged branches"),
                 NodeKind::Rename => {
                     let (Some(previous), Some(path)) = (node.previous_path(), node.path()) else {
@@ -633,7 +632,6 @@ pub(super) fn control(
 pub(super) fn version_note(
     state: RwSignal<State>,
     target: Target,
-    node_id: String,
     disabled: Signal<bool>,
 ) -> (impl IntoView, impl IntoView) {
     let editor = Editor::new(state, t("编辑备注", "Edit note"), target, disabled);
@@ -648,7 +646,7 @@ pub(super) fn version_note(
             } else {
                 view!{<span class="zxs-version-note">{move ||{
                     caption.get()
-                }}</span>{super::tags::chips(node_id.clone())}}.into_any()
+                }}</span>}.into_any()
             }}
         </div>
     };

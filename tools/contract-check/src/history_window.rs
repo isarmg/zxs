@@ -58,19 +58,6 @@ fn inline_fields(value: &Value) -> Result {
             )?;
         }
     }
-    if let Some(tags) = value.get("tags") {
-        let tags = array(tags)?;
-        require(
-            tags.len() <= storage_contract::MAX_FILE_TAGS,
-            "history tag count",
-        )?;
-        let mut seen = BTreeSet::new();
-        for tag in tags {
-            let tag = text(tag)?;
-            storage_contract::validate_tag(tag)?;
-            require(seen.insert(tag), "duplicate history tag")?;
-        }
-    }
     Ok(())
 }
 

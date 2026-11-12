@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn receipts_settle_only_the_matching_publication_and_preserve_unknown_outcomes() {
     let mut model = Model {
-        checked_nodes: crate::files::tags::tests::selection(&["selected-node"]),
+        tag_edit: Some(crate::files::tags::tests::draft_for_instance(1, "kept")),
         ..Default::default()
     };
     model.publications.insert(
@@ -27,20 +27,20 @@ fn receipts_settle_only_the_matching_publication_and_preserve_unknown_outcomes()
         model.publications[&Kind::Tags].operation_id.as_deref(),
         Some("original-tags-operation")
     );
-    assert!(model.checked_nodes.contains("selected-node"));
+    assert!(model.tag_edit.is_some());
     settle(&mut model, "original-tags-operation", SaveStatus::Rejected);
     assert!(model.publications[&Kind::Tags].operation_id.is_none());
     assert!(!model.publications[&Kind::Tags].error.is_empty());
-    assert!(model.checked_nodes.contains("selected-node"));
+    assert!(model.tag_edit.is_some());
     model
         .publications
         .get_mut(&Kind::Tags)
         .unwrap()
         .operation_id = Some("retry-tags-operation".into());
     settle(&mut model, "original-tags-operation", SaveStatus::Published);
-    assert!(model.checked_nodes.contains("selected-node"));
+    assert!(model.tag_edit.is_some());
     settle(&mut model, "retry-tags-operation", SaveStatus::Degraded);
-    assert!(model.checked_nodes.is_empty());
+    assert!(model.tag_edit.is_none());
     assert!(!model.publications.contains_key(&Kind::Tags));
     assert_eq!(
         model.publications[&Kind::Merge].operation_id.as_deref(),
@@ -55,12 +55,9 @@ fn initial() -> (State, Value) {
     };
     state.management.storage = crate::management::Storage::Ready;
     state.files.writable = true;
-    state.files.selected = Some(crate::files::test_entries::entry(json_codec::json!({
-        "file_id":"file", "repository_id":"repo", "repository_path":"a.txt", "path":"a.txt"
-    })));
-    let (draft, selected, body) = crate::files::tags::tests::submission_fixture();
+    let (draft, body) = crate::files::tags::tests::submission_fixture();
     state.files.tag_edit = Some(draft);
-    state.files.checked_nodes = selected;
+    crate::files::tags::tests::seed(&mut state);
     (state, body)
 }
 fn start(state: &mut State, body: Value) -> Attempt {
@@ -70,14 +67,14 @@ fn start(state: &mut State, body: Value) -> Attempt {
         Kind::Tags,
         "original-tags".into(),
         "POST",
-        "/api/file-manager/files/file/tags".into(),
+        "/api/file-manager/files/file_00000000000000000000000000000001/tags".into(),
         body,
     )
 }
 fn failure(status: u16) -> api::Error {
     api::Error {
         code: if status == 409 {
-            storage_contract::ErrorCode::FileBranchConflict
+            storage_contract::ErrorCode::HeadConflict
         } else {
             storage_contract::ErrorCode::RecoveryRequired
         },
@@ -92,6 +89,7 @@ pub(crate) fn outcome(id: &str) -> Value {
     let mut value: Value =
         json_codec::from_str(include_str!("../fixtures/tag-operation.json")).unwrap();
     value["operation_id"] = id.into();
+    value["result"] = crate::files::tags::tests::replacement();
     value
 }
 
@@ -138,9 +136,14 @@ fn uncertain_retry_freezes_all_targets_and_is_available_after_navigation() {
         let retry = state.try_update(begin_retry).flatten().unwrap();
         assert_eq!(retry.request.id, "original-tags");
         assert_eq!(retry.request.method, "POST");
-        assert_eq!(retry.request.endpoint, "/api/file-manager/files/file/tags");
+        assert_eq!(
+            retry.request.endpoint,
+            "/api/file-manager/files/file_00000000000000000000000000000001/tags",
+        );
         assert_eq!(retry.request.body, original);
-        assert_eq!(retry.request.body["targets"].as_array().unwrap().len(), 2);
+        assert_eq!(retry.request.body["expected_generation"], "7");
+        assert_eq!(retry.request.body["tags"], json_codec::json!(["saved"]));
+        assert!(retry.request.body.get("targets").is_none());
         assert!(
             state.try_update(begin_retry).flatten().is_none(),
             "double click cannot start another attempt"
@@ -256,14 +259,9 @@ fn retry_admission_is_session_storage_and_poll_scoped_and_old_attempts_do_not_cl
 }
 
 #[test]
-fn fresh_conflict_marks_only_the_original_draft_and_cancels_its_old_review() {
+fn fresh_conflict_marks_only_the_original_draft_and_invalidates_its_read() {
     Owner::new().with(|| {
         let (mut initial, body) = initial();
-        let owner = super::super::history::reads::ReviewOwner {
-            kind: Kind::Tags,
-            instance: 1,
-        };
-        let generation = initial.files.history_aux.begin_review(owner);
         let attempt = start(&mut initial, body);
         let state = RwSignal::new(initial);
         assert!(complete(state, Kind::Tags, &attempt, Err(failure(409))));
@@ -271,8 +269,8 @@ fn fresh_conflict_marks_only_the_original_draft_and_cancels_its_old_review() {
             assert!(!actions::pending(s));
             assert!(!can_start(s, Kind::Tags));
             assert!(s.files.tag_edit.as_ref().unwrap().requires_review());
-            assert!(!s.files.history_aux.current_review(owner, generation));
-            assert_eq!(s.files.checked_nodes.len(), 2);
+            assert!(!crate::files::tags::tests::has_snapshot(&s.files.container_tags));
+            assert_eq!(s.files.tag_edit.as_ref().unwrap().command().tags.len(), 1);
             assert!(s.files.tag_submission.is_none());
         });
     });
@@ -292,15 +290,19 @@ fn fresh_conflict_marks_only_the_original_draft_and_cancels_its_old_review() {
 }
 
 #[test]
-fn fresh_inactive_branch_conflict_also_requires_explicit_review() {
+fn a_missing_current_context_preserves_the_draft_without_fabricating_a_new_base() {
     Owner::new().with(|| {
         let (mut initial, body) = initial();
         let attempt = start(&mut initial, body);
         let state = RwSignal::new(initial);
-        let mut error = failure(409);
-        error.code = storage_contract::ErrorCode::BranchNotActive;
-        assert!(complete(state, Kind::Tags, &attempt, Err(error)));
-        assert!(state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().requires_review()));
+        let mut error = failure(404);
+        error.code = storage_contract::ErrorCode::FileNotFound;
+        assert!(!complete(state, Kind::Tags, &attempt, Err(error)));
+        state.with_untracked(|s| {
+            let draft = s.files.tag_edit.as_ref().unwrap();
+            assert_eq!(draft.command().expected_generation.get(), 7);
+            assert!(s.files.tag_submission.is_none());
+        });
     });
 }
 #[test]
@@ -354,4 +356,56 @@ fn mixed_backup_submission_freezes_endpoint_body_and_operation_before_unknown_ou
             assert_eq!(s.files.operations[0].status(), SaveStatus::Unknown);
         });
     });
+}
+
+#[test]
+fn malformed_or_different_replacement_cannot_settle_the_frozen_command() {
+    for patch in [
+        json_codec::json!({"request":{"file_id":"other", "context":{
+            "repository_id":"repo","path":"a.txt"},"expected_generation":"7",
+            "tags":["reviewed"]}}),
+        json_codec::json!({"tags":["other"]}),
+        json_codec::json!({"generation":"9"}),
+        json_codec::json!({"changed":false}),
+        json_codec::json!({"nodes":[]}),
+    ] {
+        Owner::new().with(|| {
+            let state = uncertain_tags();
+            let retry = state.try_update(begin_retry).flatten().unwrap();
+            let mut wrong = outcome("original-tags");
+            wrong["result"].as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            complete(state, Kind::Tags, &retry, Ok(wrong));
+            assert!(state.with_untracked(actions::pending));
+            assert!(state.with_untracked(has_tag_replay));
+            let retry = state.try_update(begin_retry).flatten().unwrap();
+            complete(state, Kind::Tags, &retry, Ok(outcome("original-tags")));
+            assert!(!state.with_untracked(actions::pending));
+        });
+    }
+}
+
+#[test]
+fn acknowledged_replacements_cannot_bypass_the_frozen_command_check() {
+    for commit in ["ACKED", "PUBLISHED_DEGRADED"] {
+        Owner::new().with(|| {
+            let state = uncertain_tags();
+            let retry = state.try_update(begin_retry).flatten().unwrap();
+            let mut wrong = outcome("original-tags");
+            wrong["commit_state"] = commit.into();
+            if commit == "PUBLISHED_DEGRADED" {
+                wrong["state"] = "in_doubt".into();
+                wrong["protection_at_publish"] = "BELOW_TARGET".into();
+            }
+            wrong["result"]["generation"] = "99".into();
+            assert!(!state.with_untracked(|s| receipt_kind_matches(s, "original-tags", &wrong)));
+            complete(state, Kind::Tags, &retry, Ok(wrong));
+            assert!(state.with_untracked(actions::pending));
+            assert!(state.with_untracked(has_tag_replay));
+            let retry = state.try_update(begin_retry).flatten().unwrap();
+            let mut good = outcome("original-tags");
+            good["commit_state"] = "ACKED".into();
+            complete(state, Kind::Tags, &retry, Ok(good));
+            assert!(!state.with_untracked(actions::pending));
+        });
+    }
 }

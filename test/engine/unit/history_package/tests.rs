@@ -1,3 +1,6 @@
+use crate as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 #[path = "directory_contents_tests.rs"]
 mod directory_contents;
@@ -2399,25 +2402,21 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .file_context(&repo.repository_id, "file.txt")
         .unwrap()
         .branch_id;
-    let tagged = engine
-        .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-            file_id: &entry.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch.clone(),
-                source_node_id: entry.version_id.clone(),
-                expected_node_id: engine.file_branch_head(&branch).unwrap(),
-            }],
-            add: &["release".into(), "中文".into()],
-            remove: &[],
-            location: None,
-            principal: "alice",
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    container_tags_fixture::edit(
+        &mut engine, &entry.file_id, &["release".into(), "中文".into()], &[],
+        "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    // Real path facts provide an independently annotatable historical node.
+    for (from, to) in [("file.txt", "renamed.txt"), ("renamed.txt", "file.txt")] {
+        engine.file_namespace(
+            &repo.repository_id,
+            crate::NamespaceOperation::parse(
+                crate::NamespaceOperationKind::Rename, from, Some(to),
+            ).unwrap(),
+            "alice", storage_contract::OperationId::generate().unwrap(),
+        ).unwrap();
+    }
+    let tagged = engine.file_branch_head(&branch).unwrap();
     engine
         .set_file_node_note(
             &entry.file_id,
@@ -2529,12 +2528,12 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         )
         .unwrap();
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
-    assert_eq!(manifest.file_metadata_nodes.len(), 2);
+    assert_eq!(manifest.file_metadata_nodes.len(), 1);
     assert_eq!(manifest.file_branch_merges.len(), 1);
     assert_eq!(manifest.file_branch_aliases[&right], left);
     let mut cycle = manifest.clone();
     cycle
-        .file_metadata_nodes
+        .file_path_nodes
         .get_mut(&tagged)
         .unwrap()
         .parent_node_ids = vec![merged.clone()];
@@ -2585,7 +2584,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         manifest.file_backup_policies
     );
     assert_eq!(
-        restored.file_node_tags(&entry.file_id, &merged).unwrap(),
+        container_tags_fixture::tags(&restored, &entry.file_id),
         BTreeSet::from(["release".into(), "中文".into()])
     );
     for disk in &restored.config.disks {

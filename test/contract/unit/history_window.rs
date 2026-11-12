@@ -94,14 +94,13 @@ fn summary() -> HistoryNodeSummary {
     HistoryNodeSummary {
         node_id: node(6),
         version_id: version(),
-        kind: HistoryNodeKind::Tags,
+        kind: HistoryNodeKind::Merge,
         sequence: u64::MAX,
         current: true,
         branch_id: Some(branch(7)),
         path: "Straße/Café.txt".into(),
         previous_path: None,
         note: "review".into(),
-        tags: vec!["review".into()],
         size: u64::MAX,
         content_hash: ContentHash::from_digest(blake3::hash(b"body")),
         content_state: Some(ContentState::Purged),
@@ -1048,13 +1047,6 @@ fn declared_node_and_field_budgets_include_json_escaping_and_shared_response_cei
     let mut node = summary();
     node.note = "\"".repeat(crate::MAX_NOTE_BYTES);
     validate_note(&node.note).unwrap();
-    node.tags = (0..crate::MAX_FILE_TAGS)
-        .map(|index| {
-            let tag = format!("{index:02}{}", "\"".repeat(crate::MAX_TAG_BYTES - 2));
-            validate_tag(&tag).unwrap();
-            tag
-        })
-        .collect();
     node.parents = HistoryParentSet::More {
         cursor: cursor(
             HistoryCollection::NodeParents {

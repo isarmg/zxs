@@ -73,7 +73,6 @@ impl<'de> Deserialize<'de> for SharedHistoryNodeId {
 pub enum SharedHistoryNodeKind {
     Content,
     Rename,
-    Tags,
     Merge,
     Deletion,
 }
@@ -82,12 +81,11 @@ impl<'de> Deserialize<'de> for SharedHistoryNodeKind {
         match String::deserialize(d)?.as_str() {
             "content" => Ok(Self::Content),
             "rename" => Ok(Self::Rename),
-            "tags" => Ok(Self::Tags),
             "merge" => Ok(Self::Merge),
             "deletion" => Ok(Self::Deletion),
             value => Err(data_serialization::de::Error::unknown_variant(
                 value,
-                &["content", "rename", "tags", "merge", "deletion"],
+                &["content", "rename", "merge", "deletion"],
             )),
         }
     }
@@ -237,7 +235,7 @@ impl SharedHistoryGraph {
             let expected_prefix = match node.kind {
                 SharedHistoryNodeKind::Content => "ver_",
                 SharedHistoryNodeKind::Rename => "fnode_",
-                SharedHistoryNodeKind::Tags | SharedHistoryNodeKind::Merge => "fmeta_",
+                SharedHistoryNodeKind::Merge => "fmeta_",
                 SharedHistoryNodeKind::Deletion => "fdel_",
             };
             if !files.contains_key(&node.file_id)

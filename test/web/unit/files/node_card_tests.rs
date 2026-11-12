@@ -3,10 +3,10 @@ use crate::files::history::tests::node;
 use json_codec::json;
 
 #[test]
-fn content_note_is_the_title_without_turning_tags_into_new_events() {
+fn content_note_is_the_title_without_inventing_metadata_events() {
     let record = node(json!({
         "kind":"content", "note":"not the body note", "body_note":"Saved draft",
-        "tags":["reviewed"], "sequence":"8"
+        "sequence":"8"
     }));
     assert_eq!(file_title(&record), "Saved draft");
     assert_eq!(file_actions(&record), &[Action::Content]);
@@ -15,10 +15,10 @@ fn content_note_is_the_title_without_turning_tags_into_new_events() {
 #[test]
 fn metadata_note_is_the_title_not_the_reused_body_note() {
     let record = node(json!({
-        "kind":"tags", "note":"Approved", "body_note":"old content note"
+        "kind":"merge", "note":"Approved", "body_note":"old content note"
     }));
     assert_eq!(file_title(&record), "Approved");
-    assert_eq!(file_actions(&record), &[Action::Tags]);
+    assert_eq!(file_actions(&record), &[Action::Merge]);
 }
 
 #[test]
@@ -85,7 +85,6 @@ fn case_changes_are_not_normalized_away() {
 fn kind_and_saved_paths_not_comment_words_determine_actions() {
     for (kind, expected) in [
         ("content", Action::Content),
-        ("tags", Action::Tags),
         ("merge", Action::Merge),
     ] {
         let record = node(
@@ -108,7 +107,7 @@ fn every_displayed_action_has_a_distinct_name_and_accessible_label() {
         Action::Rename,
         Action::Move,
         Action::PathChange,
-        Action::Tags,
+        Action::Merge,
         Action::Merge,
     ];
     let names = actions

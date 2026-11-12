@@ -64,7 +64,7 @@ fn response(
     let node: HistoryNodeSummary = json_codec::from_value(json!({
         "node_id":visible,"version_id":visible,"kind":"content","sequence":"1",
         "current":visible==current,"branch_id":null,"path":"a.txt","previous_path":null,
-        "note":"visible node","tags":["inherited"],"size":"0","content_hash":"0".repeat(64),
+        "note":"visible node","size":"0","content_hash":"0".repeat(64),
         "content_state":"AVAILABLE","download_name":"a.txt","storage_name":"a.txt",
         "parents":{"state":"complete"},"fields":{"message":{"byte_length":"0"},
         "author":{"byte_length":"0"},"created_at":{"byte_length":"20"}}
@@ -233,7 +233,7 @@ fn disk_directory_alias_and_stored_body_are_all_part_of_the_read_target() {
 fn an_active_existing_editor_preserves_its_window_and_requires_a_later_refresh() {
     let mut state = loaded_state();
     state.files.history_editors = 1;
-    state.files.checked_nodes = crate::files::tags::tests::selection(&["kept"]);
+    state.files.container_tags = crate::files::tags::tests::read_model();
     let target = Target::capture(&state).unwrap();
     let key = state.files.file_history.window_key();
     let request = make_request(&target, HistoryCollection::Nodes, None, None, false).unwrap();
@@ -243,7 +243,7 @@ fn an_active_existing_editor_preserves_its_window_and_requires_a_later_refresh()
     assert!(state.files.file_history.node(NODE).is_some());
     assert!(!state.files.file_history.ready());
     assert!(!state.files.history_loading);
-    assert!(state.files.checked_nodes.contains("kept"));
+    assert!(crate::files::tags::tests::has_snapshot(&state.files.container_tags));
     assert!(state.notices.message().is_some());
 }
 
@@ -640,7 +640,7 @@ fn review_owner_cancellation_and_late_completion_cannot_release_a_successor() {
         instance: 1,
     };
     let current = ReviewOwner {
-        kind: review::Kind::Tags,
+        kind: review::Kind::Merge,
         instance: 2,
     };
     let old_generation = reads.begin_review(old);
@@ -659,37 +659,29 @@ fn review_owner_cancellation_and_late_completion_cannot_release_a_successor() {
 fn cancelled_and_reopened_identical_selections_cannot_receive_the_old_drafts_staging() {
     let mut state = loaded_state();
     state.files.history_loading = false;
-    state.files.tag_edit = Some(crate::files::tags::tests::draft_for_instance(
-        1,
-        "old input",
-    ));
-    state.files.checked_nodes = crate::files::tags::tests::selection(&["old-node"]);
+    state.files.merge = Some(crate::files::merge::tests::draft_for_instance(1));
     let target = Target::capture(&state).unwrap();
     let old = ReviewOwner {
-        kind: review::Kind::Tags,
+        kind: review::Kind::Merge,
         instance: 1,
     };
-    let requested = inventory(&state, review::Kind::Tags).unwrap();
+    let requested = inventory(&state, review::Kind::Merge).unwrap();
     let old_generation = state.files.history_aux.begin_review(old);
     state.files.history_aux.cancel_review(old);
-    state.files.tag_edit = Some(crate::files::tags::tests::draft_for_instance(
-        2,
-        "new input",
-    ));
+    state.files.merge = Some(crate::files::merge::tests::draft_for_instance(2));
     let current = ReviewOwner {
-        kind: review::Kind::Tags,
+        kind: review::Kind::Merge,
         instance: 2,
     };
-    let current_inventory = inventory(&state, review::Kind::Tags).unwrap();
+    let current_inventory = inventory(&state, review::Kind::Merge).unwrap();
     assert_eq!(requested.node_ids, current_inventory.node_ids);
     assert_eq!(requested.branch_ids, current_inventory.branch_ids);
     assert_ne!(requested, current_inventory);
     let generation = state.files.history_aux.begin_review(current);
     let facts = ReviewFacts {
-        nodes: ReviewNodes::Tags(vec![SelectedNode {
+        nodes: ReviewNodes::Merge(vec![ChosenNode {
             id: "old-node".into(),
             version: "old-body".into(),
-            tags: BTreeSet::from(["old draft response".into()]),
         }]),
         branches: vec![SelectedBranch {
             id: "main".into(),
@@ -714,10 +706,10 @@ fn cancelled_and_reopened_identical_selections_cannot_receive_the_old_drafts_sta
     assert!(
         state
             .files
-            .tag_edit
+            .merge
             .as_mut()
             .unwrap()
-            .accept_review(ROOT, &mut state.files.checked_nodes)
+            .accept_review(ROOT)
             .is_err()
     );
 
@@ -725,10 +717,10 @@ fn cancelled_and_reopened_identical_selections_cannot_receive_the_old_drafts_sta
         let state = RwSignal::new(state);
         // A queued old panel callback must fail its instance fence before it
         // replaces the Review owner or attempts any browser/network operation.
-        review_history_tags(state, old.instance);
+        review_history_merge(state, old.instance);
         assert!(state.with_untracked(|s| s.files.history_aux.current_review(current, generation)));
         assert_eq!(
-            state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().instance()),
+            state.with_untracked(|s| s.files.merge.as_ref().unwrap().instance()),
             2
         );
     });
@@ -753,7 +745,7 @@ fn cyclic_response(target: &Target, request: &HistoryWindowRequest) -> json_code
 fn cyclic_response_preserves_visible_history_and_editors_but_closes_writes() {
     let mut state = loaded_state();
     state.files.history_editors = 1;
-    state.files.checked_nodes = crate::files::tags::tests::selection(&["kept"]);
+    state.files.container_tags = crate::files::tags::tests::read_model();
     state.files.history_aux.begin(Resource::Relation, None);
     state.files.history_aux.begin(Resource::Field, None);
     let before = state.files.file_history.clone();
@@ -774,7 +766,7 @@ fn cyclic_response_preserves_visible_history_and_editors_but_closes_writes() {
     assert!(!state.files.history_aux.loading());
     assert!(!crate::files::actions::history_write_allowed(&state));
     assert_eq!(state.files.history_editors, 1);
-    assert!(state.files.checked_nodes.contains("kept"));
+    assert!(crate::files::tags::tests::has_snapshot(&state.files.container_tags));
 }
 
 #[test]

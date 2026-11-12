@@ -1,5 +1,5 @@
 use super::*;
-use storage_engine::{CommitRequest, Config, FileNodeTagsUpdateRequest, FileTagTarget};
+use storage_engine::{CommitRequest, Config};
 
 fn save(
     engine: &mut Engine,
@@ -57,7 +57,7 @@ fn normalized(value: &mut Value, ids: &BTreeMap<&str, &str>) {
 }
 
 #[test]
-fn file_history_matches_preprojection_graph_json() {
+fn file_history_matches_container_tag_free_graph_json() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
@@ -84,25 +84,19 @@ fn file_history_matches_preprojection_graph_json() {
         .file_context(&repo.repository_id, "before.txt")
         .unwrap()
         .branch_id;
-    let tagged = engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &first.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch.clone(),
-                source_node_id: first.version_id.clone(),
-                expected_node_id: first.version_id.clone(),
-            }],
-            add: &["review".into(), "草稿".into()],
-            remove: &[],
-            location: None,
-            principal: "owner",
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    engine
+        .replace_container_tags(
+            &crate::container_tags_tests::command(
+                &first.file_id,
+                &repo.repository_id,
+                "before.txt",
+                0,
+                &["review", "草稿"],
+            ),
+            &"owner".parse::<storage_contract::Principal>().unwrap(),
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
     engine
         .file_namespace(
             &repo.repository_id,
@@ -149,13 +143,12 @@ fn file_history_matches_preprojection_graph_json() {
             (first.file_id.as_str(), "file"),
             (first.version_id.as_str(), "body-old"),
             (second.version_id.as_str(), "body-new"),
-            (tagged.as_str(), "tags"),
             (renamed.as_str(), "renamed"),
             (branch.as_str(), "branch"),
         ]),
     );
-    // Captured from the pre-batch production path. Only generated identities,
-    // wall-clock values and the derived storage filename are normalized.
+    // The container-tag contract removes the label row and label fields from
+    // the prior graph fixture. Content and rename facts retain their sequence.
     let expected: Value = json_codec::from_str(include_str!("history_nodes_golden.json")).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(json_codec::to_vec(engine.state()).unwrap(), before);
@@ -165,7 +158,6 @@ fn file_history_matches_preprojection_graph_json() {
 fn summary_consumption_retains_overlapping_rows() {
     let expected = storage_engine::FileNodeSummary {
         parent_node_ids: vec!["first".into(), "first".into(), "last".into()],
-        tags: BTreeSet::from(["label".into()]),
     };
     let mut summaries = BTreeMap::from([(
         "overlap".into(),

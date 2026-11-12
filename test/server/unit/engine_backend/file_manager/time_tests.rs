@@ -1,5 +1,5 @@
 use super::*;
-use storage_contract::{CommitRequest, Config, FileTagTarget};
+use storage_contract::{CommitRequest, Config};
 
 #[test]
 fn utc_history_timestamp_formats_seconds() {
@@ -64,25 +64,27 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    let context = engine
-        .file_context(&repo.repository_id, "after.txt")
+    let changed = engine
+        .replace_container_tags(
+            &crate::container_tags_tests::command(
+                &entry.file_id,
+                &repo.repository_id,
+                "after.txt",
+                0,
+                &["utc"],
+            ),
+            &"owner".parse::<storage_contract::Principal>().unwrap(),
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
-    let head = engine.file_branch_head(&context.branch_id).unwrap();
-    engine
-        .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-            file_id: &entry.file_id,
-            targets: &[FileTagTarget {
-                branch_id: context.branch_id,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["utc".into()],
-            remove: &[],
-            location: None,
-            principal: "owner",
-            operation_id: storage_contract::OperationId::generate().unwrap(),
-        })
-        .unwrap();
+    let unchanged = engine.replace_container_tags(
+        &crate::container_tags_tests::command(
+            &entry.file_id, &repo.repository_id, "after.txt", 1, &["utc"],
+        ),
+        &"owner".parse::<storage_contract::Principal>().unwrap(),
+        storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(unchanged.result["changed"], false);
     let before = json_codec::to_value(engine.state()).unwrap();
     let history = storage_contract::strict_json(
         &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
@@ -98,7 +100,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     )
     .unwrap();
     let nodes = history["nodes"].as_array().unwrap();
-    for kind in ["content", "rename", "tags"] {
+    for kind in ["content", "rename"] {
         assert!(nodes.iter().any(|node| node["kind"] == kind));
     }
     for node in nodes {
@@ -106,7 +108,6 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         let expected = match node["kind"].as_str().unwrap() {
             "content" => engine.state().versions[id].created_at.clone(),
             "rename" => utc_timestamp(engine.state().file_path_nodes[id].created_at).unwrap(),
-            "tags" => utc_timestamp(engine.state().file_metadata_nodes[id].created_at).unwrap(),
             _ => unreachable!(),
         };
         assert_eq!(node["created_at"], expected);
@@ -119,7 +120,13 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     )
     .unwrap();
     let events = activity["events"].as_array().unwrap();
-    assert!(!events.is_empty());
+    assert!(events.iter().any(|event| {
+        event["action"] == storage_contract::file_container_tags::KIND
+            && event["file_id"] == entry.file_id
+    }));
+    assert!(events.iter().any(|event| event["event_id"] == changed.operation_id.to_string()));
+    assert!(events.iter().all(|event| event["event_id"] != unchanged.operation_id.to_string()));
+    assert!(nodes.iter().all(|node| node.get("tags").is_none()));
     assert!(events.iter().all(|event| {
         event["timestamp"]
             .as_str()

@@ -1,214 +1,161 @@
-//! Version labels are immutable metadata children, never mutable file-global state.
-use super::*;
-use json_codec::json;
-use std::collections::BTreeSet;
+//! Mutable labels belong to one stable container, not its content graph.
+use crate::engine::CurrentNamespaces;
+use crate::{BranchState, Engine, Error, OperationId, OperationResult, Result, State};
+use storage_contract::file_container_tags::{
+    ContainerTags, Context, ReadRequest, ReplaceCommand, Replacement, Snapshot,
+};
+use storage_contract::{FileId, NamespaceEntryKind, Principal};
 
-pub(crate) struct TagEdit {
-    added: BTreeSet<String>,
-    removed: BTreeSet<String>,
+pub(crate) fn invalid() -> Error {
+    Error::ContainerTags(crate::ContainerTagsError::Publication)
 }
 
-pub(crate) struct TagUpdate {
-    pub(crate) tags: BTreeSet<String>,
-    pub(crate) changed: bool,
-}
-
-pub(crate) struct TagSelection {
-    pub(crate) version: String,
-    pub(crate) advance: bool,
-}
-
-pub(crate) fn target_branch<'state, 'target>(
-    state: &'state State,
-    file: &str,
-    target: &'target FileTagTarget,
-    seen: &mut BTreeSet<(&'target str, &'target str)>,
-) -> Result<&'state Branch> {
-    if !seen.insert((&target.branch_id, &target.source_node_id)) {
-        return Err(Error::new(
-            storage_contract::ErrorCode::InvalidRequest,
-            "duplicate tag target",
-        ));
-    }
-    state
-        .branches
-        .get(&target.branch_id)
-        .filter(|branch| branch.file_id.as_deref() == Some(file))
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::FileBranchNotFound,
-                "tag target branch missing",
-            )
-        })
-}
-
-/// Share selection order and branch rules while retaining each publication
-/// path's existing head and source-version admission contract.
-pub(crate) fn resolve_target(
+pub(crate) fn context(
     state: &State,
-    target: &FileTagTarget,
-    branch: &Branch,
-    head: impl FnOnce() -> Result<String>,
-    version: impl FnOnce() -> Result<String>,
-) -> Result<TagSelection> {
-    if branch.state != BranchState::Active
-        || state.file_branch_aliases.contains_key(&target.branch_id)
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::BranchNotActive,
-            "merged aliases are read-only",
-        ));
+    current: Option<&CurrentNamespaces>,
+    file: FileId,
+    context: &Context,
+    writable: bool,
+) -> Result<()> {
+    let missing = || Error::ContainerTags(crate::ContainerTagsError::Context);
+    let repository = state
+        .repositories
+        .get(&context.repository_id.to_string())
+        .ok_or_else(missing)?;
+    let branch = state
+        .branches
+        .get(&repository.main_branch_id)
+        .ok_or_else(invalid)?;
+    if writable && branch.state != BranchState::Active {
+        return Err(missing());
     }
-    let head = head()?;
-    if head != target.expected_node_id {
-        return Err(Error::new(
-            storage_contract::ErrorCode::FileBranchConflict,
-            "tag target head changed",
-        ));
+    let entries = match current {
+        Some(view) => {
+            if writable {
+                view.require_branch_write(state, &repository.main_branch_id)?;
+            }
+            view.branch_entries(&repository.main_branch_id, &branch.head_commit_id)?
+        }
+        None => {
+            &state
+                .commits
+                .get(&branch.head_commit_id)
+                .ok_or_else(invalid)?
+                .entries
+        }
+    };
+    let namespace = crate::business::NamespaceTree::from_current_state(
+        state,
+        &repository.repository_id,
+        entries,
+    );
+    let entry = namespace
+        .get_key(context.path.key())
+        .ok_or_else(missing)?;
+    if entry.kind != NamespaceEntryKind::File || entry.file_id != file.to_string() {
+        return Err(missing());
     }
-    let version = version()?;
-    if !file_nodes::belongs_to_branch(state, &target.branch_id, &head, &target.source_node_id) {
-        return Err(Error::new(
-            storage_contract::ErrorCode::FileNodeNotFound,
-            "tag target node is outside the selected branch",
-        ));
+    let version = state.versions.get(&entry.version_id).ok_or_else(invalid)?;
+    if version.file_id != entry.file_id || version.history_tree_id != repository.history_tree_id {
+        return Err(invalid());
     }
-    Ok(TagSelection {
-        version,
-        advance: head == target.source_node_id,
+    Ok(())
+}
+
+pub(crate) fn plan(
+    state: &State,
+    current: Option<&CurrentNamespaces>,
+    request: &ReplaceCommand,
+) -> Result<Replacement> {
+    context(state, current, request.file_id, &request.context, true)?;
+    let old = state
+        .container_tags
+        .get(&request.file_id)
+        .ok_or_else(invalid)?;
+    if old.generation() != request.expected_generation {
+        return Err(Error::ContainerTags(crate::ContainerTagsError::Conflict));
+    }
+    let changed = old.tags() != &request.tags;
+    let generation = if changed {
+        old.generation().next().map_err(|source| {
+            Error::ContainerTags(crate::ContainerTagsError::Exhausted(source))
+        })?
+    } else {
+        old.generation()
+    };
+    Ok(Replacement {
+        request: request.clone(),
+        tags: request.tags.clone(),
+        generation,
+        changed,
     })
 }
 
-impl TagEdit {
-    pub(crate) fn new(
-        targets: &[FileTagTarget],
-        add: &[String],
-        remove: &[String],
-        maximum: usize,
-    ) -> Result<Self> {
-        if targets.is_empty()
-            || targets.len() > maximum
-            || add.len() > MAX_FILE_TAGS
-            || remove.len() > MAX_FILE_TAGS
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidRequest,
-                "a bounded nonempty tag target list is required",
-            ));
+/// Other operations may create independent identities or retire unreferenced ones,
+/// but cannot replace the CAS state of an identity that survives the transition.
+pub(crate) fn preserve_existing(previous: &State, next: &State) -> Result<()> {
+    let check = |id: &FileId| {
+        match (previous.container_tags.get(id), next.container_tags.get(id)) {
+            (Some(before), Some(after)) if before != after => Err(invalid()),
+            _ => Ok(()),
         }
-        for tag in add.iter().chain(remove) {
-            validate_tag(tag)?;
-        }
-        let added: BTreeSet<_> = add.iter().cloned().collect();
-        let removed: BTreeSet<_> = remove.iter().cloned().collect();
-        if !added.is_disjoint(&removed) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidTag,
-                "a tag cannot be added and removed in one operation",
-            ));
-        }
-        Ok(Self { added, removed })
-    }
-
-    pub(crate) fn apply(&self, state: &State, source: &str) -> Result<TagUpdate> {
-        let old = file_nodes::node_tags(state, source);
-        let mut tags = old.clone();
-        tags.retain(|tag| !self.removed.contains(tag));
-        tags.extend(self.added.iter().cloned());
-        if tags.len() > MAX_FILE_TAGS {
-            return Err(Error::new(
-                storage_contract::ErrorCode::TagLimitExceeded,
-                "a file node supports at most 16 tags",
-            ));
-        }
-        Ok(TagUpdate {
-            changed: tags != old,
-            tags,
-        })
+    };
+    match next.container_tags.changes_since(&previous.container_tags) {
+        storage_contract::MapChanges::Keys(ids) => ids.iter().try_for_each(check),
+        storage_contract::MapChanges::All => previous.container_tags.keys().try_for_each(check),
     }
 }
 
-struct TagChange {
-    target: FileTagTarget,
-    history: String,
-    version: String,
-    tags: BTreeSet<String>,
-    changed: bool,
-    advance: bool,
+pub(crate) fn apply(state: &mut State, replacement: &Replacement) {
+    if replacement.changed {
+        state.container_tags.insert(
+            replacement.request.file_id,
+            ContainerTags::new(replacement.tags.clone(), replacement.generation),
+        );
+    }
 }
 
 impl Engine {
-    pub fn update_file_node_tags(
+    /// Business response only; the caller must authorize access to this operation.
+    pub fn container_tags_outcome(&self, operation: OperationId) -> Result<Option<Replacement>> {
+        let Some(receipt) = self.state().operations.get(&operation) else {
+            return Ok(None);
+        };
+        if receipt.kind != storage_contract::file_container_tags::KIND {
+            return Ok(None);
+        }
+        let (replacement, _, _) = crate::persist::container_tags::decode(receipt)?;
+        replacement
+            .validate(&replacement.request)
+            .map_err(|source| {
+                Error::ContainerTags(crate::ContainerTagsError::Response(source))
+            })?;
+        Ok(Some(replacement))
+    }
+
+    pub fn file_container_tags(&self, request: &ReadRequest) -> Result<Snapshot> {
+        let current = self.admitted_current_namespaces()?;
+        context(self.state(), current, request.file_id, &request.context, false)?;
+        let value = self
+            .state()
+            .container_tags
+            .get(&request.file_id)
+            .ok_or_else(invalid)?;
+        Ok(Snapshot {
+            file_id: request.file_id,
+            context: request.context.clone(),
+            tags: value.tags().clone(),
+            generation: value.generation(),
+        })
+    }
+
+    pub fn replace_container_tags(
         &mut self,
-        request: FileNodeTagsUpdateRequest<'_>,
+        request: &ReplaceCommand,
+        principal: &Principal,
+        operation: OperationId,
     ) -> Result<OperationResult> {
-        let FileNodeTagsUpdateRequest {
-            file_id: file,
-            targets,
-            add,
-            remove,
-            location,
-            principal,
-            operation_id: operation,
-        } = request;
-        let edit = TagEdit::new(targets, add, remove, self.config.max_entries)?;
-        let body = request.body();
-        self.mutate("file.tags.update", principal, operation,
-            body,
-            |engine,state,_| {
-                if let Some(view) = engine.admitted_current_namespaces()? {
-                    return view.update_current_file_tags(
-                        engine.state(),
-                        state,
-                        &request,
-                        &edit,
-                        engine.config.max_entries,
-                    );
-                }
-                super::file_requests::validate_location(engine, file, location)?;
-                // Complete preflight before any branch, context or tree advances.
-                let mut seen = BTreeSet::new();
-                let mut changes = Vec::new();
-                for target in targets {
-                    let branch = target_branch(state, file, target, &mut seen)?;
-                    engine.repository_for_history(&branch.history_tree_id)?;
-                    let TagSelection { version, advance } = resolve_target(
-                        state,
-                        target,
-                        branch,
-                        || file_nodes::branch_head(state, &target.branch_id),
-                        || file_nodes::node_version(state, file, &target.source_node_id),
-                    )?;
-                    let TagUpdate { tags, changed } = edit.apply(state, &target.source_node_id)?;
-                    changes.push(TagChange {
-                        target: target.clone(),
-                        history: branch.history_tree_id.clone(),
-                        version,
-                        changed,
-                        tags,
-                        advance,
-                    });
-                }
-                let mut results = Vec::new();
-                for TagChange { target, history, version, tags, changed, advance } in changes {
-                    if !changed {
-                        results.push(json!({"branch_id":target.branch_id,"source_node_id":target.source_node_id,"node_id":target.source_node_id,"tags":tags,"no_change":true,"advanced":false}));
-                        continue;
-                    }
-                    let node = new_id("fmeta")?;
-                    state.file_metadata_nodes.insert(node.clone(),FileMetadataNode {
-                        node_id:node.clone(),history_tree_id:history,file_id:file.into(),version_id:version,
-                        parent_node_ids:vec![target.source_node_id.clone()],branch_id:target.branch_id.clone(),
-                        kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now()?,
-                    });
-                    if advance {
-                        file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation)?;
-                    }
-                    let directories = file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &BTreeSet::from([target.branch_id.clone()]), matching_node: Some(&target.source_node_id), target_branch: &target.branch_id, target_node: &node, principal, operation, maximum: engine.config.max_entries })?;
-                    results.push(json!({"branch_id":target.branch_id,"source_node_id":target.source_node_id,"node_id":node,"tags":tags,"no_change":false,"advanced":advance,"directory_branch_ids":directories}));
-                }
-                Ok(json!({"file_id":file,"nodes":results,"content_versions_created":"0"}))
-            })
+        crate::persist::container_tags::replace(self, request, principal, operation)
     }
 }
 

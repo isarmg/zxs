@@ -516,7 +516,6 @@ pub(super) fn node_label(node: &FileNode, _index: usize) -> String {
     let descriptor = if note.is_empty() {
         match node.kind() {
             NodeKind::Rename => t("路径变化", "Path changed"),
-            NodeKind::Tags => t("标签变化", "Tags changed"),
             NodeKind::Merge => t("合并节点", "Merge node"),
             NodeKind::Content => t("文件内容", "File content"),
         }
@@ -527,4 +526,4 @@ pub(super) fn node_label(node: &FileNode, _index: usize) -> String {
 }
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/merge/tests.rs"]
-mod tests;
+pub(crate) mod tests;

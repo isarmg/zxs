@@ -55,17 +55,21 @@ class TargetedSelection(unittest.TestCase):
             'test/ci/test_targeted_ci.py',
             'test/ci/test_directory_rename_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, paths)
+        plan = CI.select_plan(self.policy, paths, shardable=True)
         self.assertEqual(plan['groups'], [
-            'ci-selection', 'directory-rename-recovery', 'historical-directory-web',
+            'ci-selection', 'container-tags-browser', 'container-tags-web',
+            'directory-rename-recovery', 'historical-directory-web',
             'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement', 'paged-deletion-review',
             'web-directory-history-retirement', 'web-recovery-principals',
         ])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']))
-        self.assertEqual(len(plan['python_tests']), 7)
+                         sorted(set(self.policy['groups']['ci-selection']['python_tests'])
+                                | set(self.policy['groups']['container-tags-browser']['python_tests'])))
+        self.assertEqual(len(plan['python_tests']), 10)
         group = self.policy['groups']['legacy-directory-branch-web-retirement']
         self.assertEqual(group['rust_targets'][0]['prefixes'], [
             'files::mkdir::storage::tests::', 'files::branch::tests::',
@@ -198,9 +202,12 @@ class TargetedSelection(unittest.TestCase):
             'docs/tools/browser-smoke.md',
             CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, paths)
+        plan = CI.select_plan(self.policy, paths, shardable=True)
         self.assertEqual(plan['groups'], [
             'browser-identity-generation', 'browser-smoke-fixture', 'ci-selection',
+            'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery',
             'historical-directory-web', 'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement',
@@ -208,8 +215,9 @@ class TargetedSelection(unittest.TestCase):
         ])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']))
-        self.assertEqual(len(plan['python_tests']), 7)
+                         sorted(set(self.policy['groups']['ci-selection']['python_tests'])
+                                | set(self.policy['groups']['container-tags-browser']['python_tests'])))
+        self.assertEqual(len(plan['python_tests']), 10)
         self.assertNotIn('working-directory-prerequisite', plan['groups'])
         browser = next(target for target in plan['rust_targets']
                        if target['package'] == 'browser-smoke'
@@ -289,10 +297,9 @@ class TargetedSelection(unittest.TestCase):
         ]
         plan = CI.select_plan(self.policy, paths)
         self.assertEqual(plan['groups'], [
-            'checkpoint-layout', 'ci-selection', 'held-directory-layout',
-            'ordinary-conversion-name-budget', 'paged-deletion-review',
-            'projection-cache-layout', 'typed-name-consumers',
-            'working-directory-prerequisite',
+            'checkpoint-layout', 'ci-selection', 'container-tags-format',
+            'held-directory-layout', 'ordinary-conversion-name-budget', 'paged-deletion-review',
+            'projection-cache-layout', 'typed-name-consumers', 'working-directory-prerequisite',
         ])
         self.assertEqual(len(plan['rust_targets']), 13)
         self.assertEqual(plan['python_tests'],
@@ -342,7 +349,7 @@ class TargetedSelection(unittest.TestCase):
             'src/server/src/lib.rs', 'src/server/src/backend_methods.rs',
             'src/server/src/engine_backend.rs', 'src/server/src/file_manager.rs',
             'test/server/integration/http_engine.rs',
-        ])
+        ], shardable=True)
         self.assertNotIn('directory-snapshot-source-preview', central['groups'])
         self.assertIn('historical-directory-runtime', central['groups'])
         self.assertIn('version-metadata-read', central['groups'])
@@ -476,10 +483,11 @@ class TargetedSelection(unittest.TestCase):
                         'legacy-directory-staging-web-retirement'}),
         ]:
             with self.subTest(paths=paths):
-                plan = CI.select_plan(self.policy, paths)
+                plan = CI.select_plan(self.policy, paths, shardable=True)
                 self.assertTrue(required <= set(plan['groups']))
-                self.assertLessEqual(len(plan['rust_targets']), 16)
-                self.assertLessEqual(len(plan['python_tests']), 8)
+                for shard in CI.shard_tools().partition(plan):
+                    self.assertLessEqual(len(shard['rust_targets']), 16)
+                    self.assertLessEqual(len(shard['python_tests']), 8)
         for oversized in [engine_paths + ui_paths,
                           ui_paths + ['TASKS.md'],
                           ui_paths + ['docs/design/container-lifecycle-read.md']]:
@@ -796,19 +804,21 @@ class TargetedSelection(unittest.TestCase):
                  'test/engine/unit/engine/current_branch_archive_tests.rs',
                  'test/engine/integration/branch_alias_operations.rs',
                  '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py']
-        plan = CI.select_plan(self.policy, paths)
+        plan = CI.select_plan(self.policy, paths, shardable=True)
         self.assertEqual(plan['groups'],
-                         ['ci-selection', 'container-unchanged-save', 'portable-path-consumers'])
-        self.assertEqual(len(plan['rust_targets']), 15)
+                         ['ci-selection', 'container-tags-engine',
+                          'container-unchanged-save', 'portable-path-consumers'])
+        self.assertEqual(len(plan['rust_targets']), 20)
         self.assertEqual(len(plan['python_tests']), 7)
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine'
                       and target.get('kind', 'lib') == 'lib'
                       and target.get('mode', 'test') == 'test')
         self.assertEqual(engine['selection_groups'],
-                         ['container-unchanged-save', 'portable-path-consumers'])
-        self.assertEqual([selection['max_tests'] for selection in engine['selections']], [24, 160])
-        first = engine['selections'][0]
+                         ['container-tags-engine', 'container-tags-engine',
+                          'container-unchanged-save', 'portable-path-consumers'])
+        self.assertEqual([selection['max_tests'] for selection in engine['selections']], [32, 1, 24, 160])
+        first = engine['selections'][2]
         self.assertEqual(first['prefixes'], ['business::file::pending_regressions::'])
         self.assertEqual(len(first['exact']), 6)
         self.assertIn(
@@ -835,7 +845,8 @@ class TargetedSelection(unittest.TestCase):
             'test/server/unit/backend_listing.rs']
         for path in paths:
             with self.subTest(path=path):
-                self.assertIn('typed-name-consumers', CI.select_plan(self.policy, [path])['groups'])
+                self.assertIn('typed-name-consumers',
+                              CI.select_plan(self.policy, [path], shardable=True)['groups'])
         for path in ['compliance/external-tests/integrated.json',
                      'docs/THIRD_PARTY_RUST_SOURCES.md']:
             with self.subTest(path=path):
@@ -1681,6 +1692,170 @@ class TargetedShards(unittest.TestCase):
         evidence = CI.selection_evidence(['selected::a', 'selected::b'], [], target)
         self.assertEqual(CI.test_timeouts(evidence), {'selected::a': 900, 'selected::b': 200})
         self.assertEqual(target, plan['rust_targets'][0])
+
+
+class ContainerTagsSelection(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    def test_wire_capture_destination_is_owned_by_the_exact_run_evidence_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = CI.Run(Path(directory))
+            wire = Path(run.environment['ZXS_TEST_WIRE_EVIDENCE_DIR'])
+            self.assertEqual(wire, run.directory / 'wire')
+            self.assertTrue(wire.is_dir())
+            self.assertEqual(run.summary['wire_evidence_directory'], str(wire))
+            self.assertEqual(Path(run.environment['TMPDIR']), run.directory / 'fixtures')
+
+    def test_each_authority_selects_its_container_regressions_without_new_file_cochange(self):
+        authorities = {
+            'container-tags-contract': [
+                'src/contract/src/error.rs',
+                'src/contract/src/model.rs', 'src/contract/src/tracked.rs',
+                'src/contract/src/file_container_tags.rs',
+                'docs/tools/contract-check/tests/fixtures/merge-tags-backup.md',
+            ],
+            'container-tags-storage': [
+                'src/engine/src/journal/snapshot.rs', 'src/engine/src/state_projection.rs',
+                'src/engine/src/history_package/manifest.rs',
+                'src/engine/src/history_package/state_read.rs',
+                'src/engine/src/container_storage/changes.rs',
+                'src/engine/src/container_storage/file_database/rows.rs',
+                'src/engine/src/engine/index/system_changes/catalog.rs',
+                'src/engine/src/file_deletion/freeze.rs',
+                'src/engine/src/foreign_import/identity_closure/graph/manifest.rs',
+                'src/engine/src/maintenance.rs',
+            ],
+            'container-tags-engine': [
+                'src/engine/src/engine/history_window/projection.rs',
+                'src/engine/src/business/file_tags.rs',
+                'src/engine/src/persist/container_tags.rs',
+                'src/engine/src/publication_shape.rs',
+                'src/engine/src/engine/planning.rs',
+                'src/engine/src/engine/recovery.rs',
+                'src/engine/src/engine/disk_registry/current/file_tags/publication.rs',
+            ],
+            'container-tags-http': [
+                'src/server/src/engine_backend.rs',
+                'src/server/src/backend_methods.rs',
+                'src/server/src/file_manager.rs',
+                'src/server/src/http_boundary.rs',
+                'src/server/src/http_file_tags.rs', 'src/server/src/operation_wire.rs',
+                'src/server/src/backend_file_tags.rs', 'src/client/src/lib.rs',
+            ],
+            'container-tags-web': [
+                'src/web/src/files/model.rs',
+                'src/web/src/files/detail.rs',
+                'src/web/src/ui.rs',
+                'src/web/src/files/history/ingress.rs',
+                'src/web/src/files/tags/mod.rs', 'src/web/src/files/tags/view.rs',
+                'src/web/src/files/review.rs',
+            ],
+            'container-tags-browser': [
+                'test/tools/browser-smoke/runner/phase1_files.rs',
+                'test/tools/browser-smoke/runner/phase1_tags.js',
+                'test/tools/browser-smoke/runner/tag_unknown.rs',
+                'test/tools/browser-smoke/runner/tag_unknown.js',
+                'test/tools/browser-smoke/runner/history_windows.rs',
+                'test/tools/browser-smoke/unit/phase1_files_probe_test.mjs',
+                'test/tools/browser-smoke/unit/tag_unknown_probe_test.mjs',
+                'test/tools/browser-smoke/unit/phase1_files_tests.rs',
+                'test/tools/browser-smoke/unit/tag_unknown_tests.rs',
+                'docs/tools/browser-smoke.md',
+                'test/ci/test_phase1_file_probes.py',
+                'test/ci/test_tag_unknown_probe.py',
+                'test/ci/test_browser_history_window_wait.py',
+            ],
+            'container-tags-format': [
+                'src/engine/src/disk.rs',
+                'src/engine/src/engine/membership_transition/pending.rs',
+                'src/engine/src/engine/membership_transition/archive/persistent.rs',
+                'src/engine/src/engine/backup_preparation/native_control/archive.rs',
+            ],
+        }
+        for group, paths in authorities.items():
+            for path in paths:
+                with self.subTest(path=path):
+                    plan = CI.select_plan(self.policy, [path], shardable=True)
+                    self.assertIn(group, plan['groups'])
+                    selected = [selection
+                                for target in plan['rust_targets']
+                                for origin, selection in zip(
+                                    target['selection_groups'], target.get('selections', [
+                                        {key: value for key, value in target.items()
+                                         if key != 'selection_groups'}]))
+                                if origin == group]
+                    self.assertCountEqual(selected, self.policy['groups'][group]['rust_targets'])
+
+    def test_atomic_change_keeps_every_old_and_new_selection_in_same_commit_shards(self):
+        paths = [
+            'test/engine/unit/business/file_tags/tests.rs', 'src/contract/src/lib.rs',
+            'src/engine/src/disk.rs', 'src/contract/src/model.rs',
+            'src/engine/src/journal/snapshot.rs', 'src/engine/src/business/file_tags.rs',
+            'src/server/src/http_file_tags.rs', 'src/web/src/files/tags/mod.rs',
+            'test/tools/browser-smoke/runner/history_windows.rs',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ]
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, paths)
+        plan = CI.select_plan(self.policy, paths, shardable=True)
+        self.assertTrue({'portable-path-consumers', 'paged-deletion-review',
+                         'held-directory-layout', 'ci-selection'} <= set(plan['groups']))
+        self.assertTrue({'container-tags-' + area for area in
+                         ('contract', 'storage', 'engine', 'http', 'web', 'format', 'browser')}
+                        <= set(plan['groups']))
+        self.assertGreater(len(plan['rust_targets']), 16)
+        shards = CI.shard_tools().partition(plan)
+        self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                         plan['rust_targets'])
+        self.assertEqual([name for shard in shards for name in shard['python_tests']],
+                         plan['python_tests'])
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+        for group in plan['groups']:
+            actual = [selection for target in plan['rust_targets']
+                      for origin, selection in zip(target['selection_groups'],
+                          target.get('selections', [{key: value for key, value in target.items()
+                                                    if key != 'selection_groups'}]))
+                      if origin == group]
+            self.assertCountEqual(actual, self.policy['groups'][group]['rust_targets'])
+
+    def test_tag_sources_keep_product_features_cross_target_and_current_format_boundaries(self):
+        groups = self.policy['groups']
+        web = groups['container-tags-web']['rust_targets']
+        self.assertTrue(any(target.get('compile_target') == 'wasm32-unknown-unknown'
+                            for target in web))
+        engine = groups['container-tags-engine']['rust_targets']
+        self.assertTrue(any(target.get('mode') == 'check'
+                            and target.get('default_features') is False for target in engine))
+        http = groups['container-tags-http']['rust_targets']
+        self.assertTrue(any(target['package'] == 'storage-client'
+                            and target.get('prefixes') == ['container_tags_tests::']
+                            for target in http))
+        self.assertTrue(all(target['features'] == ['core'] for target in http
+                            if target['package'] == 'storage-server'
+                            and target.get('mode', 'test') == 'test'))
+        self.assertEqual(http[0]['exact'], [
+            'authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors',
+            'authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods',
+        ])
+        browser = groups['container-tags-browser']
+        self.assertEqual(set(browser['python_tests']), {
+            'test_phase1_file_probes', 'test_tag_unknown_probe',
+            'test_browser_history_window_wait',
+        })
+        self.assertEqual(browser['rust_targets'][0]['prefixes'],
+                         ['phase1_files::tests::', 'tag_unknown::tests::'])
+        formats = groups['container-tags-format']['rust_targets'][0]['prefixes']
+        self.assertIn('engine::membership_transition::pending::terminal_resume::', formats)
+        self.assertIn('engine::backup_preparation::native_control::archive::format_tests::', formats)
+        for name, group in groups.items():
+            if name.startswith('container-tags-'):
+                for target in group['rust_targets']:
+                    self.assertLessEqual(len(target.get('prefixes', [])), 16)
+                    self.assertLessEqual(len(target.get('exact', [])), 16)
+                    self.assertLessEqual(target.get('timeout_seconds', 300), 900)
 
 
 if __name__ == '__main__':

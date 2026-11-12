@@ -1,486 +1,376 @@
 use super::*;
+use storage_contract::{
+    Generation,
+    file_container_tags::{Replacement, TagsError},
+};
 
-pub(crate) fn selection(ids: &[&str]) -> Selection {
-    let mut selected = Selection::default();
-    for id in ids {
-        selected
-            .insert(
-                "root-one",
-                SelectedNode {
-                    id: (*id).into(),
-                    version: format!("body-{id}"),
-                    tags: BTreeSet::new(),
-                },
-            )
-            .unwrap();
-    }
-    selected
-}
-fn selected_with_tags() -> Selection {
-    let mut selected = Selection::default();
-    selected
-        .insert(
-            "root-one",
-            SelectedNode {
-                id: "old-node".into(),
-                version: "old-body".into(),
-                tags: BTreeSet::from(["old".into(), "inherited".into()]),
+fn target() -> Target {
+    Target {
+        epoch: 0,
+        navigation: 0,
+        entry: "entry".into(),
+        read_only: false,
+        request: ReadRequest {
+            file_id: "file_00000000000000000000000000000001".parse().unwrap(),
+            context: Context {
+                repository_id: "repo_00000000000000000000000000000001".parse().unwrap(),
+                path: name_policy::PortablePath::parse("a.txt").unwrap(),
             },
-        )
-        .unwrap();
-    selected
-}
-fn branch(id: &str, expected: &str) -> SelectedBranch {
-    SelectedBranch {
-        id: id.into(),
-        name: id.into(),
-        expected: expected.into(),
+        },
     }
 }
-pub(crate) fn draft_with_pending_input(input: &str) -> Draft {
+
+fn set(values: &[&str]) -> TagSet {
+    TagSet::new(values.iter().map(|value| Tag::parse((*value).into()).unwrap())).unwrap()
+}
+fn snapshot() -> Snapshot {
+    let target = target();
+    Snapshot {
+        file_id: target.request.file_id,
+        context: target.request.context,
+        tags: set(&["reviewed"]),
+        generation: Generation::new(7),
+    }
+}
+pub(crate) fn read_model() -> ReadModel {
+    ReadModel {
+        target: Some(target()),
+        snapshot: Some(snapshot()),
+        ..Default::default()
+    }
+}
+pub(crate) fn has_snapshot(model: &ReadModel) -> bool {
+    model.snapshot.is_some()
+}
+pub(crate) fn seed(state: &mut State) {
+    state.files.container_tags = read_model();
+    state.files.selected = Some(crate::files::test_entries::entry(json!({
+        "file_id":"file_00000000000000000000000000000001",
+        "repository_id":"repo_00000000000000000000000000000001",
+        "repository_path":"a.txt",
+        "path":"a.txt"
+    })));
+}
+pub(crate) fn draft_for_instance(instance: u64, input: &str) -> Draft {
+    let value = snapshot();
     Draft {
-        instance: 1,
-        file: "file".into(),
-        repository: "repo".into(),
-        path: "a.txt".into(),
-        root: "root-one".into(),
-        max_entries: 5_001,
-        targets: BTreeMap::from([("old-node".into(), Some("main".into()))]),
-        branches: BTreeMap::from([("main".into(), branch("main", "newer-head"))]),
-        add: BTreeSet::from(["reviewed".into()]),
-        remove: BTreeSet::from(["old".into()]),
+        owner: TagOwner {
+            instance,
+            target: target(),
+        },
+        command: ReplaceCommand {
+            file_id: value.file_id,
+            context: value.context,
+            expected_generation: value.generation,
+            tags: value.tags,
+        },
         input: input.into(),
-        target_page: 0,
-        delta_page: 0,
-        resolved: None,
         needs_review: false,
     }
 }
-
-pub(crate) fn draft_for_instance(instance: u64, input: &str) -> Draft {
-    let mut draft = draft_with_pending_input(input);
-    draft.instance = instance;
-    draft
+pub(crate) fn submission_fixture() -> (Draft, Value) {
+    let mut draft = draft_for_instance(1, "");
+    draft.command.tags = set(&["saved"]);
+    let body = json!({
+        "repository_id":draft.command.context.repository_id,
+        "path":draft.command.context.path,
+        "expected_generation":"7",
+        "tags":["saved"]
+    });
+    (draft, body)
+}
+pub(crate) fn replacement() -> Value {
+    let command = submission_fixture().0.command;
+    json_codec::to_value(Replacement {
+        tags: command.tags.clone(),
+        request: command,
+        generation: Generation::new(8),
+        changed: true,
+    })
+    .unwrap()
+}
+fn state() -> State {
+    let mut state = State {
+        authenticated: true,
+        ..Default::default()
+    };
+    state.management.storage = crate::management::Storage::Ready;
+    state.files.writable = true;
+    seed(&mut state);
+    state
 }
 
 #[test]
-fn tag_deltas_preserve_heterogeneous_inherited_labels_and_do_not_mutate_the_parent() {
-    let selected = selected_with_tags();
-    let node = selected.get("old-node").unwrap();
-    let updated = result_tags(
-        node,
-        &BTreeSet::from(["new".into()]),
-        &BTreeSet::from(["old".into()]),
-    );
-    assert_eq!(updated, BTreeSet::from(["inherited".into(), "new".into()]));
-    assert!(node.tags.contains("old"));
-    assert!(valid_tag(&format!("{}ab", "文".repeat(42))));
-    assert!(!valid_tag(&"文".repeat(43)));
-    assert!(!valid_tag("bad\nlabel"));
-}
-
-#[test]
-fn requests_preserve_off_page_sources_and_frozen_branch_heads() {
-    let selected = selected_with_tags();
-    let draft = draft_with_pending_input("");
-    let body = request(&draft, &selected).unwrap();
-    assert_eq!(body["targets"][0]["source_node_id"], "old-node");
-    assert_eq!(body["targets"][0]["expected_node_id"], "newer-head");
-    assert_eq!(body["add"], json!(["reviewed"]));
-    assert!(body.get("note").is_none());
-    assert_eq!(selected.get("old-node").unwrap().version, "old-body");
-    let inventory = draft.review_inventory();
-    assert_eq!(inventory.node_ids, ["old-node"]);
-    assert_eq!(inventory.branch_ids, ["main"]);
-}
-
-#[test]
-fn one_invalid_target_blocks_every_selected_node_instead_of_submitting_a_subset() {
-    let mut selected = selected_with_tags();
-    selected
-        .insert(
-            "root-one",
-            SelectedNode {
-                id: "full".into(),
-                version: "body-full".into(),
-                tags: (0..storage_contract::MAX_FILE_TAGS)
-                    .map(|index| format!("tag-{index}"))
-                    .collect(),
-            },
-        )
-        .unwrap();
-    let mut draft = draft_with_pending_input("");
-    draft.targets.insert("full".into(), Some("main".into()));
-    assert!(request(&draft, &selected).is_err());
-    draft.remove.insert("tag-0".into());
-    assert_eq!(
-        request(&draft, &selected).unwrap()["targets"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    selected.remove("full");
+fn response_is_bound_to_the_exact_file_repository_path_and_current_format() {
+    let request = target().request;
+    let wire = json_codec::to_value(snapshot()).unwrap();
+    assert_eq!(decode(wire.clone(), &request).unwrap(), snapshot());
+    for patch in [
+        json!({"file_id":"file_00000000000000000000000000000002"}),
+        json!({"context":{
+            "repository_id":"repo_00000000000000000000000000000002", "path":"a.txt"
+        }}),
+        json!({"context":{
+            "repository_id":"repo_00000000000000000000000000000001", "path":"b.txt"
+        }}),
+        json!({"generation":null}),
+        json!({"tags":["dup","dup"]}),
+        json!({"tags":[" padded "]}),
+        json!({"nodes":[]}),
+        json!({"tags":["\n"]}),
+    ] {
+        let mut bad = wire.clone();
+        for (key, value) in patch.as_object().unwrap() {
+            bad[key] = value.clone();
+        }
+        assert!(decode(bad, &request).is_err());
+    }
+    let mut bad = wire;
+    bad.as_object_mut().unwrap().remove("generation");
+    assert!(decode(bad, &request).is_err());
     assert!(
-        request(&draft, &selected).is_err(),
-        "an evicted or missing selected identity cannot become a partial action"
+        read_endpoint(&request)
+            .ends_with("repository_id=repo_00000000000000000000000000000001&path=a.txt")
     );
 }
 
 #[test]
-fn unassigned_branches_and_a_lower_current_core_capability_block_the_whole_action() {
-    let selected = selected_with_tags();
-    let mut draft = draft_with_pending_input("");
-    draft.targets.insert("old-node".into(), None);
-    assert!(request(&draft, &selected).is_err());
-    draft.targets.insert("old-node".into(), Some("main".into()));
-    draft.max_entries = 0;
-    assert!(request(&draft, &selected).is_err());
+fn reads_reject_late_completions_after_reload_close_navigation_and_identity_changes() {
+    let target = target();
+    let mut model = read_model();
+    let first = model.begin();
+    let second = model.begin();
+    model.complete(&target, first, Ok(snapshot()));
+    assert!(model.loading && model.snapshot.is_none());
+    model.complete(&target, second, Ok(snapshot()));
+    assert_eq!(model.snapshot.as_ref(), Some(&snapshot()));
+    for changed in [
+        None,
+        Some(Target {
+            navigation: 1,
+            ..target.clone()
+        }),
+        Some(Target {
+            epoch: 1,
+            ..target.clone()
+        }),
+        Some(Target {
+            request: ReadRequest {
+                file_id: "file_00000000000000000000000000000002".parse().unwrap(),
+                ..target.request.clone()
+            },
+            ..target.clone()
+        }),
+    ] {
+        model.set_target(Some(target.clone()));
+        let generation = model.begin();
+        model.set_target(changed.clone());
+        model.complete(&target, generation, Ok(snapshot()));
+        assert_eq!(model.target, changed);
+        assert!(model.snapshot.is_none() && !model.loading);
+    }
+    model.set_target(Some(target.clone()));
+    let generation = model.begin();
+    model.clear();
+    model.complete(&target, generation, Ok(snapshot()));
+    assert!(model.snapshot.is_none());
 }
 
 #[test]
-fn pending_tag_input_cannot_be_silently_dropped_from_a_valid_delta() {
-    let selected = selected_with_tags();
-    for input in ["another", "  another  ", "bad\nlabel", &"a".repeat(129)] {
-        let draft = draft_with_pending_input(input);
-        assert!(request(&draft, &selected).unwrap_err().contains("Add tag"));
-        assert_eq!(draft.input, input);
-        assert_eq!(draft.add, BTreeSet::from(["reviewed".into()]));
-        assert_eq!(draft.remove, BTreeSet::from(["old".into()]));
-    }
-    for input in ["", "   "] {
-        let body = request(&draft_with_pending_input(input), &selected).unwrap();
-        assert_eq!(body["add"], json!(["reviewed"]));
-        assert_eq!(body["remove"], json!(["old"]));
-    }
+fn branch_content_and_history_paging_do_not_change_container_tags_or_target() {
+    let mut state = state();
+    let target = Target::capture(&state).unwrap();
+    let original = state.files.container_tags.snapshot.clone();
+    state.files.file_history = crate::files::history::tests::history(json!({
+        "selected_branch_id":"other", "nodes":[{"node_id":"new-version"}]
+    }));
+    state.files.history_generation += 1;
+    state.files.history_loading = true;
+    assert_eq!(Target::capture(&state).as_ref(), Some(&target));
+    assert_eq!(state.files.container_tags.snapshot, original);
+    state.session_epoch += 1;
+    assert_ne!(Target::capture(&state).as_ref(), Some(&target));
+    state.authenticated = false;
+    assert!(Target::capture(&state).is_none());
 }
 
 #[test]
-fn rejected_submission_preserves_the_draft_and_never_starts_an_operation() {
+fn editor_uses_a_whole_set_without_trimming_and_preserves_failed_input() {
     Owner::new().with(|| {
-        let state = RwSignal::new(State {
-            authenticated: true,
-            ..Default::default()
-        });
-        state.update(|s| {
-            s.management.storage = crate::management::Storage::Ready;
-            s.files.writable = true;
-            s.files.tag_edit = Some(draft_with_pending_input("  another  "));
-            s.files.checked_nodes = selected_with_tags();
-        });
-        submit(state, 1);
+        let state = RwSignal::new(state());
+        start(state);
+        let instance = state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().instance());
+        for invalid in [" padded ", "", "\n", "reviewed"] {
+            edit(state, instance, |draft| draft.input = invalid.into());
+            add_input(state, instance);
+            state.with_untracked(|s| {
+                let draft = s.files.tag_edit.as_ref().unwrap();
+                assert_eq!(draft.input, invalid);
+                assert_eq!(draft.command.tags, set(&["reviewed"]));
+            });
+        }
+        edit(state, instance, |draft| draft.input = "新标签".into());
+        add_input(state, instance);
         state.with_untracked(|s| {
             let draft = s.files.tag_edit.as_ref().unwrap();
-            assert_eq!(draft.input, "  another  ");
-            assert_eq!(draft.targets["old-node"].as_deref(), Some("main"));
-            assert_eq!(draft.branches["main"].expected, "newer-head");
-            assert!(s.files.checked_nodes.contains("old-node"));
-            assert!(s.files.operations.is_empty());
-            assert!(!s.files.mutation_pending);
-            assert!(
-                s.files.publications[&review::Kind::Tags]
-                    .operation_id
-                    .is_none()
-            );
-            assert!(!review::error_text(s, review::Kind::Tags).is_empty());
-        });
-        add_input(state, 1);
-        state.with_untracked(|s| {
-            let draft = s.files.tag_edit.as_ref().unwrap();
+            assert_eq!(draft.command.tags, set(&["reviewed", "新标签"]));
             assert!(draft.input.is_empty());
-            let body = request(draft, &s.files.checked_nodes).unwrap();
-            assert_eq!(body["add"], json!(["another", "reviewed"]));
-            assert_eq!(body["remove"], json!(["old"]));
-            assert!(s.files.operations.is_empty());
+            assert_eq!(draft.command.expected_generation.get(), 7);
         });
-    });
-}
-
-#[test]
-fn root_review_keeps_old_labels_and_heads_until_explicit_complete_acceptance() {
-    let mut selected = selected_with_tags();
-    let mut draft = draft_with_pending_input("");
-    let mut new = selected.get("old-node").unwrap().clone();
-    new.tags = BTreeSet::from(["rechecked".into()]);
-    draft
-        .resolve_review(
-            "root-two".into(),
-            &[new],
-            &[branch("main", "current-head")],
-            5_001,
-        )
-        .unwrap();
-    assert_eq!(draft.root(), "root-one");
-    assert_eq!(draft.branches["main"].expected, "newer-head");
-    assert!(selected.get("old-node").unwrap().tags.contains("old"));
-    draft.accept_review("root-two", &mut selected).unwrap();
-    assert_eq!(draft.root(), "root-two");
-    assert_eq!(selected.root(), Some("root-two"));
-    assert_eq!(draft.branches["main"].expected, "current-head");
-    assert_eq!(
-        selected.get("old-node").unwrap().tags,
-        BTreeSet::from(["rechecked".into()])
-    );
-    assert_eq!(draft.add, BTreeSet::from(["reviewed".into()]));
-    assert_eq!(draft.remove, BTreeSet::from(["old".into()]));
-}
-
-#[test]
-fn incomplete_or_superseded_review_preserves_all_existing_inputs() {
-    for (root, nodes) in [("root-two", vec![]), ("root-three", vec![])] {
-        let mut selected = selected_with_tags();
-        let before = selected.clone();
-        let mut draft = draft_with_pending_input("unfinished");
-        draft.resolved = Some(ResolvedReview {
-            root: "root-two".into(),
-            nodes,
-            branches: BTreeMap::new(),
-            max_entries: 5_001,
-        });
-        assert!(draft.accept_review(root, &mut selected).is_err());
-        assert_eq!(selected, before);
-        assert_eq!(draft.root(), "root-one");
-        assert_eq!(draft.branches["main"].expected, "newer-head");
-        assert_eq!(draft.input, "unfinished");
-    }
-}
-
-#[test]
-fn failed_complete_resolution_cannot_leave_an_old_review_ready_for_acceptance() {
-    let mut draft = draft_with_pending_input("unfinished");
-    draft.resolved = Some(ResolvedReview {
-        root: "root-two".into(),
-        nodes: vec![],
-        branches: BTreeMap::new(),
-        max_entries: 10,
-    });
-    assert!(
-        draft
-            .resolve_review("root-two".into(), &[], &[], 10)
-            .is_err()
-    );
-    assert!(draft.resolved.is_none());
-    assert_eq!(draft.root(), "root-one");
-    assert_eq!(draft.branches["main"].expected, "newer-head");
-    assert_eq!(draft.input, "unfinished");
-}
-
-#[test]
-fn tag_delta_changes_discard_own_staging_without_cancelling_another_review() {
-    Owner::new().with(|| {
-        let mut value = State::default();
-        let mut draft = draft_with_pending_input("");
-        draft.resolved = Some(ResolvedReview {
-            root: "root-two".into(),
-            nodes: vec![],
-            branches: draft.branches.clone(),
-            max_entries: 5_001,
-        });
-        value.files.tag_edit = Some(draft);
-        let other = ReviewOwner {
-            kind: review::Kind::Merge,
-            instance: 2,
-        };
-        let generation = value.files.history_aux.begin_review(other);
-        let state = RwSignal::new(value);
-        update(state, 1, |draft| {
-            draft.add.insert("new label".into());
-        });
-        state.with_untracked(|s| {
-            let draft = s.files.tag_edit.as_ref().unwrap();
-            assert!(draft.resolved.is_none());
-            assert!(draft.add.contains("new label"));
-            assert!(s.files.history_aux.current_review(other, generation));
-        });
-        let own = ReviewOwner {
-            kind: review::Kind::Tags,
-            instance: 1,
-        };
-        let generation = state
-            .try_update(|s| s.files.history_aux.begin_review(own))
-            .unwrap();
-        edit_input(state, 1, "new input".into());
-        assert!(!state.with_untracked(|s| s.files.history_aux.current_review(own, generation)));
-        state.update(|s| s.files.tag_edit = Some(draft_for_instance(3, "successor input")));
-        let current = ReviewOwner {
-            kind: review::Kind::Tags,
-            instance: 3,
-        };
-        let generation = state
-            .try_update(|s| s.files.history_aux.begin_review(current))
-            .unwrap();
-        edit_input(state, 1, "obsolete input".into());
-        state.with_untracked(|s| {
-            assert_eq!(s.files.tag_edit.as_ref().unwrap().input, "successor input");
-            assert!(s.files.history_aux.current_review(current, generation));
-        });
-    });
-}
-
-#[test]
-fn starting_tag_edits_uses_new_instances_and_targets_only_the_previous_tag_review() {
-    Owner::new().with(|| {
-        let mut value = State {
-            authenticated: true,
-            ..Default::default()
-        };
-        value.management.storage = crate::management::Storage::Ready;
-        value.files.writable = true;
-        value.files.selected = Some(crate::files::test_entries::entry(json!({})));
-        value.files.file_history = crate::files::history::tests::history(json!({
-            "selected_branch_id":"main","branches":[{"branch_id":"main","node_id":"main-head"}]
-        }));
-        value.files.checked_nodes = selected_with_tags();
-        value.files.tag_edit = Some(draft_with_pending_input("old input"));
-        value.files.history_next_draft = 9;
-        let old = ReviewOwner {
-            kind: review::Kind::Tags,
-            instance: 1,
-        };
-        let old_generation = value.files.history_aux.begin_review(old);
-        let state = RwSignal::new(value);
-        start(state);
+        remove(state, instance, "reviewed");
         assert_eq!(
-            state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().instance),
-            10
+            state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().command.tags.clone()),
+            set(&["新标签"]),
         );
-        assert!(!state.with_untracked(|s| s.files.history_aux.current_review(old, old_generation)));
-        let before =
-            state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().review_inventory());
-        let other = ReviewOwner {
-            kind: review::Kind::Merge,
-            instance: 11,
-        };
-        let generation = state
-            .try_update(|s| s.files.history_aux.begin_review(other))
-            .unwrap();
-        start(state);
-        state.with_untracked(|s| {
-            let after = s.files.tag_edit.as_ref().unwrap().review_inventory();
-            assert_eq!(after.instance, 11);
-            assert_eq!(before.node_ids, after.node_ids);
-            assert_eq!(before.branch_ids, after.branch_ids);
-            assert_ne!(before, after);
-            assert!(s.files.history_aux.current_review(other, generation));
-        });
     });
 }
 
-pub(crate) fn submission_fixture() -> (Draft, Selection, Value) {
-    let mut draft = draft_with_pending_input("");
-    let mut selected = selected_with_tags();
-    draft.targets.insert("off-page".into(), Some("main".into()));
-    selected
-        .insert(
-            "root-one",
-            SelectedNode {
-                id: "off-page".into(),
-                version: "off-page-body".into(),
-                tags: BTreeSet::new(),
-            },
-        )
-        .unwrap();
-    let body = request(&draft, &selected).unwrap();
-    (draft, selected, body)
+#[test]
+fn limits_are_bytes_and_full_original_count_not_lossy_set_collection() {
+    assert!(Tag::parse("中".repeat(42)).is_ok());
+    assert_eq!(Tag::parse("中".repeat(43)), Err(TagsError::InvalidTag));
+    assert!(TagSet::new((0..16).map(|i| Tag::parse(i.to_string()).unwrap())).is_ok());
+    assert_eq!(
+        TagSet::new((0..17).map(|i| Tag::parse(i.to_string()).unwrap())),
+        Err(TagsError::Limit),
+    );
+    assert_eq!(
+        TagSet::new([
+            Tag::parse("x".into()).unwrap(),
+            Tag::parse("x".into()).unwrap(),
+        ]),
+        Err(TagsError::Duplicate),
+    );
 }
 
 #[test]
-fn conflict_requires_complete_explicit_review_even_when_the_root_is_unchanged() {
-    let (mut draft, mut selected, _) = submission_fixture();
-    let old_body = request(&draft, &selected).unwrap();
-    let nodes = selected.values().cloned().collect::<Vec<_>>();
-    draft
-        .resolve_review(
-            "root-one".into(),
-            &nodes,
-            &[branch("main", "prior-review")],
-            5001,
-        )
-        .unwrap();
-    draft.require_review();
-    assert!(draft.resolved.is_none());
-    assert!(draft.requires_review());
-    assert!(request(&draft, &selected).is_err());
-    assert!(draft.accept_review("root-one", &mut selected).is_err());
-    assert!(
-        draft
-            .resolve_review(
-                "root-one".into(),
-                &[],
-                &[branch("main", "changed-head")],
-                5001
-            )
-            .is_err()
-    );
-    assert!(draft.requires_review());
-    draft
-        .resolve_review(
-            "root-one".into(),
-            &nodes,
-            &[branch("main", "changed-head")],
-            5001,
-        )
-        .unwrap();
-    assert!(draft.requires_review());
-    assert!(
-        request(&draft, &selected).is_err(),
-        "reading alone does not authorize the changed base"
-    );
-    draft.accept_review("root-one", &mut selected).unwrap();
-    assert!(!draft.requires_review());
-    let reviewed = request(&draft, &selected).unwrap();
-    assert_eq!(reviewed["add"], old_body["add"]);
-    assert_eq!(reviewed["remove"], old_body["remove"]);
-    assert_eq!(reviewed["targets"].as_array().unwrap().len(), 2);
-    for target in reviewed["targets"].as_array().unwrap() {
-        assert_eq!(target["expected_node_id"], "changed-head");
-    }
-}
-
-#[test]
-fn a_conflicted_draft_can_choose_a_fresh_writable_branch_without_unlocking_save() {
+fn conflict_requires_explicit_fresh_base_confirmation_without_merging_draft() {
     Owner::new().with(|| {
-        let mut value = State {
-            authenticated: true,
-            ..Default::default()
-        };
-        value.management.storage = crate::management::Storage::Ready;
-        value.files.writable = true;
-        value.files.selected = Some(crate::files::test_entries::entry(json!({})));
-        let mut draft = draft_with_pending_input("");
+        let mut value = state();
+        let mut draft = draft_for_instance(1, "unfinished");
+        draft.command.tags = set(&["mine"]);
         draft.require_review();
         value.files.tag_edit = Some(draft);
-        value.files.checked_nodes = selected_with_tags();
-        value.files.file_history = crate::files::history::tests::history(json!({
-            "branches":[{"branch_id":"replacement","node_id":"fresh-head"}]
-        }));
+        value.files.container_tags.clear();
         let state = RwSignal::new(value);
-        assert!(state.with_untracked(actions::history_write_allowed));
-        assign_branch(state, 1, "old-node".into(), "replacement".into());
+        accept_current(state, 1);
+        assert!(state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().requires_review()));
         state.update(|s| {
-            let nodes = s.files.checked_nodes.values().cloned().collect::<Vec<_>>();
-            let root = s.files.file_history.root().unwrap().to_owned();
-            let draft = s.files.tag_edit.as_mut().unwrap();
-            assert_eq!(draft.targets["old-node"].as_deref(), Some("replacement"));
-            assert!(draft.requires_review());
-            assert!(request(draft, &s.files.checked_nodes).is_err());
-            draft
-                .resolve_review(
-                    root.clone(),
-                    &nodes,
-                    &[branch("replacement", "fresh-head")],
-                    5001,
-                )
-                .unwrap();
-            assert!(request(draft, &s.files.checked_nodes).is_err());
-            draft
-                .accept_review(&root, &mut s.files.checked_nodes)
-                .unwrap();
-            let body = request(draft, &s.files.checked_nodes).unwrap();
-            assert_eq!(body["targets"][0]["branch_id"], "replacement");
-            assert_eq!(body["targets"][0]["expected_node_id"], "fresh-head");
-            assert_eq!(body["add"], json!(["reviewed"]));
-            assert_eq!(body["remove"], json!(["old"]));
+            s.files.container_tags = read_model();
+            let snapshot = s.files.container_tags.snapshot.as_mut().unwrap();
+            snapshot.generation = Generation::new(9);
+            snapshot.tags = set(&["concurrent"]);
+        });
+        accept_current(state, 1);
+        state.with_untracked(|s| {
+            let draft = s.files.tag_edit.as_ref().unwrap();
+            assert_eq!(draft.command.expected_generation.get(), 9);
+            assert_eq!(draft.command.tags, set(&["mine"]));
+            assert_eq!(draft.input, "unfinished");
+            assert!(!draft.requires_review());
+        });
+        submit(state, 1);
+        assert!(state.with_untracked(|s| s.files.tag_submission.is_none()));
+    });
+}
+
+#[test]
+fn old_editor_callbacks_cannot_change_or_cancel_a_new_draft_and_pending_cannot_cancel() {
+    Owner::new().with(|| {
+        let mut value = state();
+        value.files.tag_edit = Some(draft_for_instance(2, "new"));
+        let state = RwSignal::new(value);
+        edit(state, 1, |draft| draft.input = "late".into());
+        cancel(state, 1);
+        assert_eq!(
+            state.with_untracked(|s| s.files.tag_edit.as_ref().unwrap().input.clone()),
+            "new",
+        );
+        state.update(|s| s.files.mutation_pending = true);
+        cancel(state, 2);
+        assert!(state.with_untracked(|s| s.files.tag_edit.is_some()));
+        state.update(|s| {
+            s.files.mutation_pending = false;
+            s.files.writable = false;
+        });
+        cancel(state, 2);
+        assert!(state.with_untracked(|s| s.files.tag_edit.is_none()));
+    });
+}
+
+#[test]
+fn logout_and_current_session_revocation_cancel_the_tag_read_without_accepting_late_data() {
+    let mut value = state();
+    let original = target();
+    let generation = value.files.container_tags.begin();
+    assert!(crate::ui::begin_logout(&mut value).is_some());
+    value
+        .files
+        .container_tags
+        .complete(&original, generation, Ok(snapshot()));
+    assert!(value.files.container_tags.snapshot.is_none());
+    assert!(!value.files.container_tags.loading);
+    Owner::new().with(|| {
+        let state = RwSignal::new(state());
+        let error = api::Error {
+            code: storage_contract::ErrorCode::RecoveryRequired,
+            status: 401,
+            message: "expired".into(),
+            retryable: false,
+            request_id: None,
+            source: None,
+        };
+        assert!(!accept_read_response::<Snapshot>(state, 0, &Err(error)));
+        state.with_untracked(|s| {
+            assert!(!s.authenticated);
+            assert!(s.files.container_tags.snapshot.is_none());
         });
     });
+}
+
+#[test]
+fn tag_read_errors_are_not_rendered_as_an_empty_success_and_keep_their_typed_source() {
+    let target = target();
+    let mut model = read_model();
+    let generation = model.begin();
+    let mut wrong = snapshot();
+    wrong.context.path = name_policy::PortablePath::parse("different.txt").unwrap();
+    let error = decode(json_codec::to_value(wrong).unwrap(), &target.request).unwrap_err();
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(api::ErrorSource::ContainerTags(DecodeError::Authority(_)))
+    ));
+    model.complete(&target, generation, Err(error));
+    assert!(model.snapshot.is_none() && model.error.is_some() && !model.loading);
+}
+
+#[test]
+fn complete_target_and_write_gates_reject_stale_editor_callbacks() {
+    for change in 0..5 {
+        Owner::new().with(|| {
+            let mut value = state();
+            value.files.tag_edit = Some(draft_for_instance(1, "original"));
+            match change {
+                0 => value.session_epoch += 1,
+                1 => value.files.generation += 1,
+                2 => value.authenticated = false,
+                3 => {
+                    value.files.selected = Some(crate::files::test_entries::entry(json!({
+                        "file_id":"file_00000000000000000000000000000001",
+                        "repository_id":"repo_00000000000000000000000000000001",
+                        "repository_path":"elsewhere.txt", "path":"elsewhere.txt"
+                    })));
+                }
+                _ => value.management.storage = crate::management::Storage::ReadOnly,
+            }
+            let state = RwSignal::new(value);
+            edit(state, 1, |draft| draft.input = "late".into());
+            add_input(state, 1);
+            state.with_untracked(|s| {
+                let draft = s.files.tag_edit.as_ref().unwrap();
+                assert_eq!(draft.input, "original");
+                assert_eq!(draft.command.tags, set(&["reviewed"]));
+            });
+        });
+    }
 }

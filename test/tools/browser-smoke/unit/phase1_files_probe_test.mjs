@@ -189,36 +189,41 @@ function page() {
         context: {repository_id: id('repo', 1), history_tree_id: id('history', 1),
             path: 'browser-smoke.txt', selected_branch_id: id('br', 1), current_node_id: id('ver', 1)}},
         page: {previous_cursor: null, next_cursor: null}, edges: [], nodes: [{node_id: id('ver', 1),
-            version_id: id('ver', 1), current: true, kind: 'content', tags: [], size: '7',
+            version_id: id('ver', 1), current: true, kind: 'content', size: '7',
             content_hash: 'b'.repeat(64), branch_id: id('br', 1), note: 'retained', parents: {state: 'complete'}}]};
 }
+function labels() {
+    return {file_id: id('file', 1),
+        context: {repository_id: id('repo', 1), path: 'browser-smoke.txt'}, tags: [], generation: '0'};
+}
 function publication(p, index) {
-    const before = p.snapshots[index], context = before.identity.context;
-    const old = before.nodes.find(node => node.node_id === context.current_node_id);
-    const after = copy(before), next = {...copy(old), node_id: id('fmeta', index + 2),
-        kind: 'tags', tags: index === 0 ? [p.label] : []};
-    for (const node of after.nodes) node.current = false;
-    after.nodes.unshift(next);
+    const before = p.snapshots[index], prior = p.tagSnapshots[index];
+    const context = before.identity.context;
+    const after = copy(before), next = after.nodes[0];
     after.identity.history_root = String(index + 2).repeat(64);
-    after.identity.context.current_node_id = next.node_id;
-    after.edges.push({node_id: next.node_id, parent_node_id: old.node_id, endpoint: 'in_window'});
+    const tags = index === 0 ? [...prior.tags, p.label].sort() : prior.tags.filter(t => t !== p.label);
     const operation = id('op', index + 1);
-    const body = {operation_id: operation, add: index === 0 ? [p.label] : [],
-        remove: index === 0 ? [] : [p.label], repository_id: context.repository_id, path: context.path,
-        targets: [{branch_id: context.selected_branch_id, expected_node_id: old.node_id, source_node_id: old.node_id}]};
-    // This is the public operation_wire shape, not the persisted OperationResult.kind.
-    const receipt = {operation_id: operation, operation_kind: 'file.tags.update', state: 'completed', error: null,
-        commit_state: 'PUBLISHED', protection_at_publish: 'NOT_APPLICABLE',
-        request_digest: 'd'.repeat(64), publication_sequence: String(index + 2),
-        result: {file_id: before.identity.file_id, content_versions_created: '0', nodes: [{node_id: next.node_id,
-            source_node_id: old.node_id, branch_id: context.selected_branch_id, no_change: false, advanced: true, tags: next.tags}]}};
-    p.writes.push({path: `/api/file-manager/files/${before.identity.file_id}/tags`, body, status: 200, receipt, delivered: true});
+    const body = {operation_id: operation, tags, expected_generation: prior.generation,
+        repository_id: context.repository_id, path: context.path};
+    const command = {file_id: before.identity.file_id, context: copy(prior.context),
+        expected_generation: prior.generation, tags};
+    const current = {...copy(prior), tags, generation: (BigInt(prior.generation) + 1n).toString()};
+    const receipt = {operation_id: operation, operation_kind: 'file.container-tags.replace',
+        state: 'completed', error: null, commit_state: 'PUBLISHED',
+        protection_at_publish: 'NOT_APPLICABLE', request_digest: 'd'.repeat(64),
+        publication_sequence: String(index + 2), result: {request: command, tags,
+            generation: current.generation, changed: true}};
+    p.writes.push({path: `/api/file-manager/files/${before.identity.file_id}/tags`, body,
+        status: 200, receipt, delivered: true, historyReadsAtStart: p.reads.length,
+        tagReadsAtStart: p.tagReads.length});
     p.reads.push({body: after});
-    return {before, after, body, receipt, next};
+    p.tagReads.push({body: current});
+    return {before, after, body, receipt, next, current};
 }
 function tagged() {
     const f = fixture('tags');
     f.state.reads.push({body: page()});
+    f.state.tagReads.push({body: labels()});
     assert.equal(f.state.capture(), id('ver', 1));
     const mutation = publication(f.state, 0);
     return {...f, ...mutation};
@@ -232,7 +237,7 @@ test('tag observer preserves request, original response and full receipt, with n
     assert.equal(f.calls[0][0], request);
     assert.equal(response.bodyUsed, false);
     assert.deepEqual(copy(f.state.reads[0].body), page());
-    const post = new Request(`${origin}/api/file-manager/files/${id('file', 1)}/tags`, {method: 'POST', body: '{"add":["一期已审核"]}'});
+    const post = new Request(`${origin}/api/file-manager/files/${id('file', 1)}/tags`, {method: 'POST', body: '{"expected_generation":"0","tags":["一期已审核"]}'});
     const pending = f.window.fetch(post);
     await until(() => f.state.writes[0]?.release);
     assert.equal(post.bodyUsed, false);
@@ -245,17 +250,18 @@ test('tag observer preserves request, original response and full receipt, with n
     f.state.restore();
 });
 
-test('tag proof accepts add then remove, old current flags changing, and fresh identical rereads', () => {
+test('tag proof accepts replacement then removal without graph changes and fresh independent rereads', () => {
     const f = tagged();
     assert.equal(f.state.verify(0), f.next.node_id);
     const after = f.state.reads.length;
     assert.equal(f.state.reread(0, after), false);
     f.state.reads.push({body: copy(f.after)});
+    f.state.tagReads.push({body: copy(f.current)});
     assert.equal(f.state.reread(0, after), f.next.node_id);
     const removed = publication(f.state, 1);
     assert.equal(f.state.verify(1), removed.next.node_id);
-    assert.deepEqual(copy(removed.next.tags), []);
-    assert.equal(f.state.snapshots[1].nodes[0].tags[0], f.state.label);
+    assert.deepEqual(copy(removed.current.tags), []);
+    assert.equal(f.state.tagSnapshots[1].tags[0], f.state.label);
     f.state.restore();
 });
 
@@ -278,7 +284,7 @@ test('tag proof binds the public operation_kind and rejects internal or unrelate
 test('tag failure evidence preserves observed data without gate callbacks or credentials', async () => {
     const f = fixture('tags', () => page());
     const request = new Request(`${origin}/api/file-manager/files/${id('file', 1)}/tags`, {
-        method: 'POST', headers: {authorization: 'Bearer test-only-secret'}, body: '{"add":["一期已审核"]}'
+        method: 'POST', headers: {authorization: 'Bearer test-only-secret'}, body: '{"expected_generation":"0","tags":["一期已审核"]}'
     });
     const pending = f.window.fetch(request);
     await until(() => f.state.writes[0]?.release);
@@ -286,7 +292,7 @@ test('tag failure evidence preserves observed data without gate callbacks or cre
     assert.equal(snapshot.writes.length, 1);
     assert.equal(snapshot.writes[0].status, 200);
     assert.equal(snapshot.writes[0].delivered, false);
-    assert.deepEqual(copy(snapshot.writes[0].body), {add: ['一期已审核']});
+    assert.deepEqual(copy(snapshot.writes[0].body), {expected_generation: '0', tags: ['一期已审核']});
     assert.deepEqual(copy(snapshot.writes[0].receipt), page());
     assert.equal(Object.hasOwn(snapshot.writes[0], 'release'), false);
     assert.equal(JSON.stringify(snapshot).includes('test-only-secret'), false);
@@ -298,18 +304,21 @@ test('tag failure evidence preserves observed data without gate callbacks or cre
     assert.equal(snapshot.writes[0].delivered, false, 'saved failure evidence is not changed by cleanup');
 });
 
-test('tag proof rejects wrong receipt, changed file/body/old node, missing edge and extra writes', () => {
+test('tag proof rejects wrong receipt, changed file/body/old node, changed edges and extra writes', () => {
     const mutations = [
         f => { f.receipt.operation_id = id('op', 99); },
         f => { f.receipt.state = 'running'; },
-        f => { f.receipt.result.content_versions_created = '1'; },
-        f => { f.receipt.result.nodes[0].node_id = id('fmeta', 99); },
+        f => { f.receipt.result.changed = false; },
+        f => { f.receipt.result.request.expected_generation = '9'; },
         f => { f.after.identity.file_id = id('file', 99); },
         f => { f.after.identity.context.repository_id = id('repo', 99); },
         f => { f.after.identity.context.history_tree_id = id('history', 99); },
         f => { f.after.nodes[0].content_hash = 'c'.repeat(64); },
-        f => { f.after.nodes[1].note = 'changed'; },
-        f => { f.after.edges = []; },
+        f => { f.after.nodes[0].note = 'changed'; },
+        f => { f.after.edges.push({node_id: id('ver', 1), parent_node_id: id('ver', 2)}); },
+        f => { f.current.generation = '8'; },
+        f => { f.current.tags = []; },
+        f => { f.after.nodes.push(copy(f.next)); },
     ];
     for (const mutate of mutations) {
         const f = tagged();
@@ -338,8 +347,34 @@ test('tag capture and reread reject unreviewed or altered history, and cleanup r
     const g = tagged();
     g.state.verify(0);
     const after = g.state.reads.length, changed = copy(g.after);
-    changed.nodes[0].tags = [];
+    changed.nodes[0].content_hash = "c".repeat(64);
     g.state.reads.push({body: changed});
+    g.state.tagReads.push({body: copy(g.current)});
     assert.throws(() => g.state.reread(0, after), /fresh history/);
     g.state.restore();
+});
+
+test('fresh container reads retain tags and generation across version selection', () => {
+    const f = tagged();
+    f.state.verify(0);
+    const after = f.state.tagReads.length;
+    assert.equal(f.state.versionSelection(0, after), false);
+    f.after.identity.context.current_node_id = id('ver', 2);
+    f.after.identity.context.selected_branch_id = id('br', 2);
+    f.state.tagReads.push({body: copy(f.current)});
+    assert.equal(f.state.versionSelection(0, after), true);
+    f.state.tagReads.at(-1).body.tags = [];
+    assert.throws(() => f.state.versionSelection(0, after), /version selection/);
+    f.state.restore();
+});
+
+test('tag read observer binds the real GET path and query to the returned context', async () => {
+    const f = fixture('tags', () => labels());
+    const route = `${origin}/api/file-manager/files/${id('file', 1)}/tags`;
+    await f.window.fetch(`${route}?repository_id=${id('repo', 2)}&path=browser-smoke.txt`);
+    assert.equal(f.state.tagReads.length, 0);
+    const response = await f.window.fetch(`${route}?repository_id=${id('repo', 1)}&path=browser-smoke.txt`);
+    assert.equal(response, f.responses.at(-1));
+    assert.deepEqual(copy(f.state.tagReads[0].body), labels());
+    f.state.restore();
 });

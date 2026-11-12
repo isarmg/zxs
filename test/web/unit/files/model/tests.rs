@@ -103,7 +103,7 @@ fn navigation_resets_only_location_owned_state() {
             recursive_backup: None,
             placement: None,
             tag_edit: None,
-            checked_nodes: crate::files::tags::tests::selection(&["old-node"]),
+            container_tags: crate::files::tags::tests::read_model(),
             node_retirement: Default::default(),
             tag_submission: None,
             publications: [(
@@ -148,7 +148,8 @@ fn navigation_resets_only_location_owned_state() {
         assert!(model.selected.is_none() && !model.file_history.loaded());
         assert!(!model.history_loading);
         assert_eq!(model.history_generation, 12);
-        assert!(model.checked_entries.is_empty() && model.checked_nodes.is_empty());
+        assert!(model.checked_entries.is_empty());
+        assert!(!crate::files::tags::tests::has_snapshot(&model.container_tags));
         assert!(model.batch.is_none() && model.merge.is_none());
         assert!(
             model.backup.is_none()
@@ -193,12 +194,12 @@ fn refreshed_head_preserves_inputs_but_invalidates_the_loaded_history_basis() {
         &mut Arc::make_mut(&mut model.entries)[0],
         json!({"selected_branch_id":"draft","version_id":"v2"}),
     );
-    model.checked_nodes = crate::files::tags::tests::selection(&["old-node"]);
+    model.container_tags = crate::files::tags::tests::read_model();
     model.reconcile_selection(model.entries.first().cloned());
     assert_eq!(model.selected.as_ref().unwrap().version_id().unwrap(), "v2");
     assert!(model.file_history.loaded() && !model.file_history.ready());
     assert!(!model.history_loading);
-    assert!(model.checked_nodes.contains("old-node"));
+    assert!(crate::files::tags::tests::has_snapshot(&model.container_tags));
     assert_eq!(model.history_generation, 1);
 }
 
@@ -215,7 +216,7 @@ fn history_read_is_invalidated_when_only_the_logical_context_changes() {
         let mut model = Model {
             selected: Some(original.clone()),
             file_history: history(json!({"note":"old context"})),
-            checked_nodes: crate::files::tags::tests::selection(&["old-node"]),
+            container_tags: crate::files::tags::tests::read_model(),
             history_loading: true,
             history_generation: 4,
             ..Default::default()
@@ -226,7 +227,7 @@ fn history_read_is_invalidated_when_only_the_logical_context_changes() {
         assert!(!model.history_loading);
         assert!(model.history_cancellation.is_none());
         assert!(!model.file_history.loaded());
-        assert!(model.checked_nodes.is_empty());
+        assert!(!crate::files::tags::tests::has_snapshot(&model.container_tags));
     }
 }
 

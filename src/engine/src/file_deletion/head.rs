@@ -6,7 +6,6 @@ use crate::{FileMetadataKind, FileMetadataNode, FilePathNode, FileVersion, State
 pub enum FileDeletionNodeKind {
     Content,
     Rename,
-    Tags,
     Merge,
 }
 
@@ -68,7 +67,6 @@ impl<'a> FileDeletionHead<'a> {
             Node::Content(_) => FileDeletionNodeKind::Content,
             Node::Rename(_) => FileDeletionNodeKind::Rename,
             Node::Metadata(metadata) => match metadata.kind {
-                FileMetadataKind::Tags => FileDeletionNodeKind::Tags,
                 FileMetadataKind::Merge => FileDeletionNodeKind::Merge,
             },
         }

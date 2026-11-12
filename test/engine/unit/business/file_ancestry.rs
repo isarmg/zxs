@@ -162,13 +162,3 @@ fn global_header_and_raw_parent_scans_have_separate_hard_limits() {
     );
 }
 
-#[test]
-fn chosen_tag_inheritance_cannot_continue_after_shared_work_is_exhausted() {
-    let mut budget = SearchBudget { nodes: 0, edges: 0 };
-    assert_eq!(
-        chosen_tags(&State::default(), "unvisited", &mut budget)
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::ResourceLimit
-    );
-}

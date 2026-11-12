@@ -279,6 +279,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                         {merge::view(state)}
                     </Show>
                 </section>
+                {tags::view(state)}
                 <section class="zxs-entry-section zxs-entry-version-history zxs-stack" aria-busy=move ||state.with(|s|s.files.history_loading).to_string()><h3 class="zxs-row">{t("版本历史","Version history")}</h3>
                     <div class="zxs-file-toolbar zxs-flow">
                         <button class="zxs-button" disabled=move ||history_page_disabled.get()||state.with(|s|s.files.file_history.previous_cursor().is_none()) on:click=move |_|actions::page_history_nodes(state,false)>{t("上一页历史","Previous history page")}</button>
@@ -287,7 +288,6 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                             <button class="zxs-button" disabled=move ||history_page_disabled.get() on:click=move |_|if let Some(id)=state.with_untracked(|s|s.files.file_history.current_node_id().map(str::to_owned)){actions::anchor_history_node(state,id);}>{t("定位当前节点","Locate current node")}</button>
                         </Show>
                     </div>
-                    <Show when=move ||can_modify.get()>{tags::view(state)}</Show>
                     {version_tree::view(state)}
                     {super::content_matches::view(state)}
                     {super::shared_history::view(state)}

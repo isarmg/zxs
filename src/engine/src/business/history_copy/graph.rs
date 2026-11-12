@@ -137,6 +137,9 @@ pub(in crate::business) fn project(
         .iter()
         .any(|id| ids.get(id).is_some_and(|id| next.versions.contains_key(id)))
         || next.file_names.contains_key(&file)
+        || next
+            .container_tags
+            .contains_key(&file.parse::<storage_contract::FileId>()?)
     {
         return Err(invalid());
     }
@@ -287,6 +290,17 @@ pub(in crate::business) fn project(
             next.version_notes.insert(mapped(id)?, note.clone());
         }
     }
+    let source_tags = previous
+        .container_tags
+        .get(&source.file.parse::<storage_contract::FileId>()?)
+        .ok_or_else(crate::business::file_tags::invalid)?;
+    next.container_tags.insert(
+        file.parse::<storage_contract::FileId>()?,
+        storage_contract::file_container_tags::ContainerTags::new(
+            source_tags.tags().clone(),
+            storage_contract::Generation::new(0),
+        ),
+    );
     if let Some(note) = previous.file_notes.get(&source.file) {
         next.file_notes.insert(file.clone(), note.clone());
     }

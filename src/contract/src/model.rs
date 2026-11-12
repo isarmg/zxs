@@ -1,9 +1,6 @@
 use crate::SharedRecords;
 use data_serialization::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 // Unit-enum derive also accepts object aliases. This boundary only borrows
 // canonical string tokens and preserves each enum's diagnostic expectation.
@@ -196,7 +193,7 @@ macro_rules! string_state {
 }
 
 string_state!(BranchKind { File => "file", Full => "full" });
-string_state!(FileMetadataKind { Tags => "tags", Merge => "merge" });
+string_state!(FileMetadataKind { Merge => "merge" });
 string_state!(HistoryState { Active => "active", Archived => "archived" });
 string_state!(BranchState {
     Active => "active", Archived => "archived", Migrated => "migrated", Merged => "merged"
@@ -370,7 +367,6 @@ pub struct FileMetadataNode {
     pub parent_node_ids: Vec<String>,
     pub branch_id: String,
     pub kind: FileMetadataKind,
-    pub tags: BTreeSet<String>,
     pub operation_id: crate::OperationId,
     pub author: String,
     #[serialization(with = "crate::u64_string")]
@@ -432,14 +428,6 @@ pub struct FileMergeInput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct FileHistoryMergeInput {
-    pub branch_id: String,
-    pub source_node_id: String,
-    pub expected_node_id: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct FileTagTarget {
     pub branch_id: String,
     pub source_node_id: String,
     pub expected_node_id: String,
@@ -1022,6 +1010,7 @@ pub struct ProtectionPolicy {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct State {
+    pub container_tags: crate::TrackedFiles<crate::file_container_tags::ContainerTags>,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
     #[serialization(with = "crate::u64_string")]
@@ -1123,6 +1112,7 @@ impl State {
             };
         }
         track!(
+            container_tags,
             events,
             repositories,
             histories,

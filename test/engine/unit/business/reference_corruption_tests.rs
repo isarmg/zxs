@@ -1,6 +1,37 @@
 //! Broken persisted references are recoverable errors, not mutex-poisoning panics.
 use super::*;
 
+fn publish_merge(
+    engine: &mut Engine,
+    file: &str,
+    branch: &str,
+    source: &str,
+    operation: storage_contract::OperationId,
+) -> crate::Result<crate::OperationResult> {
+    let owner = engine.state.branches.values()
+        .find(|candidate| candidate.file_id.as_deref() == Some(file)
+            && candidate.branch_id != branch && candidate.state == BranchState::Active)
+        .unwrap().branch_id.clone();
+    engine.merge_file_branches(crate::FileBranchMergeRequest {
+        file_id: file,
+        inputs: &[
+            FileMergeInput {
+                branch_id: owner.clone(),
+                expected_node_id: source.into(),
+            },
+            FileMergeInput {
+                branch_id: branch.into(),
+                expected_node_id: source.into(),
+            },
+        ],
+        chosen_node_id: source,
+        surviving_branch_id: &owner,
+        location: None,
+        principal: "admin",
+        operation_id: operation,
+    })
+}
+
 fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
@@ -291,19 +322,10 @@ fn file_node_publication_exposes_missing_admitted_main_without_leaking_new_nodes
         }
         let before = canonical_json(engine.state()).unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            engine.update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-                file_id: &entry.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: branch,
-                    source_node_id: entry.version_id.clone(),
-                    expected_node_id: entry.version_id,
-                }],
-                add: &["tag".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-            })
+            publish_merge(
+                &mut engine, &entry.file_id, &branch, &entry.version_id,
+                storage_contract::OperationId::generate().unwrap(),
+            )
         }));
         assert!(result.is_err(), "{missing}: admitted root must exist");
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{missing}");
@@ -354,21 +376,9 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
         let sequence = engine.state.sequence;
         let slot = engine.next_slot;
         let operation = storage_contract::OperationId::generate().unwrap();
-        let error = engine
-            .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-                file_id: &entry.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: file_branch,
-                    source_node_id: entry.version_id.clone(),
-                    expected_node_id: entry.version_id,
-                }],
-                add: &["tag".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: operation,
-            })
-            .unwrap_err();
+        let error = publish_merge(
+            &mut engine, &entry.file_id, &file_branch, &entry.version_id, operation,
+        ).unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,
@@ -435,21 +445,10 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
             continue;
         }
         let before = canonical_json(engine.state()).unwrap();
-        let error = engine
-            .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-                file_id: &entry.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: branch,
-                    source_node_id: head.clone(),
-                    expected_node_id: head.clone(),
-                }],
-                add: &["tag".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: storage_contract::OperationId::generate().unwrap(),
-            })
-            .unwrap_err();
+        let error = publish_merge(
+            &mut engine, &entry.file_id, &branch, &head,
+            storage_contract::OperationId::generate().unwrap(),
+        ).unwrap_err();
         assert!(
             matches!(
                 error.code(),
@@ -491,8 +490,6 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
         "select",
         "select_at",
         "namespace",
-        "tags_file",
-        "tags_main",
         "archive",
         "merge_survivor",
         "merge_alias",
@@ -500,7 +497,7 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
         let (_temporary, mut engine, repo, entry, draft) = fixture();
         let owner = engine.state.file_selections[&entry.file_id].clone();
         let saturated = match action {
-            "tags_file" | "archive" | "merge_alias" => &draft,
+            "archive" | "merge_alias" => &draft,
             "merge_survivor" => &owner,
             _ => &repo.main_branch_id,
         };
@@ -532,25 +529,6 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
                 "admin",
                 operation,
             ),
-            "tags_file" | "tags_main" => {
-                engine.update_file_node_tags(crate::FileNodeTagsUpdateRequest {
-                    file_id: &entry.file_id,
-                    targets: &[FileTagTarget {
-                        branch_id: if action == "tags_file" {
-                            draft.clone()
-                        } else {
-                            owner.clone()
-                        },
-                        source_node_id: entry.version_id.clone(),
-                        expected_node_id: entry.version_id.clone(),
-                    }],
-                    add: &["tag".into()],
-                    remove: &[],
-                    location: None,
-                    principal: "admin",
-                    operation_id: operation,
-                })
-            }
             "archive" => engine.archive_branch(&draft, "admin", operation),
             "merge_survivor" | "merge_alias" => {
                 engine.merge_file_branches(crate::FileBranchMergeRequest {
@@ -736,4 +714,33 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
         );
         assert_eq!(canonical_json(engine.state()).unwrap(), before, "{action}");
     }
+}
+
+#[test]
+fn exhausted_container_generation_rejects_replacement_without_publication() {
+    use storage_contract::file_container_tags::{ContainerTags, Context, ReplaceCommand, Tag, TagSet};
+    let (_temporary, mut engine, repo, entry, _) = fixture();
+    let file = entry.file_id.parse::<storage_contract::FileId>().unwrap();
+    std::sync::Arc::make_mut(&mut engine.state).container_tags.insert(
+        file,
+        ContainerTags::new(TagSet::empty(), storage_contract::Generation::new(u64::MAX)),
+    );
+    let before = canonical_json(engine.state()).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let result = engine.replace_container_tags(
+        &ReplaceCommand {
+            file_id: file,
+            context: Context {
+                repository_id: repo.repository_id.parse().unwrap(),
+                path: entry.path.clone(),
+            },
+            expected_generation: storage_contract::Generation::new(u64::MAX),
+            tags: TagSet::new([Tag::parse("changed".into()).unwrap()]).unwrap(),
+        },
+        &"admin".parse().unwrap(),
+        operation,
+    );
+    assert_eq!(result.unwrap_err().code(), storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(!engine.state.operations.contains_key(&operation));
 }

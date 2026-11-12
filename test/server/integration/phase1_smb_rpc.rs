@@ -23,6 +23,40 @@ use storage_server::{
     engine_backend::EngineBackend,
 };
 
+fn tag_command(
+    file: &str,
+    repository: &str,
+    path: &str,
+    generation: u64,
+    labels: &[&str],
+) -> storage_contract::file_container_tags::ReplaceCommand {
+    use storage_contract::file_container_tags::{Context, ReplaceCommand, Tag, TagSet};
+    ReplaceCommand {
+        file_id: file.parse().unwrap(),
+        context: Context {
+            repository_id: repository.parse().unwrap(),
+            path: name_policy::PortablePath::parse(path).unwrap(),
+        },
+        expected_generation: storage_contract::Generation::new(generation),
+        tags: TagSet::new(labels.iter().map(|label| Tag::parse((*label).into()).unwrap())).unwrap(),
+    }
+}
+
+fn write_history_content(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> String {
+    let workspace = engine.create_workspace(branch, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, path, bytes).unwrap();
+    engine.commit_workspace(storage_contract::CommitRequest {
+        workspace_id: workspace.workspace_id,
+        principal: "alice".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        operation_id: OperationId::generate().unwrap(),
+        message: "retained history source".into(),
+        request_digest: None,
+    }).unwrap();
+    engine.file_branch_head(branch).unwrap()
+}
+
 struct Fixture {
     runtime: tokio::runtime::Runtime,
     server: tokio::task::JoinHandle<io::Result<()>>,
@@ -139,38 +173,14 @@ impl Fixture {
             .unwrap()
     }
 
-    fn annotate(&self, repository: &str, source: &Entry) -> String {
+    fn annotate(&self, repository: &str, source: &Entry) {
         let identity = self.identity();
-        let history = self
-            .backend
-            .file_history_snapshot(
+        self.backend
+            .replace_container_tags(
                 &identity,
-                ReadFileHistory::parse(
-                    source.file_id.clone(),
-                    Some(repository.into()),
-                    Some(source.path().into()),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        let node = history.current_node_id.unwrap();
-        let result = self
-            .backend
-            .update_file_node_tags(
-                &identity,
-                storage_server::UpdateFileNodeTags {
-                    file_id: source.file_id.clone(),
-                    targets: vec![storage_contract::FileTagTarget {
-                        branch_id: history.selected_branch_id.unwrap(),
-                        source_node_id: node.clone(),
-                        expected_node_id: node,
-                    }],
-                    add: vec!["source-only".into()],
-                    remove: vec![],
-                    location: Some(storage_contract::FileLocation {
-                        repository_id: repository.into(),
-                        path: source.path().into(),
-                    }),
+                storage_server::ReplaceContainerTags {
+                    command: tag_command(&source.file_id, repository, source.path(), 0,
+                        &["source-only"]),
                     operation_id: OperationId::generate().unwrap(),
                 },
             )
@@ -198,10 +208,7 @@ impl Fixture {
                 )
                 .unwrap();
         }
-        result.result["nodes"][0]["node_id"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+
     }
 
     fn cold_open(self) -> (tempfile::TempDir, Engine) {
@@ -355,7 +362,7 @@ fn public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart() 
     let source = fixture.entry(&repo.main_branch_id, "from/source.txt");
     assert_eq!(source.file_id, original.file_id);
     assert_ne!(source.version_id, original.version_id);
-    let tag_node = fixture.annotate(&repo.repository_id, &source);
+    fixture.annotate(&repo.repository_id, &source);
     let (_, bytes) = read(&client, "p/from/source.txt");
     assert_eq!(bytes, b"later");
     let created = save(&client, "p/to/new.txt", &bytes, true);
@@ -402,8 +409,8 @@ fn public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart() 
     );
     assert!(
         engine
-            .file_node_tags(&target.file_id, &target.version_id)
-            .unwrap()
+            .state().container_tags[&target.file_id.parse::<storage_contract::FileId>().unwrap()]
+            .tags()
             .is_empty()
     );
     assert!(!engine.state().file_notes.contains_key(&target.file_id));
@@ -419,8 +426,10 @@ fn public_smb_bridge_read_to_new_file_keeps_independent_history_after_restart() 
         "source note"
     );
     assert_eq!(
-        engine.file_node_tags(&source.file_id, &tag_node).unwrap(),
-        BTreeSet::from(["source-only".into()])
+        engine.state().container_tags[
+            &source.file_id.parse::<storage_contract::FileId>().unwrap()
+        ].tags().iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+        ["source-only"]
     );
     assert_eq!(exported(&engine, root.path(), &target.version_id), b"later");
 }

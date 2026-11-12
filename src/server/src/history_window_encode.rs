@@ -154,13 +154,6 @@ fn node(node: &HistoryNodeSummary, identity: &HistoryPageIdentity) -> Result<(),
     name(&node.download_name)?;
     name(&node.storage_name)?;
     note(&node.note)?;
-    if node.tags.len() > storage_contract::MAX_FILE_TAGS {
-        return Err(invalid("history node exceeds its tag budget"));
-    }
-    for tag in &node.tags {
-        storage_contract::validate_tag(tag)
-            .map_err(|source| invalid("history node has an invalid tag").with_source(source))?;
-    }
     if let HistoryParentSet::More { cursor } = &node.parents {
         scoped_cursor(cursor, identity)?;
         if !matches!(&cursor.payload().collection,

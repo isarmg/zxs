@@ -120,7 +120,7 @@ fn action_label(action: &str) -> String {
         "file.path.metadata" => t("更新节点备注", "Updated node note"),
         "file.branch.rename" => t("重命名文件分支", "Renamed file branch"),
         "file.branches.merge" => t("合并文件分支", "Merged file branches"),
-        "file.tags.update" => t("更新节点标签", "Updated node tags"),
+        "file.container-tags.replace" => t("更新容器标签", "Updated container tags"),
         "backup.configure" => t("更新备份策略", "Updated backup configuration"),
         "backup.configure-recursive" => t("更新逐级备份", "Updated recursive backups"),
         "directory.scope.initialize" => t("登记目录范围", "Registered folder scope"),

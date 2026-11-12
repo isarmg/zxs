@@ -252,7 +252,7 @@ fn fixture() -> State {
     })));
     state.file_metadata_nodes.insert("meta".into(), record(json!({
         "node_id":"meta", "history_tree_id":"history", "file_id":"file-b", "version_id":"v-b",
-        "parent_node_ids":[], "branch_id":"b-b", "kind":"tags", "tags":[],
+        "parent_node_ids":[], "branch_id":"b-b", "kind":"merge",
         "operation_id":"op_00000000000000000000000000000000", "author":"author", "sequence":"1", "created_at":"1"
     })));
     state.file_branch_merges.insert("merge".into(), record(json!({
@@ -477,12 +477,7 @@ fn overlapping_notes_and_joint_removals_keep_original_owner_rules() {
     // this change; exact write candidates must not widen their semantics.
     assert_change(&before, &[], |after| {
         after.file_path_nodes.get_mut("path").unwrap().author = "different".into();
-        after
-            .file_metadata_nodes
-            .get_mut("meta")
-            .unwrap()
-            .tags
-            .insert("tag".into());
+        after.file_metadata_nodes.get_mut("meta").unwrap().author = "different".into();
         after.file_branch_merges.get_mut("merge").unwrap().sequence += 1;
         after.versions.get_mut("v-a").unwrap().version_sequence += 1;
     });
@@ -551,4 +546,24 @@ fn exact_key_visitor_never_consumes_full_map_iterator() {
     visited.clear();
     visit_changes(MapChanges::All, all.iter(), |key| visited.push(key.clone()));
     assert_eq!(visited, all);
+}
+
+#[test]
+fn typed_container_tag_writes_select_only_the_changed_file() {
+    use storage_contract::file_container_tags::{ContainerTags, Tag, TagSet};
+    let file: storage_contract::FileId =
+        "file_00000000000000000000000000000001".parse().unwrap();
+    let mut before = State::default();
+    before.container_tags.insert(file, ContainerTags::empty());
+    let mut next = before.clone();
+    next.begin_tracking();
+    next.container_tags.insert(file, ContainerTags::new(
+        TagSet::new([Tag::parse("review".into()).unwrap()]).unwrap(),
+        storage_contract::Generation::new(1),
+    ));
+    assert_eq!(changed_files(&before, &next), BTreeSet::from([file.to_string()]));
+    let mut same = before.clone();
+    same.begin_tracking();
+    same.container_tags.insert(file, ContainerTags::empty());
+    assert!(changed_files(&before, &same).is_empty());
 }

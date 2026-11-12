@@ -310,13 +310,13 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
     let right = branch(&app, &token, file, base, "right").await;
     let tag_route = format!("/api/file-manager/files/{file}/tags");
     let tag_request = json!({
-        "targets":[{"branch_id":left,"source_node_id":base,"expected_node_id":base}],
-        "add":["reviewed"],"remove":[],"repository_id":repo,"path":"report.txt","operation_id":new_id("op").unwrap()
+        "tags":["reviewed"],"expected_generation":"0",
+        "repository_id":repo,"path":"report.txt","operation_id":new_id("op").unwrap()
     });
     let tagged = success(&app, &token, "POST", &tag_route, Some(tag_request.clone())).await;
     let merge_route = format!("/api/file-manager/files/{file}/merge");
     let merge_request = json!({
-        "inputs":[{"branch_id":left,"expected_node_id":tagged["result"]["nodes"][0]["node_id"]},{"branch_id":right,"expected_node_id":base}],
+        "inputs":[{"branch_id":left,"expected_node_id":base},{"branch_id":right,"expected_node_id":base}],
         "chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,
         "repository_id":repo,"path":"report.txt","operation_id":new_id("op").unwrap()
     });
@@ -371,19 +371,27 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
             .remove("repository_id");
         context_removed.as_object_mut().unwrap().remove("path");
         let mut payload_changed = request.clone();
-        if payload_changed.get("add").is_some() {
-            payload_changed["add"] = json!(["different"]);
+        if payload_changed.get("tags").is_some() {
+            payload_changed["tags"] = json!(["different"]);
         } else {
             payload_changed["surviving_branch_id"] = right.clone().into();
         }
         for changed in [
             path_changed,
             repository_changed,
-            context_removed,
             payload_changed,
         ] {
             let (status, response) = send(&app, Some(&token), "POST", &route, Some(changed)).await;
             assert_eq!(status, StatusCode::CONFLICT, "{response}");
+            assert_eq!(response["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+        }
+        let (status, response) = send(
+            &app, Some(&token), "POST", &route, Some(context_removed),
+        ).await;
+        if request.get("tags").is_some() {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        } else {
+            assert_eq!(status, StatusCode::CONFLICT);
             assert_eq!(response["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
         }
         let mut unpaired = request.clone();
@@ -442,55 +450,48 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let right = branch(&app, &token, file, base, "right").await;
     select(&app, &token, file, &left).await;
     let tag_route = format!("/api/file-manager/files/{file}/tags");
-    let tagged=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":base,"expected_node_id":base}],"add":["已审核","work"],"remove":[],"operation_id":new_id("op").unwrap()}))).await;
-    let tag_node = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap();
-    assert!(tag_node.starts_with("fmeta_"));
+    let before_labels = history(&app, &token, file).await;
+    let tagged = success(
+        &app, &token, "POST", &tag_route,
+        Some(json!({
+            "repository_id":repo,"path":"report.txt","expected_generation":"0",
+            "tags":["已审核","work"],"operation_id":new_id("op").unwrap()
+        })),
+    ).await;
+    assert_eq!(tagged["result"]["tags"], json!(["work", "已审核"]));
+    assert_eq!(tagged["result"]["generation"], "1");
+    let chosen_node = base;
     let initial = history(&app, &token, file).await;
+    assert_eq!(initial["nodes"], before_labels["nodes"]);
+    assert_eq!(initial["identity"]["context"]["current_node_id"], base);
+    assert_eq!(version_bytes(&app, &token, base).await, b"base body");
     assert_eq!(
         history_versions(&app, &token, file, &initial, None).await["versions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+            .as_array().unwrap().len(),
+        1,
     );
-    assert_eq!(initial["identity"]["context"]["current_node_id"], tag_node);
-    let snapshot = initial["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["node_id"] == tag_node)
-        .unwrap();
-    assert_eq!(snapshot["kind"], "tags");
-    assert_eq!(snapshot["tags"], json!(["work", "已审核"]));
-    let parents = history_related(
-        &app,
-        &token,
-        file,
-        &initial,
-        &format!("nodes/{tag_node}/parents"),
-        None,
-    )
-    .await;
-    assert_eq!(parents["parents"], json!([{"parent_node_id":base}]));
-    success(
-        &app,
-        &token,
-        "PATCH",
-        &format!("/api/file-manager/files/{file}/nodes/{tag_node}"),
-        Some(json!({"note":"独立标签备注","operation_id":new_id("op").unwrap()})),
-    )
-    .await;
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
     let renamed = history(&app, &token, file).await;
     let path_node = renamed["identity"]["context"]["current_node_id"]
         .as_str()
         .unwrap();
+    success(
+        &app, &token, "PATCH",
+        &format!("/api/file-manager/files/{file}/nodes/{path_node}"),
+        Some(json!({"note":"独立路径备注","operation_id":new_id("op").unwrap()})),
+    ).await;
     manager_upload(&app, &token, "renamed.txt", b"left body").await;
     let written = history(&app, &token, file).await;
     let left_node = written["identity"]["context"]["current_node_id"]
         .as_str()
         .unwrap();
-    assert_eq!(written["nodes"][0]["tags"], json!(["work", "已审核"]));
+    assert!(
+        written["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|node| node.get("tags").is_none())
+    );
     let parents = history_related(
         &app,
         &token,
@@ -501,15 +502,27 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     )
     .await;
     assert_eq!(parents["parents"], json!([{"parent_node_id":path_node}]));
-    let historical=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":tag_node,"expected_node_id":left_node}],"add":["归档"],"remove":["work"],"operation_id":new_id("op").unwrap()}))).await;
-    assert_eq!(historical["result"]["nodes"][0]["advanced"], false);
+    let historical = success(
+        &app, &token, "POST", &tag_route,
+        Some(json!({
+            "repository_id":repo,"path":"renamed.txt","expected_generation":"1",
+            "tags":["已审核","归档"],"operation_id":new_id("op").unwrap()
+        })),
+    ).await;
+    assert_eq!(historical["result"]["generation"], "2");
     assert_eq!(
         history(&app, &token, file).await["identity"]["context"]["current_node_id"],
         left_node
     );
     let before_invalid = history(&app, &token, file).await;
     for bad in [" bad".to_string(), "bad\nlabel".into(), "文".repeat(43)] {
-        assert_eq!(send(&app,Some(&token),"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_node,"expected_node_id":left_node}],"add":[bad],"remove":[],"operation_id":new_id("op").unwrap()}))).await.0,StatusCode::BAD_REQUEST);
+        assert_eq!(
+            send(&app, Some(&token), "POST", &tag_route, Some(json!({
+                "repository_id":repo,"path":"renamed.txt","expected_generation":"2",
+                "tags":[bad],"operation_id":new_id("op").unwrap()
+            }))).await.0,
+            StatusCode::BAD_REQUEST,
+        );
     }
     assert_eq!(history(&app, &token, file).await, before_invalid);
     select(&app, &token, file, &right).await;
@@ -519,7 +532,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .as_str()
         .unwrap();
     let merge_route = format!("/api/file-manager/files/{file}/merge");
-    let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":tag_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op").unwrap()});
+    let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":chosen_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op").unwrap()});
     let mut unconfirmed = request.clone();
     unconfirmed["confirmed"] = false.into();
     assert_eq!(
@@ -564,7 +577,13 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         result["path"], "report.txt",
         "merge metadata describes its chosen source, independent of parent UUID order"
     );
-    assert_eq!(result["tags"], json!(["work", "已审核"]));
+    assert!(result.get("tags").is_none());
+    let labels = success(
+        &app, &token, "GET",
+        &format!("{tag_route}?repository_id={repo}&path=renamed.txt"), None,
+    ).await;
+    assert_eq!(labels["tags"], json!(["已审核", "归档"]));
+    assert_eq!(labels["generation"], "2");
     let branches = history_related(&app, &token, file, &after, "branches", None).await;
     let alias = branches["branches"]
         .as_array()
@@ -579,7 +598,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let records = merges["merges"].as_array().unwrap();
     assert_eq!(records.len(), 1);
     let merge = &records[0];
-    assert_eq!(merge["chosen_node_id"], tag_node);
+    assert_eq!(merge["chosen_node_id"], chosen_node);
     assert_eq!(merge["result_node_id"], node);
     assert_eq!(merge["surviving_branch_id"], left);
     let merge_id = merge["merge_id"].as_str().unwrap();
@@ -620,7 +639,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     for (ordinal, parent) in parents.iter().enumerate() {
         assert_eq!(parent["ordinal"], ordinal.to_string());
     }
-    for head in [left_node, right_node, tag_node] {
+    for head in [left_node, right_node, chosen_node] {
         assert!(
             parents
                 .iter()
@@ -665,14 +684,17 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
             Some(&session),
             "POST",
             &tag_route,
-            Some(json!({"targets":[],"add":[],"remove":[],"operation_id":new_id("op").unwrap()}))
+            Some(json!({
+                "repository_id":repo,"path":"renamed.txt","expected_generation":"2",
+                "tags":[],"operation_id":new_id("op").unwrap()
+            }))
         )
         .await
         .0,
         StatusCode::UNAUTHORIZED
     );
     let audit = success(&app, &token, "GET", "/api/file-manager/history", None).await;
-    for action in ["file.branches.merge", "file.tags.update"] {
+    for action in ["file.branches.merge", "file.container-tags.replace"] {
         assert!(
             audit["events"]
                 .as_array()
@@ -681,7 +703,9 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
                 .any(|event| event["action"] == action)
         );
     }
-    capture_wire("file-merge-tag-history.json", &after);
+    capture_wire("file-container-tags-history.json", &after);
+    capture_wire("file-container-tags-snapshot.json", &labels);
+    capture_wire("file-container-tags-operation.json", &historical);
     drop(app);
     let engine = reopen_after_router_drop(&root.path().join("system")).await;
     assert_eq!(engine.file_branch_head(&left).unwrap(), node);
@@ -982,180 +1006,121 @@ async fn file_merge_requires_explicit_consent_and_preserves_both_location_digest
 
 #[tokio::test]
 async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_replay() {
-    for scoped in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let app = application(root.path());
-        let token = login(&app, "admin", "integration-test-password").await;
-        manager_upload(&app, &token, "report.txt", b"tag source").await;
-        let listing = success(
-            &app,
-            &token,
-            "GET",
-            "/api/file-manager/disks/P01/entries",
-            None,
-        )
-        .await;
-        let file = listing["entries"][0]["file_id"].as_str().unwrap();
-        let base = listing["entries"][0]["version_id"].as_str().unwrap();
-        let repo = listing["context"]["repository_id"].as_str().unwrap();
-        let left = branch(&app, &token, file, base, "left").await;
-        let right = branch(&app, &token, file, base, "right").await;
-        let route = format!("/api/file-manager/files/{file}/tags");
-        let targets = json!([{"branch_id":left,"source_node_id":base,"expected_node_id":base},{"branch_id":right,"source_node_id":base,"expected_node_id":base}]);
-        let mut request =
-            json!({"targets":targets,"add":["x"],"remove":[],"operation_id":new_id("op").unwrap()});
-        let location = if scoped {
-            request["repository_id"] = repo.into();
-            request["path"] = "report.txt".into();
-            json!({"repository_id":repo,"path":"report.txt"})
-        } else {
-            Value::Null
-        };
-        let before = history(&app, &token, file).await;
-        for (key, value, code) in [
-            ("targets", None, "INVALID_REQUEST"),
-            ("targets", Some(Value::Null), "INVALID_REQUEST"),
-            ("targets", Some(json!([])), "INVALID_REQUEST"),
-            (
-                "targets",
-                Some(json!([targets[0], targets[0]])),
-                "INVALID_REQUEST",
-            ),
-            (
-                "targets",
-                Some(
-                    json!([{"branch_id":left,"source_node_id":base,"expected_node_id":base,"unknown":true}]),
-                ),
-                "INVALID_REQUEST",
-            ),
-            (
-                "targets",
-                Some(json!([[left, base, base]])),
-                "INVALID_REQUEST",
-            ),
-            ("add", None, "INVALID_REQUEST"),
-            ("add", Some(Value::Null), "INVALID_REQUEST"),
-            ("add", Some(json!([1])), "INVALID_REQUEST"),
-            ("add", Some(json!("x")), "INVALID_REQUEST"),
-            ("remove", None, "INVALID_REQUEST"),
-            ("remove", Some(Value::Null), "INVALID_REQUEST"),
-            (
-                "remove",
-                Some(json!(vec!["removed"; 17])),
-                "INVALID_REQUEST",
-            ),
-            ("add", Some(json!([""])), "INVALID_TAG"),
-            ("path", Some(Value::Null), "INVALID_REQUEST"),
-            ("add", Some(json!(vec!["x"; 17])), "INVALID_REQUEST"),
-            ("add", Some(json!([" x"])), "INVALID_TAG"),
-            ("add", Some(json!(["bad\nlabel"])), "INVALID_TAG"),
-            ("add", Some(json!(["文".repeat(43)])), "INVALID_TAG"),
-            ("remove", Some(json!(["x"])), "INVALID_TAG"),
-            ("operation_id", Some(json!("bad")), "INVALID_ID"),
-            ("unknown", Some(json!(true)), "INVALID_REQUEST"),
-        ] {
-            let mut invalid = request.clone();
-            match value {
-                Some(value) => {
-                    invalid[key] = value;
-                }
-                None => {
-                    invalid.as_object_mut().unwrap().remove(key);
-                }
-            }
-            let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(invalid)).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
-            assert_eq!(rejected["error"]["code"], code);
-            assert_eq!(history(&app, &token, file).await, before);
-        }
-        let mut stale = request.clone();
-        stale["targets"][1]["expected_node_id"] = "stale".into();
-        let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(stale)).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
-        assert_eq!(history(&app, &token, file).await, before);
-        let full = (0..16).map(|i| format!("tag{i}")).collect::<Vec<_>>();
-        let seeded = success(
-            &app,
-            &token,
-            "POST",
-            &route,
-            Some(
-                json!({"targets":[targets[1]],"add":full,"remove":[],"operation_id":new_id("op").unwrap()}),
-            ),
-        )
-        .await;
-        let right_head = seeded["result"]["nodes"][0]["node_id"].as_str().unwrap();
-        request["targets"][1]["source_node_id"] = right_head.into();
-        request["targets"][1]["expected_node_id"] = right_head.into();
-        let before_overflow = history(&app, &token, file).await;
-        let (status, rejected) =
-            send(&app, Some(&token), "POST", &route, Some(request.clone())).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(rejected["error"]["code"], "TAG_LIMIT_EXCEEDED");
-        assert_eq!(
-            history(&app, &token, file).await,
-            before_overflow,
-            "second-target overflow must not publish the first target"
-        );
-        request["remove"] = json!(["tag0"]);
-        let receipt = success(&app, &token, "POST", &route, Some(request.clone())).await;
-        assert_eq!(receipt["request_digest"],storage_contract::object_hash("request",&json!({"kind":"file.tags.update","principal":"admin","body":{"file_id":file,"targets":request["targets"],"add":["x"],"remove":["tag0"],"location":location}})).unwrap());
-        assert_eq!(receipt["result"]["nodes"][0]["tags"], json!(["x"]));
-        assert_eq!(
-            receipt["result"]["nodes"][1]["tags"]
-                .as_array()
-                .unwrap()
-                .len(),
-            16
-        );
-        let after = history(&app, &token, file).await;
-        let mut changed = request.clone();
-        changed["add"] = json!(["x", "x"]);
-        let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(changed)).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(rejected["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "report.txt", b"tag source").await;
+    let listing = success(
+        &app, &token, "GET", "/api/file-manager/disks/P01/entries", None,
+    ).await;
+    let file = listing["entries"][0]["file_id"].as_str().unwrap();
+    let repo = listing["context"]["repository_id"].as_str().unwrap();
+    let route = format!("/api/file-manager/files/{file}/tags");
+    let read = format!("{route}?repository_id={repo}&path=report.txt");
+    let request = json!({
+        "repository_id":repo,"path":"report.txt","expected_generation":"0",
+        "tags":["x"],"operation_id":new_id("op").unwrap()
+    });
+    let before = history(&app, &token, file).await;
+    let empty = success(&app, &token, "GET", &read, None).await;
+    assert_eq!(empty["tags"], json!([]));
+    assert_eq!(empty["generation"], "0");
+    for (key, value, code) in [
+        ("tags", None, "INVALID_REQUEST"),
+        ("tags", Some(Value::Null), "INVALID_REQUEST"),
+        ("tags", Some(json!([1])), "INVALID_REQUEST"),
+        ("tags", Some(json!("x")), "INVALID_REQUEST"),
+        ("tags", Some(json!(["x", "x"])), "INVALID_TAG"),
+        ("tags", Some(json!([""])), "INVALID_TAG"),
+        ("tags", Some(json!([" x"])), "INVALID_TAG"),
+        ("tags", Some(json!(["bad\nlabel"])), "INVALID_TAG"),
+        ("tags", Some(json!(["文".repeat(43)])), "INVALID_TAG"),
+        (
+            "tags",
+            Some(json!((0..17).map(|n| n.to_string()).collect::<Vec<_>>())),
+            "TAG_LIMIT_EXCEEDED",
+        ),
+        ("expected_generation", Some(json!(0)), "INVALID_REQUEST"),
+        ("expected_generation", Some(json!("00")), "INVALID_REQUEST"),
+        ("path", None, "INVALID_REQUEST"),
+        ("path", Some(Value::Null), "INVALID_REQUEST"),
+        ("repository_id", None, "INVALID_REQUEST"),
+        ("operation_id", Some(json!("bad")), "INVALID_ID"),
+        ("targets", Some(json!([])), "INVALID_REQUEST"),
+        ("add", Some(json!([])), "INVALID_REQUEST"),
+        ("remove", Some(json!([])), "INVALID_REQUEST"),
+        ("unknown", Some(json!(true)), "INVALID_REQUEST"),
+    ] {
         let mut invalid = request.clone();
-        invalid["add"] = json!([" bad"]);
-        let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(invalid)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            rejected["error"]["code"], "INVALID_TAG",
-            "static policy still precedes the receipt lookup"
-        );
-        assert_eq!(history(&app, &token, file).await, after);
-        let left_head = receipt["result"]["nodes"][0]["node_id"].as_str().unwrap();
-        success(&app,&token,"POST",&route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_head,"expected_node_id":left_head}],"add":["later"],"remove":["x"],"operation_id":new_id("op").unwrap()}))).await;
-        let later = history(&app, &token, file).await;
-        drop(app);
-        let system = root.path().join("system");
-        let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
-        let auth = backend.open_auth(&system).unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
-        let token = login(&app, "admin", "integration-test-password").await;
-        let revoked = revoked_session(&app).await;
-        assert_eq!(
-            send(&app, Some(&revoked), "POST", &route, Some(request.clone()))
-                .await
-                .0,
-            StatusCode::UNAUTHORIZED
-        );
-        let replay = success(&app, &token, "POST", &route, Some(request.clone())).await;
-        for field in [
-            "operation_id",
-            "request_digest",
-            "publication_sequence",
-            "result",
-        ] {
-            assert_eq!(replay[field], receipt[field], "{field}");
+        match value {
+            Some(value) => invalid[key] = value,
+            None => {
+                invalid.as_object_mut().unwrap().remove(key);
+            }
         }
-        let mut fresh = request;
-        fresh["operation_id"] = new_id("op").unwrap().into();
-        let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(fresh)).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
-        assert_eq!(history(&app, &token, file).await, later);
+        let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], code);
+        assert_eq!(history(&app, &token, file).await, before);
+        assert_eq!(success(&app, &token, "GET", &read, None).await, empty);
     }
+    let receipt = success(&app, &token, "POST", &route, Some(request.clone())).await;
+    assert_eq!(receipt["result"]["generation"], "1");
+    assert_eq!(receipt["result"]["tags"], json!(["x"]));
+    assert_eq!(receipt["request_digest"], storage_contract::object_hash("request", &json!({
+        "kind":"file.container-tags.replace","principal":"admin","body":{
+            "file_id":file,"context":{"repository_id":repo,"path":"report.txt"},
+            "expected_generation":"0","tags":["x"]
+        }
+    })).unwrap());
+    let after = history(&app, &token, file).await;
+    assert_eq!(after["nodes"], before["nodes"]);
+    let mut noop = request.clone();
+    noop["operation_id"] = new_id("op").unwrap().into();
+    noop["expected_generation"] = "1".into();
+    let unchanged = success(&app, &token, "POST", &route, Some(noop)).await;
+    assert_eq!(unchanged["result"]["changed"], false);
+    assert_eq!(unchanged["result"]["generation"], "1");
+    let mut different = request.clone();
+    different["tags"] = json!(["other"]);
+    let (status, error) = send(&app, Some(&token), "POST", &route, Some(different)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
+    let mut invalid = request.clone();
+    invalid["tags"] = json!([" bad"]);
+    let (status, invalid) = send(&app, Some(&token), "POST", &route, Some(invalid)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid["error"]["code"], "INVALID_TAG");
+    let mut later = request.clone();
+    later["operation_id"] = new_id("op").unwrap().into();
+    later["expected_generation"] = "1".into();
+    later["tags"] = json!((0..16).map(|n| format!("tag{n}")).collect::<Vec<_>>());
+    success(&app, &token, "POST", &route, Some(later)).await;
+    let labels = success(&app, &token, "GET", &read, None).await;
+    assert_eq!(labels["generation"], "2");
+    assert_eq!(labels["tags"].as_array().unwrap().len(), 16);
+    drop(app);
+    let system = root.path().join("system");
+    let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
+    let auth = backend.open_auth(&system).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let revoked = revoked_session(&app).await;
+    assert_eq!(
+        send(&app, Some(&revoked), "POST", &route, Some(request.clone())).await.0,
+        StatusCode::UNAUTHORIZED,
+    );
+    assert_eq!(send(&app, None, "GET", &read, None).await.0, StatusCode::UNAUTHORIZED);
+    let replay = success(&app, &token, "POST", &route, Some(request.clone())).await;
+    for field in ["operation_id", "request_digest", "publication_sequence", "result"] {
+        assert_eq!(replay[field], receipt[field], "{field}");
+    }
+    let mut fresh = request;
+    fresh["operation_id"] = new_id("op").unwrap().into();
+    let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(fresh)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected["error"]["code"], "HEAD_CONFLICT");
+    assert_eq!(success(&app, &token, "GET", &read, None).await, labels);
 }
 
 #[tokio::test]

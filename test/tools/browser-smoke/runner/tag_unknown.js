@@ -9,37 +9,45 @@ const canonical = value => Array.isArray(value) ? value.map(canonical)
 const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const p = window.__zxsTagUnknown = {
     label: '恢复原请求', marker: 'Browser smoke tag recovery fault',
-    reads: [], writes: [], outcomes: [], unexpected: [], stages: [], base: null, closed: false,
+    reads: [], tagReads: [], baseTags: null, writes: [], outcomes: [], unexpected: [], stages: [], base: null, closed: false,
     capture() {
-        const page = p.reads.at(-1);
+        const page = p.reads.at(-1), tags = p.tagReads.at(-1)?.body;
         const source = page?.nodes?.find(node => node.node_id === page.identity.context.current_node_id);
         if (!source || page.kind !== 'nodes' || page.page.next_cursor !== null
             || page.page.previous_cursor !== null || !page.identity.context.selected_branch_id
-            || page.identity.context.path !== 'browser-smoke.txt' || source.tags.includes(p.label))
-            throw new Error('tag recovery requires a complete real writable current history');
+            || page.identity.context.path !== 'browser-smoke.txt'
+            || tags?.file_id !== page.identity.file_id
+            || tags.context?.repository_id !== page.identity.context.repository_id
+            || tags.context?.path !== page.identity.context.path || !Array.isArray(tags.tags)
+            || !/^(0|[1-9][0-9]*)$/.test(tags.generation) || tags.tags.includes(p.label))
+            throw new Error('tag recovery requires complete real writable history and container tags');
         p.base = page;
+        p.baseTags = tags;
         return source.node_id;
     },
     published(write) {
         const receipt = write.receipt;
-        const context = p.base?.identity.context;
-        if (!context) return false;
+        const context = p.base?.identity.context, tags = p.baseTags;
+        if (!context || !tags) return false;
         const {operation_id, ...body} = write.body;
+        const wanted = [...tags.tags, p.label].sort();
         const expected = {repository_id: context.repository_id, path: context.path,
-            targets: [{branch_id: context.selected_branch_id,
-                source_node_id: context.current_node_id, expected_node_id: context.current_node_id}],
-            add: [p.label], remove: []};
+            expected_generation: tags.generation, tags: wanted};
+        const command = {file_id: p.base.identity.file_id,
+            context: {repository_id: context.repository_id, path: context.path},
+            expected_generation: tags.generation, tags: wanted};
+        const replacement = {request: command, tags: wanted,
+            generation: (BigInt(tags.generation) + 1n).toString(), changed: true};
         return write.method === 'POST'
             && write.url === `${location.origin}/api/file-manager/files/${p.base.identity.file_id}/tags`
             && /^op_[0-9a-f]{32}$/.test(operation_id) && same(body, expected)
             && write.status === 200 && receipt?.operation_id === operation_id
-            && receipt.operation_kind === 'file.tags.update' && receipt.state === 'completed'
+            && receipt.operation_kind === 'file.container-tags.replace' && receipt.state === 'completed'
             && receipt.commit_state === 'PUBLISHED' && receipt.error === null
             && receipt.protection_at_publish === 'NOT_APPLICABLE'
             && /^[0-9a-f]{64}$/.test(receipt.request_digest)
             && /^[1-9][0-9]*$/.test(receipt.publication_sequence)
-            && receipt.result?.file_id === p.base?.identity.file_id
-            && receipt.result?.content_versions_created === '0';
+            && same(receipt.result, replacement);
     },
     uncertain() {
         const first = p.writes[0];
@@ -62,41 +70,26 @@ const p = window.__zxsTagUnknown = {
     },
     verify() {
         if (!p.replay() || !p.writes[1].delivered) return false;
-        const page = p.reads.at(-1), before = p.base;
-        if (!page || page === before) return false;
-        const source = before.nodes.find(node => node.node_id === before.identity.context.current_node_id);
-        const result = p.writes[1].receipt.result.nodes;
-        if (!Array.isArray(result) || result.length !== 1) throw new Error('retry has no single tag child receipt');
-        const id = result[0].node_id, node = page.nodes.find(node => node.node_id === id);
-        if (!node) return false;
+        const page = p.reads.at(-1), before = p.base, tags = p.tagReads.at(-1)?.body;
+        const retry = p.writes[1], result = retry.receipt.result;
+        if (!page || p.reads.length <= retry.historyReadsAtStart
+            || p.tagReads.length <= retry.tagReadsAtStart) return false;
         if (page.identity.file_id !== before.identity.file_id
-            || page.identity.context.repository_id !== before.identity.context.repository_id
-            || page.identity.context.path !== before.identity.context.path
-            || page.identity.context.history_tree_id !== before.identity.context.history_tree_id
-            || page.identity.context.selected_branch_id !== before.identity.context.selected_branch_id
-            || page.identity.context.current_node_id !== id
+            || !same(page.identity.context, before.identity.context)
             || page.page.next_cursor !== null || page.page.previous_cursor !== null)
             throw new Error('recovered history does not belong to the frozen file context');
-        if (page.nodes.length !== before.nodes.length + 1 || node.kind !== 'tags'
-            || node.version_id !== source.version_id || node.size !== source.size
-            || node.content_hash !== source.content_hash || !same(node.tags, [...source.tags, p.label].sort())
-            || result[0].source_node_id !== source.node_id || result[0].branch_id !== before.identity.context.selected_branch_id
-            || result[0].no_change !== false || result[0].advanced !== true || !same(result[0].tags, node.tags)
-            || !page.edges.some(edge => edge.node_id === id && edge.parent_node_id === source.node_id && edge.endpoint === 'in_window'))
-            throw new Error('replay created another child or changed the original body');
-        for (const old of before.nodes) {
-            const retained = page.nodes.find(node => node.node_id === old.node_id);
-            if (!retained || Object.keys(old).filter(key => key !== 'current').some(key => !same(old[key], retained[key])))
-                throw new Error('recovery changed an earlier node');
-        }
-        if (before.edges.some(edge => !page.edges.some(retained => same(edge, retained))))
-            throw new Error('recovery removed an earlier parent edge');
-        return id;
+        if (!same(page.nodes, before.nodes) || !same(page.edges, before.edges))
+            throw new Error('recovery changed the graph or original body');
+        const expected = {file_id: result.request.file_id, context: result.request.context,
+            tags: result.tags, generation: result.generation};
+        if (!same(tags, expected))
+            throw new Error('recovery changed the container CAS result');
+        return page.identity.context.current_node_id;
     },
     release() { for (const write of p.writes) write.release?.(); },
     snapshot() {
         return {scope: 'real published POST loses delivery; matching real outcomes are hidden by synthetic 404; exact original POST retry',
-            base: p.base, reads: p.reads, outcomes: p.outcomes, stages: p.stages,
+            base: p.base, baseTags: p.baseTags, tagReads: p.tagReads, reads: p.reads, outcomes: p.outcomes, stages: p.stages,
             writes: p.writes.map(({release, ...write}) => write), unexpected: p.unexpected};
     },
     restore() { p.closed = true; window.fetch = original; p.release(); delete window.__zxsTagUnknown; }
@@ -110,6 +103,8 @@ window.fetch = async function(...args) {
     const request = new Request(input instanceof Request ? input.clone() : input, args[1]);
     const url = new URL(request.url, location.href), own = url.origin === location.origin;
     const tags = own && request.method === 'POST' && /^\/api\/file-manager\/files\/[^/]+\/tags$/.test(url.pathname);
+    const tagRead = own && request.method === 'GET'
+        && /^\/api\/file-manager\/files\/[^/]+\/tags$/.test(url.pathname);
     const history = own && request.method === 'GET' && /^\/api\/file-manager\/files\/[^/]+\/history$/.test(url.pathname);
     const first = p.writes[0];
     const outcome = own && request.method === 'GET' && first?.lost
@@ -118,7 +113,8 @@ window.fetch = async function(...args) {
     if (tags) {
         const text = await request.clone().text();
         write = {method: request.method, url: url.href, text, body: JSON.parse(text),
-            delivered: false, lost: false, outcomesAtStart: p.outcomes.length};
+            delivered: false, lost: false, outcomesAtStart: p.outcomes.length,
+            historyReadsAtStart: p.reads.length, tagReadsAtStart: p.tagReads.length};
         p.writes.push(write);
     } else if (outcome) {
         read = {status: null, hidden404: false}; p.outcomes.push(read);
@@ -129,6 +125,14 @@ window.fetch = async function(...args) {
     if (history && response.ok) {
         const body = await observedJson(response, {});
         if (body?.kind === 'nodes') p.reads.push(body);
+    }
+    if (tagRead && response.ok) {
+        const body = await observedJson(response, {});
+        if (body?.file_id && body.context
+            && url.searchParams.get('repository_id') === body.context.repository_id
+            && url.searchParams.get('path') === body.context.path
+            && url.pathname === `/api/file-manager/files/${body.file_id}/tags`)
+            p.tagReads.push({body, url: url.href});
     }
     if (write) {
         write.status = response.status;

@@ -6,15 +6,6 @@ fn metadata_request_bodies_bind_absent_and_supplied_location() {
         repository_id: "repo".into(),
         path: "report.txt".into(),
     };
-    let mut tags = FileNodeTagsUpdateRequest {
-        file_id: "file",
-        targets: &[],
-        add: &[],
-        remove: &[],
-        location: None,
-        principal: "owner",
-        operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
-    };
     let mut merge = FileBranchMergeRequest {
         file_id: "file",
         inputs: &[],
@@ -24,7 +15,7 @@ fn metadata_request_bodies_bind_absent_and_supplied_location() {
         principal: "owner",
         operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
     };
-    for unscoped in [tags.body(), merge.body()] {
+    for unscoped in [merge.body()] {
         assert_eq!(unscoped.get("location"), Some(&Value::Null));
         let mut incomplete = unscoped.clone();
         incomplete.as_object_mut().unwrap().remove("location");
@@ -33,9 +24,8 @@ fn metadata_request_bodies_bind_absent_and_supplied_location() {
             crate::object_hash("request", &incomplete).unwrap()
         );
     }
-    tags.location = Some(&location);
     merge.location = Some(&location);
-    for scoped in [tags.body(), merge.body()] {
+    for scoped in [merge.body()] {
         assert_eq!(
             scoped["location"],
             json!({"repository_id":"repo","path":"report.txt"})

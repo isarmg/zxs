@@ -1,8 +1,8 @@
 # 文件容器标签：直接采用新模型
 
-状态：实现合同候选，尚未实现或验证。产品标签语义已由用户确认；第 6 节涉及整个旧池和旧备份的格式断代范围须按工程规范 §9 明确确认，不能把本设计落盘当作确认。格式门禁和完整消费者闭包必须在发布前落实并独立审阅。
+状态：用户已明确确认容器标签模型及整个旧池、旧备份不兼容的具体影响。本批实现合同进入生产代码集成；完整准确提交的 GitHub 定向编译和行为验证仍待完成，不能以静态审阅作为通过证明。
 
-核查基线：`1558d2f3c58ddda0c75a1aa86e4b6b1b9c51284c`。本轮未运行本地编译、测试、格式化或验证脚本。
+最初设计核查基线：`1558d2f3c58ddda0c75a1aa86e4b6b1b9c51284c`；本批最终集成基线：`39bcae218116b2d8f925120d9a8f34cea791df5a`，保留其备份诊断测试与原 900 秒限制。本轮未运行本地编译、测试、格式化或验证脚本。
 
 ## 1. 决定与非目标
 
@@ -34,24 +34,22 @@ ContainerTags {
 操作种类为 `file.container-tags.replace`，与旧 `file.tags.update` 分离。请求使用完整集合替换，不再接受节点、分支、add/remove 或 expected HEAD。
 
 ```text
-ReplaceContainerTags {
+ReplaceCommand {
     file_id: FileId,
-    repository_id: RepositoryId,
-    path: PortablePath,
+    context: Context { repository_id: RepositoryId, path: PortablePath },
     expected_generation: Generation,
     tags: TagSet,
-    operation_id: OperationId,
 }
 ```
 
-服务器提供经过认证的 `Principal`，不接受客户端提供主体。本片要求真实、当前且可写的 repository/path 上下文；不以缺少 location 暗示脱离当前命名空间的写权限。已删除容器保留标签，但本片不增加无位置标签编辑入口。
+HTTP GET/POST 保持 `/api/file-manager/files/{file}/tags` 路径。GET query 必须给出 `repository_id` 和 `path`；POST body 给出这两个字段、`expected_generation`、完整 `tags` 和 `operation_id`。服务端将路径 FileId、body Context 和单独操作号组合成上述领域请求。服务器提供经过认证的 `Principal`，不接受客户端提供主体。本片要求真实、当前且可写的 repository/path 上下文；不以缺少 location 暗示脱离当前命名空间的写权限。已删除容器保留标签，但本片不增加无位置标签编辑入口。
 
-操作结果至少包含 `file_id`、权威 `tags`、权威 `generation` 和 `changed`。返回结果不含新节点、推进分支或目录分支列表。
+操作结果为 `Replacement { request: ReplaceCommand, tags: TagSet, generation: Generation, changed: bool }`，包含完整原请求而非仅 FileId。直接提交、操作查询及 `/outcome` 使用同一投影；事务框架的 timestamp、membership epoch、version protection 仍留在原永久收据，不作为公开 Replacement 的扩展字段。返回结果不含新节点、推进分支或目录分支列表。
 
 顺序与不变量：
 
 1. 既有 permanent receipt 的 operation/principal/请求摘要精确重放先于新路径和 CAS 判断。同操作号不同请求仍拒绝，成功后路径改变不妨碍查询原结果。新种类收据保存可恢复的完整原请求证明，包括 file、repository、path、expected generation 和标签集合，并绑定主体、操作种类、操作号及摘要；不能从最终标签反推请求。不同路径或 expected generation 即使得到相同结果，也不是同一请求。
-2. 新请求在提交线性化点验证当前文件归属、写上下文和 `expected_generation`。CAS 冲突返回既有冲突错误，不能自动覆盖新值。
+2. 新请求在提交线性化点验证当前文件归属、写上下文和 `expected_generation`。CAS 冲突返回既有 `HEAD_CONFLICT`；当前上下文不再对应此容器返回 `FILE_NOT_FOUND`，不能自动覆盖新值。
 3. 普通写链和 Current 写链使用同一纯标签计划。注册表存在但 Current 尚未发布的围栏保留；不允许 prepared payload。
 4. 标签写允许改变目标容器标签记录、对应操作收据、主体、事件及既有操作序号/业务代数。精确拒绝其他容器标签、正文、HEAD、commit、namespace tree、fmeta、placement 和 payload 的连带变化。
 5. 真实标签改变不创建内容节点或标签元数据子节点。每次成功新操作仍按现有事务规则产生一个操作事件和永久收据；`changed=false` 表示替换请求完成，不是标签改变事实，标签代数不变。全局业务代数、操作序号和标签代数不可混用。
@@ -93,7 +91,22 @@ ReplaceContainerTags {
 
 snapshot 与 history root 采用直接描述容器标签语义的格式标记，FILE 使用对应的新语义标记，不用发行版本号命名。旧标记不保留可执行兼容分支。
 
-拟同时替换现有 active `DiskSealFormat` 的 Genesis/Generation 语义标记，不保留旧反序列化变体。该决定不是仅拒绝含标签的旧节点：整个旧池的服务开启、offline check/export、旧备份恢复也会明确拒绝，包括原本没有标签的池。程序不提供自动迁移，也不重写旧 seal/ID/hash。这一用户可见影响属于本 ADR 的待确认格式范围，不以“用户不需要兼容”省略影响说明。
+同时替换现有 active `DiskSealFormat` 的 Genesis/Generation 语义标记，不保留旧反序列化变体。该决定不是仅拒绝含标签的旧节点：整个旧池的服务开启、offline check/export、旧备份恢复也会明确拒绝，包括原本没有标签的池。程序不提供自动迁移，也不重写旧 seal/ID/hash。用户在被明确告知“新版本无法打开旧格式的整个数据池和旧备份，旧数据不会被删除或自动修改”后，再次确认不保留一切兼容；本批按该具体范围切换，不推定其授权删除、覆盖或迁移旧数据。
+
+本批标记如下，标记必须与内部权威模型同时发布：
+
+| 材料 | 新语义标记 |
+| --- | --- |
+| Genesis seal | `container-tags-managed-directory` |
+| Generation seal | `container-tags-membership-generation` |
+| Pending seal | `container-tags-membership-pending` |
+| 普通 serving archive root/binding | `container-tags-frozen-control-metadata` |
+| retained-exit serving archive root/binding | `container-tags-retained-exit-quorum-control-metadata` |
+| preparation archive | `zxs-container-tags-backup-native-control` |
+| snapshot/history root | `container-tags-radix-map-roots` |
+| FILE rows | `file-local-container-tags` |
+
+SYSTEM 增加 catalog family 39；既有永久审计主体、事件、状态的 36–38 编号保持不动。
 
 同批格式闭包还包括 `membership_transition/pending.rs::PendingFormat`、`membership_transition/archive/persistent.rs` 中用于 `ArchiveRoot` 与 `ArchiveBinding` 的两种 Format，以及 `backup_preparation/native_control/archive.rs::FORMAT`。后两者是不同的 serving archive 与 preparation archive，不能只改其中一个。同步更新格式分派比较，但不因 `membership-pending` 同名就改变磁盘目录路径。
 
@@ -107,7 +120,7 @@ snapshot 与 history root 采用直接描述容器标签语义的格式标记，
 
 ### 6.1 入口与首写边界清单
 
-下表是静态定位，不是已执行验收。路径均相对于 `src/engine/src`；格式替换和新增字段接线后必须重新核查。
+下表是静态定位，不是已执行验收。路径均相对于 `src/engine/src`；本批已按这些路径接线，新增拒绝测试与合法恢复回归仍须在 GitHub 对准确完整提交执行。
 
 | 入口 | 已定位的源准入 | 首写边界与仍需闭合的事项 |
 | --- | --- | --- |
@@ -124,11 +137,11 @@ snapshot 与 history root 采用直接描述容器标签语义的格式标记，
 
 `ArchiveStore::admit` 对非空 staging 先解码/比对 `ArchiveBinding`；`install_generation_archive` 先认证/解码 ArchiveRoot 后安装。两者必须使用同一新语义，拒绝无 seal 的旧 staging，不能绕过旧 pending 拒绝后从 archive 继续写。
 
-入口缺口不能以普通 startup 已通过替代。尤其 pending、backup resume、foreign commit 和 rescue 输出调用方必须在格式提交前给出新模型的具体源码闭包及 GitHub 行为证据。pending 旧 seal、新 seal 加旧 archive、无 seal 加旧 staging、completed/unfinished resume、两种 archive 均需独立拒绝测试，同时保留新格式中断恢复成功用例。
+入口缺口不能以普通 startup 已通过替代。尤其 pending、backup resume、foreign commit 和 rescue 输出调用方必须在格式切换验收前给出新模型的具体源码闭包及 GitHub 行为证据。pending 旧 seal、新 seal 加旧 archive、无 seal 加旧 staging、completed/unfinished resume、两种 archive 均需独立拒绝测试，同时保留新格式中断恢复成功用例。提交完整候选以运行定向 CI，不表示上述验收已完成。
 
 ## 7. 实施与验收
 
-实现前先完成第 6 节门禁审阅，按合同分工；main 只接收消费者完整、可构建的提交。若 CI 选择预算不足，先准备保留原覆盖的定向策略，再分批验证同一准确提交，不提高全局预算或删除原组规避限制。
+实现前先完成第 6 节门禁审阅，按合同分工；main 只接收消费者完整、可构建的提交。本批原规则并集已超过单 job 的 16 个 Cargo 配置上限，因此先交付同一准确提交的定向分片。默认单片选择仍为 16 个 Cargo 配置和 8 个 Python 模块；每片保留原目标、前缀、数量和 900 秒单测试上限，完整选择不漏不重，最终汇总验证所有分片的提交、基线和计划身份。此配套不启用全仓矩阵，不删原组规避限制。
 
 必须实际执行并记录：
 
@@ -141,3 +154,21 @@ snapshot 与 history root 采用直接描述容器标签语义的格式标记，
 7. 真实 HTTP 路由和 Web native/WASM 消费者；编辑关闭、导航、注销、晚响应、CAS 草稿和未知结果行为。
 
 仅允许 GitHub 定向编译/测试。本地只读写代码。准确区分待验、失败、通过与未执行，不能以静态审阅或新测试名字替代结果。
+
+### 7.1 当前证据边界
+
+- CI 分片基础已在提交 `6803ce8cd8dd6c9ff1bb8a2db97971fd92360c79` 的
+  [#1293](https://github.com/isarmg/zxs/actions/runs/43212237593) 实际通过：7 个 Python
+  模块共 132 项，0 Rust；同一提交、基线、policy/plan 摘要与唯一分片的覆盖收据一致。
+  这证明该基础片，不是容器标签生产行为或真实多分片 Rust 构建已通过。
+- 本批新增旧 seal、混合成员、pending/两类 archive 拒绝测试，比较受控临时根中的
+  全部目录集合与文件字节。它们不覆盖权限或 mtime，pending 也不宣称完整错误码矩阵。
+  native preparation 正例是 history/native 准备后冷重开续作，不代替完整池激活恢复。
+- 非空标签复制回归覆盖真实 foreign prepared graph 的新 FileId、generation 0 与捕获
+  后源变化隔离，未安装该目标，不能声称安装后双向写入已验证。maintenance split
+  回归另用真实 API 覆盖两个独立容器的写入及冷开；这些新增测试尚待本批 GitHub 执行。
+- browser-smoke 消费者已经改用真实 GET/CAS 和容器编辑器。定向组执行 Node 观察器
+  夹具并编译 Rust 驱动，不运行 Chrome；合成历史分页仍明确为合成输入。
+- 新格式真实 HTTP 捕获通过本批定向 `http_engine` 的受控 wire 工件输出，成功后仍需
+  取回三份新名称的历史、标签 Snapshot 和 Operation 响应，登记为正向契约 fixture。
+  旧真实节点标签捕获保留原字节作拒绝证据，不能手改它冒充新服务响应。

@@ -98,7 +98,7 @@ pub(super) fn dependency_fixture() -> State {
         "node".into(),
         record(json!({
             "node_id":"node","history_tree_id":"h2","file_id":"shared-file","version_id":"v2",
-            "parent_node_ids":[],"branch_id":"b2","kind":"tags","tags":[],"operation_id":"op_00000000000000000000000000000000",
+            "parent_node_ids":[],"branch_id":"b2","kind":"merge","operation_id":"op_00000000000000000000000000000000",
             "author":"author","sequence":"1","created_at":"1"
         })),
     );
@@ -555,11 +555,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
 
 #[test]
 fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies() {
-    let fixture: json_codec::Value = json_codec::from_str(include_str!(
-        "../journal/fixtures/canonical_publication.json"
-    ))
-    .unwrap();
-    let before: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
+    let before = crate::journal::container_tags_fixture::state();
     let mut after = before.clone();
     after.begin_tracking();
     let temp = tempfile::tempdir().unwrap();

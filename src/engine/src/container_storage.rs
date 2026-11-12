@@ -1629,6 +1629,8 @@ fn prepare_names_inner(
                 "branch_merges": descriptor.merges,
                 "branch_aliases": description.aliases,
                 "note": next.file_notes.get(&file).map(String::as_str).unwrap_or(""),
+                "container_tags": next.container_tags.get(&file.parse::<storage_contract::FileId>()?)
+                    .ok_or_else(|| crate::history_package::container_tags_missing())?,
                 "path_contexts": description.contexts,
                 "path_nodes": descriptor.paths,
                 "versions": descriptor.versions,

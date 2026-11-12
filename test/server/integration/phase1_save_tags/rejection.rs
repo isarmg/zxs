@@ -1,19 +1,13 @@
 //! Rejected real Engine mutations must not change persisted file history.
 use super::*;
 
-fn tag_request(history: &Value, operation: &str, tag: &str) -> Value {
-    let context = &history["identity"]["context"];
+fn tag_request(snapshot: &Value, operation: &str, tags: &[&str]) -> Value {
     json!({
-        "targets": [{
-            "branch_id": context["selected_branch_id"],
-            "source_node_id": context["current_node_id"],
-            "expected_node_id": context["current_node_id"]
-        }],
-        "repository_id": context["repository_id"],
-        "path": context["path"],
-        "add": [tag],
-        "remove": [],
-        "operation_id": operation
+        "repository_id": snapshot["context"]["repository_id"],
+        "path": snapshot["context"]["path"],
+        "expected_generation": snapshot["generation"],
+        "tags": tags,
+        "operation_id": operation,
     })
 }
 
@@ -77,7 +71,11 @@ async fn revoked_file_mutations_leave_history_and_bytes_unchanged_after_cold_ope
     let before = fixture.history(file).await;
     let versions = fixture.versions(file, &before).await;
     let route = format!("/api/file-manager/files/{file}/tags");
-    let proposed = tag_request(&before, &new_id("op").unwrap(), "authorized-later");
+    let proposed = tag_request(
+        &fixture.read_tags(file).await,
+        &new_id("op").unwrap(),
+        &["authorized-later"],
+    );
 
     let logout = fixture
         .json("POST", "/api/auth/logout", Some(json!({})))
@@ -109,14 +107,15 @@ async fn revoked_file_mutations_leave_history_and_bytes_unchanged_after_cold_ope
 
     // Reuse the exact rejected mutation, including its operation identity.
     let applied = fixture.json("POST", &route, Some(proposed)).await;
-    assert_eq!(applied["result"]["content_versions_created"], "0");
+    assert_eq!(applied["result"]["changed"], true);
     let after = fixture.history(file).await;
-    assert_eq!(current_node(&after)["tags"], json!(["authorized-later"]));
-    assert_ne!(
-        current_node(&after)["node_id"],
-        current_node(&before)["node_id"]
-    );
+    assert_eq!(fixture.read_tags(file).await["tags"], json!(["authorized-later"]));
+    assert_eq!(after["nodes"], before["nodes"]);
     assert_eq!(fixture.body(version).await, bytes);
+    let tags = fixture.read_tags(file).await;
+    let fixture = fixture.reopen().await;
+    assert_eq!(fixture.read_tags(file).await, tags);
+    fixture.assert_tag_receipt(&applied).await;
 }
 
 #[tokio::test]
@@ -128,17 +127,17 @@ async fn stale_tag_failure_is_atomic_and_does_not_consume_retry_identity() {
     let entry = fixture.entry("D01", path).await;
     let file = entry["file_id"].as_str().unwrap();
     let version = entry["version_id"].as_str().unwrap();
-    let old = fixture.history(file).await;
-    fixture.tags(file, &["first"], &[]).await;
+    let old = fixture.read_tags(file).await;
+    fixture.replace_tags(file, &["first"]).await;
     let before = fixture.history(file).await;
     let operation = new_id("op").unwrap();
     let route = format!("/api/file-manager/files/{file}/tags");
     rejected(
         &fixture,
         &route,
-        tag_request(&old, &operation, "second"),
+        tag_request(&old, &operation, &["first", "second"]),
         StatusCode::CONFLICT,
-        "FILE_BRANCH_CONFLICT",
+        "HEAD_CONFLICT",
     )
     .await;
     assert_eq!(fixture.history(file).await, before);
@@ -150,13 +149,13 @@ async fn stale_tag_failure_is_atomic_and_does_not_consume_retry_identity() {
         .json(
             "POST",
             &route,
-            Some(tag_request(&before, &operation, "second")),
+            Some(tag_request(&fixture.read_tags(file).await, &operation, &["first", "second"])),
         )
         .await;
     assert_eq!(applied["operation_id"], operation);
-    assert_eq!(applied["result"]["content_versions_created"], "0");
+    assert_eq!(applied["result"]["changed"], true);
     let after = fixture.history(file).await;
-    assert_eq!(current_node(&after)["tags"], json!(["first", "second"]));
+    assert_eq!(fixture.read_tags(file).await["tags"], json!(["first", "second"]));
     assert_eq!(
         fixture
             .versions(file, &after)
@@ -179,7 +178,6 @@ async fn stale_tag_failure_is_atomic_and_does_not_consume_retry_identity() {
         "kind",
         "sequence",
         "branch_id",
-        "tags",
         "size",
         "content_hash",
     ] {
@@ -191,9 +189,13 @@ async fn stale_tag_failure_is_atomic_and_does_not_consume_retry_identity() {
     }
     // Selection is live presentation state, not an immutable node property.
     assert_eq!(previous["current"], true);
-    assert_eq!(retained["current"], false);
+    assert_eq!(retained["current"], true);
 
+    let tags = fixture.read_tags(file).await;
+    fixture.assert_tag_receipt(&applied).await;
     let fixture = fixture.reopen().await;
+    assert_eq!(fixture.read_tags(file).await, tags);
+    fixture.assert_tag_receipt(&applied).await;
     assert_eq!(fixture.history(file).await, after);
     assert_eq!(fixture.body(version).await, bytes);
 }

@@ -114,7 +114,7 @@ pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_file_tags;
 mod http_file_metadata;
 mod http_file_tags;
-pub use backend_file_tags::UpdateFileNodeTags;
+pub use backend_file_tags::ReplaceContainerTags;
 mod backend_disk_mkdir;
 mod http_disk_mkdir;
 pub use backend_disk_mkdir::CreateDiskDirectory;
@@ -1806,3 +1806,7 @@ mod backend_admission_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/authorized_backend.rs"]
 mod authorized_backend_tests;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/container_tags.rs"]
+mod container_tags_tests;

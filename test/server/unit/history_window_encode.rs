@@ -58,7 +58,6 @@ fn summary(index: usize) -> HistoryNodeSummary {
         path: "report.txt".into(),
         previous_path: None,
         note: String::new(),
-        tags: Vec::new(),
         size: u64::MAX,
         content_hash: ContentHash::from_digest(blake3::hash(b"body")),
         content_state: Some(storage_contract::ContentState::Purged),
@@ -482,14 +481,6 @@ fn maximum_inline_fields_and_node_rows_remain_within_encoded_budget() {
     value.path = format!("{}/{}", "界".repeat(80), "界".repeat(80));
     value.previous_path = Some(value.path.clone());
     value.note = "\\\"".repeat(storage_contract::MAX_NOTE_BYTES / 2);
-    value.tags = (0..storage_contract::MAX_FILE_TAGS)
-        .map(|index| {
-            format!(
-                "{index:02}{}",
-                "\"".repeat(storage_contract::MAX_TAG_BYTES - 2)
-            )
-        })
-        .collect();
     value.download_name = "界".repeat(80);
     value.storage_name = "s".repeat(240);
     let count = HistoryCollection::Nodes.maximum_limit();
@@ -517,9 +508,6 @@ fn maximum_inline_fields_and_node_rows_remain_within_encoded_budget() {
 fn malformed_inline_fields_and_collection_mismatches_fail_instead_of_truncating() {
     let mut value = summary(1);
     value.note = "x".repeat(storage_contract::MAX_NOTE_BYTES + 1);
-    assert!(encode(&nodes_page(vec![value], Vec::new(), 1)).is_err());
-    let mut value = summary(1);
-    value.tags = vec!["tag".into(); storage_contract::MAX_FILE_TAGS + 1];
     assert!(encode(&nodes_page(vec![value], Vec::new(), 1)).is_err());
     let mut value = summary(1);
     value.path = "x".repeat(769);

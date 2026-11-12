@@ -82,9 +82,9 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
-    #[serialization(rename = "managed-directory")]
+    #[serialization(rename = "container-tags-managed-directory")]
     ManagedDirectory,
-    #[serialization(rename = "membership-generation")]
+    #[serialization(rename = "container-tags-membership-generation")]
     MembershipGeneration { authority_hash: String },
 }
 
@@ -93,7 +93,10 @@ pub(crate) fn decode_seal(bytes: &[u8]) -> Result<DiskSeal> {
     decode_strict(bytes).map_err(|source| {
         Error::from(source).context(
             ErrorCode::DiskIdentityMismatch,
-            "persisted disk identity cannot be decoded",
+            concat!(
+                "disk identity uses an unsupported or invalid format; ",
+                "automatic migration is not performed",
+            ),
         )
     })
 }

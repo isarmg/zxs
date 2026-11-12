@@ -25,7 +25,6 @@ fn kind(kind: SharedHistoryNodeKind) -> String {
     match kind {
         SharedHistoryNodeKind::Content => t("正文节点", "Content event"),
         SharedHistoryNodeKind::Rename => t("路径节点", "Path event"),
-        SharedHistoryNodeKind::Tags => t("标签节点", "Tag event"),
         SharedHistoryNodeKind::Merge => t("合并节点", "Merge event"),
         SharedHistoryNodeKind::Deletion => t("删除节点（无正文）", "Deletion event (no body)"),
     }

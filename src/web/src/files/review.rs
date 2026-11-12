@@ -74,7 +74,7 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
                         });
                         if owns_draft {
                             model.tag_edit = None;
-                            model.checked_nodes.clear();
+                            model.container_tags.clear();
                         }
                     }
                 }
@@ -105,6 +105,7 @@ struct FrozenRequest {
     body: Value,
     epoch: u64,
     owner: Option<super::tags::TagOwner>,
+    tags: Option<storage_contract::file_container_tags::ReplaceCommand>,
 }
 #[derive(Clone)]
 pub(crate) struct TagSubmission {
@@ -159,6 +160,11 @@ fn begin_submission(
         body,
         epoch: state.session_epoch,
         owner,
+        tags: (kind == Kind::Tags).then(|| {
+            state.files.tag_edit.as_ref()
+                .expect("invariant: admitted tag submission owns a command")
+                .command().clone()
+        }),
     });
     let publication = state.files.publications.entry(kind).or_default();
     publication.operation_id = Some(id);
@@ -195,12 +201,23 @@ pub(crate) fn has_tag_replay(state: &State) -> bool {
         })
 }
 pub(crate) fn receipt_kind_matches(state: &State, id: &str, value: &Value) -> bool {
-    !state
-        .files
-        .tag_submission
-        .as_ref()
-        .is_some_and(|submission| submission.request.id == id)
-        || value["operation_kind"].as_str() == Some("file.tags.update")
+    let Some(submission) = state.files.tag_submission.as_ref()
+        .filter(|submission| submission.request.id == id) else { return true; };
+    if value["operation_kind"].as_str() != Some(storage_contract::file_container_tags::KIND) {
+        return false;
+    }
+    // Rejection/unknown receipts carry no successful replacement. The common
+    // operation decoder still verifies their exact ID and publication shape.
+    if !matches!(
+        value["commit_state"].as_str(),
+        Some("PUBLISHED" | "ACKED" | "PUBLISHED_DEGRADED"),
+    ) {
+        return true;
+    }
+    let Some(command) = submission.request.tags.as_ref() else { return false; };
+    json_codec::from_value::<storage_contract::file_container_tags::Replacement>(
+        value["result"].clone(),
+    ).is_ok_and(|replacement| replacement.validate(command).is_ok())
 }
 pub(crate) fn tag_attempt_in_flight(state: &State, id: &str) -> bool {
     state
@@ -295,6 +312,7 @@ fn complete_error(state: &mut State, kind: Kind, attempt: &Attempt, error: &api:
         }
         if !unknown
             && error.status == 409
+            && error.code == storage_contract::ErrorCode::HeadConflict
             && let Some(owner) = &attempt.request.owner
             && owner.current(&state.files)
         {
@@ -303,21 +321,14 @@ fn complete_error(state: &mut State, kind: Kind, attempt: &Attempt, error: &api:
                 .tag_edit
                 .as_mut()
                 .expect("invariant: matching tag owner has its draft");
-            let instance = draft.instance();
             draft.require_review();
-            state
-                .files
-                .history_aux
-                .cancel_review(super::history::reads::ReviewOwner {
-                    kind: Kind::Tags,
-                    instance,
-                });
+            state.files.container_tags.clear();
             return true;
         }
     }
     false
 }
-/// Return whether the still-current tag scope needs a fresh history window.
+/// Return whether the still-current container needs a fresh tag observation.
 fn complete(
     state: RwSignal<State>,
     kind: Kind,
@@ -375,7 +386,7 @@ fn send(state: RwSignal<State>, kind: Kind, attempt: Attempt) {
         )
         .await;
         if complete(state, kind, &attempt, result) {
-            actions::load_file_history(state);
+            super::tags::reload(state);
         }
     });
 }

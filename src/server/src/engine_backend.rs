@@ -1000,24 +1000,31 @@ impl Backend for EngineBackend {
         let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).merge_file_history(request)
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         identity: &Identity,
-        request: crate::UpdateFileNodeTags,
+        request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
-        application::Application::new(&mut engine, &current).authorize_file(&request.file_id)?;
+        application::Application::new(&mut engine, &current)
+            .authorize_file(&request.command.file_id.to_string())?;
+        let principal = current
+            .principal
+            .parse::<storage_contract::Principal>()
+            .map_err(ApiError::invalid_authenticated_principal)?;
         engine
-            .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-                file_id: &request.file_id,
-                targets: &request.targets,
-                add: &request.add,
-                remove: &request.remove,
-                location: request.location.as_ref(),
-                principal: &current.principal,
-                operation_id: request.operation_id,
-            })
+            .replace_container_tags(&request.command, &principal, request.operation_id)
             .map_err(error)
+    }
+    fn file_container_tags(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_container_tags::ReadRequest,
+    ) -> Result<storage_contract::file_container_tags::Snapshot, ApiError> {
+        let (mut engine, current) = self.lock_current(identity)?;
+        application::Application::new(&mut engine, &current)
+            .authorize_file(&request.file_id.to_string())?;
+        engine.file_container_tags(&request).map_err(error)
     }
     fn create_disk_directory(
         &self,

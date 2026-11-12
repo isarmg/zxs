@@ -20,7 +20,7 @@ fn path(state: &mut State, id: &str, parents: &[&str]) {
     );
 }
 
-fn metadata(state: &mut State, id: &str, parents: &[&str], tags: &[&str]) {
+fn metadata(state: &mut State, id: &str, parents: &[&str]) {
     state.file_metadata_nodes.insert(
         id.into(),
         FileMetadataNode {
@@ -30,8 +30,7 @@ fn metadata(state: &mut State, id: &str, parents: &[&str], tags: &[&str]) {
             version_id: "body".into(),
             parent_node_ids: parents.iter().map(|p| (*p).into()).collect(),
             branch_id: "branch".into(),
-            kind: FileMetadataKind::Tags,
-            tags: tags.iter().map(|t| (*t).into()).collect(),
+            kind: FileMetadataKind::Merge,
             operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
             author: "author".into(),
             sequence: 1,
@@ -97,7 +96,7 @@ fn engine_with_state(state: State) -> (tempfile::TempDir, Engine) {
 fn metadata_view_releases_authoritative_generation_and_shares_only_business_fields() {
     let mut state = State::default();
     body(&mut state, "body", "file");
-    metadata(&mut state, "tags", &[], &["original"]);
+    metadata(&mut state, "tags", &[]);
     path(&mut state, "child", &["tags"]);
     let (_root, mut engine) = engine_with_state(state);
     let original = std::sync::Arc::downgrade(&engine.state);
@@ -124,18 +123,15 @@ fn metadata_view_releases_authoritative_generation_and_shares_only_business_fiel
         .file_metadata_nodes
         .get_mut("tags")
         .unwrap()
-        .tags
-        .insert("later".into());
+        .parent_node_ids
+        .push("body".into());
     assert_eq!(original.strong_count(), 0);
     for (node, summary) in view.project_file_nodes(request()) {
         assert_eq!(summary.unwrap(), *before[&node].as_ref().unwrap());
     }
-    assert!(
-        engine.project_file_nodes(request())["child"]
-            .as_ref()
-            .unwrap()
-            .tags
-            .contains("later")
+    assert_eq!(
+        engine.project_file_nodes(request())["tags"].as_ref().unwrap().parent_node_ids,
+        ["body"]
     );
     drop(engine);
     assert_eq!(original.strong_count(), 0);
@@ -146,8 +142,8 @@ fn metadata_view_releases_authoritative_generation_and_shares_only_business_fiel
 #[test]
 fn projection_matches_uncached_nodes_and_serialized_bytes() {
     let mut state = State::default();
-    metadata(&mut state, "tagged", &["tagged"], &["z", "a"]);
-    metadata(&mut state, "empty", &["tagged"], &[]);
+    metadata(&mut state, "tagged", &["tagged"]);
+    metadata(&mut state, "empty", &["tagged"]);
     path(&mut state, "tagged", &["missing"]); // metadata wins over a path ID
     path(&mut state, "left", &["tagged"]);
     path(&mut state, "right", &["empty"]);
@@ -212,8 +208,8 @@ fn projection_matches_uncached_nodes_and_serialized_bytes() {
     ];
     let mut projection = NodeProjection::new(&state);
     for node in nodes.into_iter().chain(nodes.into_iter().rev()) {
-        let expected = json_codec::json!({"parent_node_ids": node_parents(&state, node), "tags": node_tags(&state, node)});
-        let actual = json_codec::json!({"parent_node_ids": projection.parents(node), "tags": projection.tags(node)});
+        let expected = json_codec::json!({"parent_node_ids": node_parents(&state, node)});
+        let actual = json_codec::json!({"parent_node_ids": projection.parents(node)});
         assert_eq!(
             json_codec::to_vec(&actual).unwrap(),
             json_codec::to_vec(&expected).unwrap(),
@@ -227,46 +223,11 @@ fn projection_matches_uncached_nodes_and_serialized_bytes() {
 }
 
 #[test]
-fn projection_shares_and_retains_tag_snapshots_in_either_query_order() {
-    const LENGTH: usize = 4096;
-    let mut state = State::default();
-    metadata(&mut state, "0", &[], &["tag"]);
-    for n in 1..LENGTH {
-        path(&mut state, &n.to_string(), &[&(n - 1).to_string()]);
-    }
-    for reverse in [false, true] {
-        let mut projection = NodeProjection::new(&state);
-        for n in 0..LENGTH {
-            let id = if reverse { LENGTH - n - 1 } else { n }.to_string();
-            assert_eq!(projection.tags(&id), &BTreeSet::from(["tag".into()]));
-        }
-        assert_eq!(projection.tags.len(), LENGTH);
-        let snapshot = std::rc::Rc::clone(&projection.tags["0"]);
-        assert!(
-            projection
-                .tags
-                .values()
-                .all(|tags| std::rc::Rc::ptr_eq(tags, &snapshot))
-        );
-        for n in 0..LENGTH {
-            projection.tags(&n.to_string());
-        }
-        assert_eq!(projection.tags.len(), LENGTH);
-        assert!(
-            projection
-                .tags
-                .values()
-                .all(|tags| std::rc::Rc::ptr_eq(tags, &snapshot))
-        );
-    }
-}
-
-#[test]
 fn batch_matches_public_single_node_results_including_partial_errors_and_scope() {
     let mut state = State::default();
     body(&mut state, "body", "file");
     body(&mut state, "foreign-body", "foreign");
-    metadata(&mut state, "tags", &[], &["original"]);
+    metadata(&mut state, "tags", &[]);
     path(&mut state, "child", &["tags"]);
     path(&mut state, "cycle-a", &["cycle-b"]);
     path(&mut state, "cycle-b", &["cycle-a"]);
@@ -299,7 +260,7 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
     // metadata. The batch must not unify those distinct precedence rules.
     body(&mut state, "overlap", "file");
     path(&mut state, "overlap", &["dangling"]);
-    metadata(&mut state, "overlap", &["child", "child"], &["overlap"]);
+    metadata(&mut state, "overlap", &["child", "child"]);
     state
         .file_metadata_nodes
         .get_mut("overlap")
@@ -344,7 +305,6 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
             .and_then(|parent_node_ids| {
                 Ok(FileNodeSummary {
                     parent_node_ids,
-                    tags: engine.file_node_tags("file", id)?,
                 })
             })
             .map_err(|error| error.code().to_owned());
@@ -374,10 +334,6 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
         ["child", "child"]
     );
     assert_eq!(
-        summaries["foreign-parent"].as_ref().unwrap().tags,
-        BTreeSet::from(["overlap".into()])
-    );
-    assert_eq!(
         summaries["child"].as_ref().unwrap().parent_node_ids,
         ["tags", "extra"]
     );
@@ -393,7 +349,7 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
     const MERGES: usize = 257;
     let mut state = State::default();
     body(&mut state, "body", "file");
-    metadata(&mut state, "0", &[], &["old"]);
+    metadata(&mut state, "0", &[]);
     for n in 1..NODES {
         path(&mut state, &n.to_string(), &[&(n - 1).to_string()]);
     }
@@ -418,7 +374,6 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
                     (*id).to_owned(),
                     FileNodeSummary {
                         parent_node_ids: engine.file_node_parents("file", id).unwrap(),
-                        tags: engine.file_node_tags("file", id).unwrap(),
                     },
                 )
             })
@@ -435,7 +390,6 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
             node_ids: &ids,
         });
         assert_eq!(visits.get(), MERGES);
-        assert_eq!(projection.tags.len(), NODES);
         let public = engine.project_file_nodes(FileNodeProjectionRequest {
             file_id: "file",
             node_ids: &ids,
@@ -446,16 +400,16 @@ fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
         }
     }
     std::sync::Arc::make_mut(&mut engine.state)
-        .file_metadata_nodes
-        .get_mut("0")
+        .file_branch_merges
+        .get_mut("merge-0")
         .unwrap()
-        .tags = BTreeSet::from(["new".into()]);
+        .parent_node_ids.push("body".into());
     let fresh = engine.project_file_nodes(FileNodeProjectionRequest {
         file_id: "file",
         node_ids: &["1023"],
     });
     assert_eq!(
-        fresh["1023"].as_ref().unwrap().tags,
-        BTreeSet::from(["new".into()])
+        fresh["1023"].as_ref().unwrap().parent_node_ids,
+        ["1022", "0", "body"]
     );
 }

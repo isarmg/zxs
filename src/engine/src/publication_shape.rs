@@ -87,6 +87,7 @@ macro_rules! state_tables {
     };
 }
 state_tables! {
+    container_tags => ContainerTags,
     repositories => Repositories,
     histories => Histories,
     branches => Branches,

@@ -198,19 +198,17 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
             .to_owned()
     });
     engine
-        .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-            file_id: &entry.file_id,
-            targets: &[storage_contract::FileTagTarget {
-                branch_id: branches[0].clone(),
-                source_node_id: entry.version_id.clone(),
-                expected_node_id: entry.version_id.clone(),
-            }],
-            add: &["review".into()],
-            remove: &[],
-            location: None,
-            principal: "owner",
-            operation_id: OperationId::generate().unwrap(),
-        })
+        .replace_container_tags(
+            &crate::container_tags_tests::command(
+                &entry.file_id,
+                &repo.repository_id,
+                "before.txt",
+                0,
+                &["review"],
+            ),
+            &"owner".parse::<storage_contract::Principal>().unwrap(),
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let inputs = branches[..2]
         .iter()
@@ -269,13 +267,13 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
         .find(|branch| branch["branch_id"] == branches[1])
         .unwrap();
     assert_eq!(alias["alias_of"], branches[0]);
-    assert!(expected["nodes"].as_array().unwrap().iter().any(|node| {
-        node["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "review")
+    assert!(expected["nodes"].as_array().unwrap().iter().all(|node| {
+        node.get("tags").is_none()
     }));
+    let container = &engine.state().container_tags[
+        &entry.file_id.parse::<storage_contract::FileId>().unwrap()
+    ];
+    assert_eq!(container.tags().iter().map(|tag| tag.as_str()).collect::<Vec<_>>(), ["review"]);
     let (backend, _auth, _token, identity) = authenticated(engine, root.path());
     assert_eq!(
         Query::File

@@ -54,38 +54,13 @@ fn oversized_seed() -> (tempfile::TempDir, Engine, Repository, Entry, Entry) {
 }
 
 fn historical_sources(engine: &mut Engine, file: &str, branch: &str) -> Vec<String> {
-    let mut head = engine.file_branch_head(branch).unwrap();
     let mut sources = Vec::new();
-    // Alternating one tag creates distinct immutable nodes without creating
-    // content versions or exceeding the per-node tag limit.
+    // The review limit needs distinct real history sources. Container labels
+    // cannot manufacture nodes, so each source is a genuine content revision.
     for index in 0..100 {
-        let tag = vec!["audit-source".to_owned()];
-        let (add, remove) = if index % 2 == 0 {
-            (tag, Vec::new())
-        } else {
-            (Vec::new(), tag)
-        };
-        let receipt = engine
-            .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-                file_id: file,
-                targets: &[storage_contract::FileTagTarget {
-                    branch_id: branch.into(),
-                    source_node_id: head.clone(),
-                    expected_node_id: head,
-                }],
-                add: &add,
-                remove: &remove,
-                location: None,
-                principal: "alice",
-                operation_id: OperationId::generate().unwrap(),
-            })
-            .unwrap();
-        assert_eq!(receipt.result["nodes"][0]["no_change"], false);
-        head = receipt.result["nodes"][0]["node_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        sources.push(head.clone());
+        let node = write_history_content(engine, branch, "A.txt", format!("source {index}").as_bytes());
+        assert_eq!(engine.state().versions[&node].file_id, file);
+        sources.push(node);
     }
     sources
 }

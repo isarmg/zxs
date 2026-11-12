@@ -1,7 +1,7 @@
 //! File-history read projection. These observations do not grant later authorization.
 use crate::{ApiError, BranchSnapshot, ContentDispositionSnapshot};
 use data_serialization::Serialize;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 pub struct ReadFileHistory {
     file_id: String,
@@ -98,7 +98,6 @@ pub enum HistoryNode {
         version: HistoryVersion,
         node_id: String,
         kind: ContentNodeKind,
-        tags: BTreeSet<String>,
         parent_node_ids: Vec<String>,
         path: String,
         previous_path: Option<String>,
@@ -146,7 +145,6 @@ pub struct HistoryRevision {
     pub operation_id: storage_contract::OperationId,
     pub author: String,
     pub message: String,
-    pub tags: BTreeSet<String>,
 }
 #[cfg(test)]
 #[derive(Serialize)]

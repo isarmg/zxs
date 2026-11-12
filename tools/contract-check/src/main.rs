@@ -315,6 +315,16 @@ fn semantics(name: &str, value: &Value) -> Result {
             let _: storage_contract::disk_details::DiskNoteResponse =
                 json_codec::from_value(value.clone())?;
         }
+        "FileContainerTagsSnapshot" => {
+            let _: storage_contract::file_container_tags::Snapshot =
+                json_codec::from_value(value.clone())?;
+        }
+        "FileContainerTagsReplacement" => {
+            let result: storage_contract::file_container_tags::Replacement =
+                json_codec::from_value(value.clone())?;
+            // Local consistency only. Consumers also bind the frozen real request.
+            result.validate(&result.request)?;
+        }
         "SharedHistoryGraph" => {
             use storage_contract::shared_history::{SharedHistoryGraph, SharedHistoryRequest};
             let graph: SharedHistoryGraph = json_codec::from_value(value.clone())?;

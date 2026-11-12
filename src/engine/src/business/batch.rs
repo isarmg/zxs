@@ -875,6 +875,19 @@ fn apply(
                         moved.size = existing.size;
                     } else {
                         let new_file = new_id("file")?;
+                        let source_tags = state
+                            .container_tags
+                            .get(&member.file_id.parse::<storage_contract::FileId>()?)
+                            .ok_or_else(crate::business::file_tags::invalid)?;
+                        let copied_tags =
+                            storage_contract::file_container_tags::ContainerTags::new(
+                                source_tags.tags().clone(),
+                                storage_contract::Generation::new(0),
+                            );
+                        state.container_tags.insert(
+                            new_file.parse::<storage_contract::FileId>()?,
+                            copied_tags,
+                        );
                         let (source_path, original) = engine.valid_replica(&member.version_id)?;
                         let (primary, count) =
                             engine.new_file_placement(repository, moved.path())?;

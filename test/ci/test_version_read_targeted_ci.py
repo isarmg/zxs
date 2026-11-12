@@ -27,32 +27,38 @@ class VersionReadSelection(unittest.TestCase):
     def test_complete_change_keeps_original_overlaps_and_build_limit(self):
         plan = CI.select_plan(self.policy, PATHS)
         self.assertEqual(plan['groups'], [
-            'ci-selection', 'note-http-boundary', 'paged-deletion-review',
+            'ci-selection', 'container-tags-http', 'note-http-boundary', 'paged-deletion-review',
             'version-metadata-read'])
-        self.assertEqual(len(plan['rust_targets']), 9)
+        self.assertEqual(len(plan['rust_targets']), 11)
         self.assertEqual(len(plan['python_tests']), 8)
         self.assertIn('test_version_read_targeted_ci', plan['python_tests'])
         expected = {
             ('lib', None): {
+                'container-tags-http': 96,
                 'note-http-boundary': 14,
                 'paged-deletion-review': 80,
                 'version-metadata-read': 7,
             },
             ('test', 'http_engine'): {
+                'container-tags-http': 32,
                 'note-http-boundary': 10,
                 'version-metadata-read': 3,
             },
             ('test', 'phase1_smb_rpc'): {
+                'container-tags-http': 96,
                 'paged-deletion-review': 80,
                 'version-metadata-read': 2,
             },
         }
+        expected[('test', 'phase1_save_tags')] = {'container-tags-http': 32}
         for target in plan['rust_targets']:
             if (target['package'] != 'storage-server'
                     or target.get('mode', 'test') != 'test'):
                 continue
             identity = (target.get('kind', 'lib'), target.get('name'))
-            selections = target['selections']
+            selections = target.get('selections', [
+                {key: value for key, value in target.items() if key != 'selection_groups'}
+            ])
             self.assertEqual(
                 dict(zip(target['selection_groups'], [s['max_tests'] for s in selections])),
                 expected.pop(identity))

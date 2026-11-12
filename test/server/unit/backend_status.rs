@@ -1,7 +1,43 @@
 use super::*;
 #[test]
 fn capabilities_preserve_the_complete_current_wire_and_typed_limit() {
-    let expected = json_codec::json!({"name_policy":name_policy::NAME_POLICY,"path_policy":"PortablePath","unicode_data_version":name_policy::UNICODE_VERSION,"supported_save_modes":["full"],"full_only":true,"full_branches":false,"branch_creation":"record-until-write","branch_content":"inherit-parent-until-first-write","file_branches":true,"branch_scope":"file","directory_branches":true,"directory_branch_creation":"inherit-directory-tree","directory_subtrees":true,"namespace_batch":true,"smb_default_branch":"selected-root-directory","file_manager":true,"historical_save_creates_branch":true,"merge_behavior":"explicit-file-node-adoption","file_branch_merge":true,"directory_branch_merge":false,"directory_merge_status":"design-pending","file_node_tags":true,"backup_configuration":true,"range_upload":false,"complete_upload":true,"max_upload_bytes":"42","authentication":"session-bearer-or-cookie","platforms":{"web":true,"smb":true},"operations":["repositories","tree","workspace","commit","history","graph","branch","merge-link","file-branch-merge","file-node-tags","backup-configuration","purge-plan","split-plan","version-range-read","file-manager","file-branches","file-branch-rename","file-path-nodes","directory-branches","directory-subtrees","namespace-batch","default-branch","file-notes","system-status"]});
+    let expected = json_codec::json!({
+        "name_policy": name_policy::NAME_POLICY,
+        "path_policy": "PortablePath",
+        "unicode_data_version": name_policy::UNICODE_VERSION,
+        "supported_save_modes": ["full"],
+        "full_only": true,
+        "full_branches": false,
+        "branch_creation": "record-until-write",
+        "branch_content": "inherit-parent-until-first-write",
+        "file_branches": true,
+        "branch_scope": "file",
+        "directory_branches": true,
+        "directory_branch_creation": "inherit-directory-tree",
+        "directory_subtrees": true,
+        "namespace_batch": true,
+        "smb_default_branch": "selected-root-directory",
+        "file_manager": true,
+        "historical_save_creates_branch": true,
+        "merge_behavior": "explicit-file-node-adoption",
+        "file_branch_merge": true,
+        "directory_branch_merge": false,
+        "directory_merge_status": "design-pending",
+        "file_container_tags": true,
+        "backup_configuration": true,
+        "range_upload": false,
+        "complete_upload": true,
+        "max_upload_bytes": "42",
+        "authentication": "session-bearer-or-cookie",
+        "platforms": {"web": true, "smb": true},
+        "operations": [
+            "repositories", "tree", "workspace", "commit", "history", "graph", "branch",
+            "merge-link", "file-branch-merge", "file-container-tags", "backup-configuration",
+            "purge-plan", "split-plan", "version-range-read", "file-manager", "file-branches",
+            "file-branch-rename", "file-path-nodes", "directory-branches", "directory-subtrees",
+            "namespace-batch", "default-branch", "file-notes", "system-status"
+        ]
+    });
     assert_eq!(
         json_codec::to_value(CapabilitiesResponse::from(Capabilities::for_engine(42))).unwrap(),
         expected

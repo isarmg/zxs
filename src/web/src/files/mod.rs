@@ -34,6 +34,7 @@ pub(crate) use deletion::{
 pub(crate) use detached_history::view as retained_history_discovery;
 pub(crate) use detail::page as details;
 pub use history::DecodeError as FileHistoryError;
+pub use tags::DecodeError as ContainerTagsError;
 pub(crate) use mkdir::{restore as restore_folder_creation, view as folder_creation_recovery};
 pub(crate) use model::{FileOperation, Model, SaveStatus, publication_notice};
 pub(crate) use node_retirement::recovery_view as node_retirement_recovery;

@@ -211,44 +211,6 @@ pub(super) fn first_commits<'a>(
     Ok(())
 }
 
-fn first_parent<'a>(state: &'a State, scope: Scope<'_>, id: &str) -> Option<&'a str> {
-    base_parents(state, id)
-        .first()
-        .filter(|parent| node(state, scope, parent).is_some())
-        .map(String::as_str)
-}
-
-/// Preserve first-parent tag inheritance without a growing visited/cache map.
-/// The admitted node count bounds a walk even for a malformed cyclic fixture.
-pub(super) fn tags<'a>(
-    state: &'a State,
-    scope: Scope<'_>,
-    id: &'a str,
-    cancel: &HistoryWindowCancellation,
-) -> Result<Option<&'a BTreeSet<String>>> {
-    let mut current = id;
-    let maximum = state
-        .versions
-        .len()
-        .saturating_add(state.file_path_nodes.len())
-        .saturating_add(state.file_metadata_nodes.len());
-    for _ in 0..maximum {
-        cancel.checkpoint()?;
-        if let Some(metadata) = state
-            .file_metadata_nodes
-            .get(current)
-            .filter(|node| node.file_id == scope.file && node.history_tree_id == scope.history)
-        {
-            return Ok(Some(&metadata.tags));
-        }
-        let Some(parent) = first_parent(state, scope, current) else {
-            return Ok(None);
-        };
-        current = parent;
-    }
-    Ok(None)
-}
-
 /// The same canonical source-chain path as the full projection. Only the final
 /// bounded path is copied by the page builder; ancestors remain borrowed.
 pub(super) enum PathSource<'a> {

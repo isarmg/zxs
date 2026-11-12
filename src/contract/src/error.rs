@@ -267,6 +267,11 @@ impl std::fmt::Display for ErrorCode {
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error("{source}")]
+    ContainerTags {
+        source: crate::file_container_tags::TagsError,
+        retryable: bool,
+    },
+    #[error("{source}")]
     FileLifecycle {
         source: crate::file_lifecycle::LifecycleError,
         retryable: bool,
@@ -330,7 +335,8 @@ impl Error {
     }
     pub fn retryable(mut self) -> Self {
         match &mut self {
-            Self::FileLifecycle { retryable, .. }
+            Self::ContainerTags { retryable, .. }
+            | Self::FileLifecycle { retryable, .. }
             | Self::InvalidIdentifier { retryable, .. }
             | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
@@ -343,7 +349,8 @@ impl Error {
     }
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::FileLifecycle { retryable, .. }
+            Self::ContainerTags { retryable, .. }
+            | Self::FileLifecycle { retryable, .. }
             | Self::InvalidIdentifier { retryable, .. }
             | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
@@ -355,6 +362,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::ContainerTags { source, .. } => source.code(),
             Self::FileLifecycle { source, .. } => source.code(),
             Self::InvalidIdentifier { .. } => ErrorCode::InvalidId,
             Self::IdentifierGeneration { .. } => ErrorCode::InternalError,
@@ -367,6 +375,7 @@ impl Error {
     }
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
+            Self::ContainerTags { source, .. } => source.to_string().into(),
             Self::FileLifecycle { source, .. } => source.to_string().into(),
             Self::InvalidIdentifier { prefix, .. } => format!("invalid {prefix} identifier").into(),
             Self::IdentifierGeneration { .. } => "identifier generation failed".into(),

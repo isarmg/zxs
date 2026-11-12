@@ -2,6 +2,10 @@
 //! Every mutation and content read uses the production Engine on temporary roots.
 use std::{collections::BTreeSet, io::Read};
 use storage_engine::*;
+use storage_engine as engine_api;
+use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 
 const PATH: &str = "资料/报告.txt";
 
@@ -17,23 +21,12 @@ struct Saved {
 }
 #[derive(Clone)]
 struct Labels {
-    file: String,
-    target: FileTagTarget,
-    add: Vec<String>,
-    remove: Vec<String>,
+    command: ReplaceCommand,
     operation: OperationId,
 }
 impl Labels {
     fn submit(&self, engine: &mut Engine) -> Result<OperationResult> {
-        engine.update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &self.file,
-            targets: std::slice::from_ref(&self.target),
-            add: &self.add,
-            remove: &self.remove,
-            location: None,
-            principal: "admin",
-            operation_id: self.operation,
-        })
+        engine.replace_container_tags(&self.command, &"admin".parse().unwrap(), self.operation)
     }
 }
 impl Fixture {
@@ -95,20 +88,23 @@ impl Fixture {
             receipt,
         }
     }
-    fn labels(&self, source: &str, add: &[&str], remove: &[&str]) -> Labels {
-        let context = self
-            .engine
-            .file_context(&self.repository.repository_id, PATH)
-            .unwrap();
-        Labels {
-            file: self.entry().file_id,
-            target: FileTagTarget {
-                expected_node_id: self.engine.file_branch_head(&context.branch_id).unwrap(),
-                branch_id: context.branch_id,
-                source_node_id: source.into(),
+    fn labels(&self, tags: &[&str]) -> Labels {
+        let read = ReadRequest {
+            file_id: self.entry().file_id.parse().unwrap(),
+            context: Context {
+                repository_id: self.repository.repository_id.parse().unwrap(),
+                path: name_policy::PortablePath::parse(PATH).unwrap(),
             },
-            add: add.iter().map(|value| (*value).into()).collect(),
-            remove: remove.iter().map(|value| (*value).into()).collect(),
+        };
+        let current = self.engine.file_container_tags(&read).unwrap();
+        Labels {
+            command: ReplaceCommand {
+                file_id: read.file_id,
+                context: read.context,
+                expected_generation: current.generation,
+                tags: TagSet::new(tags.iter().map(|tag| Tag::parse((*tag).into()).unwrap()))
+                    .unwrap(),
+            },
             operation: op(),
         }
     }
@@ -133,7 +129,7 @@ impl Fixture {
             head
         );
         assert_eq!(
-            self.engine.file_node_tags(&entry.file_id, head).unwrap(),
+            container_tags_fixture::tags(&self.engine, &entry.file_id),
             tag_set(tags)
         );
     }
@@ -144,12 +140,6 @@ fn op() -> OperationId {
 fn tag_set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| (*value).into()).collect()
 }
-fn node(receipt: &OperationResult) -> String {
-    receipt.result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .into()
-}
 fn snapshot(engine: &Engine) -> json_codec::Value {
     json_codec::to_value(engine.state()).unwrap()
 }
@@ -159,10 +149,10 @@ fn old_save_and_tag_receipts_do_not_rewind_newer_content_after_cold_open() {
     let mut f = Fixture::new();
     let first_bytes = (0..=255).cycle().take(262144 + 17).collect::<Vec<u8>>();
     let first = f.save(&first_bytes);
-    let add = f.labels(&first.entry.version_id, &["keep", "review"], &[]);
+    let add = f.labels(&["keep", "review"]);
     let added = add.submit(&mut f.engine).unwrap();
-    let first_tag = node(&added);
-    let first_tag_record = f.engine.state().file_metadata_nodes[&first_tag].clone();
+    let first_head = first.entry.version_id.clone();
+    let metadata_before = f.engine.state().file_metadata_nodes.clone();
     let second = f.save(b"short replacement\0with bytes\xff");
     assert_eq!(second.entry.file_id, first.entry.file_id);
     assert_ne!(second.entry.version_id, first.entry.version_id);
@@ -170,17 +160,15 @@ fn old_save_and_tag_receipts_do_not_rewind_newer_content_after_cold_open() {
         f.engine
             .file_node_parents(&first.entry.file_id, &second.entry.version_id)
             .unwrap(),
-        vec![first_tag.clone()]
+        vec![first_head]
     );
     assert_eq!(
-        f.engine
-            .file_node_tags(&first.entry.file_id, &second.entry.version_id)
-            .unwrap(),
+        container_tags_fixture::tags(&f.engine, &first.entry.file_id),
         tag_set(&["keep", "review"])
     );
-    let remove = f.labels(&second.entry.version_id, &["final"], &["review", "review"]);
+    let remove = f.labels(&["final", "keep"]);
     let removed = remove.submit(&mut f.engine).unwrap();
-    let head = node(&removed);
+    let head = second.entry.version_id.clone();
     f.assert_current(&second.entry, &head, &["final", "keep"]);
     let versions = f.engine.state().versions.len();
     let metadata = f.engine.state().file_metadata_nodes.len();
@@ -207,7 +195,7 @@ fn old_save_and_tag_receipts_do_not_rewind_newer_content_after_cold_open() {
     );
     assert_eq!(snapshot(&f.engine), before);
     let mut changed_remove = remove.clone();
-    changed_remove.remove.pop();
+    changed_remove.command.tags = TagSet::empty();
     assert_eq!(
         changed_remove.submit(&mut f.engine).unwrap_err().code(),
         ErrorCode::IdempotencyKeyReused
@@ -215,10 +203,7 @@ fn old_save_and_tag_receipts_do_not_rewind_newer_content_after_cold_open() {
     assert_eq!(snapshot(&f.engine), before);
     assert_eq!(f.engine.state().versions.len(), versions);
     assert_eq!(f.engine.state().file_metadata_nodes.len(), metadata);
-    assert_eq!(
-        f.engine.state().file_metadata_nodes[&first_tag],
-        first_tag_record
-    );
+    assert_eq!(f.engine.state().file_metadata_nodes, metadata_before);
     assert_eq!(f.body(&first.entry.version_id), first_bytes);
     assert_eq!(
         f.body(&second.entry.version_id),
@@ -226,28 +211,23 @@ fn old_save_and_tag_receipts_do_not_rewind_newer_content_after_cold_open() {
     );
     let f = f.reopen();
     f.assert_current(&second.entry, &head, &["final", "keep"]);
-    assert_eq!(
-        f.engine.state().file_metadata_nodes[&first_tag],
-        first_tag_record
-    );
+    assert_eq!(f.engine.state().file_metadata_nodes, metadata_before);
 }
 
 #[test]
 fn noop_tag_receipts_remain_permanent_after_another_save_and_two_cold_opens() {
     let mut f = Fixture::new();
     let first = f.save(b"initial");
-    let seed = f.labels(&first.entry.version_id, &["ready"], &[]);
-    let seeded = seed.submit(&mut f.engine).unwrap();
-    let head = node(&seeded);
-    let noop = f.labels(&head, &["ready", "ready"], &["absent", "absent"]);
+    let seed = f.labels(&["ready"]);
+    seed.submit(&mut f.engine).unwrap();
+    let head = first.entry.version_id.clone();
+    let noop = f.labels(&["ready"]);
     let metadata = f.engine.state().file_metadata_nodes.len();
     let versions = f.engine.state().versions.len();
     let operations = f.engine.state().operations.len();
     let sequence = f.engine.state().sequence;
     let receipt = noop.submit(&mut f.engine).unwrap();
-    assert_eq!(receipt.result["nodes"][0]["no_change"], true);
-    assert_eq!(node(&receipt), head);
-    assert_eq!(receipt.result["content_versions_created"], "0");
+    assert!(!f.engine.container_tags_outcome(noop.operation).unwrap().unwrap().changed);
     assert_eq!(f.engine.state().file_metadata_nodes.len(), metadata);
     assert_eq!(f.engine.state().versions.len(), versions);
     assert_eq!(f.engine.state().operations.len(), operations + 1);
@@ -271,17 +251,20 @@ fn noop_tag_receipts_remain_permanent_after_another_save_and_two_cold_opens() {
     assert_eq!(noop.submit(&mut f.engine).unwrap(), receipt);
     assert_eq!(snapshot(&f.engine), before);
     let mut changed_encoding = noop.clone();
-    changed_encoding.add.pop();
+    changed_encoding.command.tags = TagSet::empty();
     assert_eq!(
         changed_encoding.submit(&mut f.engine).unwrap_err().code(),
         ErrorCode::IdempotencyKeyReused
     );
     assert_eq!(snapshot(&f.engine), before);
+    let advance = f.labels(&["ready", "newer"]);
+    advance.submit(&mut f.engine).unwrap();
+    let before = snapshot(&f.engine);
     let mut stale_fresh = noop;
     stale_fresh.operation = op();
     assert_eq!(
         stale_fresh.submit(&mut f.engine).unwrap_err().code(),
-        ErrorCode::FileBranchConflict
+        ErrorCode::HeadConflict
     );
     assert!(
         !f.engine
@@ -292,7 +275,7 @@ fn noop_tag_receipts_remain_permanent_after_another_save_and_two_cold_opens() {
     assert_eq!(snapshot(&f.engine), before);
     assert_eq!(f.engine.state().file_metadata_nodes.len(), metadata);
     assert_eq!(f.engine.state().versions.len(), versions + 1);
-    f.assert_current(&second.entry, &second.entry.version_id, &["ready"]);
+    f.assert_current(&second.entry, &second.entry.version_id, &["ready", "newer"]);
     assert_eq!(f.body(&first.entry.version_id), b"initial");
     assert_eq!(
         f.body(&second.entry.version_id),

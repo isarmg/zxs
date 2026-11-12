@@ -7,7 +7,7 @@ use storage_contract::{MapChanges, SequenceChanges};
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
-            repositories,histories,branches,commits,versions,placements,merge_links,
+            container_tags,repositories,histories,branches,commits,versions,placements,merge_links,
             history_boundaries,content_states,operations,plans,placement_rules,
             protection_policies,operation_principals,file_selections,directory_branches,
             directory_git_repositories,
@@ -23,6 +23,7 @@ macro_rules! state_map_fields {
 #[derive(Clone)]
 pub(super) enum FieldRoot {
     Text(MapRoot),
+    Files(MapRoot<storage_contract::FileId>),
     Operations(MapRoot<OperationId>),
     Events(MapRoot<usize>),
 }
@@ -30,6 +31,7 @@ macro_rules! field_root {
     ($value:expr, $root:ident => $expression:expr) => {
         match $value {
             FieldRoot::Text($root) => $expression,
+            FieldRoot::Files($root) => $expression,
             FieldRoot::Operations($root) => $expression,
             FieldRoot::Events($root) => $expression,
         }
@@ -56,6 +58,15 @@ impl FieldRoot {
             unreachable!("invariant: field declaration preserves its String key domain")
         };
         root
+    }
+    fn files(&self) -> Result<&MapRoot<storage_contract::FileId>> {
+        match self {
+            Self::Files(root) => Ok(root),
+            Self::Text(_) | Self::Operations(_) | Self::Events(_) => Err(
+                storage_contract::file_container_tags::TagsError::SnapshotKeyDomain
+                    .into_error().into(),
+            ),
+        }
     }
     fn operations(&self) -> &MapRoot<OperationId> {
         let Self::Operations(root) = self else {
@@ -149,6 +160,27 @@ fn prepare_inner(
         }};
     }
     macro_rules! field {
+        (container_tags) => {{
+            let prior = previous.map(|(before, basis)| {
+                Ok::<_, Error>((
+                    state.container_tags.changes_since(&before.container_tags),
+                    basis.fields.get("container_tags").ok_or_else(|| {
+                        storage_contract::file_container_tags::TagsError::SnapshotKeyDomain
+                            .into_error()
+                    })?.files()?,
+                ))
+            }).transpose()?;
+            let root = builder.map(
+                "container_tags",
+                state.container_tags.iter(),
+                prior,
+                |key| state.container_tags.get(key),
+                |value| encode_value("container_tags", value),
+                &|key: &storage_contract::FileId| Cow::Owned(key.to_string()),
+            )?;
+            builder.fields.insert("container_tags".into(), FieldRoot::Files(root));
+        }};
+
         (operations) => {
             typed_field!(operations, Operations, operations, &|key: &OperationId| {
                 Cow::Owned(key.to_string())

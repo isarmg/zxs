@@ -10,7 +10,6 @@ use crate::{
         merge::selection::{ChosenNode, ReviewInventory, SelectedBranch},
         page::Entry,
         review,
-        tags::SelectedNode,
     },
     ui::{ErrorContext, State, accept_read_response, fail_in},
 };
@@ -767,7 +766,6 @@ pub(crate) fn history_aux_loading(state: &State) -> bool {
 
 enum ReviewNodes {
     Merge(Vec<ChosenNode>),
-    Tags(Vec<SelectedNode>),
 }
 struct ReviewFacts {
     nodes: ReviewNodes,
@@ -784,21 +782,11 @@ pub(crate) fn review_history_merge(state: RwSignal<State>, instance: u64) {
         },
     );
 }
-pub(crate) fn review_history_tags(state: RwSignal<State>, instance: u64) {
-    begin_review(
-        state,
-        ReviewOwner {
-            kind: review::Kind::Tags,
-            instance,
-        },
-    );
-}
 
 fn inventory(state: &State, kind: review::Kind) -> Option<ReviewInventory> {
     match kind {
         review::Kind::Merge => Some(state.files.merge.as_ref()?.review_inventory()),
-        review::Kind::Tags => Some(state.files.tag_edit.as_ref()?.review_inventory()),
-        review::Kind::Backup | review::Kind::Placement => {
+        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
             unreachable!("invariant: configuration drafts have no history selection review")
         }
     }
@@ -807,8 +795,7 @@ fn inventory(state: &State, kind: review::Kind) -> Option<ReviewInventory> {
 fn review_current(state: &State, target: &Target, generation: u64, owner: ReviewOwner) -> bool {
     let instance = match owner.kind {
         review::Kind::Merge => state.files.merge.as_ref().map(|draft| draft.instance()),
-        review::Kind::Tags => state.files.tag_edit.as_ref().map(|draft| draft.instance()),
-        review::Kind::Backup | review::Kind::Placement => None,
+        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => None,
     };
     target.current(state)
         && state.files.file_history.ready()
@@ -832,9 +819,8 @@ fn begin_review(state: RwSignal<State>, owner: ReviewOwner) {
             let generation = s.files.history_aux.begin_review(owner);
             match kind {
                 review::Kind::Merge => s.files.merge.as_mut()?.discard_review(),
-                review::Kind::Tags => s.files.tag_edit.as_mut()?.discard_review(),
-                review::Kind::Backup | review::Kind::Placement => {
-                    unreachable!("invariant: selected history review is merge or tags")
+                review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
+                    unreachable!("invariant: only merge owns a history selection review")
                 }
             }
             Some((target, inventory, generation, max_entries))
@@ -894,12 +880,6 @@ fn complete_review(
                     .as_mut()
                     .expect("invariant: inventory still owns its merge draft")
                     .resolve_review(root, &nodes, &facts.branches, facts.max_entries),
-                (review::Kind::Tags, ReviewNodes::Tags(nodes)) => state
-                    .files
-                    .tag_edit
-                    .as_mut()
-                    .expect("invariant: inventory still owns its tag draft")
-                    .resolve_review(root, &nodes, &facts.branches, facts.max_entries),
                 _ => unreachable!("invariant: review facts retain their requested action kind"),
             };
             ReviewCompletion::Prepared(result)
@@ -957,8 +937,7 @@ async fn collect_review(
 ) -> Result<Option<ReviewFacts>, api::Error> {
     let nodes = match owner.kind {
         review::Kind::Merge => ReviewNodes::Merge(Vec::with_capacity(requested.node_ids.len())),
-        review::Kind::Tags => ReviewNodes::Tags(Vec::with_capacity(requested.node_ids.len())),
-        review::Kind::Backup | review::Kind::Placement => {
+        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
             unreachable!("invariant: configuration selection is not a history review")
         }
     };
@@ -989,11 +968,6 @@ async fn collect_review(
             ReviewNodes::Merge(nodes) => nodes.push(ChosenNode {
                 id: node.node_id.to_string(),
                 version: node.version_id.to_string(),
-            }),
-            ReviewNodes::Tags(nodes) => nodes.push(SelectedNode {
-                id: node.node_id.to_string(),
-                version: node.version_id.to_string(),
-                tags: node.tags.into_iter().collect(),
             }),
         }
         // All unselected node data and parent previews are released here.

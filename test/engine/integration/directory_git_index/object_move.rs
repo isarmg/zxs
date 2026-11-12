@@ -1,10 +1,13 @@
 //! Whole-directory user flows over the existing public Engine test facilities.
 //! Requires the agreed ObjectMoveRequest and Engine::move_object implementation.
 //! No fault/replay matrix here; the shared executor and SMB suites own those.
+use storage_engine as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use std::collections::BTreeMap;
 use storage_contract::{
-    Entry, FileTagTarget, NamespaceEntryKind, NamespaceOperation, NamespaceOperationKind,
+    Entry, NamespaceEntryKind, NamespaceOperation, NamespaceOperationKind,
     directory_history::{DirectoryHistoryCollection, DirectoryHistoryRequest},
     file_relocation::{NamespaceEntryId, OBJECT_MOVE_KIND, ObjectMoveFact, ObjectMoveRequest},
     history_window::{HistoryRepositoryId, HistoryWindowCancellation},
@@ -375,20 +378,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             .file_context(&source.repository_id, "project/added")
             .unwrap();
         let node = engine.file_branch_head(&context.branch_id).unwrap();
-        engine
-            .update_file_node_tags(storage_engine::FileNodeTagsUpdateRequest {
-                file_id: &added.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: context.branch_id,
-                    source_node_id: node.clone(),
-                    expected_node_id: node,
-                }],
-                add: &["saved-work".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: OperationId::generate().unwrap(),
-            })
+        container_tags_fixture::edit(&mut engine, &added.file_id, &["saved-work".into()], &[], "admin", OperationId::generate().unwrap())
             .unwrap();
         let before = status(&engine, &source, "project");
         let child_before = status(&engine, &source, "project/child");
@@ -488,9 +478,7 @@ fn repository_move_keeps_saved_work_separate_from_its_branches_and_child_pins() 
             .file_context(&target.repository_id, "moved/added")
             .unwrap();
         assert!(
-            engine
-                .file_node_tags(&moved_added.file_id, context.node_id.as_ref().unwrap())
-                .unwrap()
+            container_tags_fixture::tags(&engine, &moved_added.file_id)
                 .contains("saved-work"),
             "{route:?}"
         );

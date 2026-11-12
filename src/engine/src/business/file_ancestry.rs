@@ -50,43 +50,6 @@ impl SearchBudget {
     }
 }
 
-/// Chosen tags inherit the first *base* parent, not the sorted ancestry index.
-/// Borrow that single edge instead of cloning a possibly wide parent vector.
-pub(crate) fn chosen_tags(
-    state: &State,
-    chosen: &str,
-    budget: &mut SearchBudget,
-) -> Result<BTreeSet<String>> {
-    let mut current = chosen;
-    let mut seen = BTreeSet::new();
-    loop {
-        if !seen.insert(current) {
-            return Err(Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "chosen node tag ancestry contains a cycle",
-            ));
-        }
-        budget.node()?;
-        if let Some(node) = state.file_metadata_nodes.get(current) {
-            return Ok(node.tags.clone());
-        }
-        let parents = if let Some(node) = state.file_path_nodes.get(current) {
-            &node.parent_node_ids
-        } else {
-            let version = &state.versions[current];
-            state
-                .file_node_parents
-                .get(current)
-                .unwrap_or(&version.source_version_ids)
-        };
-        let Some(parent) = parents.first() else {
-            return Ok(BTreeSet::new());
-        };
-        budget.edge()?;
-        current = parent;
-    }
-}
-
 pub(crate) struct FileAncestry<'a> {
     parents: BTreeMap<&'a str, BTreeSet<&'a str>>,
 }

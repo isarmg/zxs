@@ -807,34 +807,40 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
     invalid["repository_id"] = storage_contract::new_id("repo").unwrap().into();
     assert!(!merge.is_valid(&invalid));
     let tags = request_schema("/api/file-manager/files/{file}/tags", "post");
-    let body = json!({"targets":[{"branch_id":branch,"source_node_id":version,"expected_node_id":meta}],"add":["审核"],"remove":[],"operation_id":operation});
+    let body = json!({
+        "repository_id": storage_contract::new_id("repo").unwrap(),
+        "path": "report.txt",
+        "expected_generation": "7",
+        "tags": ["审核"],
+        "operation_id": operation,
+    });
     assert!(tags.is_valid(&body));
-    // Requests retain exact array encoding for permanent operation digests;
-    // the core deduplicates label values only when computing the result set.
-    for key in ["add", "remove"] {
-        let mut repeated = body.clone();
-        repeated["add"] = json!([]);
-        repeated["remove"] = json!([]);
-        repeated[key] = json!(["审核", "审核"]);
-        assert!(tags.is_valid(&repeated), "duplicate request labels: {key}");
-        repeated[key] = json!(vec!["审核"; 17]);
-        assert!(
-            !tags.is_valid(&repeated),
-            "raw array budget precedes deduplication: {key}"
-        );
+    for key in ["repository_id", "path", "expected_generation", "tags", "operation_id"] {
+        let mut invalid = body.clone();
+        invalid.as_object_mut().unwrap().remove(key);
+        assert!(!tags.is_valid(&invalid), "missing {key}");
     }
-    let mut invalid = body.clone();
-    invalid["targets"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("expected_node_id");
-    assert!(!tags.is_valid(&invalid));
-    invalid = body.clone();
-    invalid["add"] = json!(["bad\nlabel"]);
-    assert!(!tags.is_valid(&invalid));
-    invalid = body;
-    invalid["add"] = json!((0..17).map(|n| format!("tag{n}")).collect::<Vec<_>>());
-    assert!(!tags.is_valid(&invalid));
+    for labels in [
+        json!(["重复", "重复"]),
+        json!(["bad\nlabel"]),
+        json!([" leading"]),
+        json!(["trailing "]),
+        json!((0..17).map(|n| format!("tag{n}")).collect::<Vec<_>>()),
+    ] {
+        let mut invalid = body.clone();
+        invalid["tags"] = labels;
+        assert!(!tags.is_valid(&invalid));
+    }
+    for generation in [json!(7), json!("07"), json!("18446744073709551616")] {
+        let mut invalid = body.clone();
+        invalid["expected_generation"] = generation;
+        assert!(!tags.is_valid(&invalid));
+    }
+    for retired in ["targets", "add", "remove"] {
+        let mut invalid = body.clone();
+        invalid[retired] = json!([]);
+        assert!(!tags.is_valid(&invalid), "retired node request {retired}");
+    }
     let backups = request_schema("/api/repositories/{repo}/backup-configuration", "put");
     let body = json!({"path":"docs/report.txt","target_copies":3,"backup_prefixes":{"B01":"工作备份","C01":"archive"},"expected_scope_id":file,"expected_generation":"0","operation_id":operation});
     assert!(backups.is_valid(&body));
@@ -852,13 +858,18 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
     )
     .unwrap();
     let mut body = fixture["nodes"][0].clone();
-    body["kind"] = "tags".into();
+    body["kind"] = "merge".into();
     body["node_id"] = meta.clone().into();
     body["version_id"] = version.clone().into();
-    body["tags"] = json!(["审核"]);
     assert!(node.is_valid(&body));
-    let mut invalid = body;
+    let mut invalid = body.clone();
     invalid["version_id"] = meta.into();
+    assert!(!node.is_valid(&invalid));
+    invalid = body.clone();
+    invalid["kind"] = "tags".into();
+    assert!(!node.is_valid(&invalid));
+    invalid = body;
+    invalid["tags"] = json!(["审核"]);
     assert!(!node.is_valid(&invalid));
     // Reviewed response fixtures are source inputs, not optional local evidence.
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -901,6 +912,16 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
             api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         ]);
         let response = validator(&schema).unwrap();
+        if name == "file-merge-tag-history.json" {
+            // Keep the captured old bytes intact as explicit rejection evidence.
+            // A new positive real capture must come from the exact GitHub run.
+            assert!(!response.is_valid(&wire), "retired node-tag capture must fail");
+            let decoded: storage_contract::Result<
+                storage_contract::history_window::HistoryWindowPage,
+            > = storage_contract::decode_strict(&json_codec::to_vec(&wire).unwrap());
+            assert!(decoded.is_err());
+            continue;
+        }
         response
             .validate(&wire)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1495,4 +1516,64 @@ fn namespace_only_commit_placement_matches_existing_wire_contract() {
             assert!(!api_schema.is_valid(&invalid), "{name}: {}", case["name"]);
         }
     }
+}
+
+#[test]
+fn container_tags_vectors_bind_strict_wire_and_retire_old_node_contracts() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    assert_eq!(api["components"]["schemas"], bundle(&core["$defs"]));
+    for retired in ["FileNodeTags", "FileTagTarget"] {
+        assert!(core["$defs"].get(retired).is_none());
+    }
+    let mut count = 0;
+    for group in ["positive", "negative"] {
+        for case in array(&vectors[group]).unwrap().iter().filter(|case| {
+            case["name"].as_str().is_some_and(|name| name.starts_with("container-tags-"))
+        }) {
+            count += 1;
+            let name = case["schema"].as_str().unwrap();
+            core["$ref"] = format!("#/$defs/{name}").into();
+            api["$ref"] = format!("#/components/schemas/{name}").into();
+            let shape_valid = group == "positive" || case["layer"] == "semantic";
+            for document in [&core, &api] {
+                assert_eq!(
+                    validator(document).unwrap().is_valid(&case["value"]),
+                    shape_valid,
+                    "{}",
+                    case["name"],
+                );
+            }
+            if shape_valid {
+                assert_eq!(
+                    semantics(name, &case["value"]).is_ok(),
+                    group == "positive",
+                    "{}",
+                    case["name"],
+                );
+            }
+        }
+    }
+    assert!(count >= 20);
+    let route = &api["paths"]["/api/file-manager/files/{file}/tags"];
+    assert_eq!(route["get"]["x-rejectUnknownQueryParameters"], true);
+    assert_eq!(route["get"]["x-rejectDuplicateQueryParameters"], true);
+    let parameters = array(&route["get"]["parameters"]).unwrap();
+    for name in ["file", "repository_id", "path"] {
+        assert_eq!(
+            parameters.iter().find(|item| item["name"] == name).unwrap()["required"],
+            true,
+        );
+    }
+    let response = &route["post"]["responses"]["200"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        response["properties"]["operation_kind"]["const"],
+        storage_contract::file_container_tags::KIND,
+    );
+    assert_eq!(
+        response["allOf"][0]["then"]["properties"]["result"]["$ref"],
+        "#/components/schemas/FileContainerTagsReplacement",
+    );
 }

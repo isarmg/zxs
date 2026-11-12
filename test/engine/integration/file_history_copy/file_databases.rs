@@ -1,4 +1,7 @@
 //! Persisted file-local SQLite over real Engine publication and recovery.
+use storage_engine as engine_api;
+#[path = "../../support/container_tags.rs"]
+mod container_tags_fixture;
 use super::*;
 use sqlite_access::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::{
@@ -87,21 +90,7 @@ fn copied_file_has_independent_pathless_database_and_source_remains_visible() {
         .branch_id
         .unwrap();
     let head = fixture.engine.file_branch_head(&branch).unwrap();
-    fixture
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &original.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch,
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["persisted-tag".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        })
+    container_tags_fixture::edit(&mut fixture.engine, &original.file_id, &["persisted-tag".into()], &[], "admin", op())
         .unwrap();
     let copy = request(&fixture.engine, &fixture.source, &fixture.target);
     fixture
@@ -132,7 +121,7 @@ fn copied_file_has_independent_pathless_database_and_source_remains_visible() {
     assert_eq!(data.keys().filter(|(kind, _)| kind == "branch").count(), 2);
     assert!(
         data.values()
-            .any(|row| row["node"]["tags"] == json_codec::json!(["persisted-tag"]))
+            .any(|row| row["container_tags"]["tags"] == json_codec::json!(["persisted-tag"]))
     );
     assert!(
         data.keys()

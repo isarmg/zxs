@@ -18,11 +18,21 @@ fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
     legacy["physical_device"] = json_codec::json!("/sys/old-device");
     legacy["filesystem_uuid"] = json_codec::json!("old-filesystem");
     invalid.push(canonical_json(&legacy).unwrap());
+    for format in [
+        json_codec::json!("managed-directory"),
+        json_codec::json!({
+            "membership-generation": {"authority_hash": "1".repeat(64)}
+        }),
+    ] {
+        let mut previous_format = seal.clone();
+        previous_format["format"] = format;
+        invalid.push(canonical_json(&previous_format).unwrap());
+    }
     let mut wrong_format = seal.clone();
     wrong_format["format"] = json_codec::json!("unsupported-identity");
     invalid.push(canonical_json(&wrong_format).unwrap());
     let mut incomplete_pending = seal.clone();
-    incomplete_pending["format"] = json_codec::json!("membership-pending");
+    incomplete_pending["format"] = json_codec::json!("container-tags-membership-pending");
     invalid.push(canonical_json(&incomplete_pending).unwrap());
     for field in ["physical_device", "filesystem_uuid"] {
         let mut old_field = seal.clone();
@@ -238,4 +248,74 @@ fn production_directory_seal_rejects_changed_device_inode_and_root_without_rewri
     );
     assert_eq!(fs::read(&path).unwrap(), original);
     assert_eq!(fs::read(held.join("disk.json")).unwrap(), original);
+}
+
+fn format_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        let relative = path.strip_prefix(root).unwrap().to_path_buf();
+        if metadata.is_dir() {
+            assert!(entries.insert(relative, None).is_none());
+            for entry in fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), entries);
+            }
+        } else {
+            assert!(metadata.is_file());
+            assert!(entries.insert(relative, Some(fs::read(path).unwrap())).is_none());
+        }
+    }
+    let mut entries = BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
+
+#[test]
+fn old_pool_and_mixed_seals_reject_without_rewriting_members() {
+    let temp = tempfile::tempdir().unwrap();
+    let config =
+        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+            .unwrap();
+    let system = temp.path().join("system");
+    let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("retained").unwrap(),
+            "P01",
+            3,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let state = canonical_json(engine.state()).unwrap();
+    drop(engine);
+    let seals: Vec<_> = config
+        .disks
+        .iter()
+        .map(|disk| fs::read(disk.root.join("disk.json")).unwrap())
+        .collect();
+    for format in [
+        json_codec::json!("managed-directory"),
+        json_codec::json!({
+            "membership-generation": {"authority_hash": "2".repeat(64)}
+        }),
+    ] {
+        for changed_members in [1, 3] {
+            for (disk, bytes) in config.disks.iter().zip(&seals).take(changed_members) {
+                let mut changed: json_codec::Value = json_codec::from_slice(bytes).unwrap();
+                changed["format"] = format.clone();
+                let bytes = canonical_json(&changed).unwrap();
+                assert_identity_json_error(&decode_seal(&bytes).unwrap_err());
+                fs::write(disk.root.join("disk.json"), bytes).unwrap();
+            }
+            let before = format_tree(temp.path());
+            assert_identity_json_error(&Engine::open(&system).err().unwrap());
+            assert_eq!(format_tree(temp.path()), before);
+            for (disk, bytes) in config.disks.iter().zip(&seals) {
+                fs::write(disk.root.join("disk.json"), bytes).unwrap();
+            }
+            let reopened = Engine::open(&system).unwrap();
+            assert_eq!(canonical_json(reopened.state()).unwrap(), state);
+            drop(reopened);
+        }
+    }
 }

@@ -299,10 +299,10 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,
-        _request: crate::UpdateFileNodeTags,
+        _request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -1565,12 +1565,12 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.merge_file_branches(identity, request)
         }
-        fn update_file_node_tags(
+        fn replace_container_tags(
             &self,
             identity: &crate::auth::Identity,
-            request: crate::UpdateFileNodeTags,
+            request: crate::ReplaceContainerTags,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
-            self.delegate.update_file_node_tags(identity, request)
+            self.delegate.replace_container_tags(identity, request)
         }
         fn create_disk_directory(
             &self,

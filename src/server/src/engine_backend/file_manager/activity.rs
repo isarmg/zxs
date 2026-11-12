@@ -9,6 +9,7 @@ use std::{cmp::Reverse, collections::BTreeMap};
 use storage_engine::Engine;
 
 mod deletion;
+mod tags;
 
 // Operation receipts retain an open JSON payload on disk. Parse only fields
 // consumed here; malformed retained rows are external state errors, not bugs.
@@ -397,7 +398,9 @@ fn file_operation_events<'a>(
         if !history_sequence_may_fit(events, operation.sequence) {
             continue;
         }
-        if deletion::record_operation(engine, events, operation)? {
+        if deletion::record_operation(engine, events, operation)?
+            || tags::record_operation(engine, events, operation)?
+        {
             continue;
         }
         if !matches!(
@@ -408,7 +411,6 @@ fn file_operation_events<'a>(
                 | "file.default.set"
                 | "file.path.metadata"
                 | "file.branches.merge"
-                | "file.tags.update"
         ) || operation.result.get("no_change").and_then(Value::as_bool) == Some(true)
         {
             continue;

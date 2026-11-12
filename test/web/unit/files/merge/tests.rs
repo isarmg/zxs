@@ -252,3 +252,10 @@ fn starting_a_merge_assigns_a_fresh_instance_and_only_cancels_its_previous_draft
         });
     });
 }
+
+/// The shared history-review owner is still exercised after node tags retire.
+pub(crate) fn draft_for_instance(instance: u64) -> Draft {
+    let mut value = draft();
+    value.instance = instance;
+    value
+}

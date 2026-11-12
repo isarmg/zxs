@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "generation_objects.rs"]
 pub(super) mod generation_objects;
 
-const FORMAT: &str = "zxs-backup-native-control";
+const FORMAT: &str = "zxs-container-tags-backup-native-control";
 const ROOT: &str = "native-control";
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_READS: usize = 32768;
@@ -870,3 +870,7 @@ pub(super) fn read_observed(
     };
     verify_observed(&manifest, &bytes, job, &mut source, observe)
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/backup_native_format_tests.rs"]
+mod format_tests;

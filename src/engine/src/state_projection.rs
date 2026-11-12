@@ -14,6 +14,7 @@ pub(crate) use files::FileRows;
 // One schema drives State coverage, row lookup, membership, and graph field names.
 macro_rules! projection_maps {
     ($consumer:ident) => { $consumer! {
+        container_tags => ContainerTags, file, "container_tags";
         branches => Branches, history, "branches";
         file_selections => FileSelections, selected_file, "file_selections";
         directory_branches => DirectoryBranches, repository, "directory_branches";
@@ -91,7 +92,8 @@ macro_rules! define_fields {
                     ..Self::default()
                 };
                 $(writes.rows.insert(Field::$variant,
-                    exact_keys(after.$field.changes_since(&before.$field))?);)*
+                    exact_keys(after.$field.changes_since(&before.$field))?
+                        .into_iter().map(|key| key.to_string()).collect());)*
                 Some(writes)
             }
         }
@@ -170,6 +172,12 @@ macro_rules! owner_for {
     };
 }
 macro_rules! field_keys {
+    (container_tags, $state:ident, $visit:ident) => {
+        for key in $state.container_tags.keys() {
+            $visit(&key.to_string());
+        }
+    };
+
     (content_states, $state:ident, $visit:ident) => {
         for key in $state.versions.keys() {
             $visit(key);
@@ -182,6 +190,12 @@ macro_rules! field_keys {
     };
 }
 macro_rules! field_value {
+    (container_tags, $state:ident, $key:ident) => {
+        Ok($key.parse::<storage_contract::FileId>().ok()
+            .and_then(|key| $state.container_tags.get(&key))
+            .map(json_codec::to_value).transpose()?)
+    };
+
     (content_states, $state:ident, $key:ident) => {
         Ok($state
             .versions
@@ -210,6 +224,12 @@ macro_rules! field_value {
     };
 }
 macro_rules! field_equal {
+    (container_tags, $before:ident, $after:ident, $key:ident) => {
+        $key.parse::<storage_contract::FileId>().ok().is_some_and(|key| {
+            $before.container_tags.get(&key) == $after.container_tags.get(&key)
+        })
+    };
+
     (content_states, $before:ident, $after:ident, $key:ident) => {
         $before.versions.contains_key($key) == $after.versions.contains_key($key)
             && content_state($before, $key) == content_state($after, $key)
@@ -219,6 +239,11 @@ macro_rules! field_equal {
     };
 }
 macro_rules! field_present {
+    (container_tags, $state:ident, $key:ident) => {
+        $key.parse::<storage_contract::FileId>().ok()
+            .is_some_and(|key| $state.container_tags.contains_key(&key))
+    };
+
     (content_states, $state:ident, $key:ident) => {
         $state.versions.contains_key($key)
     };

@@ -2,9 +2,14 @@
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use storage_engine::{
     BranchName, CommitRequest, Config, DeleteFileRequest, Engine, ErrorCode, FileDeletionTarget,
-    FileNodeTagsUpdateRequest, FileTagTarget, NamespaceOperation, NamespaceOperationKind,
+    NamespaceOperation, NamespaceOperationKind,
     OperationId, UndoFileDeletionRequest, Workspace,
 };
+
+use storage_engine as engine_api;
+use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
 
 fn request(workspace: Workspace) -> CommitRequest {
     CommitRequest {
@@ -64,26 +69,27 @@ fn deletion_joins_frontier_preserves_bytes_freezes_only_its_file_and_undo_surviv
         .unwrap()
         .branch_id
         .unwrap();
-    let head = engine.file_branch_head(&second).unwrap();
-    let tagged = engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &original.file_id,
-            targets: &[FileTagTarget {
-                branch_id: second.clone(),
-                source_node_id: head.clone(),
-                expected_node_id: head,
-            }],
-            add: &["reviewed".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let review = engine.create_workspace(&second, "admin").unwrap();
+    engine.stage_bytes(&review.workspace_id, "A.txt", b"independent review body").unwrap();
+    engine.commit_workspace(request(review)).unwrap();
+    let tagged = engine.file_branch_head(&second).unwrap();
+    container_tags_fixture::edit(
+        &mut engine, &original.file_id, &["reviewed".into()], &[], "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let tag_read = ReadRequest {
+        file_id: original.file_id.parse().unwrap(),
+        context: Context {
+            repository_id: repository.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse("A.txt").unwrap(),
+        },
+    };
+    let blocked_tags = ReplaceCommand {
+        expected_generation: engine.file_container_tags(&tag_read).unwrap().generation,
+        file_id: tag_read.file_id,
+        context: tag_read.context,
+        tags: TagSet::new([Tag::parse("blocked".into()).unwrap()]).unwrap(),
+    };
     let b_workspace = engine
         .create_workspace(&repository.main_branch_id, "admin")
         .unwrap();
@@ -172,22 +178,12 @@ fn deletion_joins_frontier_preserves_bytes_freezes_only_its_file_and_undo_surviv
             .code(),
         ErrorCode::BranchNotActive
     );
-    let tag_error = engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &original.file_id,
-            targets: &[FileTagTarget {
-                branch_id: second.clone(),
-                source_node_id: tagged.clone(),
-                expected_node_id: tagged,
-            }],
-            add: &["blocked".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap_err();
-    assert_eq!(tag_error.code(), ErrorCode::BranchNotActive);
+    let tag_error = engine.replace_container_tags(
+        &blocked_tags, &"admin".parse().unwrap(), OperationId::generate().unwrap(),
+    ).unwrap_err();
+    assert_eq!(tag_error.code(), ErrorCode::FileNotFound);
+    assert_eq!(container_tags_fixture::tags(&engine, &original.file_id),
+        std::collections::BTreeSet::from(["reviewed".into()]));
     assert_eq!(
         engine
             .file_namespace(

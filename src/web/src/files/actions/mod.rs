@@ -9,7 +9,7 @@ pub(crate) use history::{
     anchor_history_node, close_history_field, close_history_relation, history_aux_loading,
     load_file_history, load_history_field, load_history_merges, open_history_merge_inputs,
     open_history_merge_parents, open_history_parents, open_history_version_sources,
-    page_history_branches, page_history_nodes, review_history_merge, review_history_tags,
+    page_history_branches, page_history_nodes, review_history_merge,
 };
 
 pub(crate) use super::mkdir::start as create_directory;

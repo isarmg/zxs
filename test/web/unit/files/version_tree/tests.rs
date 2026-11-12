@@ -55,13 +55,13 @@ fn history_nodes_sort_sibling_tips_by_sequence_then_identity() {
         json_codec::json!({"node_id":"root","version_id":"root","parent_node_ids":[],"kind":"content","sequence":"1"}),
         json_codec::json!({"node_id":"older-rename","version_id":"root","parent_node_ids":["root"],"kind":"rename","sequence":"2"}),
         json_codec::json!({"node_id":"b-newer-body","version_id":"body","parent_node_ids":["root"],"kind":"content","sequence":"3"}),
-        json_codec::json!({"node_id":"a-newer-tags","version_id":"body","parent_node_ids":["root"],"kind":"tags","sequence":"3"}),
+        json_codec::json!({"node_id":"a-newer-merge","version_id":"body","parent_node_ids":["root"],"kind":"merge","sequence":"3"}),
     ];
     let tree = layout(&metadata(&typed(&records)));
     assert_eq!(
         tree.levels,
         vec![
-            vec!["a-newer-tags", "b-newer-body", "older-rename"],
+            vec!["a-newer-merge", "b-newer-body", "older-rename"],
             vec!["root"]
         ]
     );
@@ -527,7 +527,7 @@ fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() 
         for i in 0..20 {
             state.update(|s| {
                 s.session_notice = i.to_string();
-                s.files.checked_nodes = crate::files::tags::tests::selection(&["node-1"]);
+                s.files.container_tags = crate::files::tags::tests::read_model();
             });
             assert_eq!(records.with(|index| index.snapshot.nodes().len()), count);
         }

@@ -209,7 +209,6 @@ impl<'a> VerifiedHistoryMerge<'a> {
             || node.operation_id != event.operation_id
             || node.author != *principal
             || node.sequence != next.sequence
-            || node.tags != prepared.tags
             || node.parent_node_ids != parents
             || event.parent_node_ids != parents
         {

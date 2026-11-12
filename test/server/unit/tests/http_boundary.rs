@@ -669,10 +669,10 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private file history merge panic detail")
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,
-        _request: crate::UpdateFileNodeTags,
+        _request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
@@ -1251,10 +1251,24 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             ),
         ),
         (
+            "GET",
+            concat!(
+                "/api/file-manager/files/file/tags?",
+                "repository_id=repo_00000000000000000000000000000000&path=file.txt",
+            ),
+            None,
+        ),
+        (
             "POST",
             "/api/file-manager/files/file/tags",
             Some(
-                json!({"targets":[],"add":[],"remove":[],"operation_id":"op_00000000000000000000000000000000"}),
+                json!({
+                    "repository_id":"repo_00000000000000000000000000000000",
+                    "path":"file.txt",
+                    "expected_generation":"0",
+                    "tags":[],
+                    "operation_id":"op_00000000000000000000000000000000"
+                }),
             ),
         ),
         (

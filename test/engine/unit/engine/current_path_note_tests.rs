@@ -101,25 +101,32 @@ impl Fixture {
         let context = engine
             .file_context(&repository.repository_id, "original.txt")
             .unwrap();
-        let metadata_node = engine
-            .update_file_node_tags(FileNodeTagsUpdateRequest {
-                file_id: &entry.file_id,
-                targets: &[FileTagTarget {
-                    branch_id: context.branch_id,
-                    source_node_id: entry.version_id.clone(),
-                    expected_node_id: entry.version_id.clone(),
-                }],
-                add: &["historical".into()],
-                remove: &[],
-                location: None,
-                principal: "admin",
-                operation_id: op(),
-            })
-            .unwrap()
-            .result["nodes"][0]["node_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        for (from, to) in [("original.txt", "merge-input.txt"),
+            ("merge-input.txt", "original.txt")]
+        {
+            engine.file_namespace(
+                &repository.repository_id,
+                NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to))
+                    .unwrap(),
+                "admin",
+                op(),
+            ).unwrap();
+        }
+        let head = engine.file_branch_head(&context.branch_id).unwrap();
+        let inputs = [&entry.version_id, &head].map(|source| FileHistoryMergeInput {
+            branch_id: context.branch_id.clone(),
+            source_node_id: source.clone(),
+            expected_node_id: head.clone(),
+        });
+        let metadata_node = engine.merge_file_history(FileHistoryMergeRequest {
+            file_id: &entry.file_id,
+            inputs: &inputs,
+            chosen_node_id: &entry.version_id,
+            name: &BranchName::parse("note metadata merge").unwrap(),
+            location: None,
+            principal: "admin",
+            operation_id: op(),
+        }).unwrap().result["node_id"].as_str().unwrap().to_owned();
         let rename = |engine: &mut Engine, from: &str, to: &str| {
             engine
                 .file_namespace(
@@ -595,8 +602,7 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
                     .file_metadata_nodes
                     .get_mut(&fixture.metadata_node)
                     .unwrap()
-                    .tags
-                    .insert("injected".into());
+                    .author = "injected".into();
             }
             3 => {
                 changed

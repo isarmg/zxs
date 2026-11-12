@@ -1020,6 +1020,7 @@ impl Engine {
         })?;
         self.mutate("history.restore",principal,operation,json!({"manifest_hash":report.manifest_hash,"primary_slot_id":primary,"target_copies":copies}),|engine,state,pending| {
             if state.histories.contains_key(&manifest.history.history_tree_id) || state.repositories.contains_key(&manifest.repository.repository_id)
+                || manifest.container_tags.keys().any(|id| state.container_tags.contains_key(id))
                 || manifest.commits.keys().any(|id| state.commits.contains_key(id))
                 || manifest.branches.keys().any(|id| state.branches.contains_key(id))
                 || manifest.directory_branches.keys().any(|id| state.directory_branches.contains_key(id))
@@ -1083,6 +1084,7 @@ impl Engine {
             state.file_backup_paths.extend(backup_paths.clone());
             state.file_backup_policies.extend(manifest.file_backup_policies.clone());
             state.file_selection_generations.extend(manifest.file_selection_generations.clone());
+            state.container_tags.extend(manifest.container_tags.clone());
             state.file_notes.extend(manifest.file_notes.clone());state.version_notes.extend(manifest.version_notes.clone());
             state.file_names.extend(manifest.file_names.clone());
             state.merge_links.extend(manifest.merge_links.clone()); state.history_boundaries.extend(manifest.boundary_marks.clone());
@@ -1133,4 +1135,9 @@ mod prepared_dedup_tests;
 pub(crate) fn retirement_history_root(state: &State, history: &str) -> Result<String> {
     let manifest = HistoryManifest::from_state(state, history)?;
     Ok(graph::prepare_encoded(&manifest, usize::MAX)?.binding.hash)
+}
+
+/// A missing record is corrupt authority, never an implicit empty tag set.
+pub(crate) fn container_tags_missing() -> Error {
+    storage_contract::file_container_tags::TagsError::MissingRecord.into_error().into()
 }

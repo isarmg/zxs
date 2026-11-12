@@ -27,6 +27,7 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) {
         directory_selections,
         directory_selection_generations,
         file_selection_generations,
+        container_tags,
         file_notes,
         version_notes,
         file_names,
@@ -39,6 +40,7 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) {
         placement_rules,
         protection_policies,
     } = mapped;
+    next.container_tags.extend(container_tags);
     next.repositories
         .insert(repository.repository_id.clone(), repository);
     next.histories

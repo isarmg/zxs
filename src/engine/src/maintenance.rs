@@ -811,6 +811,16 @@ impl Engine {
                     }
                 }
                 for (old,new) in &file_map {
+                    let source = old.parse::<storage_contract::FileId>()?;
+                    let tags = state.container_tags.get(&source)
+                        .ok_or_else(crate::history_package::container_tags_missing)?
+                        .tags().clone();
+                    state.container_tags.insert(
+                        new.parse()?,
+                        storage_contract::file_container_tags::ContainerTags::new(
+                            tags, storage_contract::Generation::new(0),
+                        ),
+                    );
                     if let Some(name)=state.file_names.get(old).cloned(){state.file_names.insert(new.clone(),name);}
                     if let Some(location)=state.file_locations.get(old).cloned(){state.file_locations.insert(new.clone(),location);}
                     if let Some(note)=state.file_notes.get(old).cloned(){state.file_notes.insert(new.clone(),note);}

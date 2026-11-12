@@ -12,9 +12,52 @@ mod shared_history;
 use storage_contract::content_matches::{ContentMatchPage, ContentMatchRequest};
 use storage_contract::history_window::HistoryWindowCancellation;
 use storage_engine::{
-    BranchName, CommitRequest, Config, Engine, Entry, ErrorCode, FileNodeTagsUpdateRequest,
-    FileTagTarget, OperationId, Workspace,
+    BranchName, CommitRequest, Config, Engine, Entry, ErrorCode, OperationId, Workspace,
 };
+use storage_engine as engine_api;
+#[path = "../support/container_tags.rs"]
+mod container_tags_fixture;
+
+fn metadata_node(pool: &mut Pool, entry: &Entry) -> String {
+    container_tags_fixture::edit(
+        &mut pool.engine,
+        &entry.file_id,
+        &["retained label".into()],
+        &[],
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let labels = container_tags_fixture::tags(&pool.engine, &entry.file_id);
+    for (from, to) in [(entry.path(), "merge-source"), ("merge-source", entry.path())] {
+        pool.engine.file_namespace(
+            &pool.repository,
+            storage_engine::NamespaceOperation::parse(
+                storage_engine::NamespaceOperationKind::Rename, from, Some(to),
+            ).unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        ).unwrap();
+    }
+    let context = pool.engine.file_context(&pool.repository, entry.path()).unwrap();
+    let head = pool.engine.file_branch_head(&context.branch_id).unwrap();
+    let inputs = [&entry.version_id, &head].map(|node| storage_engine::FileHistoryMergeInput {
+        branch_id: context.branch_id.clone(),
+        source_node_id: node.clone(),
+        expected_node_id: head.clone(),
+    });
+    let receipt = pool.engine.merge_file_history(storage_engine::FileHistoryMergeRequest {
+        file_id: &entry.file_id,
+        inputs: &inputs,
+        chosen_node_id: &entry.version_id,
+        name: &BranchName::parse("metadata merge").unwrap(),
+        location: None,
+        principal: "admin",
+        operation_id: OperationId::generate().unwrap(),
+    }).unwrap();
+    assert_eq!(container_tags_fixture::tags(&pool.engine, &entry.file_id), labels);
+    receipt.result["node_id"].as_str().unwrap().to_owned()
+}
+
 fn commit(workspace: Workspace) -> CommitRequest {
     CommitRequest {
         workspace_id: workspace.workspace_id,
@@ -167,38 +210,7 @@ fn content_matches_accept_metadata_nodes_but_reject_wrong_file_and_cursor() {
     let a = pool.entry("a");
     let b = pool.entry("b");
     let c = pool.entry("c");
-    let branch = pool
-        .engine
-        .create_file_branch(
-            &a.file_id,
-            &a.version_id,
-            &BranchName::parse("review").unwrap(),
-            "admin",
-            OperationId::generate().unwrap(),
-        )
-        .unwrap()
-        .branch_id
-        .unwrap();
-    let node = pool
-        .engine
-        .update_file_node_tags(FileNodeTagsUpdateRequest {
-            file_id: &a.file_id,
-            targets: &[FileTagTarget {
-                branch_id: branch,
-                source_node_id: a.version_id.clone(),
-                expected_node_id: a.version_id.clone(),
-            }],
-            add: &["label".into()],
-            remove: &[],
-            location: None,
-            principal: "admin",
-            operation_id: OperationId::generate().unwrap(),
-        })
-        .unwrap()
-        .result["nodes"][0]["node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let node = metadata_node(&mut pool, &a);
     let page = pool.page(pool.request(&a, &node, None, 64));
     assert_eq!(page.source_version_id.as_str(), a.version_id);
     assert_eq!(page.matches.len(), 1);

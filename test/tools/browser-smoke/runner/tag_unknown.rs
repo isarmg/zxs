@@ -17,30 +17,34 @@ fn publish_and_lose_delivery(browser: &Browser) -> Result<()> {
     check(
         browser,
         "real current history before the lost tag response",
-        "return window.__zxsTagUnknown.reads.length>0&&!document.querySelector('.zxs-header-refresh').disabled&&!!document.querySelector('.zxs-version-current')",
+        "return window.__zxsTagUnknown.reads.length>0\
+         &&!document.querySelector('.zxs-header-refresh').disabled\
+         &&!!document.querySelector('.zxs-version-current')",
     )?;
+    phase1_files::reload_container_tags(browser)?;
     browser.script("window.__zxsTagUnknown.capture();return true")?;
-    // Reuse the regular helper so compact cards can open their current node.
+    // Use the real container editor, outside all version cards.
     phase1_files::edit_current_tags(browser)?;
-    let input = browser.css(
-        ".zxs-tag-review input[aria-label='Add tag'],.zxs-tag-review input[aria-label='新增标签']",
-    )?;
+    let input = browser.css("[data-container-tag-editor] input:not([disabled])")?;
     browser.keys(&input, "恢复原请求")?;
     browser.keys(&input, "\u{e007}")?;
-    browser.click(&browser.button("Save tag child nodes", "保存标签子节点")?)?;
+    browser.click(&browser.button("Save tags", "保存标签")?)?;
     check(
         browser,
         "published tag delivery lost and two completed outcomes hidden by 404",
         r#"
-        const p=window.__zxsTagUnknown,panel=document.querySelector('.zxs-tag-review');
+        const p=window.__zxsTagUnknown,panel=document.querySelector('[data-container-tag-editor]');
         if(!p.uncertain()||!panel)return false;
         const buttons=Array.from(panel.querySelectorAll('button'));
-        const save=buttons.find(b=>['Save tag child nodes','保存标签子节点'].includes(b.textContent.trim()));
+        const save=buttons.find(b=>['Save tags','保存标签'].includes(b.textContent.trim()));
         const cancel=buttons.find(b=>['Cancel','取消'].includes(b.textContent.trim()));
         return save?.disabled&&cancel?.disabled;
     "#,
     )?;
-    browser.script("window.__zxsTagUnknown.stages.push('published response lost; repeated 404 keeps draft frozen');return true")?;
+    browser.script(
+        "window.__zxsTagUnknown.stages.push(\
+         'published response lost; repeated 404 keeps draft frozen');return true",
+    )?;
     Ok(())
 }
 
@@ -56,20 +60,26 @@ fn recover_after_navigation(browser: &Browser) -> Result<()> {
             .find(b=>['New folder','新建文件夹'].includes(b.textContent.trim()));
         return p.uncertain()&&!!document.querySelector('[data-tag-request-recovery]')
             &&!!document.querySelector('[data-tag-request-retry]:not([disabled])')
-            &&!document.querySelector('.zxs-tag-review')
+            &&!document.querySelector('[data-container-tag-editor]')
             &&document.querySelector('.zxs-file-manager')?.getAttribute('aria-busy')==='false'
             &&create?.disabled;
     "#,
     )?;
-    browser.script(r#"
+    browser.script(
+        r#"
         const p=window.__zxsTagUnknown;
         for(const b of document.querySelectorAll('button'))
-            if(['New folder','新建文件夹'].includes(b.textContent.trim())){b.click();b.click();}
+            if(['New folder','新建文件夹'].includes(b.textContent.trim())){
+                b.click();
+                b.click();
+            }
         if(p.writes.length!==1||p.unexpected.length||document.querySelector('.zxs-inline-input'))
             throw new Error('404 or navigation removed the tag write fence');
-        p.stages.push('different directory; original request recovery visible; namespace writes fenced');
+        p.stages.push(
+            'different directory; original request recovery visible; namespace writes fenced');
         return true;
-    "#)?;
+    "#,
+    )?;
     browser.click(&browser.css("[data-tag-request-retry]:not([disabled])")?)?;
     check(
         browser,
@@ -80,11 +90,17 @@ fn recover_after_navigation(browser: &Browser) -> Result<()> {
             &&document.querySelector('[data-tag-request-retry]')?.disabled;
     "#,
     )?;
-    browser.script(r#"
+    browser.script(
+        r#"
         const p=window.__zxsTagUnknown,button=document.querySelector('[data-tag-request-retry]');
-        if(!button.disabled||document.visibilityState!=='visible')throw new Error('retry hold is not visible and fenced');
-        button.click();button.click();p.heldAt=performance.now();return true;
-    "#)?;
+        if(!button.disabled||document.visibilityState!=='visible')
+            throw new Error('retry hold is not visible and fenced');
+        button.click();
+        button.click();
+        p.heldAt=performance.now();
+        return true;
+    "#,
+    )?;
     // Cross the real 2-second operation polling interval, without changing it.
     check(
         browser,
@@ -95,7 +111,11 @@ fn recover_after_navigation(browser: &Browser) -> Result<()> {
             &&!p.writes[1].delivered&&document.querySelector('[data-tag-request-retry]')?.disabled;
     "#,
     )?;
-    browser.script("const p=window.__zxsTagUnknown;p.stages.push('exact original POST and receipt; duplicate click and poll fenced');p.release();return true")?;
+    browser.script(
+        "const p=window.__zxsTagUnknown;\
+         p.stages.push('exact original POST and receipt; duplicate click and poll fenced');\
+         p.release();return true",
+    )?;
     check(
         browser,
         "only the delivered original receipt clears recovery and write fencing",
@@ -113,17 +133,24 @@ fn recover_after_navigation(browser: &Browser) -> Result<()> {
     )?)?;
     check(
         browser,
-        "fresh original file history has exactly one tag child and unchanged body",
+        "fresh container read retains one CAS replacement and unchanged history",
         r#"
-        const p=window.__zxsTagUnknown,id=p.verify();if(!id)return false;
+        const p=window.__zxsTagUnknown,id=p.verify();
+        if(!id)return false;
         const node=document.querySelector('[data-node-id="'+id+'"]');
         const actual=p.reads.at(-1).nodes.find(n=>n.node_id===id);
-        return node?.dataset.nodeKind==='tags'&&node.dataset.bodyVersionId===actual.version_id
+        const tags=p.tagReads.at(-1).body;
+        const panel=document.querySelector(
+            'section[aria-label="Container tags"],section[aria-label="容器标签"]');
+        return node?.dataset.nodeKind===actual.kind&&node.dataset.bodyVersionId===actual.version_id
             &&!!node.querySelector('.zxs-version-current')
-            &&JSON.stringify(Array.from(node.querySelectorAll('.zxs-node-tag'),tag=>tag.textContent))===JSON.stringify(actual.tags);
+            &&panel?.querySelector('[role=status]')?.textContent.trim()===tags.tags.join(' / ');
     "#,
     )?;
-    browser.script("window.__zxsTagUnknown.stages.push('fresh history: one tag child; retained old nodes and body');return true")?;
+    browser.script(
+        "window.__zxsTagUnknown.stages.push(\
+         'fresh container tags: one CAS advance; unchanged graph and body');return true",
+    )?;
     assert_metadata_only(browser)
 }
 
@@ -162,7 +189,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS real published tag response loss, repeated synthetic outcome 404 fencing, navigation and exact original POST retry; one retained-body tag child, no duplicate publication"
+        "PASS real published tag response loss, repeated synthetic outcome 404 fencing, navigation \
+         and exact original POST retry; one container CAS advance, no new node or duplicate publication"
     );
     Ok(())
 }

@@ -17,6 +17,10 @@ pub(in crate::journal) fn prepare_reference(
         let root = if matches!(field, "operations" | "operation_principals") {
             let map: BTreeMap<OperationId,json_codec::Value> = json_codec::from_value(value)?;
             FieldRoot::Operations(builder.encoder.map_typed(map, ProofMeasure::Plain, &|key: &OperationId| Cow::Owned(key.to_string()))?)
+        } else if field == "container_tags" {
+            let map: BTreeMap<storage_contract::FileId, json_codec::Value> = json_codec::from_value(value)?;
+            FieldRoot::Files(builder.encoder.map_typed(map, ProofMeasure::Plain,
+                &|key: &storage_contract::FileId| Cow::Owned(key.to_string()))?)
         } else {
             let json_codec::Value::Object(map) = value else { panic!("State field is a map") };
             let measure = if field == "content_states" { ProofMeasure::ContentStates } else { ProofMeasure::Plain };

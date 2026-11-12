@@ -131,7 +131,10 @@ pub(crate) fn accept_read_response<T>(
         && error.status == 401
     {
         fail(state, error.clone());
-        state.update(|s| s.files.cancel_history());
+        state.update(|s| {
+            s.files.cancel_history();
+            s.files.container_tags.clear();
+        });
         return false;
     }
     true
@@ -394,6 +397,7 @@ fn begin_login(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.files.container_tags.clear();
     state.notices.clear();
     state.session_notice.clear();
     state.login_in_flight = true;
@@ -411,6 +415,7 @@ fn begin_restore(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.files.container_tags.clear();
     state.notices.clear();
     state.session_transition = SessionTransition::Restoring;
     state.session_epoch += 1;
@@ -455,6 +460,7 @@ pub(crate) fn begin_logout(state: &mut State) -> Option<u64> {
         return None;
     }
     state.files.cancel_history();
+    state.files.container_tags.clear();
     state.notices.clear();
     state.session_transition = SessionTransition::LoggingOut;
     state.session_epoch += 1;
@@ -500,7 +506,10 @@ pub(crate) fn complete_logout(state: RwSignal<State>, result: Result<Value, api:
     });
 }
 fn end_session(state: RwSignal<State>, notice: String) {
-    state.update(|s| s.files.cancel_history());
+    state.update(|s| {
+        s.files.cancel_history();
+        s.files.container_tags.clear();
+    });
     api::clear_session();
     let session_epoch = state.with_untracked(|s| s.session_epoch + 1);
     state.set(State {

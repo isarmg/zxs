@@ -4723,8 +4723,8 @@
     },
     "/api/file-manager/files/{file}/tags": {
       "post": {
-        "operationId": "updateFileNodeTags",
-        "description": "对显式源节点批量增加/删除标签，全部branch head基线先验证。每个变化目标生成复用正文的metadata child，继承源标签再应用增量；原节点不变。只有source恰为当前分支/目录引用才推进该引用；历史源仅新增子节点。最多16标签，每个128 UTF-8字节，无控制字符，去重，任一目标失败整笔不发布。标签不算首次正文写入。",
+        "operationId": "replaceFileContainerTags",
+        "description": "以明确当前repository_id/path和独立expected_generation整体替换文件容器标签。文件身份是唯一标签归属，不选择节点或分支、不创建节点或正文、不推进任何分支HEAD。同值成功changed=false且代数不变。重复标签/超16项/超128 UTF-8字节/空白或控制字符拒绝。HEAD_CONFLICT保留草稿，重读后显式确认新CAS；未知结果只能查询或原样重发同一operation_id与完整请求。",
         "parameters": [
           {
             "name": "file",
@@ -4740,65 +4740,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "operation_id": {
-                    "$ref": "#/components/schemas/OperationId"
-                  },
-                  "repository_id": {
-                    "$ref": "#/components/schemas/RepositoryId"
-                  },
-                  "path": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "targets": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/FileTagTarget"
-                    },
-                    "minItems": 1
-                  },
-                  "add": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128,
-                      "x-maxUtf8Bytes": 128,
-                      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
-                      "description": "标签必须trim前后相同，非空，无Unicode控制字符，最多128个UTF-8字节。"
-                    },
-                    "maxItems": 16
-                  },
-                  "remove": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128,
-                      "x-maxUtf8Bytes": 128,
-                      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
-                      "description": "标签必须trim前后相同，非空，无Unicode控制字符，最多128个UTF-8字节。"
-                    },
-                    "maxItems": 16
-                  }
-                },
-                "required": [
-                  "operation_id",
-                  "targets",
-                  "add",
-                  "remove"
-                ],
-                "additionalProperties": false,
-                "dependentRequired": {
-                  "repository_id": [
-                    "path"
-                  ],
-                  "path": [
-                    "repository_id"
-                  ]
-                }
+                "$ref": "#/components/schemas/FileContainerTagsReplaceBody"
               }
             }
           }
@@ -4815,7 +4757,7 @@
                       "$ref": "#/components/schemas/OperationId"
                     },
                     "operation_kind": {
-                      "type": "string"
+                      "const": "file.container-tags.replace"
                     },
                     "request_digest": {
                       "$ref": "#/components/schemas/Hash"
@@ -4836,7 +4778,10 @@
                       "$ref": "#/components/schemas/UInt64"
                     },
                     "result": {
-                      "type": "object"
+                      "type": [
+                        "object",
+                        "null"
+                      ]
                     },
                     "error": {
                       "anyOf": [
@@ -4858,6 +4803,27 @@
                     "commit_state",
                     "result",
                     "error"
+                  ],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "state": {
+                            "const": "completed"
+                          }
+                        },
+                        "required": [
+                          "state"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "result": {
+                            "$ref": "#/components/schemas/FileContainerTagsReplacement"
+                          }
+                        }
+                      }
+                    }
                   ]
                 }
               }
@@ -4874,7 +4840,67 @@
             }
           },
           "409": {
-            "description": "NAME_COLLISION：同一文件已有规范化同名分支，整笔不修改。",
+            "description": "HEAD_CONFLICT：独立标签代数已变化，本次未发布；须重读并明确确认新CAS。未知原请求不能改写代数后重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getFileContainerTags",
+        "description": "只读返回当前文件容器标签及独立代数；必须提供授权当前repository_id和PortablePath，不创建空记录，不受节点、分支或历史分页选择影响。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768,
+              "x-maxUtf16Units": 200,
+              "x-maxDepth": 32,
+              "x-namePolicy": "PortablePath"
+            }
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "responses": {
+          "200": {
+            "description": "完整标签快照及明确文件/路径身份。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContainerTagsSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定结果使用原 operation_id 查询或重试。",
             "content": {
               "application/json": {
                 "schema": {
@@ -12133,19 +12159,6 @@
         "type": "string",
         "pattern": "^fmerge_[0-9a-f]{32}(?![\\s\\S])"
       },
-      "FileNodeTags": {
-        "type": "array",
-        "items": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "x-maxUtf8Bytes": 128,
-          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
-          "description": "标签必须trim前后相同，非空，无Unicode控制字符，最多128个UTF-8字节。"
-        },
-        "maxItems": 16,
-        "uniqueItems": true
-      },
       "FileMergeInput": {
         "type": "object",
         "properties": {
@@ -12158,26 +12171,6 @@
         },
         "required": [
           "branch_id",
-          "expected_node_id"
-        ],
-        "additionalProperties": false
-      },
-      "FileTagTarget": {
-        "type": "object",
-        "properties": {
-          "branch_id": {
-            "$ref": "#/components/schemas/BranchId"
-          },
-          "source_node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
-          },
-          "expected_node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
-          }
-        },
-        "required": [
-          "branch_id",
-          "source_node_id",
           "expected_node_id"
         ],
         "additionalProperties": false
@@ -12210,12 +12203,8 @@
           },
           "kind": {
             "enum": [
-              "tags",
               "merge"
             ]
-          },
-          "tags": {
-            "$ref": "#/components/schemas/FileNodeTags"
           },
           "operation_id": {
             "$ref": "#/components/schemas/OperationId"
@@ -12238,14 +12227,13 @@
           "parent_node_ids",
           "branch_id",
           "kind",
-          "tags",
           "operation_id",
           "author",
           "sequence",
           "created_at"
         ],
         "additionalProperties": false,
-        "description": "不可变标签或合并元数据子节点，复用真实正文和proof，不新增FileVersion。标签是节点快照，后续普通子节点继承第一父节点。"
+        "description": "不可变合并元数据子节点，复用真实正文和proof，不新增FileVersion。标签只属于文件容器，元数据节点没有标签字段或标签种类。"
       },
       "FileBranchMerge": {
         "type": "object",
@@ -12458,10 +12446,16 @@
           },
           "file_backup_policies": {
             "$ref": "#/components/schemas/FileBackupPolicies"
+          },
+          "container_tags": {
+            "$ref": "#/components/schemas/FileContainerTagsMap"
           }
         },
         "additionalProperties": true,
-        "description": "State及HistoryManifest新增字段的受检投影；各映射省略时默认为空。不声称覆盖完整状态或恢复包。"
+        "description": "State及HistoryManifest文件功能字段的受检投影；container_tags为必需完整文件身份映射，不补空旧格式。其他字段的省略规则不在此投影中改变；不声称覆盖完整状态或恢复包。",
+        "required": [
+          "container_tags"
+        ]
       },
       "MetadataReference": {
         "type": "object",
@@ -12623,7 +12617,7 @@
         "type": "object",
         "properties": {
           "format": {
-            "const": "radix-map-roots"
+            "const": "container-tags-radix-map-roots"
           },
           "repository": {
             "$ref": "#/components/schemas/HistoryRepository"
@@ -12729,6 +12723,9 @@
               },
               "file_deletions": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "container_tags": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -12763,7 +12760,8 @@
               "placement_rules",
               "protection_policies",
               "directory_git_repositories",
-              "file_deletions"
+              "file_deletions",
+              "container_tags"
             ],
             "additionalProperties": false
           }
@@ -12775,7 +12773,7 @@
           "maps"
         ],
         "additionalProperties": false,
-        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定32个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。 当前删除生命周期要求file_deletions独立映射根。"
+        "description": "history-manifest域当前有界分页历史根，format是必需语义标识而非发行版本号；固定33个映射。Candidate.history_roots目录通过history ID绑定此根摘要，展开逻辑HistoryManifest不是根身份。 当前删除生命周期要求file_deletions独立映射根。 容器标签新格式必须包含container_tags根；旧format或缺根拒绝，不迁移原字节。"
       },
       "CapacityMeasure": {
         "type": "object",
@@ -13044,7 +13042,7 @@
         "type": "object",
         "properties": {
           "format": {
-            "const": "radix-map-roots"
+            "const": "container-tags-radix-map-roots"
           },
           "sequence": {
             "$ref": "#/components/schemas/UInt64"
@@ -13168,6 +13166,9 @@
               },
               "file_deletions": {
                 "$ref": "#/components/schemas/MetadataReference"
+              },
+              "container_tags": {
+                "$ref": "#/components/schemas/MetadataReference"
               }
             },
             "required": [
@@ -13207,7 +13208,8 @@
               "directory_selection_generations",
               "file_selection_generations",
               "directory_git_repositories",
-              "file_deletions"
+              "file_deletions",
+              "container_tags"
             ],
             "additionalProperties": false
           },
@@ -13228,7 +13230,7 @@
           "control_auth"
         ],
         "additionalProperties": false,
-        "description": "snapshot域固定37个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。 当前删除生命周期要求file_deletions独立映射根。"
+        "description": "snapshot域固定38个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。 当前删除生命周期要求file_deletions独立映射根。 容器标签新格式必须包含container_tags根；旧format或缺根拒绝，不迁移原字节。"
       },
       "InclusionProof": {
         "type": "object",
@@ -14215,7 +14217,6 @@
             "enum": [
               "content",
               "rename",
-              "tags",
               "merge"
             ]
           },
@@ -14263,9 +14264,6 @@
             "maxLength": 128,
             "x-maxUtf8Bytes": 128,
             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
-          },
-          "tags": {
-            "$ref": "#/components/schemas/FileNodeTags"
           },
           "size": {
             "$ref": "#/components/schemas/UInt64"
@@ -14320,7 +14318,6 @@
           "path",
           "previous_path",
           "note",
-          "tags",
           "size",
           "content_hash",
           "content_state",
@@ -14377,7 +14374,6 @@
               "properties": {
                 "kind": {
                   "enum": [
-                    "tags",
                     "merge"
                   ]
                 }
@@ -20343,7 +20339,6 @@
             "enum": [
               "content",
               "rename",
-              "tags",
               "merge",
               "deletion"
             ]
@@ -21274,6 +21269,197 @@
         "required": [
           "current",
           "tree_id"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTag": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "x-maxUtf8Bytes": 128,
+        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])",
+        "description": "非空、首尾无空白、无控制字符；最多128 UTF-8字节，不自动trim。UTF-8字节界限还由共享Rust DTO验证。",
+        "allOf": [
+          {
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+          }
+        ]
+      },
+      "FileContainerTagSet": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/FileContainerTag"
+        },
+        "maxItems": 16,
+        "uniqueItems": true
+      },
+      "FileContainerTagContext": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-maxDepth": 32,
+            "x-namePolicy": "PortablePath"
+          }
+        },
+        "required": [
+          "repository_id",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTags": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "$ref": "#/components/schemas/FileContainerTagSet"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "tags",
+          "generation"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTagsMap": {
+        "type": "object",
+        "propertyNames": {
+          "$ref": "#/components/schemas/FileId"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/FileContainerTags"
+        }
+      },
+      "FileContainerTagsReadRequest": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "context": {
+            "$ref": "#/components/schemas/FileContainerTagContext"
+          }
+        },
+        "required": [
+          "file_id",
+          "context"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTagsSnapshot": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "context": {
+            "$ref": "#/components/schemas/FileContainerTagContext"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileContainerTagSet"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "file_id",
+          "context",
+          "tags",
+          "generation"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTagsReplaceCommand": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "context": {
+            "$ref": "#/components/schemas/FileContainerTagContext"
+          },
+          "expected_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileContainerTagSet"
+          }
+        },
+        "required": [
+          "file_id",
+          "context",
+          "expected_generation",
+          "tags"
+        ],
+        "additionalProperties": false
+      },
+      "FileContainerTagsReplacement": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/FileContainerTagsReplaceCommand"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileContainerTagSet"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request",
+          "tags",
+          "generation",
+          "changed"
+        ],
+        "additionalProperties": false,
+        "description": "永久替换结果；request必须等于原始完整命令，tags必须相同。changed为true时generation为expected_generation+1，否则相等；共享Rust验证器检查这些跨字段关系。"
+      },
+      "FileContainerTagsReplaceBody": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-maxDepth": 32,
+            "x-namePolicy": "PortablePath"
+          },
+          "expected_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileContainerTagSet"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          }
+        },
+        "required": [
+          "repository_id",
+          "path",
+          "expected_generation",
+          "tags",
+          "operation_id"
         ],
         "additionalProperties": false
       }

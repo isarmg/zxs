@@ -440,20 +440,41 @@ impl Client {
         self.request("POST", &format!("/api/file-manager/files/{}/merge-history", segment(file)),
             Some(&json!({"inputs":inputs,"chosen_node_id":chosen_node,"name":name,"confirmed":true,"operation_id":operation_id}))).await
     }
-    /// Apply tag deltas to explicit source nodes with their expected branch heads.
-    /// No repository/path precondition is sent. Preserve all inputs for a retry.
-    pub async fn update_file_node_tags(
+    /// Read the labels of this exact current file-container occurrence.
+    pub async fn file_container_tags(
         &self,
-        file: &str,
-        targets: &[storage_contract::FileTagTarget],
-        add: &[String],
-        remove: &[String],
-        operation_id: &str,
+        request: &storage_contract::file_container_tags::ReadRequest,
+    ) -> Result<storage_contract::file_container_tags::Snapshot, Error> {
+        let query = url_encoding::form::Serializer::new(String::new())
+            .append_pair("repository_id", &request.context.repository_id.to_string())
+            .append_pair("path", request.context.path.as_str())
+            .finish();
+        let route = format!("/api/file-manager/files/{}/tags?{query}", request.file_id);
+        let snapshot: storage_contract::file_container_tags::Snapshot =
+            json_codec::from_value(self.request("GET", &route, None).await?)?;
+        snapshot
+            .validate(request)
+            .map_err(|source| Error::Contract(source.into_error()))?;
+        Ok(snapshot)
+    }
+
+    /// Replace the complete container label set against its observed generation.
+    /// Preserve the entire command and operation ID after an uncertain response.
+    pub async fn replace_container_tags(
+        &self,
+        command: &storage_contract::file_container_tags::ReplaceCommand,
+        operation_id: storage_contract::OperationId,
     ) -> Result<Value, Error> {
         self.request(
             "POST",
-            &format!("/api/file-manager/files/{}/tags", segment(file)),
-            Some(&json!({"targets":targets,"add":add,"remove":remove,"operation_id":operation_id})),
+            &format!("/api/file-manager/files/{}/tags", command.file_id),
+            Some(&json!({
+                "repository_id": command.context.repository_id,
+                "path": command.context.path,
+                "expected_generation": command.expected_generation,
+                "tags": command.tags,
+                "operation_id": operation_id,
+            })),
         )
         .await
     }
@@ -516,3 +537,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/client/unit/transfer_tests.rs"]
 mod transfer_tests;
+
+#[cfg(test)]
+#[path = "../../../test/client/unit/container_tags.rs"]
+mod container_tags_tests;

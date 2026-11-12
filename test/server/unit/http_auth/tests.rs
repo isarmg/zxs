@@ -1323,10 +1323,10 @@ impl crate::Backend for RetryProbe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
-    fn update_file_node_tags(
+    fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,
-        _request: crate::UpdateFileNodeTags,
+        _request: crate::ReplaceContainerTags,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

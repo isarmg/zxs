@@ -21,6 +21,8 @@ mod file_branches;
 mod file_restore;
 mod file_synchronization;
 mod file_tags;
+pub(in crate::engine) use file_tags::verify as verify_container_tags;
+mod merge_metadata;
 mod history_copy;
 mod history_merges;
 mod history_move;
@@ -545,6 +547,7 @@ impl CurrentNamespaces {
 
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
+        self.verify_file_tag_publications(previous, next)?;
         if let Some(view) = self.advance_history_move(previous, next)? {
             return Ok(view);
         }
@@ -569,7 +572,7 @@ impl CurrentNamespaces {
             self.require_recursive_paths_unchanged(previous, next)?;
         }
         self.verify_merge_links(previous, next)?;
-        self.verify_file_tag_publications(previous, next)?;
+        self.verify_merge_metadata(previous, next)?;
         let historical_fork = self.verify_directory_commits(previous, next)?;
         let mut view = self.clone();
         view.recursive_policies =

@@ -28,9 +28,9 @@ pub(in crate::engine::membership_transition) mod abort_view;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "frozen-control-metadata")]
+    #[serialization(rename = "container-tags-frozen-control-metadata")]
     FrozenControlMetadata,
-    #[serialization(rename = "retained-exit-quorum-control-metadata")]
+    #[serialization(rename = "container-tags-retained-exit-quorum-control-metadata")]
     RetainedExitQuorum,
 }
 impl Format {
