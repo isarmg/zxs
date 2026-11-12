@@ -177,6 +177,91 @@ fn measured<T>(
     result
 }
 
+fn measure_upstream(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    expected: &crate::engine::membership_transition::PreparedBackupFirstCandidate,
+    iteration: usize,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let (report, observed) = measured("first_candidate_read_verified", iteration, 0, || {
+        first_candidate::read_verified(prepared, decision, stop)
+    })?;
+    assert_eq!(report.candidate_hash, expected.hash());
+    assert_eq!(report.snapshot_hash, expected.snapshot_hash());
+    assert_eq!(report.intended_first_sequence, expected.sequence());
+    assert_eq!(report.metadata_bytes_per_target, expected.bytes() as u64);
+    assert_eq!(observed.files().collect::<Vec<_>>(), expected.files().collect::<Vec<_>>());
+    let inputs = measured("generation_inputs_observe", iteration, 0, || {
+        generation_inputs::observe(prepared, decision, stop)
+    })?;
+    assert_eq!(inputs.operation_id, decision.operation());
+    assert_eq!(inputs.decision_hash, *expected.decision_hash());
+    assert_eq!(inputs.intended_first_sequence, expected.sequence());
+    assert_eq!(inputs.targets, prepared.targets.len());
+    for index in 0..prepared.targets.len() {
+        let (control, control_report) =
+            measured("generation_control_read_authority", iteration, index, || {
+                generation_control::read_authority_input(
+                    prepared, decision, &inputs, index, stop,
+                )
+            })?;
+        assert_eq!(control.root_hash(), control_report.native_control_root);
+        assert_eq!(control_report.operation_id, decision.operation());
+        assert_eq!(control_report.decision_hash, *expected.decision_hash());
+        assert_eq!(control_report.targets, prepared.targets.len());
+        let source = measured("source_snapshot_read", iteration, index, || {
+            snapshot::read(
+                &prepared.targets[index].root,
+                &prepared.task.selection().jobs()[index],
+                stop,
+            )
+        })?;
+        assert_eq!(
+            object_hash("backup-prepared-state", source.state())?,
+            prepared.source_evidence().state_hash(),
+        );
+        let rebuilt_authority = measured("authority_capture", iteration, index, || {
+            crate::engine::membership_transition::PreparedBackupAuthority::capture(
+                decision,
+                &control,
+                &inputs,
+                &control_report,
+                source.state(),
+            )
+        })?;
+        assert_eq!(rebuilt_authority.hash(), expected.authority_hash());
+        let (authority, admitted) =
+            measured("generation_authority_read_candidate", iteration, index, || {
+                generation_authority::read_candidate_input(
+                    prepared, decision, &inputs, index, stop,
+                )
+            })?;
+        assert_eq!(authority.hash(), expected.authority_hash());
+        assert_eq!(authority.bytes(), rebuilt_authority.bytes());
+        assert_eq!(
+            canonical_json(admitted.state())?,
+            canonical_json(source.state())?,
+        );
+        let candidate = measured("authority_first_candidate", iteration, index, || {
+            authority.first_candidate(admitted.state(), stop)
+        })?;
+        assert_eq!(candidate.hash(), expected.hash());
+        assert_eq!(candidate.snapshot_hash(), expected.snapshot_hash());
+        assert_eq!(candidate.sequence(), expected.sequence());
+        assert_eq!(candidate.bytes(), expected.bytes());
+        assert_eq!(
+            candidate.files().collect::<Vec<_>>(),
+            expected.files().collect::<Vec<_>>(),
+        );
+        preparation_checkpoint(stop)?;
+        named_target(&prepared.targets[index].root, &prepared.task.selection().jobs()[index])?;
+    }
+    decision.verify_targets(prepared, stop)?;
+    recovery::require_isolated(&prepared.targets)?;
+    prepared.recheck_names()
+}
+
 #[test]
 fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Result<()> {
     let (_temp, mut engine, request) = fixture();
@@ -265,6 +350,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let mut previous_completion = None;
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
+        measure_upstream(&prepared, &decision, &candidate, iteration, &stop)?;
         let publication = measured("first_publication_observe", iteration, 0, || {
             first_publication::observe(&prepared, &decision, &expected, &stop)
         })?;

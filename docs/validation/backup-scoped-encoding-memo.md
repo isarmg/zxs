@@ -147,4 +147,47 @@ capture/observation、serving Plan capture、registry/State 读取、完整对�
 
 该夹具止于 published serving image 安装，未执行后续 scopes、SYSTEM、ordinary-serving
 切换与恢复；不能代替真实完整切换与冷重放。原 900 秒集成仍独立选中，
-不放宽预算；新基准尚未在本地或 GitHub 执行，结果以随后准确提交的 CI 工件为准。
+不放宽预算。该基准首次 GitHub 结果见下；本地仍未执行编译、测试或 rustfmt。
+
+## #1289 的组件结果与下一步边界
+
+`1558d2f3c58ddda0c75a1aa86e4b6b1b9c51284c` 的 #1289：
+61 项 Rust、8 个模块共 151 项 Python 和 1 个 Engine 无默认特性产品检查通过。
+新增真实组件测试通过，整体耗时 47.92 秒。唯一失败仍为原完整事务在 900 秒超时，
+已选范围没有 skipped 或 blocked；组件通过不能替代完整切换与冷重放。
+
+两轮实测如下，单位为毫秒。每个桶均为 inclusive 且是独立调用，
+不可相加为总耗时，也不能用两项差值冒充同一次调用的精确内部成本。
+
+| 真实入口 | 第 0 轮 | 第 1 轮 |
+| --- | ---: | ---: |
+| first-publication observation | 1079.442 | 1074.449 |
+| configuration inspection | 2293.774 | 2050.905 |
+| published-registry capture | 2324.044 | 2073.665 |
+| published-registry observation | 233.880 | 198.077 |
+| serving Plan capture | 2378.812 | 2316.194 |
+
+四次逐目标对象数据库准备为 2.067–3.636 毫秒，镜像捕获为 3.335–5.634 毫秒，
+包含真实物理 verify 的 with-image 为 8.776–13.061 毫秒。
+这把本夹具的主要成本收窄到 configuration / first-publication 上游，
+没有证据支持继续增加 FILE / SQLite 编码缓存。
+
+原完整事务首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM
+约为 26/42/74/122/216/316/510 秒，native metadata 未报告完成即超时。
+进度采样不等于函数精确时长，不能跨不同运行环境直接宣称性能改进。
+
+审查否决了简单删除 configuration 的第二次 first-candidate read：
+它在 Publication/payload 现场读回之后重新读取所有目标的 inputs、authority、
+archive、source、candidate 和 completion。内存候选没有这些文件的不可变租约；
+尾部 decision / isolation / name 检查不能替代它们。保留全部原生产调用和错误、
+取消、对象/字节预算，不以“同一调用栈”冒充仍然有效的磁盘证明。
+
+下一轮仅扩展同一个测试夹具的七项上游外侧测量，两轮两目标合计 24 次固定调用：
+first-candidate 完整读取、generation inputs、control/archive 输入、source snapshot、
+authority capture、authority/candidate 输入及 first-candidate 构造。
+最后一项仍包含内存语义校验、投影和编码，不能解释为纯 SQL 或纯编码成本。
+不增加生产缓存、不扩大 API 可见性、不增加测试数量或放宽原预算。
+扩展测量尚未执行，不能据此承诺优化收益或完整事务通过。
+
+工件：https://github.com/isarmg/zxs/actions/runs/43203111948/artifacts/13938900160
+组件日志为 `057.stdout.log` / `057.stderr.log`，原完整事务为 `079.stderr.log`。
