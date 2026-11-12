@@ -296,7 +296,12 @@ async fn corrupt_payload_fails_without_returning_a_partial_source_list() {
     let mut corrupt = original.to_vec();
     corrupt[0] ^= 1;
     for path in payloads {
-        std::fs::write(path, &corrupt).unwrap();
+        let original_permissions = std::fs::metadata(&path).unwrap().permissions();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
+        std::fs::write(&path, &corrupt).unwrap();
+        std::fs::set_permissions(&path, original_permissions).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
     }
     let before = manager_disk_files(root.path());
     let (status, rejected) = send(
