@@ -5,7 +5,7 @@ use crate::container_storage::backup_databases::PreparedDatabases;
 
 mod materials;
 mod runtime;
-mod scoped;
+pub(super) mod scoped;
 pub(in crate::engine) use scoped::ServingSwitch;
 pub use scoped::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
@@ -178,7 +178,18 @@ fn verify_at(
     roots: &[&DiskRoot],
     stop: &AtomicBool,
 ) -> Result<BackupObjectDatabasePreparationReport> {
-    let native = verify_completed(&task.native, roots, stop)?;
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = scoped::encoding_memo::Transaction::new(None, &binding);
+    verify_at_with_encodings(task, roots, stop, &mut encodings)
+}
+
+fn verify_at_with_encodings(
+    task: &DatabaseTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+    encodings: &mut scoped::encoding_memo::Transaction<'_>,
+) -> Result<BackupObjectDatabasePreparationReport> {
+    let native = verify_completed_with_encodings(&task.native, roots, stop, encodings)?;
     task.check_native(&native)?;
     let intent = task.bytes()?;
     let mut completed = None;

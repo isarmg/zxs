@@ -8,6 +8,11 @@ use std::{
     io::{BufReader, Read},
     path::{Path, PathBuf},
 };
+mod retained_encoding;
+pub(crate) use retained_encoding::{
+    AuthenticatedMetadataRead, MetadataDomain, RawMetadataRead, RetainedMetadataEncoding,
+};
+
 pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
 const LOG_HEADER_BYTES: usize = 12;
@@ -763,26 +768,31 @@ impl AuthenticatedMetadataObject {
         value: json_codec::Value,
     ) -> Result<Self> {
         let (bytes, actual) = encode_hashed_value(kind, &value)?;
-        if bytes.len() > MAX_METADATA {
+        Self::authenticate_prepared(
+            retained_encoding::ExpectedMetadataDigest(hash),
+            PreparedMetadataObject { kind, hash: actual, bytes },
+            value,
+        )
+    }
+
+    fn authenticate_prepared(
+        expected: retained_encoding::ExpectedMetadataDigest<'_>,
+        prepared: PreparedMetadataObject,
+        value: json_codec::Value,
+    ) -> Result<Self> {
+        if prepared.bytes.len() > MAX_METADATA {
             return Err(Error::new(
                 storage_contract::ErrorCode::ResourceLimit,
                 "serialized metadata exceeds reader limit",
             ));
         }
-        if actual != hash {
+        if prepared.hash != expected.0 {
             return Err(Error::new(
                 storage_contract::ErrorCode::ObjectCorrupt,
                 "immutable object digest differs",
             ));
         }
-        Ok(Self {
-            prepared: PreparedMetadataObject {
-                kind,
-                hash: actual,
-                bytes,
-            },
-            value,
-        })
+        Ok(Self { prepared, value })
     }
     pub(crate) fn kind(&self) -> &'static str {
         self.prepared.kind

@@ -74,10 +74,10 @@ impl PreparedScopes {
         encodings: &mut encoding_memo::Transaction<'_>,
     ) -> Result<Self> {
         let mut disks = None;
-        let (control, state) = super::super::super::archive::read_observed(
+        let (control, state) = super::super::super::archive::read_observed_with_encodings(
             root,
             job,
-            &task.objects.native.archive_hash,
+            &task.objects.native,
             stop,
             &mut |config, candidate, hash, state| {
                 preparation_checkpoint(stop)?;
@@ -89,6 +89,7 @@ impl PreparedScopes {
                     .expect("invariant: prefix initialized its disk scopes")
                     .observe(candidate, hash, state, stop)
             },
+            encodings,
         )?;
         if control.state_hash != task.objects.state_hash {
             return Err(invalid(

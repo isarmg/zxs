@@ -29,7 +29,7 @@ pub use cutover::{
 pub(in crate::engine) use cutover::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
-mod encoding_memo;
+pub(in crate::engine::backup_preparation::native_control) mod encoding_memo;
 mod projection;
 mod runtime;
 mod store;
@@ -182,7 +182,7 @@ fn verify_at_with_encodings(
             "scoped verification requires every original selected target",
         ));
     }
-    let objects = super::verify_at(&task.objects, roots, stop)?;
+    let objects = super::verify_at_with_encodings(&task.objects, roots, stop, encodings)?;
     let intent = task.bytes()?;
     let mut completion = None;
     for (root, job) in roots.iter().zip(task.objects.native.selection.jobs()) {

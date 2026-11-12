@@ -2,6 +2,169 @@
 use super::*;
 use crate::ErrorCode;
 
+#[test]
+fn canonical_bytes_share_sqlite_budget_without_evaluating_its_lazy_binding() {
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let fresh = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
+        .authenticate(None).unwrap();
+    let payload = fresh.retained_payload_bytes().unwrap();
+    let total = payload + std::mem::size_of::<(Key, Bytes)>();
+    let binding = |_: &AtomicBool| -> Result<Option<[u8; 32]>> {
+        panic!("canonical inputs must not evaluate SQLite authority binding")
+    };
+    let memo = memo_with_limit(total, 1);
+    {
+        let mut transaction = Transaction::new(Some(&memo), &binding);
+        let object = transaction.metadata(
+            RawMetadataRead::parse("snapshot", &expected, raw).unwrap(),
+        ).unwrap();
+        assert_eq!(object.bytes(), fresh.into_object().bytes());
+        let mut sql = Session::new(Some((&memo, [3; 32])));
+        assert_eq!(sql.system([4; 32], || Ok(vec![5])).unwrap(), [5]);
+        assert_eq!(sql.reserved_entries, 0);
+        let state = memo.state.lock().unwrap();
+        assert_eq!(state.reserved_bytes, total);
+        assert_eq!(state.reserved_entries, 1);
+        assert!(state.entries.is_empty());
+        drop(state);
+        transaction.commit();
+    }
+    let mut hit = Transaction::new(Some(&memo), &binding);
+    assert_eq!(hit.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap())
+        .unwrap().hash(), expected);
+    hit.commit();
+    let state = memo.state.lock().unwrap();
+    assert_eq!(state.entries.len(), 1);
+    assert_eq!(state.bytes, total);
+    assert_eq!(state.reserved_bytes, 0);
+    assert_eq!(state.reserved_entries, 0);
+    drop(state);
+
+    // A byte-short account declines retention, never the original authentication.
+    let short = memo_with_limit(total - 1, 1);
+    let mut declined = Transaction::new(Some(&short), &binding);
+    assert_eq!(declined.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap())
+        .unwrap().hash(), expected);
+    declined.commit();
+    assert!(short.state.lock().unwrap().entries.is_empty());
+
+    // Pending SQLite consumes the same account in the opposite direction too.
+    let shared = memo_with_limit(MAX_BYTES, 1);
+    let mut sql = Session::new(Some((&shared, [3; 32])));
+    sql.system([4; 32], || Ok(vec![5])).unwrap();
+    let mut declined = Transaction::new(Some(&shared), &binding);
+    declined.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap()).unwrap();
+    declined.commit();
+    assert!(shared.state.lock().unwrap().entries.is_empty());
+    drop(sql);
+    assert_eq!(shared.state.lock().unwrap().reserved_bytes, 0);
+}
+
+#[test]
+fn canonical_lookup_collision_never_substitutes_domain_raw_or_current_expected_digest() {
+    let memo = ScopeEncodingMemo::new();
+    let raw = br#"{"value":1}"#;
+    let other = br#"{"value":2}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let (_, other_expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(other).unwrap(),
+    ).unwrap();
+    let read = RawMetadataRead::parse("snapshot", &expected, raw).unwrap();
+    let key = Key {
+        context: [0; 32],
+        input: *blake3::hash(other).as_bytes(),
+        kind: Kind::Canonical(read.domain()),
+    };
+    let proof = read.authenticate(None).unwrap().retain_encoding();
+    let payload = proof.payload_bytes().unwrap();
+    {
+        // Deliberately place a genuine proof under another raw input's key.
+        // This tests a lookup collision without forging a journal proof.
+        let mut state = memo.state.lock().unwrap();
+        state.entries.insert(key, Bytes::Canonical { encoding: proof.clone(), payload });
+        state.bytes = payload + std::mem::size_of::<(Key, Bytes)>();
+    }
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let rejected = transaction.metadata(
+        RawMetadataRead::parse("snapshot", &expected, other).unwrap(),
+    ).err().unwrap();
+    assert_eq!(rejected.code(), ErrorCode::ObjectCorrupt);
+    assert_eq!(transaction.metadata(
+        RawMetadataRead::parse("snapshot", &other_expected, other).unwrap(),
+    ).unwrap().hash(), other_expected);
+    transaction.commit();
+    let state = memo.state.lock().unwrap();
+    assert_eq!(state.entries.len(), 1);
+    let Some(Bytes::Canonical { encoding, .. }) = state.entries.get(&key) else {
+        panic!("original colliding proof was replaced");
+    };
+    assert!(encoding.matches(&RawMetadataRead::parse("snapshot", &expected, raw).unwrap()));
+    assert_eq!(state.reserved_bytes, 0);
+    drop(state);
+
+    let (_, page_expected) = storage_contract::encode_hashed_value(
+        "state-page", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let page = RawMetadataRead::parse("state-page", &page_expected, raw).unwrap();
+    let page_key = Key {
+        context: [0; 32],
+        input: *blake3::hash(raw).as_bytes(),
+        kind: Kind::Canonical(page.domain()),
+    };
+    {
+        let mut state = memo.state.lock().unwrap();
+        state.entries.insert(page_key, Bytes::Canonical { encoding: proof, payload });
+        state.bytes += payload + std::mem::size_of::<(Key, Bytes)>();
+    }
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let rejected = transaction.metadata(
+        RawMetadataRead::parse("state-page", &expected, raw).unwrap(),
+    ).err().unwrap();
+    assert_eq!(rejected.code(), ErrorCode::ObjectCorrupt);
+    assert_eq!(transaction.metadata(page).unwrap().hash(), page_expected);
+    transaction.commit();
+    let state = memo.state.lock().unwrap();
+    assert_eq!(state.entries.len(), 2);
+    let Some(Bytes::Canonical { encoding, .. }) = state.entries.get(&page_key) else {
+        panic!("cross-domain colliding proof was replaced");
+    };
+    assert!(encoding.matches(&RawMetadataRead::parse("snapshot", &expected, raw).unwrap()));
+    assert_eq!(state.reserved_bytes, 0);
+}
+
+#[test]
+fn canonical_pending_is_dropped_after_late_binding_error_or_cancellation() {
+    let memo = ScopeEncodingMemo::new();
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let stop = AtomicBool::new(true);
+    let binding = |stop: &AtomicBool| {
+        preparation_checkpoint(stop)?;
+        Ok(Some([7; 32]))
+    };
+    {
+        let mut transaction = Transaction::new(Some(&memo), &binding);
+        transaction.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap()).unwrap();
+        assert_eq!(memo.state.lock().unwrap().reserved_entries, 1);
+        let failure = transaction.session(&1u8, &stop).err().unwrap();
+        assert_eq!(failure.code(), ErrorCode::OperationAborted);
+        // The real registry verifier likewise returns before commit on a tail error.
+    }
+    let state = memo.state.lock().unwrap();
+    assert!(state.entries.is_empty());
+    assert_eq!(state.bytes, 0);
+    assert_eq!(state.reserved_bytes, 0);
+    assert_eq!(state.reserved_entries, 0);
+}
+
 fn memo_with_limit(bytes: usize, entries: usize) -> ScopeEncodingMemo {
     ScopeEncodingMemo {
         state: Mutex::new(State::default()),

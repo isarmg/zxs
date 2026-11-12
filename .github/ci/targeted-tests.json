@@ -2330,7 +2330,7 @@
       ]
     },
     "backup-scoped-encoding-memo": {
-      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact. Native archive decoding borrows the freshly authenticated Value instead of cloning its tree; owned-reference differential admission retains roundtrip equality, actual reads, errors, budgets and cancellation. Installed target verification reuses one canonical Task encoding for its intent bytes and domain digest, preserving the existing intent bound and every target read. Authenticated metadata-index/history-root decoding borrows the retained Value and snapshot control-auth takes ownership of its already authenticated Value; preserve every read, graph/schema guard and independent differential admission.",
+      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact. Native archive decoding borrows the freshly authenticated Value instead of cloning its tree; owned-reference differential admission retains roundtrip equality, actual reads, errors, budgets and cancellation. Installed target verification reuses one canonical Task encoding for its intent bytes and domain digest, preserving the existing intent bound and every target read. Authenticated metadata-index/history-root decoding borrows the retained Value and snapshot control-auth takes ownership of its already authenticated Value; preserve every read, graph/schema guard and independent differential admission. Native archive reads may reuse only a journal-created canonical encoding and digest after exact fresh raw/domain equality; retain original strict parsing, expected digest/size checks, target-local budgets and every typed/State/history admission in the original shared transaction account.",
       "python_tests": [
         "test_backup_encoding_memo_ci"
       ],
@@ -2350,7 +2350,8 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::original_scope_encoding_tests::",
             "engine::backup_preparation::native_control::archive::decode_tests::",
             "engine::backup_preparation::native_control::databases::scoped::cutover::installation::encoding_tests::",
-            "metadata_map::read_owned_tests::"
+            "metadata_map::read_owned_tests::",
+            "journal::retained_encoding::tests::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900
@@ -8012,6 +8013,30 @@
     },
     {
       "path": "test/engine/unit/history_package/graph/tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/retained_encoding.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/retained_encoding_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases.rs",
       "groups": [
         "backup-scoped-encoding-memo"
       ]

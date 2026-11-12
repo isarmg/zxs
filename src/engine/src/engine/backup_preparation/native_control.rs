@@ -242,6 +242,17 @@ fn verify_targets(
     roots: &[&DiskRoot],
     stop: &AtomicBool,
 ) -> Result<BackupNativePreparationReport> {
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = databases::scoped::encoding_memo::Transaction::new(None, &binding);
+    verify_targets_with_encodings(task, roots, stop, &mut encodings)
+}
+
+fn verify_targets_with_encodings(
+    task: &NativeTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+    encodings: &mut databases::scoped::encoding_memo::Transaction<'_>,
+) -> Result<BackupNativePreparationReport> {
     let materials = task.selection.verify_material(roots, stop)?;
     let intent = task.bytes()?;
     let mut reports = Vec::with_capacity(roots.len());
@@ -252,7 +263,7 @@ fn verify_targets(
                 "native target has a different whole-selection intent",
             ));
         }
-        let control = archive::read(root, job, &task.archive_hash, stop)?;
+        let control = archive::read_with_encodings(root, job, task, stop, encodings)?;
         if control.state_hash != material.state_hash
             || control.snapshot_hash != material.snapshot_hash
             || control.sequence != material.sequence
@@ -310,7 +321,18 @@ fn verify_completed(
     roots: &[&DiskRoot],
     stop: &AtomicBool,
 ) -> Result<BackupNativePreparationReport> {
-    let report = verify_targets(task, roots, stop)?;
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = databases::scoped::encoding_memo::Transaction::new(None, &binding);
+    verify_completed_with_encodings(task, roots, stop, &mut encodings)
+}
+
+fn verify_completed_with_encodings(
+    task: &NativeTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+    encodings: &mut databases::scoped::encoding_memo::Transaction<'_>,
+) -> Result<BackupNativePreparationReport> {
+    let report = verify_targets_with_encodings(task, roots, stop, encodings)?;
     let bytes = canonical_json(&report)?;
     if bytes.len() > MAX_TASK {
         return Err(Error::new(

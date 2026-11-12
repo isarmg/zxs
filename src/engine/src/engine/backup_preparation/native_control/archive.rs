@@ -1,11 +1,15 @@
 //! Original fixed-member journals and every referenced published State/history
 //! graph. This archive preserves evidence; it never creates a new disk vote.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::scoped::{
+    encoding_memo::Transaction,
+};
 use crate::disk::{DiskSeal, DiskSealFormat};
 use crate::history_package::{AdmittedState, bound_history_objects_with};
 use crate::journal::{
     AuthenticatedMetadataObject, Candidate, CommitProof, JournalFrameReader, Publication,
-    PublicationSeal, Record, RecordType, Snapshot, decode_proof, resolve_admitted_snapshot,
+    PublicationSeal, RawMetadataRead, Record, RecordType, Snapshot, decode_proof,
+    resolve_admitted_snapshot,
     verify_publication_seal,
 };
 use crate::publication_evidence::{verified_graph_object_at, verified_publication_seal_at};
@@ -230,12 +234,13 @@ impl Source for Capture<'_> {
     }
 }
 
-struct Target<'a> {
+struct Target<'a, 'memo> {
     root: &'a DiskRoot,
     stop: &'a AtomicBool,
     budget: Budget,
+    encodings: Option<&'a mut Transaction<'memo>>,
 }
-impl Source for Target<'_> {
+impl Source for Target<'_, '_> {
     fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
         crate::history_package::preparation_checkpoint(self.stop)?;
         let bytes = self.root.read_bytes(
@@ -243,11 +248,11 @@ impl Source for Target<'_> {
             MAX_BYTES - self.budget.bytes,
         )?;
         self.budget.account(bytes.len())?;
-        AuthenticatedMetadataObject::authenticate(
-            kind,
-            hash,
-            storage_contract::strict_json(&bytes)?,
-        )
+        let read = RawMetadataRead::parse(kind, hash, &bytes)?;
+        match self.encodings.as_deref_mut() {
+            Some(encodings) => encodings.metadata(read),
+            None => Ok(read.authenticate(None)?.into_object()),
+        }
     }
     fn journal(&mut self, index: usize, expected: &OriginalMember) -> Result<Vec<u8>> {
         crate::history_package::preparation_checkpoint(self.stop)?;
@@ -577,7 +582,9 @@ fn verify_observed(
     bytes: &[u8],
     job: &Job,
     source: &mut impl Source,
-    observe: &mut impl FnMut(&crate::ValidatedConfig, &Candidate, &str, &AdmittedState) -> Result<()>,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
 ) -> Result<(BackupNativeControlReport, AdmittedState)> {
     if manifest.format != FORMAT
         || manifest.publications.is_empty()
@@ -870,17 +877,69 @@ pub(super) fn read_observed(
     job: &Job,
     expected: &str,
     stop: &AtomicBool,
-    observe: &mut impl FnMut(&crate::ValidatedConfig, &Candidate, &str, &AdmittedState) -> Result<()>,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    read_observed_at(root, job, ExpectedArchiveDigest(expected), stop, observe, None)
+}
+
+// An expectation, not an admitted archive or a substitute for manifest readback.
+struct ExpectedArchiveDigest<'a>(&'a str);
+
+pub(super) fn read_with_encodings(
+    root: &DiskRoot,
+    job: &Job,
+    task: &NativeTask,
+    stop: &AtomicBool,
+    encodings: &mut Transaction<'_>,
+) -> Result<BackupNativeControlReport> {
+    let (report, _) = read_observed_with_encodings(
+        root, job, task, stop, &mut |_, _, _, _| Ok(()), encodings,
+    )?;
+    Ok(report)
+}
+
+pub(super) fn read_observed_with_encodings(
+    root: &DiskRoot,
+    job: &Job,
+    task: &NativeTask,
+    stop: &AtomicBool,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
+    encodings: &mut Transaction<'_>,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    read_observed_at(
+        root,
+        job,
+        ExpectedArchiveDigest(&task.archive_hash),
+        stop,
+        observe,
+        Some(encodings),
+    )
+}
+
+fn read_observed_at(
+    root: &DiskRoot,
+    job: &Job,
+    expected: ExpectedArchiveDigest<'_>,
+    stop: &AtomicBool,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
+    encodings: Option<&mut Transaction<'_>>,
 ) -> Result<(BackupNativeControlReport, AdmittedState)> {
     let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST)?;
     let manifest: Manifest = decode_proof(&bytes)?;
-    if object_hash(FORMAT, &manifest)? != expected {
+    if object_hash(FORMAT, &manifest)? != expected.0 {
         return Err(invalid("native archive differs from the immutable task"));
     }
     let mut source = Target {
         root,
         stop,
         budget: Budget::default(),
+        encodings,
     };
     verify_observed(&manifest, &bytes, job, &mut source, observe)
 }

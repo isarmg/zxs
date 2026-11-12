@@ -744,8 +744,11 @@ MetadataIndex 的引用/枚举及 PagedHistoryRoot 的完整 Repository/HistoryT
 准确 head `cb50776d9212b0a7bbc27c9531d8d737156963fb`，
 base `84b574a4d8b12416f33f246d84162285cd4df487`。
 第 2 片的 17 项 foreign-original 与 38 项平台安全回归通过，
-selected failed/skipped/blocked 为空；主 Engine 单元片仍待最终工件，
-不能把这 55 项归为全部选测通过。
+selected failed/skipped/blocked 为空。主 Engine 单元片随后已取齐：541 Rust、
+7 个 Python 模块共 85 项及 Engine 无默认特性检查通过；
+另一个 101 项的 CI 选择模块有 3 条旧预期失败，不计为整模块通过。
+全三片合计 596 Rust、85 Python 和 1 项产品检查通过，
+失败仍包括原 900 秒事务及这 3 条 CI 预期；selected skipped/blocked 为空。
 
 独立原事务仍在 900 秒超时，selected skipped/blocked 为空。
 首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM/native metadata
@@ -777,3 +780,70 @@ verify_journal_receipts 保留原首行 object_hash 的位置、算法和错误�
 
 此片尚未本地编译或测试，待准确后继 GitHub 定向验证；
 原 exact/max1/900 与所有既有选择保留，不声称该摘要重复是超时主因。
+
+## #1328 与 CI 预期修复
+
+#1327 主片工件 13972623090，ZIP SHA256：
+`1b34f6b68f01bfc12b80af7391bed03eab0afeaa0261efd1536f309a6c49caca`。
+两项新借用解码真实差分分别约 0.05/0.08 秒。
+#1329 准确 `34bc51a0158cb7475a8a72c63c7b797be93f3589` /
+`4fc36d6060de8371917c5e019d3fb98cc9db98e0` 只修复遗漏新增 memo 组的
+3 条 CI 并集预期，7 模块共 156 Python 全过；没有执行 Rust 或产品检查。
+工件 13982552055，ZIP SHA256：
+`9baf0e35ebb7bd69f3d5bbd9d5f7ba9240b5e963c70846642fdf578d41432232`。
+这不把 #1327 或任何后继生产变更追认为全过。
+
+#1328 准确 `4fc36d6060de8371917c5e019d3fb98cc9db98e0` /
+`cb50776d9212b0a7bbc27c9531d8d737156963fb` 的独立原事务仍 900 秒超时，
+该片通过数为零、selected skipped/blocked 为空。
+主 Engine 片随后取得 220 Rust、7 模块共 85 Python 通过；
+新增 FINALIZE 摘要复用差分实际 0.96 秒通过。除了同一 3 条已修 CI 旧预期，
+既有 readmission 全截点用例在原 300 秒限额超时，日志推进到 cut 16 冷开；
+后续同 Cargo 身份和 Engine 无默认特性检查按失败门阻断，不记通过。
+加上第 2 片的 38 项平台回归，全轮为 258 Rust／85 Python 通过，
+原 900 秒、readmission 超时和 CI 模块失败仍保留，不是全过。
+主片工件 13984331677，ZIP SHA256：
+`1e6703b910f2d80d46915a7323af1cfc66209d683dda21bc89999b45534666d9`。
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM 约为
+44/68/124/204/364/528/862 秒，没有 native metadata 或完整切换完成证据。
+末样本约 895.276 秒，工作线程 CPU 815.655 秒、调度等待 0.258 秒，
+逻辑读取 4,701,849,660 字节／9,252,077 次，物理 read_bytes 为 0。
+这仍是活跃计算和重复读取的证据，不是某函数主耗时或跨 runner 加速证明。
+工件：https://github.com/isarmg/zxs/actions/runs/43302230094/artifacts/13983846237
+ZIP SHA256：`86e1562936a2bfc2eeac20af51c3c7a1f89caaacb6b8f64e53e456619f5c12ba`。
+
+## 同事务的精确原字节规范编码复用
+
+journal 内部先对本次真实 raw 执行 strict JSON，保留私有 raw/Value 绑定，
+调用方不能把另一个 Value 拼给 proof。只有完整 raw 与编码域同时相等，
+才复用该模块从原 encoder 签出的规范字节和域摘要；lookup digest 只定位候选，
+冲突或不匹配回到原 encoder，不替换已占用的旧 proof。
+命中仍执行原 canonical 大小上限，然后比较本次 expected 摘要。
+不保留 Value、typed 对象、State、Report 或任何准入成功结果。
+
+所有 Target 仍按原 checkpoint → 地址验证／有界真实读取 → Budget.account →
+strict parse 顺序进入；typed 反序列化和回编码相等、snapshot/历史/收据、
+payload 及每次现场身份检查不删。预算、取消和错误顺序保持。
+只有纯规范 JSON 编码及其域摘要可复用，不推断 typed/State 的成本已消失。
+
+新 variant 使用同一个 request-local ScopeEncodingMemo 的 32 MiB／256 项账户，
+Key/Bytes 结构、raw、canonical、摘要载荷以及所有 pending 预留共同计费；
+固定 entry 上限约束树／分配器开销。先预留再复制 retained payload，超限只拒绝缓存，
+不新增业务失败。读取句柄仅廉价克隆已计费 Arc，不形成另一个无界持久表。
+纯 raw/domain key 不求值 SQL 的 lazy authority binding；后者仍在 archive 之后原位计算。
+
+两条实际原生读取链接入同一 Transaction：
+scoped verify → object databases → native verify_completed/verify_targets → archive，
+以及 scoped PreparedScopes 的 read_observed → 各 publication 观察。
+独立原入口以 None 包装。pool-snapshot 的另一条独立读取以及
+published_scopes 的独立 Session 边界不在这次编码复用范围内，均继续原完整验证。
+
+原 registry verify 的 project 比较 → recheck_names → checkpoint → commit 不变。
+此前失败或取消会释放 pending；该 commit 之后上层仍有 decision-copy 等检查，
+不声称任何最外层失败都会清空已经合法提交的纯编码。
+
+新增 journal 原语差分、同一 SQL/raw 预算、lookup 碰撞、晚 binding 取消，
+及真实多 publication native 报告／完整 State／实际 read 与 byte 预算对照。
+warm 后坏 raw、duplicate、缺件、取消仍拒绝，验证器不修复原文件；
+测试只恢复自己改坏的夹具。保留原 exact/max1/900 和原全部选择／限额。
+该实现仍待准确后继 GitHub 定向验证，不宣称 900 秒问题或完整三范围恢复已闭环。
