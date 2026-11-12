@@ -8,7 +8,6 @@ pub enum FileNodeId {
     Version(Id<kind::Version>),
     Anchor(Id<kind::FileAnchor>),
     Metadata(Id<kind::FileMetadata>),
-    Deletion(Id<kind::FileDeletion>),
     Merge(Id<kind::FileMerge>),
 }
 
@@ -18,7 +17,6 @@ impl FileNodeId {
             Self::Version(id) => (kind::Version::PREFIX, &id.bytes),
             Self::Anchor(id) => (kind::FileAnchor::PREFIX, &id.bytes),
             Self::Metadata(id) => (kind::FileMetadata::PREFIX, &id.bytes),
-            Self::Deletion(id) => (kind::FileDeletion::PREFIX, &id.bytes),
             Self::Merge(id) => (kind::FileMerge::PREFIX, &id.bytes),
         }
     }
@@ -44,7 +42,6 @@ impl FromStr for FileNodeId {
             Some((kind::Version::PREFIX, _)) => value.parse().map(Self::Version),
             Some((kind::FileAnchor::PREFIX, _)) => value.parse().map(Self::Anchor),
             Some((kind::FileMetadata::PREFIX, _)) => value.parse().map(Self::Metadata),
-            Some((kind::FileDeletion::PREFIX, _)) => value.parse().map(Self::Deletion),
             Some((kind::FileMerge::PREFIX, _)) => value.parse().map(Self::Merge),
             _ => Err(Error::InvalidIdentifier {
                 prefix: "file node",
@@ -60,7 +57,6 @@ impl fmt::Display for FileNodeId {
             Self::Version(id) => fmt::Display::fmt(id, formatter),
             Self::Anchor(id) => fmt::Display::fmt(id, formatter),
             Self::Metadata(id) => fmt::Display::fmt(id, formatter),
-            Self::Deletion(id) => fmt::Display::fmt(id, formatter),
             Self::Merge(id) => fmt::Display::fmt(id, formatter),
         }
     }

@@ -1,5 +1,63 @@
 {
   "groups": {
+    "container-deletion-graph": {
+      "reason": "Keep deletion facts outside shared content ancestry while preserving typed deletion review, frozen frontiers, cold lifecycle evidence, permanent retirement, strict schemas and real HTTP/Web consumers.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "id::tests::",
+            "file_deletion_review::tests::",
+            "shared_history::tests::"
+          ],
+          "max_tests": 64,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "content_matches",
+          "whole": true,
+          "max_tests": 96,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_smb_rpc",
+          "features": ["core"],
+          "exact": [
+            "soft_deletion::public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "files::shared_history::tests::",
+            "files::deletion::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "prefixes": ["shared_history_tests::"],
+          "exact": ["tests::checked_in_contracts_and_document_examples_are_consistent"],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "container-unchanged-save": {
       "reason": "Container content-only history: pending same-body and empty saves, selected ownership, mixed uploads, exact replay and cold recovery, and unchanged-save selection fencing",
       "python_tests": [],
@@ -2875,6 +2933,146 @@
     }
   },
   "rules": [
+    {
+      "path": "src/contract/src/id/node.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/contract/src/shared_history.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/permanent_removal.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/shared_history.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/web/src/files/deletion/frontier.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "src/web/src/files/shared_history/projection.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_deletion_review.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/contract/unit/id.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/contract/unit/shared_history.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/engine/integration/content_matches/permanent_removal.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/engine/integration/content_matches/shared_history.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/shared_history_tests.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "docs/design/shared-file-history.md",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/unit/shared_history_tests.rs",
+      "groups": [
+        "container-deletion-graph",
+        "container-lifecycle-engine",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "shared-history-http-boundary"
+      ]
+    },
     {
       "path": "src/client/src/lib.rs",
       "groups": [

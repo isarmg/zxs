@@ -51,11 +51,7 @@ impl SharedHistoryRequest {
 pub struct SharedHistoryNodeId(String);
 impl SharedHistoryNodeId {
     pub fn parse(value: &str) -> Result<Self> {
-        if !value.starts_with("fdel_") {
-            HistoryNodeId::parse(value)?;
-        } else {
-            crate::validate_id(value, "fdel")?;
-        }
+        HistoryNodeId::parse(value)?;
         Ok(Self(value.into()))
     }
     pub fn as_str(&self) -> &str {
@@ -74,7 +70,6 @@ pub enum SharedHistoryNodeKind {
     Content,
     Rename,
     Merge,
-    Deletion,
 }
 impl<'de> Deserialize<'de> for SharedHistoryNodeKind {
     fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
@@ -82,10 +77,9 @@ impl<'de> Deserialize<'de> for SharedHistoryNodeKind {
             "content" => Ok(Self::Content),
             "rename" => Ok(Self::Rename),
             "merge" => Ok(Self::Merge),
-            "deletion" => Ok(Self::Deletion),
             value => Err(data_serialization::de::Error::unknown_variant(
                 value,
-                &["content", "rename", "merge", "deletion"],
+                &["content", "rename", "merge"],
             )),
         }
     }
@@ -118,8 +112,7 @@ pub struct SharedHistoryNode {
     pub node_id: SharedHistoryNodeId,
     pub file_id: HistoryFileId,
     pub kind: SharedHistoryNodeKind,
-    #[serialization(deserialize_with = "crate::encoding::required_nullable")]
-    pub version_id: Option<HistoryVersionId>,
+    pub version_id: HistoryVersionId,
     /// Retained record sequence, not an ordering proof between different files.
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -211,9 +204,10 @@ impl SharedHistoryGraph {
         self.validate_nodes(&files, &versions, &nodes)?;
         for branch in &self.branches {
             crate::BranchName::parse(&branch.name)?;
-            if nodes.get(&branch.head_node_id).is_none_or(|node| {
-                node.file_id != branch.file_id || node.kind == SharedHistoryNodeKind::Deletion
-            }) {
+            if nodes
+                .get(&branch.head_node_id)
+                .is_none_or(|node| node.file_id != branch.file_id)
+            {
                 return Err(invalid("shared branch has an invalid head"));
             }
         }
@@ -236,18 +230,14 @@ impl SharedHistoryGraph {
                 SharedHistoryNodeKind::Content => "ver_",
                 SharedHistoryNodeKind::Rename => "fnode_",
                 SharedHistoryNodeKind::Merge => "fmeta_",
-                SharedHistoryNodeKind::Deletion => "fdel_",
             };
             if !files.contains_key(&node.file_id)
                 || !node.node_id.as_str().starts_with(expected_prefix)
-                || (node.kind == SharedHistoryNodeKind::Deletion) != node.version_id.is_none()
-                || node.version_id.as_ref().is_some_and(|id| {
-                    versions
-                        .get(id)
-                        .is_none_or(|body| body.file_id != node.file_id)
-                        || (node.kind == SharedHistoryNodeKind::Content
-                            && node.node_id.as_str() != id.as_str())
-                })
+                || versions
+                    .get(&node.version_id)
+                    .is_none_or(|body| body.file_id != node.file_id)
+                || (node.kind == SharedHistoryNodeKind::Content
+                    && node.node_id.as_str() != node.version_id.as_str())
             {
                 return Err(invalid("shared event has an invalid identity or body"));
             }
@@ -259,10 +249,9 @@ impl SharedHistoryGraph {
             for parent in &node.parent_node_ids {
                 if previous.is_some_and(|previous| previous >= parent)
                     || parent == &node.node_id
-                    || nodes.get(parent).is_none_or(|parent| {
-                        parent.file_id != node.file_id
-                            || parent.kind == SharedHistoryNodeKind::Deletion
-                    })
+                    || nodes
+                        .get(parent)
+                        .is_none_or(|parent| parent.file_id != node.file_id)
                 {
                     return Err(invalid(
                         "shared ancestry is unordered, missing or crosses files",

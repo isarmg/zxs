@@ -22102,6 +22102,353 @@
           }
         }
       }
+    },
+    {
+      "name": "shared-history-rejects-deletion-node-identity",
+      "schema": "SharedHistoryGraph",
+      "layer": "schema",
+      "value": {
+        "origin_file_id": "file_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "files": [
+          {
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1"
+          },
+          {
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2"
+          }
+        ],
+        "versions": [
+          {
+            "version_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          },
+          {
+            "version_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          }
+        ],
+        "nodes": [
+          {
+            "node_id": "fdel_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000001",
+            "sequence": "1",
+            "parent_node_ids": []
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000002",
+            "sequence": "1",
+            "parent_node_ids": []
+          }
+        ],
+        "branches": [],
+        "shared_contents": [
+          {
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version_ids": [
+              "ver_00000000000000000000000000000001",
+              "ver_00000000000000000000000000000002"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "shared-history-rejects-deletion-node-kind",
+      "schema": "SharedHistoryGraph",
+      "layer": "schema",
+      "value": {
+        "origin_file_id": "file_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "files": [
+          {
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1"
+          },
+          {
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2"
+          }
+        ],
+        "versions": [
+          {
+            "version_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          },
+          {
+            "version_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          }
+        ],
+        "nodes": [
+          {
+            "node_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "deletion",
+            "version_id": "ver_00000000000000000000000000000001",
+            "sequence": "1",
+            "parent_node_ids": []
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000002",
+            "sequence": "1",
+            "parent_node_ids": []
+          }
+        ],
+        "branches": [],
+        "shared_contents": [
+          {
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version_ids": [
+              "ver_00000000000000000000000000000001",
+              "ver_00000000000000000000000000000002"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "shared-history-requires-content-version",
+      "schema": "SharedHistoryGraph",
+      "layer": "schema",
+      "value": {
+        "origin_file_id": "file_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "files": [
+          {
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1"
+          },
+          {
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2"
+          }
+        ],
+        "versions": [
+          {
+            "version_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          },
+          {
+            "version_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          }
+        ],
+        "nodes": [
+          {
+            "node_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "content",
+            "version_id": null,
+            "sequence": "1",
+            "parent_node_ids": []
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000002",
+            "sequence": "1",
+            "parent_node_ids": []
+          }
+        ],
+        "branches": [],
+        "shared_contents": [
+          {
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version_ids": [
+              "ver_00000000000000000000000000000001",
+              "ver_00000000000000000000000000000002"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "shared-history-rejects-deletion-parent-identity",
+      "schema": "SharedHistoryGraph",
+      "layer": "schema",
+      "value": {
+        "origin_file_id": "file_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "files": [
+          {
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1"
+          },
+          {
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2"
+          }
+        ],
+        "versions": [
+          {
+            "version_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          },
+          {
+            "version_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          }
+        ],
+        "nodes": [
+          {
+            "node_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000001",
+            "sequence": "1",
+            "parent_node_ids": [
+              "fdel_00000000000000000000000000000001"
+            ]
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000002",
+            "sequence": "1",
+            "parent_node_ids": []
+          }
+        ],
+        "branches": [],
+        "shared_contents": [
+          {
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version_ids": [
+              "ver_00000000000000000000000000000001",
+              "ver_00000000000000000000000000000002"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "shared-history-rejects-former-deletion-graph-shape",
+      "schema": "SharedHistoryGraph",
+      "layer": "schema",
+      "value": {
+        "origin_file_id": "file_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "files": [
+          {
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1"
+          },
+          {
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2"
+          }
+        ],
+        "versions": [
+          {
+            "version_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "creation_name": "file-1",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          },
+          {
+            "version_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "creation_name": "file-2",
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "content_state": "PURGED"
+          }
+        ],
+        "nodes": [
+          {
+            "node_id": "fdel_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "deletion",
+            "version_id": null,
+            "sequence": "2",
+            "parent_node_ids": [
+              "ver_00000000000000000000000000000001"
+            ]
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000001",
+            "file_id": "file_00000000000000000000000000000001",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000001",
+            "sequence": "1",
+            "parent_node_ids": []
+          },
+          {
+            "node_id": "ver_00000000000000000000000000000002",
+            "file_id": "file_00000000000000000000000000000002",
+            "kind": "content",
+            "version_id": "ver_00000000000000000000000000000002",
+            "sequence": "1",
+            "parent_node_ids": []
+          }
+        ],
+        "branches": [],
+        "shared_contents": [
+          {
+            "logical_size": "3",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version_ids": [
+              "ver_00000000000000000000000000000001",
+              "ver_00000000000000000000000000000002"
+            ]
+          }
+        ]
+      }
     }
   ],
   "canonical": [

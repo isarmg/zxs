@@ -1,8 +1,8 @@
-use super::*;
-use storage_contract::history_window::{HistoryTreeId, HistoryVersionId};
+use crate::files::shared_history::{Model, Selection, Target, decode, endpoint, project};
+use storage_contract::history_window::{HistoryFileId, HistoryTreeId, HistoryVersionId};
 use storage_contract::shared_history::{
-    SharedContent, SharedHistoryFile, SharedHistoryNode, SharedHistoryNodeId,
-    SharedHistoryNodeKind, SharedHistoryVersion,
+    SharedContent, SharedHistoryFile, SharedHistoryGraph, SharedHistoryNode,
+    SharedHistoryNodeId, SharedHistoryNodeKind, SharedHistoryRequest, SharedHistoryVersion,
 };
 fn id(prefix: &str, n: u8) -> String {
     format!("{prefix}_{n:032x}")
@@ -45,7 +45,7 @@ fn graph() -> SharedHistoryGraph {
             node_id: SharedHistoryNodeId::parse(v.version_id.as_str()).unwrap(),
             file_id: v.file_id.clone(),
             kind: SharedHistoryNodeKind::Content,
-            version_id: Some(v.version_id.clone()),
+            version_id: v.version_id.clone(),
             sequence: index as u64 + 1,
             parent_node_ids: if index == 2 {
                 vec![node("ver", 1)]
@@ -54,14 +54,6 @@ fn graph() -> SharedHistoryGraph {
             },
         })
         .collect::<Vec<_>>();
-    nodes.push(SharedHistoryNode {
-        node_id: node("fdel", 4),
-        file_id: file(2),
-        kind: SharedHistoryNodeKind::Deletion,
-        version_id: None,
-        sequence: 4,
-        parent_node_ids: vec![node("ver", 2)],
-    });
     nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
     let graph = SharedHistoryGraph {
         origin_file_id: request.file_id.clone(),
@@ -131,11 +123,11 @@ fn shared_history_panel_close_root_and_session_changes_reject_old_completions() 
     assert_eq!(model.selection, Selection::All);
 }
 #[test]
-fn shared_history_projection_keeps_repeated_content_events_and_bodyless_deletion() {
+fn shared_history_projection_keeps_repeated_content_events_without_deletion_nodes() {
     let graph = graph();
     let projected = project(&graph, &Selection::All);
-    assert_eq!(projected.cards.len(), 5);
-    assert_eq!(projected.records.len(), 5);
+    assert_eq!(projected.cards.len(), 4);
+    assert_eq!(projected.records.len(), 4);
     let hubs = projected
         .cards
         .iter()
@@ -157,18 +149,11 @@ fn shared_history_projection_keeps_repeated_content_events_and_bodyless_deletion
         .find(|record| record.0 == id("ver", 3))
         .unwrap();
     assert!(repeated.2.contains(&id("ver", 1)));
-    let deletion = projected
-        .records
-        .iter()
-        .find(|record| record.0 == id("fdel", 4))
-        .unwrap();
-    assert_eq!(deletion.2, vec![id("ver", 2)]);
-    assert!(!projected.cards[&deletion.0].shared);
     assert!(
-        !projected.cards[&deletion.0]
-            .lines
+        projected
+            .records
             .iter()
-            .any(|line| line.contains("PURGED"))
+            .all(|record| record.0.as_str() == hub.as_str() || record.0.starts_with("ver_"))
     );
     assert!(
         projected
@@ -188,7 +173,6 @@ fn shared_history_file_filter_is_local_and_preserves_other_file_provenance() {
     assert!(mine.cards.contains_key(&id("ver", 1)));
     assert!(mine.cards.contains_key(&id("ver", 3)));
     assert!(!mine.cards.contains_key(&id("ver", 2)));
-    assert!(!mine.cards.contains_key(&id("fdel", 4)));
     assert!(
         mine.cards
             .values()
@@ -200,7 +184,6 @@ fn shared_history_file_filter_is_local_and_preserves_other_file_provenance() {
     );
     let other = project(&graph, &Selection::File(file(2)));
     assert!(other.cards.contains_key(&id("ver", 2)));
-    assert!(other.cards.contains_key(&id("fdel", 4)));
     assert!(!other.cards.contains_key(&id("ver", 1)));
     assert_eq!(graph, original);
 }
@@ -210,6 +193,21 @@ fn shared_history_decode_rejects_crossed_identity_unknown_fields_and_missing_edg
     assert!(endpoint(&request).contains("/shared-history?history_root="));
     let wire = json_codec::to_value(graph()).unwrap();
     assert!(decode(wire.clone(), &request).is_ok());
+    for (field, value) in [
+        ("node_id", json_codec::json!(id("fdel", 4))),
+        ("kind", json_codec::json!("deletion")),
+        ("version_id", json_codec::Value::Null),
+    ] {
+        let mut bad = wire.clone();
+        bad["nodes"][0][field] = value;
+        assert!(decode(bad, &request).is_err(), "{field}");
+    }
+    let mut missing_version = wire.clone();
+    missing_version["nodes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("version_id");
+    assert!(decode(missing_version, &request).is_err());
     for (field, value) in [
         ("origin_file_id", id("file", 2)),
         ("history_root", "b".repeat(64)),

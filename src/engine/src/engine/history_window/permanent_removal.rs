@@ -207,7 +207,7 @@ pub(super) fn analyze(
         .collect::<BTreeMap<_, _>>();
     for node in &graph.nodes {
         work.step()?;
-        if let Some(index) = node.version_id.as_ref().and_then(|id| indices.get(id)) {
+        if let Some(index) = indices.get(&node.version_id) {
             retired.insert(node.node_id.clone());
             retirements[*index]
                 .event_node_ids

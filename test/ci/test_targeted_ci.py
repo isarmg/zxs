@@ -15,6 +15,113 @@ SPEC.loader.exec_module(CI)
 
 
 class TargetedSelection(unittest.TestCase):
+
+    def test_deletion_graph_sources_keep_lifecycle_and_http_consumers(self):
+        paths = [
+            'src/contract/src/id/node.rs',
+            'src/contract/src/shared_history.rs',
+            'src/engine/src/engine/history_window/permanent_removal.rs',
+            'src/engine/src/engine/history_window/shared_history.rs',
+            'src/web/src/files/deletion/frontier.rs',
+            'src/web/src/files/shared_history/projection.rs',
+            'test/contract/unit/file_deletion_review.rs',
+            'test/contract/unit/id.rs',
+            'test/contract/unit/shared_history.rs',
+            'test/engine/integration/content_matches/permanent_removal.rs',
+            'test/engine/integration/content_matches/shared_history.rs',
+            'test/web/unit/files/shared_history_tests.rs',
+            'docs/design/shared-file-history.md',
+            'test/tools/contract-check/unit/shared_history_tests.rs',
+        ]
+        required = {
+            'container-deletion-graph', 'container-lifecycle-engine',
+            'container-lifecycle-http', 'container-lifecycle-web',
+            'shared-history-http-boundary',
+        }
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertTrue(required <= set(plan['groups']))
+        complete_paths = paths + [
+            'test/server/integration/phase1_smb_rpc/soft_deletion.rs',
+            'docs/contracts/core.schema.json', 'docs/contracts/openapi.json',
+            'docs/contracts/vectors.json', 'docs/15-api-and-errors.md',
+            'docs/design/container-lifecycle-read.md', 'TASKS.md',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, complete_paths, shardable=True)
+        self.assertTrue({
+            'container-tags-contract', 'container-tags-engine', 'container-tags-web',
+            'historical-directory-foundation', 'paged-deletion-review',
+            'note-target-consumers', 'ci-selection',
+        } <= set(plan['groups']))
+        shards = CI.shard_tools().partition(plan)
+        self.assertEqual(
+            [target for shard in shards for target in shard['rust_targets']],
+            plan['rust_targets'],
+        )
+        self.assertEqual(
+            [name for shard in shards for name in shard['python_tests']],
+            plan['python_tests'],
+        )
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+        for group in plan['groups']:
+            actual = [
+                selection
+                for target in plan['rust_targets']
+                for origin, selection in zip(
+                    target['selection_groups'],
+                    target.get('selections', [{
+                        key: value for key, value in target.items()
+                        if key != 'selection_groups'
+                    }]),
+                )
+                if origin == group
+            ]
+            self.assertCountEqual(actual, self.policy['groups'][group]['rust_targets'])
+
+    def test_deletion_graph_selects_real_identity_freeze_schema_and_retirement_tests(self):
+        targets = self.policy['groups']['container-deletion-graph']['rust_targets']
+        contract, engine, server, web, schema = targets
+        self.assertEqual(contract['prefixes'], [
+            'id::tests::', 'file_deletion_review::tests::', 'shared_history::tests::',
+        ])
+        self.assertEqual(
+            (engine['package'], engine['kind'], engine['name'], engine['whole']),
+            ('storage-engine', 'test', 'content_matches', True),
+        )
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (96, 900))
+        self.assertEqual(
+            (server['package'], server['kind'], server['name'], server['features']),
+            ('storage-server', 'test', 'phase1_smb_rpc', ['core']),
+        )
+        self.assertEqual(server['exact'], [
+            'soft_deletion::public_backend_soft_delete_preserves_frontier_'
+            'and_freezes_only_deleted_identity',
+        ])
+        self.assertEqual((server['max_tests'], server['timeout_seconds']), (1, 900))
+        self.assertEqual(web['prefixes'], [
+            'files::shared_history::tests::', 'files::deletion::',
+        ])
+        self.assertEqual(
+            (schema['package'], schema['kind'], schema['name']),
+            ('contract-check', 'bin', 'contract-check'),
+        )
+        self.assertEqual(schema['prefixes'], ['shared_history_tests::'])
+        self.assertEqual(schema['exact'], [
+            'tests::checked_in_contracts_and_document_examples_are_consistent',
+        ])
+        self.assertEqual((schema['max_tests'], schema['timeout_seconds']), (8, 900))
+        lifecycle = self.policy['groups']['container-lifecycle-engine']['rust_targets']
+        self.assertEqual((lifecycle[0]['max_tests'], lifecycle[0]['timeout_seconds']), (96, 900))
+        self.assertEqual((lifecycle[1]['max_tests'], lifecycle[1]['timeout_seconds']), (8, 900))
+        checks = self.policy['groups']['container-lifecycle-web']['rust_targets'][1:]
+        self.assertEqual(len(checks), 2)
+        self.assertEqual([target.get('compile_target') for target in checks],
+                         [None, 'wasm32-unknown-unknown'])
+
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 

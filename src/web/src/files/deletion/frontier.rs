@@ -1,4 +1,4 @@
-//! Branch pages stay attached to the exact complete deletion node being reviewed.
+//! Branch pages stay attached to the exact deletion record and frozen frontier.
 use crate::files::deletion::{Inspection, batch_restore, restore};
 use crate::ui::State;
 use std::{ops::Range, sync::Arc};
@@ -62,18 +62,29 @@ pub(super) fn view(state: RwSignal<State>, node: Arc<FileDeletionNode>) -> impl 
     let restore_button = restore::button(state, node.clone());
     let batch_restore_button = batch_restore::button(state, node.clone());
     view! {
-        <section class="zxs-stack" data-deletion-node=node.node_id.clone()>
-            <h3>{format!("{} · {}",t("删除节点", "Deletion node"),node.path.as_str())}</h3>
-            <p>{t(
-                "无正文节点。箭头表示该分支保留的最新节点连接到删除节点；没有更改分支 HEAD。",
-                concat!(
-                    "Bodyless node. Each arrow joins the retained branch tip to the deletion node; ",
-                    "branch HEADs are unchanged.",
-                ),
-            )}</p>
+        <section
+            class="zxs-stack"
+            data-deletion-node=node.node_id.clone()
+        >
+            <h3>
+                {format!("{} · {}", t("删除记录", "Deletion record"), node.path.as_str())}
+            </h3>
+            <p>
+                {t(
+                    concat!(
+                        "独立删除记录保存所有分支的冻结末端。",
+                        "它不是内容历史节点，不创建祖先边，也不改变分支 HEAD。",
+                    ),
+                    concat!(
+                        "This independent deletion record retains every frozen branch tip. ",
+                        "It is not a content-history node and creates no ancestry edges ",
+                        "or changes to branch HEADs.",
+                    ),
+                )}
+            </p>
             {evidence(node.clone())}
-            {edges(state,target)}
-            {pagination(state,target)}
+            {branch_frontier(state, target)}
+            {pagination(state, target)}
             {restore_button}
             {batch_restore_button}
         </section>
@@ -86,52 +97,77 @@ fn evidence(node: Arc<FileDeletionNode>) -> impl IntoView {
             <summary>{t("核对文件身份与删除依据", "Inspect file identity and deletion evidence")}</summary>
             <dl>
                 <dt>{t("文件 ID", "File ID")}</dt>
-                <dd><code>{node.file_id.clone()}</code></dd>
+                <dd>
+                    <code>{node.file_id.clone()}</code>
+                </dd>
                 <dt>{t("仓库 ID", "Repository ID")}</dt>
-                <dd><code>{node.repository_id.clone()}</code></dd>
-                <dt>{t("删除节点", "Deletion node")}</dt>
-                <dd><code>{node.node_id.clone()}</code></dd>
+                <dd>
+                    <code>{node.repository_id.clone()}</code>
+                </dd>
+                <dt>{t("删除记录 ID", "Deletion record ID")}</dt>
+                <dd>
+                    <code>{node.node_id.clone()}</code>
+                </dd>
                 <dt>{t("原删除操作", "Original deletion operation")}</dt>
-                <dd><code>{node.operation_id.to_string()}</code></dd>
+                <dd>
+                    <code>{node.operation_id.to_string()}</code>
+                </dd>
                 <dt>{t("删除主体", "Deleted by")}</dt>
                 <dd>{node.author.clone()}</dd>
                 <dt>{t("发布序号", "Publication sequence")}</dt>
                 <dd>{node.sequence.to_string()}</dd>
-                <dt>{t("保留分支 / 去重父边", "Retained branches / distinct parents")}</dt>
-                <dd>{format!("{} / {}",node.branch_heads.len(),node.parent_node_ids.len())}</dd>
+                <dt>{t("保留分支 / 去重冻结末端", "Retained branches / distinct frozen tips")}</dt>
+                <dd>
+                    {format!("{} / {}", node.branch_heads.len(), node.parent_node_ids.len())}
+                </dd>
             </dl>
         </details>
     }
 }
 
-fn edges(state: RwSignal<State>, target: StoredValue<Target>) -> impl IntoView {
+fn branch_frontier(state: RwSignal<State>, target: StoredValue<Target>) -> impl IntoView {
     view! {
         <div class="zxs-table-scroll">
             <table
                 class="zxs-table"
-                aria-label=t("所有分支末端到删除节点的连线", "Edges from every branch tip to the deletion node")
+                aria-label=t(
+                    "删除记录保存的全部分支冻结前沿",
+                    "Complete frozen frontier of the deletion record",
+                )
             >
                 <thead>
                     <tr>
                         <th>{t("分支", "Branch")}</th>
-                        <th>{t("末端节点", "Tip node")}</th>
-                        <th>{t("连接", "Edge")}</th>
-                        <th>{t("删除", "Deleted")}</th>
+                        <th>{t("冻结末端节点", "Frozen tip node")}</th>
+                        <th>{t("删除记录", "Deletion record")}</th>
                     </tr>
                 </thead>
-                <tbody>{move ||target.with_value(|target| {
-                    state.with(|s|target.range(s)).map(|range| {
-                        target.node.branch_heads.iter().skip(range.start).take(range.len())
-                            .map(|(branch,head)| view! {
-                                <tr data-deletion-parent=head.clone()>
-                                    <td><code>{branch.clone()}</code></td>
-                                    <td><code>{head.clone()}</code></td>
-                                    <td>"→"</td>
-                                    <td><code>{target.node.node_id.clone()}</code></td>
-                                </tr>
-                            }).collect_view()
-                    })
-                })}</tbody>
+                <tbody>
+                    {move || target.with_value(|target| {
+                        state.with(|state| target.range(state)).map(|range| {
+                            target
+                                .node
+                                .branch_heads
+                                .iter()
+                                .skip(range.start)
+                                .take(range.len())
+                                .map(|(branch, head)| view! {
+                                    <tr data-deletion-parent=head.clone()>
+                                        <td>
+                                            <code>{branch.clone()}</code>
+                                        </td>
+                                        <td>
+                                            <code>{head.clone()}</code>
+                                        </td>
+                                        <td>
+                                            <code>{target.node.node_id.clone()}</code>
+                                        </td>
+                                    </tr>
+                                })
+                                .collect_view()
+                        })
+                    })}
+                </tbody>
             </table>
         </div>
     }
@@ -140,9 +176,12 @@ fn edges(state: RwSignal<State>, target: StoredValue<Target>) -> impl IntoView {
 fn pagination(state: RwSignal<State>, target: StoredValue<Target>) -> impl IntoView {
     let multiple = target.with_value(|target| target.node.branch_heads.len() > PAGE_SIZE);
     view! {
-        <p role="status" data-deletion-branch-range="">
-            {move ||target.with_value(|target| {
-                state.with(|s|target.range(s)).map(|range| format!(
+        <p
+            role="status"
+            data-deletion-branch-range=""
+        >
+            {move || target.with_value(|target| {
+                state.with(|state| target.range(state)).map(|range| format!(
                     "{} {}-{} / {}",
                     t("分支", "Branches"),
                     range.start + 1,
@@ -151,10 +190,10 @@ fn pagination(state: RwSignal<State>, target: StoredValue<Target>) -> impl IntoV
                 ))
             })}
         </p>
-        <Show when=move ||multiple>
+        <Show when=move || multiple>
             <div class="zxs-row">
-                {page_button(state,target,Turn::Previous)}
-                {page_button(state,target,Turn::Next)}
+                {page_button(state, target, Turn::Previous)}
+                {page_button(state, target, Turn::Next)}
             </div>
         </Show>
     }
@@ -172,10 +211,12 @@ fn page_button(
     view! {
         <button
             class="zxs-button"
-            disabled=move ||state.with(|s| {
-                target.with_value(|target|target.destination(s,turn).is_none())
+            disabled=move || state.with(|state| {
+                target.with_value(|target| target.destination(state, turn).is_none())
             })
-            on:click=move |_|state.update(|s|target.with_value(|target|target.turn(s,turn)))
+            on:click=move |_| state.update(|state| {
+                target.with_value(|target| target.turn(state, turn))
+            })
         >
             {label}
         </button>

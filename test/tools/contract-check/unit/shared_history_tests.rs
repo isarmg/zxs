@@ -32,17 +32,15 @@ fn shared_history_published_contract_matches_strict_component_semantics() {
                 "{}",
                 case["name"]
             );
-            if shape_valid {
-                assert_eq!(
-                    semantics("SharedHistoryGraph", &case["value"]).is_ok(),
-                    group == "positive",
-                    "{}",
-                    case["name"]
-                );
-            }
+            assert_eq!(
+                semantics("SharedHistoryGraph", &case["value"]).is_ok(),
+                group == "positive",
+                "{}",
+                case["name"]
+            );
         }
     }
-    assert_eq!(count, 9);
+    assert_eq!(count, 14);
     let operation = &api["paths"]["/api/file-manager/files/{file}/shared-history"]["get"];
     assert_eq!(
         operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],

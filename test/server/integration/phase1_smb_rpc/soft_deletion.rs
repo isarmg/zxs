@@ -513,10 +513,15 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     backend
         .authorize_listing_snapshot(&smb, &listed_before)
         .unwrap();
+    let graph_before_delete = backend_shared_graph(&backend, &management, &b.file_id);
     backend
         .delete_current_file(&smb, command(a.entry_id.clone()))
         .unwrap()
         .expect("native file deletion");
+    same_shared_facts_after_publication(
+        backend_shared_graph(&backend, &management, &b.file_id),
+        &graph_before_delete,
+    );
     assert_eq!(
         backend
             .authorize_listing_snapshot(&smb, &listed_before)
@@ -683,27 +688,10 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
                 .iter()
                 .any(|id| id.as_str() == c.version_id)
     }));
-    let deletion = joined
-        .nodes
-        .iter()
-        .find(|node| node.node_id.as_str() == d.node_id)
-        .unwrap();
-    assert_eq!(
-        deletion.kind,
-        storage_contract::shared_history::SharedHistoryNodeKind::Deletion
-    );
-    assert!(deletion.version_id.is_none());
-    assert_eq!(
-        deletion
-            .parent_node_ids
-            .iter()
-            .map(|node| node.as_str())
-            .collect::<BTreeSet<_>>(),
-        d.parent_node_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    );
+    assert!(joined.nodes.iter().all(|node| node.node_id.as_str() != d.node_id));
+    assert!(joined.nodes.iter().all(|node| {
+        node.parent_node_ids.iter().all(|parent| parent.as_str() != d.node_id)
+    }));
     backend
         .authorize_version(&management, &a.version_id)
         .unwrap();
@@ -731,6 +719,8 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         )
         .unwrap();
     backend.authorize_version(&smb, &a.version_id).unwrap();
+    let restored = backend_shared_graph(&backend, &management, &b.file_id);
+    same_shared_facts_after_publication(restored.clone(), &joined);
     drop(auth);
     drop(backend);
     let engine = Engine::open(&system).unwrap();
@@ -770,6 +760,7 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
     let graph = read.graph().unwrap();
     engine.recheck_shared_history(&read).unwrap();
     graph.validate(&request).unwrap();
+    assert_eq!(graph, restored);
     assert_eq!(
         graph
             .files
@@ -778,6 +769,15 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([a.file_id.as_str(), b.file_id.as_str(), c.file_id.as_str()])
     );
+}
+
+fn same_shared_facts_after_publication(
+    mut actual: storage_contract::shared_history::SharedHistoryGraph,
+    expected: &storage_contract::shared_history::SharedHistoryGraph,
+) {
+    assert_ne!(actual.history_root, expected.history_root);
+    actual.history_root = expected.history_root;
+    assert_eq!(&actual, expected);
 }
 
 fn backend_save(

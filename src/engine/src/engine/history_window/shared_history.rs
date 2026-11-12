@@ -32,7 +32,7 @@ impl Events {
         id: &str,
         file: &str,
         kind: SharedHistoryNodeKind,
-        body: Option<&str>,
+        body: &str,
         sequence: u64,
     ) -> Result<()> {
         if self.nodes.len() == MAX_SHARED_HISTORY_NODES {
@@ -42,7 +42,7 @@ impl Events {
             node_id: SharedHistoryNodeId::parse(id)?,
             file_id: HistoryFileId::parse(file)?,
             kind,
-            version_id: body.map(HistoryVersionId::parse).transpose()?,
+            version_id: HistoryVersionId::parse(body)?,
             sequence,
             parent_node_ids: Vec::new(),
         };
@@ -126,7 +126,7 @@ pub(super) fn project(
                 &version.version_id,
                 file,
                 SharedHistoryNodeKind::Content,
-                Some(&version.version_id),
+                &version.version_id,
                 version.version_sequence,
             )?;
         }
@@ -179,7 +179,7 @@ fn metadata_events(
                 &node.node_id,
                 &node.file_id,
                 SharedHistoryNodeKind::Rename,
-                Some(&node.version_id),
+                &node.version_id,
                 node.sequence,
             )?;
         }
@@ -197,19 +197,7 @@ fn metadata_events(
                 &node.node_id,
                 &node.file_id,
                 kind,
-                Some(&node.version_id),
-                node.sequence,
-            )?;
-        }
-    }
-    for node in state.file_deletions.values() {
-        scan.record()?;
-        if node.history_tree_id == history && files.contains(node.file_id.as_str()) {
-            events.insert(
-                &node.node_id,
-                &node.file_id,
-                SharedHistoryNodeKind::Deletion,
-                None,
+                &node.version_id,
                 node.sequence,
             )?;
         }
@@ -221,12 +209,7 @@ fn ancestry(state: &State, history: &str, events: &mut Events, scan: &mut Scan<'
     let ids = events.nodes.keys().cloned().collect::<Vec<_>>();
     for id in &ids {
         scan.record()?;
-        let node = &events.nodes[id];
-        let parents = if node.kind == SharedHistoryNodeKind::Deletion {
-            &state.file_deletions[node.file_id.as_str()].parent_node_ids
-        } else {
-            nodes::base_parents(state, id)
-        };
+        let parents = nodes::base_parents(state, id);
         let parents =
             crate::node_retirement_engine::live_parents(state, parents, || scan.record())?;
         for parent in parents {

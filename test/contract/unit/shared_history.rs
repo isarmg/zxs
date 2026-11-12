@@ -35,7 +35,7 @@ fn graph() -> SharedHistoryGraph {
             node_id: SharedHistoryNodeId::parse(version_id.as_str()).unwrap(),
             file_id,
             kind: SharedHistoryNodeKind::Content,
-            version_id: Some(version_id),
+            version_id,
             sequence: 1,
             parent_node_ids: Vec::new(),
         });
@@ -91,23 +91,25 @@ fn shared_history_contract_rejects_missing_false_empty_and_disconnected_relation
     assert!(bad.validate(&request()).is_err());
 }
 #[test]
-fn shared_history_contract_keeps_deletion_bodyless_and_ancestry_file_local() {
-    let mut good = graph();
-    good.nodes.push(SharedHistoryNode {
-        node_id: SharedHistoryNodeId::parse(&id("fdel", 1)).unwrap(),
-        file_id: good.files[0].file_id.clone(),
-        kind: SharedHistoryNodeKind::Deletion,
-        version_id: None,
-        sequence: 2,
-        parent_node_ids: vec![good.nodes[0].node_id.clone()],
-    });
-    good.nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+fn shared_history_contract_rejects_deletion_nodes_and_keeps_ancestry_file_local() {
+    let good = graph();
     good.validate(&request()).unwrap();
+    let deletion = id("fdel", 1);
+    assert!(SharedHistoryNodeId::parse(&deletion).is_err());
+    let wire = json_codec::to_value(&good).unwrap();
+    for (field, value) in [
+        ("node_id", json_codec::json!(deletion)),
+        ("kind", json_codec::json!("deletion")),
+    ] {
+        let mut bad = wire.clone();
+        bad["nodes"][0][field] = value;
+        assert!(json_codec::from_value::<SharedHistoryGraph>(bad).is_err());
+    }
+    let mut bad = wire.clone();
+    bad["nodes"][0]["version_id"] = json_codec::Value::Null;
+    assert!(json_codec::from_value::<SharedHistoryGraph>(bad).is_err());
     let mut bad = good.clone();
-    bad.nodes[0].version_id = Some(bad.versions[0].version_id.clone());
-    assert!(bad.validate(&request()).is_err());
-    let mut bad = good.clone();
-    bad.nodes[0].parent_node_ids = vec![bad.nodes[2].node_id.clone()];
+    bad.nodes[0].parent_node_ids = vec![bad.nodes[1].node_id.clone()];
     assert!(bad.validate(&request()).is_err());
     let mut bad = good;
     bad.nodes[1].parent_node_ids = vec![bad.nodes[0].node_id.clone()];
@@ -123,7 +125,7 @@ fn shared_history_contract_rejects_cycles_and_oversized_complete_claims() {
         node_id,
         file_id: graph.files[0].file_id.clone(),
         kind: SharedHistoryNodeKind::Merge,
-        version_id: Some(graph.versions[0].version_id.clone()),
+        version_id: graph.versions[0].version_id.clone(),
         sequence: 2,
         parent_node_ids: vec![parent],
     });
@@ -136,7 +138,7 @@ fn shared_history_contract_rejects_cycles_and_oversized_complete_claims() {
             node_id: SharedHistoryNodeId::parse(&id("ver", 1)).unwrap(),
             file_id: graph.files[0].file_id.clone(),
             kind: SharedHistoryNodeKind::Content,
-            version_id: Some(graph.versions[0].version_id.clone()),
+            version_id: graph.versions[0].version_id.clone(),
             sequence: 1,
             parent_node_ids: vec![],
         },
@@ -212,7 +214,7 @@ fn retained_version_fixture(graph: &mut SharedHistoryGraph, number: u16, owner: 
         node_id: SharedHistoryNodeId::parse(version_id.as_str()).unwrap(),
         file_id,
         kind: SharedHistoryNodeKind::Content,
-        version_id: Some(version_id),
+        version_id,
         sequence: u64::from(number),
         parent_node_ids: Vec::new(),
     });
@@ -288,7 +290,7 @@ fn shared_history_contract_removing_file_local_metadata_keeps_shared_membership(
         node_id: metadata.clone(),
         file_id: retained.files[0].file_id.clone(),
         kind: SharedHistoryNodeKind::Merge,
-        version_id: Some(retained.versions[0].version_id.clone()),
+        version_id: retained.versions[0].version_id.clone(),
         sequence: 3,
         parent_node_ids: vec![retained.nodes[0].node_id.clone()],
     });

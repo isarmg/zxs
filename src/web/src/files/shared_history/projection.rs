@@ -1,5 +1,5 @@
 //! View-only equality hubs preserve every real event and never become ancestry.
-use super::Selection;
+use crate::files::shared_history::Selection;
 use std::collections::BTreeMap;
 use storage_contract::shared_history::{SharedContent, SharedHistoryGraph, SharedHistoryNodeKind};
 use web_interface::i18n::t;
@@ -26,7 +26,6 @@ fn kind(kind: SharedHistoryNodeKind) -> String {
         SharedHistoryNodeKind::Content => t("正文节点", "Content event"),
         SharedHistoryNodeKind::Rename => t("路径节点", "Path event"),
         SharedHistoryNodeKind::Merge => t("合并节点", "Merge event"),
-        SharedHistoryNodeKind::Deletion => t("删除节点（无正文）", "Deletion event (no body)"),
     }
 }
 fn content_state(state: Option<storage_contract::ContentState>) -> String {
@@ -137,17 +136,13 @@ pub(super) fn project(graph: &SharedHistoryGraph, selection: &Selection) -> Proj
             parents.push(hub.clone());
         }
         let mut lines = vec![node.file_id.to_string(), id.clone()];
-        let title = if let Some(version) = &node.version_id {
-            let version = versions[version.as_str()];
-            lines.push(format!(
-                "{} · {}",
-                version.version_id,
-                content_state(version.content_state)
-            ));
-            format!("{} · {}", version.creation_name, kind(node.kind))
-        } else {
-            kind(node.kind)
-        };
+        let version = versions[node.version_id.as_str()];
+        lines.push(format!(
+            "{} · {}",
+            version.version_id,
+            content_state(version.content_state)
+        ));
+        let title = format!("{} · {}", version.creation_name, kind(node.kind));
         if let Some(names) = heads.get(id.as_str()) {
             lines.extend(names.iter().cloned());
         }

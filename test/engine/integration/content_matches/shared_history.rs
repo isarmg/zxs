@@ -26,6 +26,87 @@ fn graph(pool: &Pool, file: &str) -> SharedHistoryGraph {
     result.validate(&request).unwrap();
     result
 }
+fn assert_same_graph_facts(actual: &SharedHistoryGraph, expected: &SharedHistoryGraph) {
+    // Publication roots change on lifecycle writes, but content graph facts do not.
+    assert_eq!(actual.files, expected.files);
+    assert_eq!(actual.versions, expected.versions);
+    assert_eq!(actual.nodes, expected.nodes);
+    assert_eq!(actual.branches, expected.branches);
+    assert_eq!(actual.shared_contents, expected.shared_contents);
+}
+
+fn lifecycle(pool: &Pool, file: &str) -> Vec<storage_contract::file_lifecycle::Event> {
+    let request = storage_contract::file_lifecycle::Request::parse(
+        file,
+        pool.engine.metadata_view().history_root(&pool.history).unwrap(),
+        None,
+        None,
+        None,
+        64,
+    )
+    .unwrap();
+    let read = pool
+        .engine
+        .capture_file_lifecycle(request.clone(), HistoryWindowCancellation::new())
+        .unwrap();
+    let page = read.page().unwrap();
+    page.validate(&request).unwrap();
+    assert!(page.next_cursor.is_none());
+    pool.engine.recheck_file_lifecycle(&read).unwrap();
+    page.events
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OrdinaryNode {
+    node_id: storage_contract::history_window::HistoryNodeId,
+    version_id: storage_contract::history_window::HistoryVersionId,
+    kind: storage_contract::history_window::HistoryNodeKind,
+    sequence: u64,
+    parents: storage_contract::history_window::HistoryParentSet,
+}
+
+fn ordinary_graph(
+    pool: &Pool,
+    file: &str,
+) -> (Vec<OrdinaryNode>, Vec<storage_contract::history_window::HistoryGraphEdge>) {
+    use storage_contract::history_window::{
+        HistoryCollection, HistoryPageLimit, HistoryWindowPage, HistoryWindowRequest,
+    };
+    let request = HistoryWindowRequest {
+        file_id: HistoryFileId::parse(file).unwrap(),
+        collection: HistoryCollection::Nodes,
+        location: None,
+        history_root: Some(graph_request(pool, file).history_root),
+        cursor: None,
+        anchor_node_id: None,
+        limit: HistoryPageLimit::for_collection(64, &HistoryCollection::Nodes).unwrap(),
+    };
+    let read = pool
+        .engine
+        .capture_history_window(request, HistoryWindowCancellation::new())
+        .unwrap();
+    let HistoryWindowPage::Nodes {
+        nodes, edges, page, ..
+    } = read.page().unwrap() else {
+        panic!("Nodes request returned another collection");
+    };
+    assert!(page.previous_cursor.is_none());
+    assert!(page.next_cursor.is_none());
+    // Current visibility is intentionally not graph ancestry: deletion hides
+    // the namespace occurrence without removing its retained nodes or edges.
+    let nodes = nodes
+        .into_iter()
+        .map(|node| OrdinaryNode {
+            node_id: node.node_id,
+            version_id: node.version_id,
+            kind: node.kind,
+            sequence: node.sequence,
+            parents: node.parents,
+        })
+        .collect();
+    (nodes, edges)
+}
+
 fn members(graph: &SharedHistoryGraph) -> BTreeSet<String> {
     graph
         .files
@@ -138,14 +219,15 @@ fn shared_history_new_file_joins_soft_deleted_history_and_remains_writable_after
         members(&joined),
         BTreeSet::from([old.file_id.clone(), new.file_id.clone()])
     );
-    let deletion = joined
-        .nodes
-        .iter()
-        .find(|node| node.kind == SharedHistoryNodeKind::Deletion)
-        .unwrap();
-    assert!(deletion.version_id.is_none());
-    assert_eq!(deletion.file_id.as_str(), old.file_id);
+    let deletion = pool.engine.file_deletion(&old.file_id).unwrap();
     assert!(!deletion.parent_node_ids.is_empty());
+    assert!(
+        joined.nodes.iter().all(|node| node.node_id.as_str() != deletion.node_id)
+    );
+    let events = lifecycle(&pool, &old.file_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].deletion_id.to_string(), deletion.node_id);
+    assert_eq!(events[0].action, storage_contract::file_lifecycle::Action::Delete);
     assert_eq!(container_tags_fixture::tags(&pool.engine, &old.file_id),
         BTreeSet::from(["keep".into()]));
     assert!(container_tags_fixture::tags(&pool.engine, &new.file_id).is_empty());
@@ -315,22 +397,69 @@ fn shared_history_undoing_one_file_deletion_keeps_both_parallel_content_connecti
     let before = graph(&pool, &a.file_id);
     assert_eq!(before.shared_contents.len(), 2);
     let versions = pool.engine.state().versions.clone();
+    let branches = pool.engine.state().branches.clone();
+    let parents = pool.engine.state().file_node_parents.clone();
+    let nodes = ordinary_graph(&pool, &a.file_id);
     delete(&mut pool, &a);
-    let deleted = graph(&pool, &b.file_id);
-    assert_eq!(members(&deleted), members(&before));
-    assert_eq!(deleted.shared_contents, before.shared_contents);
-    assert!(deleted.nodes.iter().any(|node| {
-        node.file_id.as_str() == a.file_id && node.kind == SharedHistoryNodeKind::Deletion
-    }));
+    let deletion = pool.engine.file_deletion(&a.file_id).unwrap().clone();
+    let deleted = graph(&pool, &a.file_id);
+    assert_same_graph_facts(&deleted, &before);
+    assert_eq!(ordinary_graph(&pool, &a.file_id), nodes);
+    assert_eq!(pool.engine.state().versions, versions);
+    assert_eq!(pool.engine.state().branches, branches);
+    assert_eq!(pool.engine.state().file_node_parents, parents);
+    assert!(
+        pool.engine.namespace_tree(&pool.branch).unwrap().get("a").is_none()
+    );
+    let frozen = storage_contract::canonical_json(pool.engine.state()).unwrap();
+    let error = pool
+        .engine
+        .create_file_branch(
+            &a.file_id,
+            &a.version_id,
+            &BranchName::parse("must-stay-frozen").unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::BranchNotActive);
+    assert_eq!(
+        storage_contract::canonical_json(pool.engine.state()).unwrap(),
+        frozen,
+    );
+    let events = lifecycle(&pool, &a.file_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].action, storage_contract::file_lifecycle::Action::Delete);
+    assert_eq!(events[0].deletion_id.to_string(), deletion.node_id);
+    let root = pool.root.clone();
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    assert_eq!(pool.engine.file_deletion(&a.file_id), Some(&deletion));
+    assert_same_graph_facts(&graph(&pool, &a.file_id), &before);
+    assert_eq!(ordinary_graph(&pool, &a.file_id), nodes);
+    assert_eq!(lifecycle(&pool, &a.file_id), events);
     undo_deletion(&mut pool, &a);
     let restored = graph(&pool, &a.file_id);
-    assert_eq!(members(&restored), members(&before));
-    assert_eq!(restored.shared_contents, before.shared_contents);
+    assert_same_graph_facts(&restored, &before);
+    assert_eq!(ordinary_graph(&pool, &a.file_id), nodes);
     assert_eq!(pool.engine.state().versions, versions);
-    assert!(!restored.nodes.iter().any(|node| {
-        node.file_id.as_str() == a.file_id && node.kind == SharedHistoryNodeKind::Deletion
-    }));
+    assert_eq!(pool.engine.state().branches, branches);
+    assert_eq!(pool.engine.state().file_node_parents, parents);
+    let restored_events = lifecycle(&pool, &a.file_id);
+    assert_eq!(restored_events.len(), 2);
+    assert_eq!(restored_events[0], events[0]);
+    assert_eq!(
+        restored_events[1].action,
+        storage_contract::file_lifecycle::Action::Undo,
+    );
+    assert_eq!(restored_events[1].deletion_id.to_string(), deletion.node_id);
+    assert!(pool.engine.file_deletion(&a.file_id).is_none());
     assert!(pool.engine.file_deletion(&b.file_id).is_none());
+    drop(pool.engine);
+    pool.engine = Engine::open(&root).unwrap();
+    assert_same_graph_facts(&graph(&pool, &a.file_id), &before);
+    assert_eq!(ordinary_graph(&pool, &a.file_id), nodes);
+    assert_eq!(lifecycle(&pool, &a.file_id), restored_events);
 }
 
 #[test]

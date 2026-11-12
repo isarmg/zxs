@@ -51,6 +51,14 @@ fn audit_pages_require_explicit_continuations_and_preserve_parent_order() {
         "ver_11111111111111111111111111111111"
     );
     assert_eq!(json_codec::to_value(page).unwrap(), parent);
+    let mut malformed = parent.clone();
+    malformed["entries"][0] = json!("fdel_11111111111111111111111111111111");
+    assert!(json_codec::from_value::<ParentPage>(malformed).is_err());
+    let malformed_head = json!({
+        "branch_id":"br_11111111111111111111111111111111",
+        "node_id":"fdel_11111111111111111111111111111111"
+    });
+    assert!(json_codec::from_value::<BranchHead>(malformed_head).is_err());
     let mut missing = parent;
     missing.as_object_mut().unwrap().remove("next_offset");
     assert!(json_codec::from_value::<ParentPage>(missing).is_err());

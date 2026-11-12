@@ -10056,7 +10056,7 @@
     },
     "SharedHistoryNodeId": {
       "type": "string",
-      "pattern": "^(ver|fnode|fmeta|fdel)_[0-9a-f]{32}$"
+      "pattern": "^(ver|fnode|fmeta)_[0-9a-f]{32}$"
     },
     "SharedHistoryFile": {
       "type": "object",
@@ -10138,19 +10138,11 @@
           "enum": [
             "content",
             "rename",
-            "merge",
-            "deletion"
+            "merge"
           ]
         },
         "version_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VersionId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/VersionId"
         },
         "sequence": {
           "$ref": "#/$defs/UInt64"

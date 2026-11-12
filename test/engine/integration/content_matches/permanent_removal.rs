@@ -193,12 +193,11 @@ fn permanent_removal_analysis_couples_body_metadata_without_treating_soft_delete
         .unwrap();
     let graph = read(&pool, &b.file_id).graph().unwrap();
     assert_eq!(graph.files.len(), 2);
-    let deletion = graph
-        .nodes
-        .iter()
-        .find(|n| n.kind == storage_contract::shared_history::SharedHistoryNodeKind::Deletion)
-        .unwrap();
-    assert!(HistoryVersionId::parse(deletion.node_id.as_str()).is_err());
+    let deletion = pool.engine.file_deletion(&a.file_id).unwrap();
+    assert!(HistoryVersionId::parse(&deletion.node_id).is_err());
+    assert!(
+        graph.nodes.iter().all(|node| node.node_id.as_str() != deletion.node_id)
+    );
     let result = analyze(&pool, &b.file_id, &[&a.version_id]);
     assert_eq!(result.retirements().len(), 1);
     let coupled = result.retirements()[0]

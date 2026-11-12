@@ -111,12 +111,11 @@ fn identity_traits_do_not_require_traits_on_the_kind() {
     assert_single_prefix::<Marker>("marker");
 }
 
-fn file_nodes(bytes: [u8; 16]) -> [FileNodeId; 5] {
+fn file_nodes(bytes: [u8; 16]) -> [FileNodeId; 4] {
     [
         FileNodeId::Version(Id::from_random(bytes)),
         FileNodeId::Anchor(Id::from_random(bytes)),
         FileNodeId::Metadata(Id::from_random(bytes)),
-        FileNodeId::Deletion(Id::from_random(bytes)),
         FileNodeId::Merge(Id::from_random(bytes)),
     ]
 }
@@ -124,7 +123,7 @@ fn file_nodes(bytes: [u8; 16]) -> [FileNodeId; 5] {
 #[test]
 fn file_node_variants_preserve_prefixes_and_scalar_encoding() {
     let nodes = file_nodes([0; 16]);
-    for (id, prefix) in nodes.into_iter().zip(["ver", "fnode", "fmeta", "fdel", "fmerge"]) {
+    for (id, prefix) in nodes.into_iter().zip(["ver", "fnode", "fmeta", "fmerge"]) {
         let wire = format!("{prefix}_00000000000000000000000000000000");
         let json = format!("\"{wire}\"");
         assert_eq!(id.to_string(), wire);
@@ -163,7 +162,7 @@ fn file_node_map_iteration_matches_text_order_across_variants_and_bytes() {
 
 #[test]
 fn file_node_parser_rejects_other_domains_and_noncanonical_suffixes() {
-    for prefix in ["ver", "fnode", "fmeta", "fdel", "fmerge"] {
+    for prefix in ["ver", "fnode", "fmeta", "fmerge"] {
         for suffix in [
             "",
             "0000000000000000000000000000000",
@@ -184,6 +183,7 @@ fn file_node_parser_rejects_other_domains_and_noncanonical_suffixes() {
     for wire in [
         "",
         "fnode",
+        "fdel_00000000000000000000000000000000",
         "op_00000000000000000000000000000000",
         "file_00000000000000000000000000000000",
         " fnode_00000000000000000000000000000000",
@@ -193,6 +193,7 @@ fn file_node_parser_rejects_other_domains_and_noncanonical_suffixes() {
             wire.parse::<FileNodeId>().unwrap_err().code(),
             ErrorCode::InvalidId
         );
+        assert!(json_codec::from_str::<FileNodeId>(&format!("\"{wire}\"")).is_err());
     }
     for wire in ["null", "1", "{}", "[]", "true"] {
         assert!(json_codec::from_str::<FileNodeId>(wire).is_err());
