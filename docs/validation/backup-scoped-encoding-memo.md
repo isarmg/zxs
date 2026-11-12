@@ -299,6 +299,46 @@ installation/project 核对、最终名称复核及取消 checkpoint 后提交�
 disk-pair 命中/坏缓存 readback 由原组合测试继续证明；多数坏材料回归只断言拒绝，
 不宣称准确错误码或全部恢复路径均已覆盖。目录/文件快照不覆盖权限和 mtime。
 
-原 900 秒完整事务及现有组件测量不变。这次编码接线尚未执行 GitHub 验证，
-不能把 350 毫秒全部归因于 SQL，也不能预先认定解决超时。新的完整 context
-摘要本身也有计算成本，收益以准确提交实际结果为准；未本地编译、测试或格式化。
+原 900 秒完整事务及现有组件测量不变。这次编码接线的首次 GitHub 执行结果
+见下节，尚无行为通过或收益证明。不能把 350 毫秒全部归因于 SQL；新的完整
+context 摘要本身也有计算成本。未本地编译、测试或格式化。
+
+
+## #1298 的失败证据与复验链分解
+
+`9726d8dfb331489fbf488370c03631faf7fc33e5` 的 #1298：
+7 个完整通过的 Python 模块共 78 项，Engine 无默认特性产品检查通过。
+没有 Rust 测试通过记录：lib 单测构建因新迁移 memo 的测试接线少一层
+`../` 而失败；因此原有单测、8 项新增回归和组件测试均未执行，不能把
+产品检查通过等同于这些行为验证。另一个 Python 模块因既有模块名正则
+不接受数字失败，已由 `f3dd9403` 修复；不能把该模块内部部分成功计入通过数。
+lib 接线错误已独立以 `3c534060` 修正并提交复验，未放宽选择或预算。
+
+原完整事务另行成功构建并实际运行，但仍在 900 秒超时。首次观察到
+serving/scopes/common/Current/aliases/盘根库/SYSTEM 约为
+40/58/104/168/294/424/694 秒；native metadata 未报告完成。
+这不证明原预备 SQL memo 有效，也不证明无效，更不代表完整恢复完成。
+外部 180 次有效观测到约 895.25 秒，进程 user/system 约 815.89/78.65 秒，
+主要工作线程 CPU 约 826.85 秒、调度等待约 0.155 秒；逻辑读取约 5.85 GB、
+1,152 万次读调用，物理 read_bytes 为 0。它仍只支持持续计算/逻辑读取，
+不是具体函数采样，也不能跨运行环境直接宣称性能改进。
+
+本次只扩展既有真实组件测试：在原两轮内各增加 native、对象库、原 scopes、
+cutover、installation、registry projection、registry verify 的独立整体调用，
+以及两个目标各一次原 image capture + verify，共 18 次固定计时调用。
+报告与真实冻结 evidence、投影与原 registry projection 完整比较；image
+对照真实 manifest、placement、文件/目录/body 数量后执行原目标读回。
+原始 fixture、全部已有测量与末尾 admission 保留，不增加生产可见性、测试钩子、
+缓存、时限或成功阈值，也不改变原 900 秒完整事务。
+
+三个独立层级的 SQL 观察使用真实 prepared memo 和完整 task/projection binding；
+不提交局部观察的 pending。只有完整生产 registry.verify 经原成功门后可提交。
+这些额外真实读取会预热缓存，位置在已有真实前缀推进之后，不是冷缓存基准；
+各桶包含下层、是独立调用，不能相加或直接相减当同一次执行的排它成本。
+断言、日志和部分析构不全部计入。decision 的 bind/copies 私有责任未单独隔离，
+不从目标读取一份新的不可信“期望值”冒充它们；完整 decision 测量仍保留。
+
+工件：https://github.com/isarmg/zxs/actions/runs/43218824624/artifacts/13946226942
+ZIP SHA256：`34c4aef0d3200dcd20acbbccdabae502f32f209c218b06a34d9862ed14f7138c`。
+单测构建诊断在 `011.stdout.log`，原完整事务及外部观测在 `016.stderr.log` /
+`016.sampling.log`。新增层级测量尚未执行 GitHub 验证。

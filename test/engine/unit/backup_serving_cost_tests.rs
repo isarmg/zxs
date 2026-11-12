@@ -263,6 +263,99 @@ fn measure_upstream(
     prepared.recheck_names()
 }
 
+
+fn measure_original_verification(
+    prepared: &PreparedBackupRegistry,
+    iteration: usize,
+    stop: &AtomicBool,
+) -> Result<()> {
+    use crate::engine::backup_preparation::native_control;
+    use crate::engine::backup_preparation::native_control::databases;
+    use crate::engine::backup_preparation::native_control::databases::scoped;
+    use crate::engine::backup_preparation::native_control::databases::scoped::cutover;
+    use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
+
+    let roots = prepared.targets.iter().map(|target| &target.root).collect::<Vec<_>>();
+    let installation = &prepared.task.installation;
+    let task = &installation.evidence.task;
+    let expected = &installation.evidence.report;
+    let native = measured("original_native_verify", iteration, 0, || {
+        native_control::verify_completed(&task.scoped.objects.native, &roots, stop)
+    })?;
+    assert_eq!(canonical_json(&native)?, canonical_json(&expected.scoped.objects.native)?);
+    let objects = measured("original_object_verify", iteration, 0, || {
+        databases::verify_at(&task.scoped.objects, &roots, stop)
+    })?;
+    assert_eq!(canonical_json(&objects)?, canonical_json(&expected.scoped.objects)?);
+
+    // These are independent inclusive observations on the same real fixture.
+    // Match the production binding exactly; pending bytes from a partial
+    // observation are dropped, never committed as a registry verification.
+    let binding = |stop: &AtomicBool| {
+        encoding_memo::digest(&(&prepared.task, &prepared.projection), stop)
+    };
+    let scopes = measured("original_scoped_verify", iteration, 0, || {
+        let mut encodings =
+            encoding_memo::Transaction::new(prepared.scope_encoding.as_ref(), &binding);
+        scoped::verify_at_with_encodings(&task.scoped, &roots, stop, &mut encodings)
+    })?;
+    assert_eq!(canonical_json(&scopes)?, canonical_json(&expected.scoped)?);
+    let cutover = measured("original_cutover_verify", iteration, 0, || {
+        let mut encodings =
+            encoding_memo::Transaction::new(prepared.scope_encoding.as_ref(), &binding);
+        cutover::verify_at_with_encodings(task, &roots, stop, &mut encodings)
+    })?;
+    assert_eq!(canonical_json(&cutover)?, canonical_json(expected)?);
+    measured("original_installation_verify", iteration, 0, || {
+        let mut encodings =
+            encoding_memo::Transaction::new(prepared.scope_encoding.as_ref(), &binding);
+        cutover::installation::verify_installed_with_encodings(
+            installation,
+            &prepared.targets,
+            stop,
+            &mut encodings,
+        )
+    })?;
+    let projection = measured("original_registry_project", iteration, 0, || {
+        registration::project(&prepared.task, &prepared.targets, stop)
+    })?;
+    assert_eq!(canonical_json(&projection)?, canonical_json(&prepared.projection)?);
+    // Only the complete production entry may commit pending encodings after
+    // its own final naming and cancellation checks.
+    measured("original_registry_verify", iteration, 0, || prepared.verify(stop))?;
+    for (index, target) in prepared.targets.iter().enumerate() {
+        measured("original_image_capture_verify", iteration, index, || {
+            cutover::installation::with_image(
+                installation,
+                target,
+                index,
+                stop,
+                |image| {
+                    assert_eq!(
+                        image.manifest_hash(),
+                        prepared.projection.targets[index].image_manifest_hash,
+                    );
+                    assert_eq!(
+                        canonical_json(image.placement())?,
+                        canonical_json(&prepared.projection.targets[index].entities)?,
+                    );
+                    assert_eq!(image.file_units, expected.whole_file_units_per_target);
+                    assert_eq!(
+                        image.directory_repositories,
+                        expected.directory_repositories_per_target,
+                    );
+                    let job = &prepared.task.selection().jobs()[index];
+                    assert_eq!(image.bodies, job.total_files);
+                    assert_eq!(image.body_bytes, job.total_bytes);
+                    image.verify(&target.root, stop)
+                },
+            )
+        })?;
+    }
+    preparation_checkpoint(stop)?;
+    prepared.recheck_names()
+}
+
 #[test]
 fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Result<()> {
     let (_temp, mut engine, request) = fixture();
@@ -352,6 +445,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
         measure_upstream(&prepared, &decision, &candidate, iteration, &stop)?;
+        measure_original_verification(&prepared, iteration, &stop)?;
         let publication = measured("first_publication_observe", iteration, 0, || {
             first_publication::observe(&prepared, &decision, &expected, &stop)
         })?;
