@@ -598,3 +598,236 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
         canonical_json(before.1.state()).unwrap(),
     );
 }
+
+fn assert_finalize_encoding_equality(
+    left: &crate::journal::Finalize,
+    right: &crate::journal::Finalize,
+) {
+    assert_eq!(
+        left == right,
+        canonical_json(left).unwrap() == canonical_json(right).unwrap(),
+    );
+}
+
+#[derive(Clone, Copy)]
+enum FinalizeChange {
+    Candidate, Disk, Slot, Frame, RecordKind, Sequence, RecordCandidate,
+    RecordObject, Previous, Order, Duplicate, Remove, RecoveryNone,
+    RecoveryEmpty, RecoverySome,
+}
+
+fn exercise_finalize_equality(original: &crate::journal::Finalize) {
+    assert!(original.accepts.len() >= 2);
+    assert_finalize_encoding_equality(original, original);
+    for change in [
+        FinalizeChange::Candidate, FinalizeChange::Disk, FinalizeChange::Slot,
+        FinalizeChange::Frame, FinalizeChange::RecordKind, FinalizeChange::Sequence,
+        FinalizeChange::RecordCandidate, FinalizeChange::RecordObject,
+        FinalizeChange::Previous, FinalizeChange::Order, FinalizeChange::Duplicate,
+        FinalizeChange::Remove, FinalizeChange::RecoveryNone, FinalizeChange::RecoveryEmpty,
+        FinalizeChange::RecoverySome,
+    ] {
+        let mut changed = original.clone();
+        match change {
+            FinalizeChange::Candidate => changed.candidate_hash.push('x'),
+            FinalizeChange::Disk => changed.accepts[0].disk_id.push('x'),
+            FinalizeChange::Slot => changed.accepts[0].slot_id.push('x'),
+            FinalizeChange::Frame => changed.accepts[0].frame_hash.push('x'),
+            FinalizeChange::RecordKind => {
+                assert_eq!(changed.accepts[0].record.record_type, RecordType::Accept);
+                changed.accepts[0].record.record_type = RecordType::Finalize;
+            }
+            FinalizeChange::Sequence => changed.accepts[0].record.sequence = u64::MAX,
+            FinalizeChange::RecordCandidate => changed.accepts[0].record.candidate_hash.push('x'),
+            FinalizeChange::RecordObject => changed.accepts[0].record.object_hash.push('x'),
+            FinalizeChange::Previous => changed.accepts[0].record.previous_frame_hash.push('x'),
+            FinalizeChange::Order => changed.accepts.swap(0, 1),
+            FinalizeChange::Duplicate => changed.accepts.push(changed.accepts[0].clone()),
+            FinalizeChange::Remove => {
+                changed.accepts.remove(0);
+            }
+            FinalizeChange::RecoveryNone => changed.recovery_id = None,
+            FinalizeChange::RecoveryEmpty => changed.recovery_id = Some(String::new()),
+            FinalizeChange::RecoverySome => changed.recovery_id = Some("fixture-recovery".into()),
+        }
+        if !matches!(change, FinalizeChange::RecoveryNone) {
+            assert_ne!(original, &changed);
+        }
+        assert_finalize_encoding_equality(original, &changed);
+        assert_finalize_encoding_equality(&changed, &changed);
+    }
+    let mut absent = original.clone();
+    absent.recovery_id = None;
+    let mut empty = absent.clone();
+    empty.recovery_id = Some(String::new());
+    assert_ne!(absent, empty);
+    assert_finalize_encoding_equality(&absent, &empty);
+}
+
+// Retain the old payload algorithm only as an independent differential oracle.
+fn encoded_reference_verify_payloads(
+    config: &Config,
+    candidate: &Candidate,
+    publication: &Publication,
+    source: &mut impl Source,
+) -> Result<()> {
+    let mut expected = BTreeSet::new();
+    for evidence in &candidate.versions {
+        let mut route = BTreeSet::new();
+        if evidence.placement.version_id != evidence.version.version_id
+            || evidence.placement.route_slot_ids.is_empty()
+        {
+            return Err(invalid("native payload has no complete route"));
+        }
+        for slot in &evidence.placement.route_slot_ids {
+            if !route.insert(slot) {
+                return Err(invalid("native payload repeats a route slot"));
+            }
+            let disk = members_config_disk(config, slot)?;
+            let key = (
+                evidence.version.version_id.as_str(),
+                disk.disk_id.as_str(),
+                slot.as_str(),
+            );
+            if !expected.insert(key) {
+                return Err(invalid("native candidate repeats payload evidence"));
+            }
+            let receipt = publication
+                .payload_receipts
+                .iter()
+                .find(|r| r.version_id == key.0 && r.disk_id == key.1 && r.slot_id == key.2)
+                .ok_or_else(|| invalid("original payload receipt missing"))?;
+            let proof: CommitProof = typed(source, "commit-proof", &receipt.proof_hash)?;
+            if proof.candidate_hash != publication.candidate_hash
+                || proof.disk_id != disk.disk_id
+                || proof.slot_id != *slot
+                || proof.version_hash != object_hash("version", &evidence.version)?
+                || proof.route_slot_ids != evidence.placement.route_slot_ids
+                || canonical_json(&proof.finalize)? != canonical_json(&publication.finalize)?
+            {
+                return Err(invalid(
+                    "original payload proof differs from certified evidence",
+                ));
+            }
+        }
+    }
+    let actual = publication
+        .payload_receipts
+        .iter()
+        .map(|r| {
+            (
+                r.version_id.as_str(),
+                r.disk_id.as_str(),
+                r.slot_id.as_str(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if actual != expected || actual.len() != publication.payload_receipts.len() {
+        return Err(invalid(
+            "publication has extra or duplicate payload receipts",
+        ));
+    }
+    Ok(())
+}
+
+fn fixture_file_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, path: &Path, output: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            if metadata.is_dir() {
+                visit(root, &path, output);
+            } else {
+                assert!(metadata.is_file());
+                output.insert(path.strip_prefix(root).unwrap().to_owned(), fs::read(path).unwrap());
+            }
+        }
+    }
+    let mut output = BTreeMap::new();
+    visit(root, root, &mut output);
+    output
+}
+
+#[test]
+fn real_finalize_structural_equality_preserves_payload_rejection_and_bytes() {
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let system = DiskRoot::open(&fixture._temp.path().join("system")).unwrap();
+    let task = NativeTask::read(&system).unwrap();
+    let stop = AtomicBool::new(false);
+    let manifest_bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let manifest: Manifest = decode_proof(&manifest_bytes).unwrap();
+    let baseline = read_observed(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    let mut source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let mut exercised = false;
+    let original_files = fixture_file_bytes(fixture._temp.path());
+    for published in &manifest.publications {
+        let candidate: Candidate = typed(&mut source, "candidate", &published.candidate).unwrap();
+        let publication: Publication =
+            typed(&mut source, "publication", &published.publication).unwrap();
+        exercise_finalize_equality(&publication.finalize);
+        if publication.payload_receipts.is_empty() {
+            continue;
+        }
+        let original_path = object_path(
+            root.path(), "commit-proof", &publication.payload_receipts[0].proof_hash,
+        ).unwrap();
+        let original_bytes = fs::read(&original_path).unwrap();
+        let mut proof: CommitProof = typed(
+            &mut source, "commit-proof", &publication.payload_receipts[0].proof_hash,
+        ).unwrap();
+        proof.finalize.recovery_id = Some("fixture-only-mismatch".into());
+        let changed_bytes = canonical_json(&proof).unwrap();
+        let changed_hash = object_hash("commit-proof", &proof).unwrap();
+        let changed_path = object_path(root.path(), "commit-proof", &changed_hash).unwrap();
+        assert!(!changed_path.exists());
+        fs::write(&changed_path, &changed_bytes).unwrap();
+        let changed_files = fixture_file_bytes(fixture._temp.path());
+        // This locally changed reference tests the payload boundary, not a forged
+        // complete Publication/seal. The full archive still names only original bytes.
+        let mut changed_publication = publication.clone();
+        changed_publication.payload_receipts[0].proof_hash = changed_hash;
+        for selected in [&publication, &changed_publication] {
+            let mut old = Target { root: &root, stop: &stop, budget: Budget::default() };
+            let mut new = Target { root: &root, stop: &stop, budget: Budget::default() };
+            let expected = encoded_reference_verify_payloads(
+                &manifest.config, &candidate, selected, &mut old,
+            );
+            let actual = verify_payloads(&manifest.config, &candidate, selected, &mut new);
+            assert_eq!(old.budget.reads, new.budget.reads);
+            assert_eq!(old.budget.bytes, new.budget.bytes);
+            assert!(new.budget.reads > 0);
+            if std::ptr::eq(selected, &publication) {
+                expected.unwrap();
+                actual.unwrap();
+            } else {
+                let expected = expected.unwrap_err();
+                let actual = actual.unwrap_err();
+                assert_eq!(actual.code(), ErrorCode::PublicationInvalid);
+                assert_eq!(error_signature(&actual), error_signature(&expected));
+            }
+            assert_eq!(fixture_file_bytes(fixture._temp.path()), changed_files);
+            assert_eq!(fs::read(&original_path).unwrap(), original_bytes);
+            assert_eq!(fs::read(&changed_path).unwrap(), changed_bytes);
+            assert_eq!(fs::read(manifest_path(root.path())).unwrap(), manifest_bytes);
+        }
+        fs::remove_file(changed_path).unwrap();
+        assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+        exercised = true;
+        break;
+    }
+    assert!(exercised);
+    let restored = read_observed(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    assert_eq!(restored.0, baseline.0);
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+    assert_eq!(
+        canonical_json(restored.1.state()).unwrap(),
+        canonical_json(baseline.1.state()).unwrap(),
+    );
+}

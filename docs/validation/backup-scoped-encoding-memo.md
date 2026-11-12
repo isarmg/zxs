@@ -577,7 +577,30 @@ journal/account/budget 仍委托同一个真实 Target。
 `backup-archive-test-copy-us` 属于测试侧分解；
 `backup-archive-delegated-us` 才是直接委托真实 Target 的完整调用观察。
 两条路径是先后独立调用，均已预热并含观测开销，不是冷缓存或配对 A/B。
-新观察尚未运行 GitHub，不能据此先认定 JSON/hash 是主耗时。
+新观察已在 #1322 的准确 `65adb173cbb34aa85f6756859835ab2041958532`
+及 base `2b22a9715d65aad77d1e3b81dfb214cca5c95bfc` 执行。
+unit 分片的 72 项 Rust、8 模块共 185 项 Python 及 Engine 无默认特性检查通过，
+selected failed/skipped/blocked 均为空；新增观察用例实际 0.91 秒。
+独立原事务仍是唯一失败：900 秒超时，selected skipped/blocked 为空。
+阶段约 28/42/76/124/220/320/532 秒到 SYSTEM，未见 native metadata 完成；
+180 次采样末点约 895.175 秒，user/system CPU 为 813.30/80.91 秒，
+worker CPU 829.597 秒、调度等待 0.177 秒；
+逻辑读取 7,826,046,718 字节、15,402,268 次，物理 read_bytes 为 0。
+这些仍不是具体热函数或性能收益的证明。
+
+该小型 Genesis 夹具的复制 Source 整体为 16,474 微秒：
+地址与真实读取 2,428、strict parse 1,954、认证 inclusive 3,365、
+journal inclusive 52 微秒。169 次对象调用读取 91,345 字节；
+计费含图验证等其余 account，合计 392 次、118,659 字节。
+直接委托真实 Target 的整体为 16,286 微秒，object inclusive 7,689、
+journal inclusive 36 微秒；调用次数和预算相同。
+约一半耗时仍在 Source 之外的 typed 回编码、图/State/收据等流程及观测开销，
+不能据此把 JSON/hash 认作主耗时，更不推断完整事务的比例或优化收益。
+
+unit 工件：
+https://github.com/isarmg/zxs/actions/runs/43267501783/artifacts/13965994593
+ZIP SHA256：
+`181cea743c9887c87b4de32a0d1881bc1125fac41e91fd6a199168850575ee5e`。
 
 ## #1320 完整比较基线中的原事务
 
@@ -598,3 +621,29 @@ worker CPU 818.509 秒、调度等待 0.235 秒；
 https://github.com/isarmg/zxs/actions/runs/43261366402/artifacts/13966215855
 ZIP SHA256：
 `44e23f87531a2df87e4fd0afeaead765083ab88bda54b45ba0b2499c7a60e88f`。
+
+## Finalize 完整结构比较
+
+原 native archive 在独立 FINALIZE 读回后，以及每个 payload proof 的
+FINALIZE 比较处，只为判断两份完整 typed 材料相等而各做两次规范 JSON 编码。
+现给 Finalize 派生完整 PartialEq/Eq，并在原短路位置直接比较结构。
+
+Finalize 的全部字段为 candidate_hash、按序 accepts 和可选 recovery_id；
+Receipt/Record 的所有字段均参与 Eq 和持久序列化。
+RecordType 的固定输出互异，sequence 用十进制字符串，None 的省略与
+Some 空字符串不等价；这些封闭字段没有浮点、非字符串映射键或可失败的自定义
+序列化。因此两个位置的结构相等与原规范字节相等具有相同判断结果，
+不会丢弃一个可由输入触发的编码错误。
+
+独立 FINALIZE 和 CommitProof 仍由真实 Source 读取、认证及完整 typed 回编码，
+大小/次数预算、取消、原错误分支与条件短路位置不变。
+Publication、journal、原始收据、State、历史和 payload 语义检查均保留。
+此处不复用跨现场的准入结论，不新增缓存、领域字符串接口或生产观测。
+只消除每个独立比较的两次纯编码，尚不证明其是主要耗时或原事务已通过。
+
+此片仍待准确后继 SHA 的 GitHub 定向验证；原 exact/max1/900 保持不变。
+
+#1322 原事务工件：
+https://github.com/isarmg/zxs/actions/runs/43267501783/artifacts/13969035340
+ZIP SHA256：
+`e790de511c06ee7480c30efebb9db3e1655921f4ecb8a03dcbeae334a55167fb`。

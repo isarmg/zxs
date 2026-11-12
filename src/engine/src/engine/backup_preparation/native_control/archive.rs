@@ -627,7 +627,7 @@ fn verify_observed(
         )?;
         let finalize_hash = object_hash("finalize", &publication.finalize)?;
         let finalize: crate::journal::Finalize = typed(source, "finalize", &finalize_hash)?;
-        if canonical_json(&finalize)? != canonical_json(&publication.finalize)? {
+        if finalize != publication.finalize {
             return Err(invalid("original FINALIZE differs"));
         }
         let descriptor: Snapshot = typed(source, "snapshot", &candidate.snapshot_hash)?;
@@ -814,7 +814,7 @@ fn verify_payloads(
                 || proof.slot_id != *slot
                 || proof.version_hash != object_hash("version", &evidence.version)?
                 || proof.route_slot_ids != evidence.placement.route_slot_ids
-                || canonical_json(&proof.finalize)? != canonical_json(&publication.finalize)?
+                || proof.finalize != publication.finalize
             {
                 return Err(invalid(
                     "original payload proof differs from certified evidence",

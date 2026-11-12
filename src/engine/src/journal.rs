@@ -1122,7 +1122,7 @@ pub(crate) struct VersionEvidence {
 }
 mod candidate;
 pub(crate) use candidate::{Candidate, CandidateData};
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Finalize {
     pub candidate_hash: String,
