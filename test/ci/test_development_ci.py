@@ -158,12 +158,16 @@ class DevelopmentCiPolicy(unittest.TestCase):
     def test_all_ci_jobs_run_with_original_full_budgets(self):
         ci = jobs((ROOT / '.github/workflows/ci.yml').read_text())
         self.assertEqual(set(ci), {'static', 'tests', 'web-production', 'browser-smoke',
-                                   'smb-sdk', 'phase-one-core', 'workspace-coverage', 'targeted'})
+                                   'smb-sdk', 'phase-one-core', 'workspace-coverage', 'targeted',
+                                   'targeted-plan', 'targeted-coverage'})
         for name, body in ci.items():
             if name == 'workspace-coverage':
                 self.assertIn("    if: always() && (" + POLICY.FULL_CONDITION + ") && needs.static.result == 'success'\n", body)
                 self.assertNotIn('continue-on-error:', body)
-            elif name == 'targeted':
+            elif name == 'targeted-coverage':
+                self.assertIn("    if: always() && needs.targeted-plan.result == 'success'\n", body)
+                self.assertNotIn('continue-on-error:', body)
+            elif name in {'targeted', 'targeted-plan'}:
                 self.assertIn("    if: github.event_name == 'push' || inputs.scope == 'targeted'\n", body)
             else:
                 self.assertIn('    if: ' + POLICY.FULL_CONDITION + '\n', body)
@@ -190,6 +194,21 @@ class DevelopmentCiPolicy(unittest.TestCase):
         release = jobs((ROOT / '.github/workflows/release.yml').read_text())
         self.assertEqual(set(release) - set(POLICY.PAUSED_JOBS['release.yml']), {'static'})
         self.assertIn('    timeout-minutes: 5\n', release['static'])
+
+    def test_targeted_coverage_rejects_failed_cancelled_skipped_or_missing_job_results(self):
+        body = jobs((ROOT / '.github/workflows/ci.yml').read_text())['targeted-coverage']
+        gate = body.split('      - name: Require every selected shard job to succeed\n', 1)[1]
+        gate = gate.split('      - name:', 1)[0]
+        self.assertIn('        if: always()\n', gate)
+        self.assertIn('ZXS_TARGETED_JOB_RESULT: ${{ needs.targeted.result }}', gate)
+        command = re.search(r'^        run: (.+)$', gate, re.MULTILINE).group(1)
+        for status in ['success', 'failure', 'cancelled', 'skipped', '']:
+            result = subprocess.run(['bash', '-c', command],
+                                    env=dict(os.environ, ZXS_TARGETED_JOB_RESULT=status),
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode == 0, status == 'success')
+        self.assertLess(body.index('Require every selected shard job'),
+                        body.index('Fetch every targeted shard'))
 
     def test_full_ci_jobs_cannot_be_silently_paused(self):
         for name in ('ci.yml', 'smb-sdk.yml'):

@@ -2453,6 +2453,14 @@
   },
   "rules": [
     {
+      "path": ".github/scripts/targeted-ci-shards.py",
+      "groups": ["ci-selection"]
+    },
+    {
+      "path": "docs/design/targeted-ci-shards.md",
+      "groups": ["ci-selection"]
+    },
+    {
       "path": "src/engine/src/business/directory_git/export.rs",
       "groups": [
         "directory-export-wrapper-retirement"

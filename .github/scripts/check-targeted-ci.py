@@ -75,7 +75,7 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def select_plan(policy, changed):
+def select_plan(policy, changed, *, shardable=False):
     if set(policy) != {'groups', 'rules', 'unexecuted'} or not policy['unexecuted']:
         raise ValueError('invalid targeted policy')
     groups, rules = policy['groups'], policy['rules']
@@ -120,7 +120,8 @@ def select_plan(policy, changed):
         python_tests.update(modules)
         targets.extend(group['rust_targets'])
         origins.extend([name] * len(group['rust_targets']))
-    if len(python_tests) > 8 or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
+    python_limit = 128 if shardable else 8
+    if len(python_tests) > python_limit or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
         raise ValueError('invalid Python modules')
     if not (targets or python_tests):
         raise ValueError('target selection must be bounded and nonempty')
@@ -190,7 +191,7 @@ def select_plan(policy, changed):
         combined['selections'].append(dict(target))
         combined['selection_groups'].append(origin)
     targets = list(builds.values())
-    if len(targets) > 16:
+    if len(targets) > (256 if shardable else 16):
         raise ValueError('target selection must be bounded and nonempty')
     return {'groups': sorted(selected), 'changed_paths': sorted(changed),
             'python_tests': sorted(python_tests), 'python_timeouts': python_timeouts,
@@ -305,9 +306,18 @@ def passed_python(output, expected):
         raise ValueError('Python module did not execute the expected nonzero tests')
 
 
+def shard_tools():
+    path = ROOT / ".github/scripts/targeted-ci-shards.py"
+    spec = importlib.util.spec_from_file_location("targeted_ci_shards", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class Run:
-    def __init__(self, root):
+    def __init__(self, root, *, shard_request=None):
         self.root = Path(root)
+        self.shard_request = shard_request
         self.directory = self.root / 'target/targeted-ci'
         self.directory.mkdir(parents=True, exist_ok=True)
         self.summary = {'status': 'incomplete', 'commands': [], 'artifacts': [], 'passed': [],
@@ -361,7 +371,7 @@ class Run:
             raise subprocess.CalledProcessError(result.returncode, args)
         return stdout.read_text()
 
-    def plan(self):
+    def plan(self, *, shardable=False):
         policy = json.loads((self.root / PLAN_PATH).read_text())
         self.summary['head'] = self.command(['git', 'rev-parse', 'HEAD']).strip()
         event_name = os.environ.get('GITHUB_EVENT_NAME')
@@ -381,10 +391,30 @@ class Run:
         self.command(['git', 'merge-base', '--is-ancestor', before, 'HEAD'])
         changed = self.command(['git', 'diff', '--name-only', '--no-renames', '-z',
                                 before, 'HEAD']).split('\0')
-        value = select_plan(policy, [p for p in changed if p])
+        value = select_plan(policy, [p for p in changed if p],
+                            shardable=shardable or self.shard_request is not None)
         self.summary.update(base=before, policy_sha256=digest(self.root / PLAN_PATH), plan=value)
+        if self.shard_request is not None:
+            value = shard_tools().select(self.summary, value, self.shard_request)
+            self.summary['plan'] = value
         self.save()
         return value
+
+    def verify_shards(self, directory):
+        try:
+            plan = self.plan(shardable=True)
+            receipts = [json.loads(path.read_text())
+                        for path in sorted(directory.rglob('summary.json'))]
+            result = shard_tools().verify(
+                self.summary, plan, receipts, selection_evidence, test_timeouts)
+            self.summary.update(status=result['status'], coverage=result)
+            (self.directory / 'coverage.json').write_text(json.dumps(result, indent=2) + '\n')
+            print(json.dumps(result, indent=2))
+        except Exception as error:
+            self.summary.update(status='failed', error=f'{type(error).__name__}: {error}')
+            raise
+        finally:
+            self.save()
 
     def failure(self, stage, error, **scope):
         record = dict(scope, stage=stage, error=f'{type(error).__name__}: {error}',
@@ -495,7 +525,14 @@ class Run:
     def execute(self, action):
         remaining_python, remaining_targets = [], []
         try:
-            plan = self.plan()
+            plan = self.plan(shardable=True) if action == 'matrix' else self.plan()
+            if action == 'matrix':
+                matrix = shard_tools().matrix(self.summary, plan)
+                self.summary['matrix'] = matrix
+                self.summary['status'] = 'planned'
+                with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+                    stream.write('matrix=' + json.dumps(matrix, separators=(',', ':')) + '\n')
+                return
             if action == 'plan':
                 self.summary['status'] = 'planned'
                 return
@@ -549,5 +586,13 @@ class Run:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'run'))
-    Run(ROOT).execute(parser.parse_args().action)
+    parser.add_argument('action', choices=('plan', 'run', 'matrix', 'verify-shards'))
+    parser.add_argument('--receipts', type=Path)
+    args = parser.parse_args()
+    if args.action == 'verify-shards':
+        if args.receipts is None:
+            parser.error('verify-shards requires --receipts')
+        Run(ROOT).verify_shards(args.receipts)
+    else:
+        request = os.environ.get('ZXS_TARGETED_SHARD')
+        Run(ROOT, shard_request=json.loads(request) if request else None).execute(args.action)

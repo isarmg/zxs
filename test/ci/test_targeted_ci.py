@@ -978,6 +978,26 @@ class TargetedBaseline(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.run.plan()
 
+    def test_matrix_emits_complete_exact_source_identity_without_executing_work(self):
+        self.dispatch(self.base)
+        output = self.root / 'outputs'
+        with mock.patch.dict(CI.os.environ, {'GITHUB_OUTPUT': str(output)}):
+            self.run.execute('matrix')
+        value = json.loads(output.read_text().removeprefix('matrix='))
+        request = value['include'][0]
+        self.assertEqual(request['head'], self.head)
+        self.assertEqual(request['base'], self.base)
+        self.assertEqual(request['count'], 1)
+        self.assertEqual(request['index'], 0)
+        self.assertEqual(self.run.summary['status'], 'planned')
+        self.assertEqual(self.run.summary['passed'], [])
+        self.run.shard_request = request
+        self.run.plan()
+        self.assertEqual(self.run.summary['shard'], request)
+        self.run.shard_request = request | {'base': 'c' * 40}
+        with self.assertRaises(ValueError):
+            self.run.plan()
+
 class TargetedExecution(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -1490,6 +1510,177 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         self.assertEqual(product['features'], ['core'])
         self.assertEqual(no_core['mode'], 'check')
         self.assertFalse(no_core['default_features'])
+
+
+class TargetedShards(unittest.TestCase):
+    """Execution receipts, not job names, prove complete selected coverage."""
+
+    def setUp(self):
+        self.shards = CI.shard_tools()
+        targets = [
+            {'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+             'kind': 'test', 'name': f'fixture_{index}', 'mode': 'check'}
+            for index in range(17)
+        ]
+        targets[0] = {
+            'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+            'prefixes': ['selected::'], 'max_tests': 2, 'timeout_seconds': 900,
+        }
+        self.policy = {
+            'groups': {'fixture': {
+                'reason': 'Synthetic cross-crate atomic change',
+                'python_tests': ['test_fixture_' + suffix for suffix in 'abcdefghi'],
+                'rust_targets': targets,
+            }},
+            'rules': [{'path': 'changed.rs', 'groups': ['fixture']}],
+            'unexecuted': 'Unrelated tests are not selected.',
+        }
+        self.plan = CI.select_plan(self.policy, ['changed.rs'], shardable=True)
+        self.summary = {'head': 'b' * 40, 'base': 'a' * 40, 'policy_sha256': 'c' * 64}
+
+    def receipts(self):
+        receipts = []
+        for request in self.shards.matrix(self.summary, self.plan)['include']:
+            receipt = dict(self.summary, status='selected-tests-passed',
+                           failed=[], skipped=[], blocked=[], compiled=[], artifacts=[], passed=[])
+            plan = self.shards.select(receipt, self.plan, request)
+            receipt['plan'] = plan
+            for module in plan['python_tests']:
+                receipt['passed'].append({'python_module': module, 'tests': 1,
+                                         'timeout_seconds': plan['python_timeouts'][module]})
+            for target in plan['rust_targets']:
+                artifact = {'configuration': target}
+                if target.get('mode') == 'check':
+                    artifact['files'] = [{'path': '/repo/target/targeted-ci/build/fixture', 'sha256': 'd' * 64}]
+                    receipt['compiled'].append(target)
+                else:
+                    artifact.update(inventory=['selected::a', 'selected::b', 'other::c'],
+                                    ignored=[], selected=['selected::a', 'selected::b'],
+                                    path='/repo/target/targeted-ci/build/fixture', sha256='d' * 64,
+                                    package=target['package'], unexecuted=['other::c'])
+                    artifact['selections'] = CI.selection_evidence(
+                        artifact['inventory'], artifact['ignored'], target)
+                    artifact['test_timeouts'] = CI.test_timeouts(artifact['selections'])
+                    receipt['passed'].extend({'configuration': target, 'name': name}
+                                              for name in artifact['selected'])
+                receipt['artifacts'].append(artifact)
+            receipts.append(receipt)
+        return receipts
+
+    def verify(self, receipts):
+        return self.shards.verify(
+            self.summary, self.plan, receipts, CI.selection_evidence, CI.test_timeouts)
+
+    def test_default_remains_bounded_and_explicit_partition_preserves_exact_union(self):
+        with self.assertRaises(ValueError):
+            CI.select_plan(self.policy, ['changed.rs'])
+        shards = self.shards.partition(self.plan)
+        self.assertEqual(len(shards), 2)
+        self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                         self.plan['rust_targets'])
+        self.assertEqual([module for shard in shards for module in shard['python_tests']],
+                         self.plan['python_tests'])
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+        self.assertEqual(self.shards.partition(copy.deepcopy(self.plan)), shards)
+        self.assertEqual(self.verify(self.receipts())['status'], 'all-selected-shards-passed')
+
+    def test_sharding_never_relaxes_target_prefix_timeout_or_total_resource_bounds(self):
+        for patch in ({'prefixes': [f'prefix_{i}::' for i in range(17)]},
+                      {'timeout_seconds': 901}, {'max_tests': 193}):
+            policy = copy.deepcopy(self.policy)
+            policy['groups']['fixture']['rust_targets'][0].update(patch)
+            with self.assertRaises(ValueError):
+                CI.select_plan(policy, ['changed.rs'], shardable=True)
+        oversized = copy.deepcopy(self.plan)
+        oversized['rust_targets'] *= 16
+        with self.assertRaises(ValueError):
+            self.shards.partition(oversized)
+        policy = copy.deepcopy(self.policy)
+        policy['rules'] = [{'path': 'different.rs', 'groups': ['fixture']}]
+        with self.assertRaises(ValueError):
+            CI.select_plan(policy, ['changed.rs'], shardable=True)
+
+    def test_shard_identity_rejects_other_commit_base_policy_plan_and_index(self):
+        original = self.shards.matrix(self.summary, self.plan)['include'][0]
+        for patch in ({'head': 'd' * 40}, {'base': 'e' * 40}, {'policy_sha256': 'f' * 64},
+                      {'plan_sha256': '0' * 64}, {'index': -1}, {'index': 2},
+                      {'index': True}, {'count': True}, {'count': 3}, {'extra': 1}):
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                self.shards.select(dict(self.summary), self.plan, original | patch)
+        with self.assertRaises(ValueError):
+            self.shards.select(dict(self.summary), self.plan, {})
+
+    def test_missing_duplicate_failed_or_wrong_source_receipts_cannot_pass(self):
+        receipts = self.receipts()
+        for bad in (receipts[:-1], receipts + [receipts[0]], [receipts[0], receipts[0]]):
+            with self.assertRaises(ValueError):
+                self.verify(bad)
+        for field, value in [('status', 'planned'), ('head', 'e' * 40),
+                             ('base', 'e' * 40), ('policy_sha256', 'e' * 64),
+                             ('failed', [{'error': 'test failed'}]),
+                             ('skipped', [{'reason': 'missing executable'}]),
+                             ('blocked', [{'reason': 'timeout'}])]:
+            bad = copy.deepcopy(receipts)
+            bad[0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.verify(bad)
+
+    def test_green_label_without_exact_python_rust_or_compile_evidence_is_rejected(self):
+        original = self.receipts()
+        mutations = [
+            lambda receipt: receipt['passed'].pop(),
+            lambda receipt: receipt['passed'].append(receipt['passed'][0]),
+            lambda receipt: receipt['passed'][0].update(tests=0),
+            lambda receipt: receipt['passed'][0].update(timeout_seconds=900),
+            lambda receipt: receipt['compiled'].pop(),
+            lambda receipt: receipt['artifacts'].pop(),
+            lambda receipt: receipt['artifacts'][0]['selected'].pop(),
+            lambda receipt: receipt['artifacts'][0]['inventory'].remove('selected::b'),
+            lambda receipt: receipt['plan']['rust_targets'].pop(),
+        ]
+        for mutate in mutations:
+            bad = copy.deepcopy(original)
+            mutate(bad[0])
+            with self.assertRaises(ValueError):
+                self.verify(bad)
+
+    def test_current_artifact_identity_and_selection_budget_evidence_is_required(self):
+        original = self.receipts()
+        for field in ('path', 'sha256', 'package', 'selections', 'test_timeouts', 'unexecuted'):
+            bad = copy.deepcopy(original)
+            del bad[0]['artifacts'][0][field]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.verify(bad)
+        for patch in ({'sha256': 'bad'}, {'path': '/outside/fixture'},
+                      {'test_timeouts': {'selected::a': 901, 'selected::b': 900}},
+                      {'package': 'other'}, {'unexecuted': []}):
+            bad = copy.deepcopy(original)
+            bad[0]['artifacts'][0].update(patch)
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                self.verify(bad)
+        for files in ([{}], [], [{'path': '/repo/target/targeted-ci/build/fixture'}]):
+            bad = copy.deepcopy(original)
+            bad[0]['artifacts'][1]['files'] = files
+            with self.subTest(files=files), self.assertRaises(ValueError):
+                self.verify(bad)
+
+    def test_existing_multigroup_selections_are_not_flattened_or_dropped(self):
+        self.policy['groups']['also'] = {
+            'reason': 'Second owner retains its own timeout and budget', 'python_tests': [],
+            'rust_targets': [{'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+                              'exact': ['selected::b'], 'max_tests': 1,
+                              'timeout_seconds': 200}],
+        }
+        self.policy['rules'][0]['groups'].append('also')
+        plan = CI.select_plan(self.policy, ['changed.rs'], shardable=True)
+        shards = self.shards.partition(plan)
+        target = shards[0]['rust_targets'][0]
+        self.assertEqual(target['selection_groups'], ['also', 'fixture'])
+        evidence = CI.selection_evidence(['selected::a', 'selected::b'], [], target)
+        self.assertEqual(CI.test_timeouts(evidence), {'selected::a': 900, 'selected::b': 200})
+        self.assertEqual(target, plan['rust_targets'][0])
 
 
 if __name__ == '__main__':

@@ -194,15 +194,45 @@ def development_workflow(name, original):
 
 FULL_CONDITION = "github.event_name == 'workflow_dispatch' && inputs.scope == 'full'"
 TARGETED_JOB = """
-  targeted:
-    name: Selected change tests
+  targeted-plan:
+    name: Admit complete targeted selection
     if: github.event_name == 'push' || inputs.scope == 'targeted'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Partition the complete same-commit selection
+        id: plan
+        run: python3 .github/scripts/check-targeted-ci.py matrix
+      - name: Retain complete selected scope
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: targeted-plan-${{ github.sha }}
+          path: target/targeted-ci/summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+  targeted:
+    name: Selected change tests (${{ matrix.index }})
+    if: github.event_name == 'push' || inputs.scope == 'targeted'
+    needs: targeted-plan
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.targeted-plan.outputs.matrix) }}
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
+      ZXS_TARGETED_SHARD: ${{ toJSON(matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -220,10 +250,44 @@ TARGETED_JOB = """
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: targeted-tests-${{ github.sha }}
+          name: targeted-tests-${{ matrix.index }}-${{ github.sha }}
           path: |
             target/targeted-ci/summary.json
             target/targeted-ci/*.log
+          if-no-files-found: error
+          retention-days: 7
+
+  targeted-coverage:
+    name: Complete same-commit targeted coverage
+    needs: [targeted-plan, targeted]
+    if: always() && needs.targeted-plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require every selected shard job to succeed
+        if: always()
+        env:
+          ZXS_TARGETED_JOB_RESULT: ${{ needs.targeted.result }}
+        run: test "$ZXS_TARGETED_JOB_RESULT" = success
+      - name: Fetch every targeted shard from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: targeted-tests-*-${{ github.sha }}
+          path: target/targeted-shards
+      - name: Prove complete non-overlapping selected execution
+        run: python3 .github/scripts/check-targeted-ci.py verify-shards --receipts target/targeted-shards
+      - name: Retain targeted coverage evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: targeted-coverage-${{ github.sha }}
+          path: |
+            target/targeted-ci/summary.json
+            target/targeted-ci/coverage.json
           if-no-files-found: error
           retention-days: 7
 """
