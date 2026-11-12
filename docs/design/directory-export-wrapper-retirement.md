@@ -36,3 +36,16 @@ fixture，不宣称后者已独立验证；该恢复代码本片逐字保留。
 
 未本地编译、运行测试或 rustfmt。实际通过与未执行范围以准确 GitHub 提交的
 targeted-tests 工件、编译库存和逐测试结果为准。
+
+## 首轮 GitHub 结果与后继补验
+
+`82b15da6722c7bd812e61c3fa44eb5a4c89969a4` 的 CI #1274：
+6 条选定 Rust 测试、8 个模块中的 124 条 Python 测试全部通过；
+Engine 无默认特性、helper 与 perf-check 三项产品构建通过。
+server core 与 browser-smoke 因前序 HTTP 退役误删共享 `patch` import 而编译失败，
+不能据此宣称全部消费者已经闭合。
+
+后继 `837858ea765755c31c75eb623d6daf6b43529fc0` 恢复该导入，
+不恢复旧目录 PATCH 路由。本次文档跟进选择同一完整 8 构建／8 Python 组，
+在修复后的代码上重验全部消费者和原 6 条行为，不跳过失败构建或减少断言。
+准确结果继续保留在 GitHub targeted-tests 工件，未执行本地构建或测试。

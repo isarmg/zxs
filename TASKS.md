@@ -4,7 +4,7 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] GitHub 定向 CI 验证[旧目录导出孤儿入口退役](docs/design/directory-export-wrapper-retirement.md)：#1274 的 6 项 Rust、124 项 Python、Engine 无默认产品及 helper/perf 构建通过；server/core 与 browser-smoke 因共享 PATCH import 缺失未构建，需在修复后完成两消费者验证。保留目录所有权拒绝、普通文件改名与独立历史复制；旧 file.directory.export 的解码／永久收据／恢复实现原样保留，尚无本片专属冷恢复 fixture，不恢复非容器功能。
+- [ ] GitHub 定向 CI 验证[旧目录导出孤儿入口退役](docs/design/directory-export-wrapper-retirement.md)：#1274 的 6 项 Rust、124 项 Python、Engine 无默认产品及 helper/perf 构建通过；server/core 与 browser-smoke 因共享 PATCH import 缺失未构建，该导入已在 837858e 恢复，待完整 8 构建／8 Python 后继复验。保留目录所有权拒绝、普通文件改名与独立历史复制；旧 file.directory.export 的解码／永久收据／恢复实现原样保留，尚无本片专属冷恢复 fixture，不恢复非容器功能。
 
 - [ ] 修复 #1273：共享 file_manager 的文件分支改名和节点备注仍需 PATCH 路由构造器，恢复其共享导入（不恢复目录 PATCH），同步历史 policy 分批 9→10 的产品检查与组断言。原轮 154 项 Rust、121 项 Python 及 Web 原生/WASM 产品检查通过，6 个 server 构建失败导致 HTTP 行为未执行；待准确后继提交复验。
 
