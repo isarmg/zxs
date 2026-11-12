@@ -353,8 +353,12 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
         .unwrap();
     let published = fixture.engine.state.as_ref().clone();
     crate::engine::disk_registry::current::verify_path_changes(
-        &before_batch, &published, None, None,
-    ).unwrap();
+        &before_batch,
+        &published,
+        None,
+        None,
+    )
+    .unwrap();
     for erase_transfers in [false, true] {
         let mut forged = published.clone();
         let result = &mut forged.operations.get_mut(&receipt.operation_id).unwrap().result;
@@ -364,15 +368,25 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
         }
         assert_eq!(
             crate::engine::disk_registry::current::verify_path_changes(
-                &before_batch, &forged, None, None,
-            ).unwrap_err().code(),
+                &before_batch,
+                &forged,
+                None,
+                None,
+            )
+            .unwrap_err()
+            .code(),
             ErrorCode::PublicationInvalid,
         );
         let decoded: State = json_codec::from_slice(&canonical_json(&forged).unwrap()).unwrap();
         assert_eq!(
             crate::engine::disk_registry::current::verify_path_changes(
-                &before_batch, &decoded, None, None,
-            ).unwrap_err().code(),
+                &before_batch,
+                &decoded,
+                None,
+                None,
+            )
+            .unwrap_err()
+            .code(),
             ErrorCode::PublicationInvalid,
         );
     }

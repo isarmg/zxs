@@ -238,10 +238,16 @@ fn file_database_rejects_old_path_nodes_without_rewriting_state_or_archive_mater
     let fixture = Fixture::new();
     let original_database = fixture.bytes();
     let mut state = fixture.engine.state().clone();
-    let branch = state.file_contexts.values().find(|context| {
-        state.branches[&context.branch_id].file_id.as_deref()
-            == Some(fixture.file.file_id.as_str())
-    }).unwrap().branch_id.clone();
+    let branch = state
+        .file_contexts
+        .values()
+        .find(|context| {
+            state.branches[&context.branch_id].file_id.as_deref()
+                == Some(fixture.file.file_id.as_str())
+        })
+        .unwrap()
+        .branch_id
+        .clone();
     let node = FilePathNode {
         node_id: new_id("fnode").unwrap(),
         history_tree_id: fixture.repo.history_tree_id.clone(),
@@ -259,17 +265,24 @@ fn file_database_rejects_old_path_nodes_without_rewriting_state_or_archive_mater
     state.file_path_nodes.insert(node.node_id.clone(), node.clone());
     let old_bytes = canonical_json(&state).unwrap();
     assert_eq!(
-        crate::history_package::validate_prepared_state(&state).unwrap_err().code(),
+        crate::history_package::validate_prepared_state(&state)
+            .unwrap_err()
+            .code(),
         ErrorCode::PublicationInvalid,
     );
     assert_eq!(
         crate::history_package::HistoryManifest::from_state(&state, &fixture.repo.history_tree_id)
-            .err().unwrap().code(),
+            .err()
+            .unwrap()
+            .code(),
         ErrorCode::PublicationInvalid,
     );
     let projection = crate::state_projection::ProjectionSnapshot::new(&state);
     assert_eq!(
-        projection::records(projection.view(), &fixture.file.file_id).err().unwrap().code(),
+        projection::records(projection.view(), &fixture.file.file_id)
+            .err()
+            .unwrap()
+            .code(),
         ErrorCode::PublicationInvalid,
     );
     assert_eq!(canonical_json(&state).unwrap(), old_bytes);
@@ -297,7 +310,9 @@ fn file_database_rejects_old_path_nodes_without_rewriting_state_or_archive_mater
             &material,
             &fixture.file.file_id,
             &fixture.repo.history_tree_id,
-        ).unwrap_err().code(),
+        )
+        .unwrap_err()
+        .code(),
         ErrorCode::ContainerLayoutInvalid,
     );
     assert_eq!(canonical_json(&material).unwrap(), material_bytes);

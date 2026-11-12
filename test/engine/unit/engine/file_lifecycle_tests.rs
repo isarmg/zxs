@@ -319,7 +319,9 @@ fn file_lifecycle_rename_uses_permanent_fact_without_changing_content_graph() {
         }
         let bytes = storage_contract::canonical_json(&corrupted).unwrap();
         assert_eq!(
-            crate::history_package::validate_prepared_state(&corrupted).unwrap_err().code(),
+            crate::history_package::validate_prepared_state(&corrupted)
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         assert_eq!(storage_contract::canonical_json(&corrupted).unwrap(), bytes);
@@ -370,13 +372,18 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
         .remove("retained_lifecycle");
     let bytes = storage_contract::canonical_json(&read.source).unwrap();
     assert_eq!(
-        crate::history_package::validate_prepared_state(&read.source).unwrap_err().code(),
+        crate::history_package::validate_prepared_state(&read.source)
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::PublicationInvalid,
     );
     assert_eq!(read.page().unwrap_err().code(), storage_contract::ErrorCode::PublicationInvalid);
-    let mut unrelated = engine.capture_file_lifecycle(
-        request_for(&engine, &file, 64), HistoryWindowCancellation::new(),
-    ).unwrap();
+    let mut unrelated = engine
+        .capture_file_lifecycle(
+            request_for(&engine, &file, 64),
+            HistoryWindowCancellation::new(),
+        )
+        .unwrap();
     unrelated.source = read.source.clone();
     assert_eq!(
         unrelated.page().unwrap_err().code(),

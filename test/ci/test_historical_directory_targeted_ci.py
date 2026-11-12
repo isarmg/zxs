@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -146,7 +147,15 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         notes = [path for path in paths if path not in authorization + policy]
         with self.assertRaisesRegex(ValueError, '^invalid Python modules$'):
             CI.select_plan(self.policy, notes + policy)
-        plans = [CI.select_plan(self.policy, batch) for batch in [authorization, notes, policy]]
+        plans = [
+            CI.select_plan(self.policy, authorization),
+            assert_path_group_extension(self, self.policy, notes, [
+                'container-tags-http', 'directory-rename-http-retirement',
+                'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
+                'server-authorization', 'version-metadata-read',
+            ], ['container-path-facts-http', 'container-lifecycle-http']),
+            CI.select_plan(self.policy, policy),
+        ]
         # HTTP retirement adds a core product check without dropping any old selection.
         self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 12, 0])
         self.assertEqual([len(plan['python_tests']) for plan in plans], [1, 2, 7])

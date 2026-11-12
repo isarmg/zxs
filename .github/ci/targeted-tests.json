@@ -2441,7 +2441,7 @@
       ]
     },
     "container-lifecycle-engine": {
-      "reason": "Project only authenticated permanent D/undo/import facts; preserve original FILE database audit consumers, complete source admission, cold reopen, retained-copy evidence, cancellable receipt ownership scans, shared move decoding and no-fabrication failures.",
+      "reason": "Project only authenticated permanent deletion/undo/import and local path facts; preserve original FILE audit consumers, complete snapshot and read-source admission, cold reopen, retained-copy evidence, cancellable ledger scans, shared move decoding and no-fabrication failures.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -8329,6 +8329,13 @@
     },
     {
       "path": "src/engine/src/persist/path_changes.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/path_changes/ledger.rs",
       "groups": [
         "container-path-facts-engine",
         "container-lifecycle-engine"

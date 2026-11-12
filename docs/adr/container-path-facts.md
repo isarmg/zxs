@@ -44,6 +44,11 @@ archive、snapshot/history 和 FILE 读取边界拒绝。旧格式数据原地�
 遗漏、额外事实或不属于该操作的事实。Current 的最终 Publication／D3、现场锁、
 文件身份、授权、取消与原恢复材料校验不因改名节点退役而省略。
 
+完整 Snapshot 准入与页面读取共用永久账本封套校验，绑定 operation 表键、发布序号、
+主体和本地事实，并拒绝缺失的 Graph／Retained／移动复制保留封套。
+查询另一个文件也不能绕过全局坏封套。该检查验证最终 State 中封套与身份的完整性，
+不是从最终 State 重放全部过去命名空间；实际前后变更仍由提交及恢复的精确比较证明。
+
 批次收据保存必需的原 typed namespace request，并与请求摘要绑定。
 transfers 的成员数、动作、逐项 source／target 和真实前后位置必须完整吻合。
 Move／Rename 缺失目标不能当复制跳过，清空 transfers 和 path_changes 也不是空证明。
@@ -92,7 +97,9 @@ Delete 与 PathChanged 使用确实记录的时间；Undo／Import 仍为明确 
 
 响应最多 64 项、64 KiB。字节预算可产生短的非空续页，下一游标必须精确指向本页
 最后真实成员；单个事件都超限时明确 ResourceLimit，不截断路径或字段。
-完整来源准入先于取页；分页不意味着 O(page size) 的扫描成本或统一 CPU 上限。
+完整来源准入先于取页。每页扫描完整永久账本，并解码各复制／移动的必需保留封套，
+再读取目标删除／恢复前缀，不仅是廉价的目标归属分类。逐收据及本地事实之间可以取消，
+单封套 JSON 解码不能在内部打断；没有全局缓存。分页不意味着 O(page size) 或统一 CPU 上限。
 浏览器使用 file、operation 和 source 的完整成员身份，不以 operation 单独作为卡片键。
 关闭、换目标、注销与晚响应隔离、原错误呈现、读许可和授权复验全部保留。
 
