@@ -1,6 +1,7 @@
 //! Bounded derived bytes from a complete target-local native prefix.
 use super::*;
 use crate::engine::disk_catalog::PreparedDiskScopes;
+use crate::engine::index::preparation::SystemEncodingInput;
 use crate::history_package::preparation_checkpoint;
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -60,6 +61,18 @@ impl PreparedScopes {
         job: &Job,
         stop: &AtomicBool,
     ) -> Result<Self> {
+        let binding = |_: &AtomicBool| Ok(None);
+        let mut encodings = encoding_memo::Transaction::new(None, &binding);
+        Self::capture_with_encodings(root, task, job, stop, &mut encodings)
+    }
+
+    pub(super) fn capture_with_encodings(
+        root: &DiskRoot,
+        task: &ScopedTask,
+        job: &Job,
+        stop: &AtomicBool,
+        encodings: &mut encoding_memo::Transaction<'_>,
+    ) -> Result<Self> {
         let mut disks = None;
         let (control, state) = super::super::super::archive::read_observed(
             root,
@@ -88,15 +101,27 @@ impl PreparedScopes {
             disks: 0,
         };
         preparation_checkpoint(stop)?;
+        let mut session = encodings.session(&(task, job), stop)?;
+        let checkpoint = || preparation_checkpoint(stop);
+        let input = SystemEncodingInput::new(&state, &checkpoint)?;
+        let system = session.system(input.input_hash(), || input.encode(&checkpoint))?;
+        input.verify(&system, &checkpoint)?;
         prepared.add(
             Scope::SystemCurrent {
                 pool_id: job.pool_id.clone(),
             },
-            crate::engine::index::preparation::encode(&state, stop)?,
+            system,
         )?;
         disks
             .ok_or_else(|| invalid("scoped preparation has no admitted genesis prefix"))?
-            .finish(&state, stop, |identity, current, history| {
+            .finish_with_encoder(&state, stop, |current, history| {
+                let input = if session.enabled() {
+                    encoding_memo::digest(&(current, history), stop)?
+                } else {
+                    None
+                };
+                session.disk_pair(input, || PreparedDiskScopes::encode_pair(current, history))
+            }, |identity, current, history| {
                 prepared.add(
                     Scope::DiskCurrent {
                         identity: identity.clone(),
@@ -107,6 +132,7 @@ impl PreparedScopes {
                 prepared.disks += 1;
                 Ok(())
             })?;
+        encodings.retain(session);
         Ok(prepared)
     }
     fn add(&mut self, scope: Scope, bytes: Vec<u8>) -> Result<()> {

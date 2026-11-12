@@ -2,6 +2,7 @@
 //! These names are deliberately outside membership decision namespaces. A
 //! prepared topology never grants I/O, a vote, an active route or a new receipt.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
 use crate::history_package::{
     install_preparation_bytes, preparation_checkpoint, preparation_path_exists,
 };
@@ -231,7 +232,18 @@ fn verify_at(
     roots: &[&DiskRoot],
     stop: &AtomicBool,
 ) -> Result<BackupCutoverPreparationReport> {
-    let scoped = super::verify_at(&task.scoped, roots, stop)?;
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = encoding_memo::Transaction::new(None, &binding);
+    verify_at_with_encodings(task, roots, stop, &mut encodings)
+}
+
+fn verify_at_with_encodings(
+    task: &CutoverTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+    encodings: &mut encoding_memo::Transaction<'_>,
+) -> Result<BackupCutoverPreparationReport> {
+    let scoped = super::verify_at_with_encodings(&task.scoped, roots, stop, encodings)?;
     let observed = report(task, scoped, roots, stop)?;
     let intent = task.bytes()?;
     let completed = bounded(&observed)?;

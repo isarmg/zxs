@@ -1,6 +1,7 @@
 //! Recover the same source-fenced operation and install isolated target entities.
 //! This does not choose a successor authority, release a fence or serve a disk.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
 use crate::container_storage::backup_entities::Image;
 
 const FORMAT: &str = "zxs-backup-fenced-entity-installation";
@@ -419,11 +420,22 @@ fn completion(task: &Task, hash: &str, acceptances: &[Vec<u8>]) -> Result<Vec<u8
 /// Require all old entity acceptances and their identical complete-set marker.
 /// No decision caller may infer image completion from a progress phase alone.
 pub(super) fn verify_installed(task: &Task, targets: &[Target], stop: &AtomicBool) -> Result<()> {
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = encoding_memo::Transaction::new(None, &binding);
+    verify_installed_with_encodings(task, targets, stop, &mut encodings)
+}
+
+pub(super) fn verify_installed_with_encodings(
+    task: &Task,
+    targets: &[Target],
+    stop: &AtomicBool,
+    encodings: &mut encoding_memo::Transaction<'_>,
+) -> Result<()> {
     let roots = targets
         .iter()
         .map(|target| &target.root)
         .collect::<Vec<_>>();
-    let observed = super::verify_at(&task.evidence.task, &roots, stop)?;
+    let observed = super::verify_at_with_encodings(&task.evidence.task, &roots, stop, encodings)?;
     if bounded(&observed)? != bounded(&task.evidence.report)? {
         return Err(invalid(
             "installed entities extend different original cutover inputs",

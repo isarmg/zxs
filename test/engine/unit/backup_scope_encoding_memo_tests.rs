@@ -1,6 +1,6 @@
 //! Byte memo contracts only; real admission/readback remains in its callers.
 use super::*;
-use crate::{DiskRegistrationIdentity, DiskRegistryCommitment, ErrorCode};
+use crate::ErrorCode;
 
 fn memo_with_limit(bytes: usize, entries: usize) -> ScopeEncodingMemo {
     ScopeEncodingMemo {
@@ -15,13 +15,28 @@ fn committed_exact_input_reuses_owned_bytes_without_reexecuting_encoder() {
     let memo = ScopeEncodingMemo::new();
     let mut calls = 0;
     let mut first = Session::new(Some((&memo, [1; 32])));
-    assert_eq!(first.system([2; 32], || { calls += 1; Ok(vec![3, 4]) }).unwrap(), [3, 4]);
+    assert_eq!(
+        first.system([2; 32], || {
+            calls += 1;
+            Ok(vec![3, 4])
+        }).unwrap(),
+        [3, 4],
+    );
     assert!(memo.state.lock().unwrap().entries.is_empty());
     first.commit();
     let mut next = Session::new(Some((&memo, [1; 32])));
-    let mut bytes = next.system([2; 32], || { calls += 1; Ok(vec![9]) }).unwrap();
+    let mut bytes = next.system([2; 32], || {
+        calls += 1;
+        Ok(vec![9])
+    }).unwrap();
     bytes[0] = 8;
-    assert_eq!(next.system([2; 32], || { calls += 1; Ok(vec![9]) }).unwrap(), [3, 4]);
+    assert_eq!(
+        next.system([2; 32], || {
+            calls += 1;
+            Ok(vec![9])
+        }).unwrap(),
+        [3, 4],
+    );
     assert_eq!(calls, 1);
 }
 
@@ -53,7 +68,13 @@ fn pending_capture_is_not_visible_to_a_different_capture() {
     first.system([2; 32], || Ok(vec![3])).unwrap();
     let mut second = Session::new(Some((&memo, [1; 32])));
     let mut called = false;
-    assert_eq!(second.system([2; 32], || { called = true; Ok(vec![3]) }).unwrap(), [3]);
+    assert_eq!(
+        second.system([2; 32], || {
+            called = true;
+            Ok(vec![3])
+        }).unwrap(),
+        [3],
+    );
     assert!(called);
     first.commit();
     second.commit();
@@ -80,7 +101,13 @@ fn cache_full_and_pending_reservations_fall_back_without_changing_results() {
     let mut full = Session::new(Some((&memo, [1; 32])));
     let mut calls = 0;
     for _ in 0..2 {
-        assert_eq!(full.system([8; 32], || { calls += 1; Ok(vec![9]) }).unwrap(), [9]);
+        assert_eq!(
+            full.system([8; 32], || {
+                calls += 1;
+                Ok(vec![9])
+            }).unwrap(),
+            [9],
+        );
     }
     assert_eq!(calls, 2);
     let state = memo.state.lock().unwrap();
@@ -93,7 +120,13 @@ fn disabled_reader_encodes_every_time_and_does_not_create_a_cache() {
     let mut session = Session::new(None);
     let mut calls = 0;
     for _ in 0..2 {
-        assert_eq!(session.system([2; 32], || { calls += 1; Ok(vec![3]) }).unwrap(), [3]);
+        assert_eq!(
+            session.system([2; 32], || {
+                calls += 1;
+                Ok(vec![3])
+            }).unwrap(),
+            [3],
+        );
     }
     assert!(!session.enabled());
     assert_eq!(calls, 2);
@@ -112,89 +145,17 @@ fn target_context_input_and_encoder_kind_all_separate_entries() {
         session.commit();
     }
     let mut pair = Session::new(Some((&memo, [1; 32])));
-    assert_eq!(pair.disk_pair(Some([2; 32]), || Ok((vec![7], vec![8]))).unwrap(), (vec![7], vec![8]));
+    assert_eq!(
+        pair.disk_pair(Some([2; 32]), || Ok((vec![7], vec![8]))).unwrap(),
+        (vec![7], vec![8]),
+    );
     pair.commit();
     let mut next = Session::new(Some((&memo, [1; 32])));
-    assert_eq!(next.disk_pair(Some([2; 32]), || panic!("exact pair should hit")).unwrap(), (vec![7], vec![8]));
+    assert_eq!(
+        next.disk_pair(Some([2; 32]), || panic!("exact pair should hit")).unwrap(),
+        (vec![7], vec![8]),
+    );
     assert_eq!(memo.state.lock().unwrap().entries.len(), 4);
-}
-
-fn identity() -> DiskRegistrationIdentity {
-    DiskRegistrationIdentity {
-        pool_id: format!("pool_{}", "1".repeat(32)),
-        disk_id: format!("disk_{}", "2".repeat(32)),
-        slot_id: "C02".into(),
-        binding_generation: 7,
-    }
-}
-
-fn registry(root: char, generation: u64) -> DiskRegistryCommitment {
-    json_codec::from_str(&format!(
-        "{{\"root_hash\":\"{}\",\"view_generation\":\"{generation}\"}}",
-        root.to_string().repeat(64)
-    )).unwrap()
-}
-
-fn context<'a>(
-    target: &'a DiskRegistrationIdentity,
-    registry: &'a DiskRegistryCommitment,
-) -> Context<'a> {
-    Context {
-        target,
-        device: 11,
-        inode: 13,
-        operation: "op_00000000000000000000000000000001".parse().unwrap(),
-        source_fence: "source-fence",
-        archive: "archive",
-        candidate: "candidate",
-        decision: "decision",
-        publication: "publication",
-        authority: "authority",
-        snapshot: "snapshot",
-        first_sequence: 17,
-        registry,
-        configuration: "configuration",
-    }
-}
-
-#[test]
-fn every_context_identity_binding_and_authenticated_boundary_is_in_the_key() {
-    let stop = AtomicBool::new(false);
-    let target = identity();
-    let original_registry = registry('a', 1);
-    let original = context(&target, &original_registry).digest(&stop).unwrap();
-    macro_rules! changed {
-        ($field:ident, $value:expr) => {{
-            let mut changed = context(&target, &original_registry);
-            changed.$field = $value;
-            assert_ne!(changed.digest(&stop).unwrap(), original, stringify!($field));
-        }};
-    }
-    changed!(device, 19);
-    changed!(inode, 23);
-    changed!(operation, "op_00000000000000000000000000000002".parse().unwrap());
-    changed!(source_fence, "other");
-    changed!(archive, "other");
-    changed!(candidate, "other");
-    changed!(decision, "other");
-    changed!(publication, "other");
-    changed!(authority, "other");
-    changed!(snapshot, "other");
-    changed!(first_sequence, 29);
-    changed!(configuration, "other");
-    for field in 0..4 {
-        let mut altered = identity();
-        match field {
-            0 => altered.pool_id = format!("pool_{}", "3".repeat(32)),
-            1 => altered.disk_id = format!("disk_{}", "4".repeat(32)),
-            2 => altered.slot_id = "C03".into(),
-            _ => altered.binding_generation += 1,
-        }
-        assert_ne!(context(&altered, &original_registry).digest(&stop).unwrap(), original);
-    }
-    for other in [registry('b', 1), registry('a', 2)] {
-        assert_ne!(context(&target, &other).digest(&stop).unwrap(), original);
-    }
 }
 
 #[test]
@@ -322,7 +283,8 @@ fn real_disk_pair_hit_still_runs_sqlite_readback_and_rejects_corrupted_cached_by
         {
             let mut state = memo.state.lock().unwrap();
             assert_eq!(state.entries.len(), 1);
-            let Bytes::DiskPair(current, history) = state.entries.values_mut().next().unwrap() else {
+            let Bytes::DiskPair(current, history) = state.entries.values_mut().next().unwrap()
+            else {
                 panic!("fixture only encodes disk pairs");
             };
             let bytes = if corrupt_history { history } else { current };
@@ -390,4 +352,99 @@ fn cancellation_during_serialization_returns_original_error_without_a_partial_di
     let error = digest(&CancelAfterFirstField(&stop), &stop).unwrap_err();
     assert_eq!(error.code(), ErrorCode::OperationAborted);
     assert!(stop.load(Ordering::Acquire));
+}
+
+#[test]
+fn original_and_published_sessions_share_pending_and_committed_capacity() {
+    let entry_bytes = std::mem::size_of::<(Key, Bytes)>() + 1;
+    let memo = memo_with_limit(entry_bytes, 1);
+    let mut published = Session::new(Some((&memo, [1; 32])));
+    published.system([2; 32], || Ok(vec![3])).unwrap();
+    let binding = |_: &AtomicBool| Ok(Some([4; 32]));
+    let stop = AtomicBool::new(false);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let mut original = transaction.session(&("task", "target"), &stop).unwrap();
+    assert_eq!(original.system([5; 32], || Ok(vec![6])).unwrap(), [6]);
+    transaction.retain(original);
+    transaction.commit();
+    assert!(memo.state.lock().unwrap().entries.is_empty());
+    published.commit();
+    let state = memo.state.lock().unwrap();
+    assert_eq!(state.entries.len(), 1);
+    assert_eq!(state.bytes, entry_bytes);
+    assert_eq!(state.reserved_entries, 0);
+    assert_eq!(state.reserved_bytes, 0);
+    drop(state);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let mut original = transaction.session(&("task", "target"), &stop).unwrap();
+    let mut encodes = 0;
+    for _ in 0..2 {
+        assert_eq!(
+            original.system([5; 32], || {
+                encodes += 1;
+                Ok(vec![6])
+            }).unwrap(),
+            [6],
+        );
+    }
+    transaction.retain(original);
+    transaction.commit();
+    assert_eq!(encodes, 2);
+    assert_eq!(memo.state.lock().unwrap().entries.len(), 1);
+}
+
+#[test]
+fn original_transaction_error_releases_earlier_target_reservations() {
+    use std::cell::Cell;
+    use std::sync::atomic::Ordering;
+
+    let memo = ScopeEncodingMemo::new();
+    let stop = AtomicBool::new(false);
+    let calls = Cell::new(0);
+    let binding = |stop: &AtomicBool| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 2 {
+            stop.store(true, Ordering::Release);
+        }
+        preparation_checkpoint(stop)?;
+        Ok(Some([1; 32]))
+    };
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    let mut first = transaction.session(&"first-target", &stop).unwrap();
+    first.system([2; 32], || Ok(vec![3])).unwrap();
+    transaction.retain(first);
+    assert_eq!(memo.state.lock().unwrap().reserved_entries, 1);
+    let error = transaction.session(&"second-target", &stop).err().unwrap();
+    assert_eq!(error.code(), ErrorCode::OperationAborted);
+    drop(transaction);
+    let state = memo.state.lock().unwrap();
+    assert!(state.entries.is_empty());
+    assert_eq!(state.reserved_entries, 0);
+    assert_eq!(state.reserved_bytes, 0);
+}
+
+#[test]
+fn original_transaction_disabled_or_declined_binding_always_encodes() {
+    let stop = AtomicBool::new(false);
+    let unused = |_: &AtomicBool| -> Result<Option<[u8; 32]>> {
+        panic!("ordinary readers must not compute a cache binding")
+    };
+    let mut disabled = Transaction::new(None, &unused);
+    let mut session = disabled.session(&"target", &stop).unwrap();
+    assert!(!session.enabled());
+    assert_eq!(session.system([1; 32], || Ok(vec![2])).unwrap(), [2]);
+    disabled.retain(session);
+    disabled.commit();
+
+    let memo = ScopeEncodingMemo::new();
+    let declined = |_: &AtomicBool| Ok(None);
+    let mut transaction = Transaction::new(Some(&memo), &declined);
+    let mut session = transaction.session(&"target", &stop).unwrap();
+    assert!(!session.enabled());
+    assert_eq!(session.system([1; 32], || Ok(vec![2])).unwrap(), [2]);
+    transaction.retain(session);
+    transaction.commit();
+    let state = memo.state.lock().unwrap();
+    assert!(state.entries.is_empty());
+    assert_eq!(state.reserved_entries, 0);
 }

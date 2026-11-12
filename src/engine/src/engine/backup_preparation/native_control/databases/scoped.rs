@@ -29,6 +29,7 @@ pub use cutover::{
 pub(in crate::engine) use cutover::{
     BackupRegistryProjection, BackupSourceFenceEvidence, MAX_DECISION_BYTES, PreparedBackupRegistry,
 };
+mod encoding_memo;
 mod projection;
 mod runtime;
 mod store;
@@ -165,6 +166,17 @@ fn verify_at(
     roots: &[&DiskRoot],
     stop: &AtomicBool,
 ) -> Result<BackupScopedDatabasePreparationReport> {
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut encodings = encoding_memo::Transaction::new(None, &binding);
+    verify_at_with_encodings(task, roots, stop, &mut encodings)
+}
+
+fn verify_at_with_encodings(
+    task: &ScopedTask,
+    roots: &[&DiskRoot],
+    stop: &AtomicBool,
+    encodings: &mut encoding_memo::Transaction<'_>,
+) -> Result<BackupScopedDatabasePreparationReport> {
     if roots.len() != task.objects.native.selection.jobs().len() {
         return Err(invalid(
             "scoped verification requires every original selected target",
@@ -179,7 +191,7 @@ fn verify_at(
                 "target scoped intent belongs to another original task",
             ));
         }
-        let scopes = PreparedScopes::capture(root, task, job, stop)?;
+        let scopes = PreparedScopes::capture_with_encodings(root, task, job, stop, encodings)?;
         store::verify(root, &scopes, stop)?;
         let observation = report(task, objects.clone(), &scopes)?;
         let bytes = completion_bytes(&observation)?;

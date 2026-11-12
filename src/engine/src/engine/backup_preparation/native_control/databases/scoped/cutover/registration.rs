@@ -1,6 +1,7 @@
 //! One closed registry plus complete entity placement projection. Selection is
 //! committed by original native decision slots, never by this target JSON alone.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
 use crate::container_storage::backup_entities::EntityPlacement;
 use crate::engine::backup_preparation::native_control::databases::materials;
 use crate::engine::membership_transition::BackupChoiceContext;
@@ -360,13 +361,26 @@ impl PreparedBackupRegistry {
         Ok(())
     }
     pub(in crate::engine) fn verify(&self, stop: &AtomicBool) -> Result<()> {
-        installation::verify_installed(&self.task.installation, &self.targets, stop)?;
+        let binding = |stop: &AtomicBool| {
+            encoding_memo::digest(&(&self.task, &self.projection), stop)
+        };
+        let mut encodings =
+            encoding_memo::Transaction::new(self.scope_encoding.as_ref(), &binding);
+        installation::verify_installed_with_encodings(
+            &self.task.installation,
+            &self.targets,
+            stop,
+            &mut encodings,
+        )?;
         if encode(&project(&self.task, &self.targets, stop)?)? != encode(&self.projection)? {
             return Err(invalid(
                 "complete registry or placement changed after target admission",
             ));
         }
-        self.recheck_names()
+        self.recheck_names()?;
+        preparation_checkpoint(stop)?;
+        encodings.commit();
+        Ok(())
     }
     pub(in crate::engine) fn require_capacity(&self, inputs: &[u8], decision: &[u8]) -> Result<()> {
         self.recheck_names()?;
@@ -492,3 +506,9 @@ fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
+#[cfg(test)]
+#[path =
+    "../../../../../../../../../test/engine/unit/backup_original_scope_encoding_tests.rs"
+]
+mod original_scope_encoding_tests;

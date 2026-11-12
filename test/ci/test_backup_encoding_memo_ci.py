@@ -10,6 +10,13 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/encoding_memo.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/projection.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/installation.rs',
+    'test/engine/unit/backup_published_scope_context_tests.rs',
+    'test/engine/unit/backup_original_scope_encoding_tests.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_candidate.rs',
     'test/engine/unit/backup_first_candidate_cost.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs',
@@ -65,6 +72,12 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertIn(
             'engine::backup_preparation::native_control::databases::scoped::cutover::'
             'registration::serving::cost_tests::', unit['prefixes'])
+        self.assertIn(
+            'engine::backup_preparation::native_control::databases::scoped::'
+            'encoding_memo::tests::', unit['prefixes'])
+        self.assertIn(
+            'engine::backup_preparation::native_control::databases::scoped::cutover::'
+            'registration::original_scope_encoding_tests::', unit['prefixes'])
         self.assertEqual(product['mode'], 'check')
         self.assertFalse(product['default_features'])
         self.assertEqual(transaction['name'], 'recursive_backup_paths')

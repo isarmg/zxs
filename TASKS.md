@@ -12,7 +12,7 @@
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
 
-- [ ] 闭环 Backup 原 900 秒事务超时：#1292 已过 61 项 Rust、151 项 Python 和 Engine 无默认产品检查，组件 67.80 秒通过但完整事务仍超时；first-candidate 读回约 1.13 秒，候选构造（含语义检查）约 28 毫秒。继续同夹具材料 inventory、State readback、completion 和首尾决定的分解，保留每次实际读取、原预算与取消；不盲加缓存或放宽 900 秒。见[验证范围](docs/validation/backup-scoped-encoding-memo.md)。
+- [ ] 闭环 Backup 原 900 秒事务超时：#1294 已过 61 Rust、160 Python 和 Engine 无默认产品检查，组件 90.13 秒通过但完整事务仍超时；热点在 decision 门的完整前置安装复验，材料/State 读回仅毫秒级。将原预备 Scoped 的纯 SYSTEM/DISK 编码接入同一任务账户，保留归档回放、真实SQL读回、材料/身份/锁/取消和原900，待准确 GitHub 结果证明收益。见[验证范围](docs/validation/backup-scoped-encoding-memo.md)。
 
 - [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
 

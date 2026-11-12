@@ -235,9 +235,70 @@ materials inventory / bytes、State readback 和 completion；另独立观察 wr
 原完整读取与末尾检查仍保留，原 900 秒用例与全部既有选测预算不变。
 额外独立读取会预热缓存并增加测试耗时，不是冷缓存剖析；断言、日志输出和部分
 析构不全部包含在计时内，各项不能相加推算原事务耗时或直接证明优化收益。
-这次新增读回分项尚未执行；不能宣称已经解决超时或完成整池恢复。
+读回分项已在下述 #1294 执行；不能宣称已经解决超时或完成整池恢复。
 
 工件：https://github.com/isarmg/zxs/actions/runs/43207338808/artifacts/13940207969
 ZIP SHA256：`97866341117433c6de361699822a1628f704402723535185dbf6ce1243e8470e`。
 组件日志为 `057.stdout.log` / `057.stderr.log`，原完整事务为 `079.stderr.log`，
 外部观测为 `079.sampling.log`。
+
+## #1294 的真实读回结果
+
+`39bcae218116b2d8f925120d9a8f34cea791df5a` 的 #1294：
+61 项 Rust、8 个模块共 160 项 Python 和 1 个 Engine 无默认产品检查通过，
+真实组件耗时 90.13 秒通过；唯一失败仍是原完整事务 900 秒超时。
+执行清单 skipped / blocked 均为空。CI 聚合正确因执行分片失败而失败，
+不能把完整选测计划或组件成功视为完整事务通过。
+
+两轮 readback 测量中，入口 decision 为 351.873–356.623 毫秒，
+出口 decision 为 353.512–355.993 毫秒，writer-routes 为 352.814–354.073 毫秒。
+每目标材料 inventory / 原字节比较仅 1.812–1.855 毫秒，State 真实读回为
+5.472–5.782 毫秒，completion 约 0.013 毫秒。
+因此，不应把主成本归于本夹具的 State 解码或材料 inventory 并增加对应缓存。
+
+decision 门并非单个证书 JSON 解码。它调用原完整安装复验链，重新核验 native
+历史/日志、FILE 库、原 SYSTEM/DISK scopes、cutover 和实体镜像，再读决定副本。
+这些边界继续保留；本轮未删除首尾 decision 或任何实际读回。
+
+工件：https://github.com/isarmg/zxs/actions/runs/43212457818/artifacts/13943581721
+ZIP SHA256：`b7de6b95d584c7b606b6a28ddfce88cb1361addb2b05e92f24e933cbd9b298eb`。
+
+## 原预备 scopes 的纯编码复用
+
+原 `scoped/projection.rs` 与 published scopes 是两个调用路径。
+前者过去在每次完整 archive 回放之后重新编码 SYSTEM 和所有 original DISK
+current/history SQLite。此片只让它使用已有的纯编码接口与同一任务级 memo，
+不缓存整个 PreparedScopes、State 准入、归档回放、决定验证或最终成功状态。
+
+通用 memo 上移到 scoped 私有模块；published Context 的字段和域保持原样。
+runtime 仍只创建一个 request-owned 32 MiB / 256 条总账户，包含全部 pending；
+原始与 published 路径共享此配额，不新增第二缓存。
+ordinary/offline reader 仍显式禁用，且禁用时不计算额外 binding 摘要。
+
+original 键有独立域，再绑定完整 registry task/projection、完整 ScopedTask 与当前 Job。
+这些输入包含 source fence、操作、原始 archive/state/configuration、目标顺序、
+注册身份和物理 binding。SYSTEM 另使用完整输入摘要，DISK pair 另使用完整
+current/history 摘要。不能只凭最终 State、磁盘 ID、长度或旧完成标记命中。
+64 MiB 的可选 context/history 摘要上限或共享 cache 配额耗尽只退回原编码，
+不扩大或替代原有输入、输出和真实读取预算。
+
+每次 capture 仍执行目标本地 archive 原字节读取/认证、完整 published-prefix
+observe、State/hash 对照、SYSTEM 输入与 SQL readback、DISK prefix/current rows
+和两库 readback。65 数据库 / 64 MiB 输出限制、manifest/数据库/intent/completion
+实际读回、目标命名与物理/锁检查均保留。
+原始 pending 会话跨完整 selected-set 验证持有，只有 registry.verify 完成原
+installation/project 核对、最终名称复核及取消 checkpoint 后提交。
+失败或取消由 Drop 释放全部未提交预约。后续 decision 副本检查仍照旧执行，
+这里不声称它已成功，也不把纯 SQL bytes 当作授权。
+
+旧 12 项 memo 回归拆为 11 个通用测试与 1 个 published Context 测试，行为保留。
+新增 3 项事务回归检查共同配额、跨目标取消释放与 disabled/declined fallback；
+新增 5 项真实 Engine 回归覆盖 None/cold/hit 的文件、manifest/report 不变，
+真实 registry 提交后 SYSTEM 命中，暖后损坏 archive/SQLite/completion 或更换根仍拒绝，
+后目标失败及第二目标取消丢弃前目标 pending。
+disk-pair 命中/坏缓存 readback 由原组合测试继续证明；多数坏材料回归只断言拒绝，
+不宣称准确错误码或全部恢复路径均已覆盖。目录/文件快照不覆盖权限和 mtime。
+
+原 900 秒完整事务及现有组件测量不变。这次编码接线尚未执行 GitHub 验证，
+不能把 350 毫秒全部归因于 SQL，也不能预先认定解决超时。新的完整 context
+摘要本身也有计算成本，收益以准确提交实际结果为准；未本地编译、测试或格式化。

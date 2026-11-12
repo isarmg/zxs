@@ -2248,7 +2248,7 @@
       ]
     },
     "backup-scoped-encoding-memo": {
-      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes inside one Backup worker. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact.",
+      "reason": "Reuse only bounded deterministic SYSTEM/DISK SQLite encoding bytes for original and published scopes inside one Backup worker with one shared bounded account. Re-admit target identity, registry and full native history and decode/compare SQLite on every use; preserve the original full transaction 900-second bound and prior backup budget/snapshot regressions. Measure real native serving components only from test-side calls, with all existing admission and physical verification intact.",
       "python_tests": [
         "test_backup_encoding_memo_ci"
       ],
@@ -2263,7 +2263,9 @@
             "container_storage::backup_entities::budget_tests::",
             "container_storage::backup_ordinary::store::tests::",
             "container_storage::backup_original_objects::tests::",
-            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving::cost_tests::"
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::serving::cost_tests::",
+            "engine::backup_preparation::native_control::databases::scoped::encoding_memo::tests::",
+            "engine::backup_preparation::native_control::databases::scoped::cutover::registration::original_scope_encoding_tests::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900
@@ -6003,13 +6005,13 @@
       ]
     },
     {
-      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
+      "path": "禁止防御性编程.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "\u5de5\u7a0b\u89c4\u8303.md",
+      "path": "工程规范.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -7511,6 +7513,48 @@
       "path": "test/engine/integration/foreign_original_databases.rs",
       "groups": [
         "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/encoding_memo.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/projection.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/installation.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_published_scope_context_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_original_scope_encoding_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
       ]
     }
   ],
