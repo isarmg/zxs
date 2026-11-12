@@ -184,6 +184,7 @@ fn measure_upstream(
     iteration: usize,
     stop: &AtomicBool,
 ) -> Result<()> {
+    first_candidate::cost_components::observe(prepared, decision, expected, iteration, stop)?;
     let (report, observed) = measured("first_candidate_read_verified", iteration, 0, || {
         first_candidate::read_verified(prepared, decision, stop)
     })?;

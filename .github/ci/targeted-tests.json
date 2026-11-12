@@ -2454,11 +2454,15 @@
   "rules": [
     {
       "path": ".github/scripts/targeted-ci-shards.py",
-      "groups": ["ci-selection"]
+      "groups": [
+        "ci-selection"
+      ]
     },
     {
       "path": "docs/design/targeted-ci-shards.md",
-      "groups": ["ci-selection"]
+      "groups": [
+        "ci-selection"
+      ]
     },
     {
       "path": "src/engine/src/business/directory_git/export.rs",
@@ -6013,6 +6017,18 @@
     },
     {
       "path": "test/engine/unit/backup_serving_cost_tests.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_candidate.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_first_candidate_cost.rs",
       "groups": [
         "backup-scoped-encoding-memo"
       ]

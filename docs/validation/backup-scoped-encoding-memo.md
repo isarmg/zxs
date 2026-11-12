@@ -187,7 +187,57 @@ first-candidate 完整读取、generation inputs、control/archive 输入、sour
 authority capture、authority/candidate 输入及 first-candidate 构造。
 最后一项仍包含内存语义校验、投影和编码，不能解释为纯 SQL 或纯编码成本。
 不增加生产缓存、不扩大 API 可见性、不增加测试数量或放宽原预算。
-扩展测量尚未执行，不能据此承诺优化收益或完整事务通过。
+本节扩展已在下述 #1292 执行，不能据此承诺优化收益或完整事务通过。
 
 工件：https://github.com/isarmg/zxs/actions/runs/43203111948/artifacts/13938900160
 组件日志为 `057.stdout.log` / `057.stderr.log`，原完整事务为 `079.stderr.log`。
+
+## #1292 的上游结果与读回分解
+
+`2071952d3ff0f558eadada69ea47e813814bdeab` 的 #1292：
+61 项 Rust、8 个模块共 151 项 Python 和 1 个 Engine 无默认特性产品检查通过。
+同一组件测试通过，耗时 67.80 秒；原完整事务仍在 900 秒超时。
+已选范围 skipped / blocked 均为空，尚未完成 ordinary-serving 与后继发布冷重放。
+
+两轮上游观察如下，单位为毫秒；逐目标项给出四次独立调用的范围。
+
+| 入口 | 第 0 轮 / 范围 | 第 1 轮 |
+| --- | ---: | ---: |
+| first-candidate read_verified | 1134.242 | 1123.534 |
+| generation inputs observe | 280.276 | 281.673 |
+| control / archive authority 输入 | 97.816–98.201 | 同左范围 |
+| source snapshot read | 3.535–3.618 | 同左范围 |
+| authority capture | 14.254–14.390 | 同左范围 |
+| authority / candidate 输入 | 123.236–123.941 | 同左范围 |
+| authority first-candidate 构造 | 28.242–28.566 | 同左范围 |
+
+同轮 configuration inspection 为 2800.524–2833.875 毫秒，
+first-publication observation 为 1394.094–1399.681 毫秒。
+这些是独立 inclusive 调用，不能相加或相减充当同一次执行的精确内部剖分。
+尤其 candidate 构造包含内存语义检查与编码，但测量不支持把主要成本归于它，
+也不支持再增加一个盲目的 SQL / candidate 编码缓存。
+
+原完整事务首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM
+约为 36/56/100/162/290/422/688 秒，native metadata 未报告完成即超时。
+外部采样到约 895.19 秒，进程 user / system CPU 累计约 813.39 / 85.22 秒，
+主工作线程 CPU 约 808.30 秒、调度等待约 0.178 秒；
+逻辑读取约 5.85 GB、1,131 万次读调用，物理 read_bytes 为 0。
+仍支持持续计算/逻辑读取，不证明具体热函数或性能修复。
+
+静态链核对发现 first-candidate 验证包含独立的完整材料 inventory / 逐字节读比、
+candidate / snapshot / State 依赖的认证和准入，以及全部依赖再次原字节读回。
+后两段每次读取和重复读取都有 ReadBudget / 取消责任，不能因上一段成功而省掉。
+
+下一片仍只扩展该测试，不改生产算法。测试 helper 按现有 read_verified 次序，
+逐项观察入口/出口 isolation 和 decision、generation inputs、每目标 Plan capture、
+materials inventory / bytes、State readback 和 completion；另独立观察 writer-routes。
+两轮固定 28 次外侧测量，没有新测试条目、缓存、阈值、产品 hook 或 API 扩权。
+原完整读取与末尾检查仍保留，原 900 秒用例与全部既有选测预算不变。
+额外独立读取会预热缓存并增加测试耗时，不是冷缓存剖析；断言、日志输出和部分
+析构不全部包含在计时内，各项不能相加推算原事务耗时或直接证明优化收益。
+这次新增读回分项尚未执行；不能宣称已经解决超时或完成整池恢复。
+
+工件：https://github.com/isarmg/zxs/actions/runs/43207338808/artifacts/13940207969
+ZIP SHA256：`97866341117433c6de361699822a1628f704402723535185dbf6ce1243e8470e`。
+组件日志为 `057.stdout.log` / `057.stderr.log`，原完整事务为 `079.stderr.log`，
+外部观测为 `079.sampling.log`。

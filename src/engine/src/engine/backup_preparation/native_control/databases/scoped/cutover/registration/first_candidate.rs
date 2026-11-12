@@ -221,3 +221,7 @@ pub(super) fn read_verified(
     recovery::require_isolated(&prepared.targets)?;
     Ok(final_plan.expect("invariant: selected task has one to eight targets"))
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../test/engine/unit/backup_first_candidate_cost.rs"]
+pub(super) mod cost_components;

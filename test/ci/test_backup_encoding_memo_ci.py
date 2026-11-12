@@ -10,6 +10,8 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_candidate.rs',
+    'test/engine/unit/backup_first_candidate_cost.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs',
     'test/engine/unit/backup_serving_cost_tests.rs',
     '.github/scripts/backup-process-sampling.py',
