@@ -17,7 +17,7 @@ function rustJsonRoundtrip(value) {
 const disks = ['P01', 'B01', 'C01'].map((slot_id, index) => ({
     slot_id, name: `real-${slot_id}`, level: index + 1, online: true, writable: index === 0
 }));
-const labels = ['New folder', 'Move', 'Copy', 'Rename', 'Delete', 'Create folder branch', 'Primary placement', 'Backup settings'];
+const labels = ['New folder', 'Move', 'Copy', 'Rename', 'Delete', 'Primary placement', 'Backup settings'];
 const text = value => ({textContent: value});
 const button = (label, disabled = false) => ({...text(label), disabled,
     getAttribute: name => name === 'aria-label' ? null : undefined});
@@ -69,7 +69,8 @@ function dom() {
             }));
             const current = state.body ? {...view(state.body), ...state.overrides} : null;
             if (selector === '.zxs-breadcrumb button') return state.mode === 'directory' ? current.breadcrumbs.map(text) : [];
-            if (selector === '.zxs-file-toolbar button') return labels.map(label => button(label, current?.readonlyControls));
+            if (selector === '.zxs-file-toolbar button') return labels.map(label => button(label, current?.readonlyControls))
+                .concat(state.overrides.retiredBranch ? [button('Create folder branch', true)] : []);
             throw new Error(`unexpected document list selector ${selector}`);
         },
         querySelector(selector) {
@@ -78,7 +79,7 @@ function dom() {
                 getAttribute: () => state.overrides.ready === false ? 'true' : 'false',
                 querySelectorAll: () => state.overrides.readonlyNotice === false ? [] : [text('This disk directory is read only.')]
             };
-            if (selector === '[data-zxs-set-directory-default]') return {disabled: state.overrides.readonlyControls !== false};
+            if (selector === '[data-zxs-set-directory-default]') return state.overrides.retiredDefault ? {disabled: true} : null;
             if (selector === '.zxs-file-table:not(.zxs-disk-table)') {
                 if (state.mode !== 'directory') return null;
                 const current = {...view(state.body), ...state.overrides};
@@ -275,7 +276,7 @@ test('actual DOM selectors capture breadcrumb/row kinds and disabled navigation 
     assert.equal(f.p.step('C01', 'P01', after).path, 'P01/browser-fixtures');
     assert.deepEqual(copy(f.p.pages[0].view), view(body));
     for (const overrides of [{ready: false}, {breadcrumbs: ['All disks', 'real-B01', 'P01']},
-        {readonlyNotice: false}, {readonlyControls: false}, {rows: []},
+        {readonlyNotice: false}, {readonlyControls: false}, {retiredBranch: true}, {retiredDefault: true}, {rows: []},
         {rows: [{...view(body).rows[0], checkboxDisabled: false}]},
         {rows: [{...view(body).rows[0], checked: true}]},
         {rows: [{...view(body).rows[0], type: 'File'}]}]) {

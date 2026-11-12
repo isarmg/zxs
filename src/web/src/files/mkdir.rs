@@ -1,4 +1,4 @@
-//! Recover exact namespace and directory branch requests across sessions.
+//! Recover exact namespace requests across sessions.
 use super::{FileOperation, SaveStatus, actions};
 use crate::{
     api,
@@ -95,15 +95,6 @@ pub(crate) fn blocks_writes(state: &State) -> bool {
     let model = &state.files.mkdir;
     model.owns(state) && (!model.records.is_empty() || model.error.is_some())
 }
-pub(crate) fn default_completion_applies(state: &State, id: &str) -> bool {
-    state
-        .files
-        .mkdir
-        .records
-        .iter()
-        .find(|retained| retained.record.operation().to_string() == id)
-        .is_none_or(|retained| retained.record.checkout_applies(state))
-}
 pub(crate) fn start(state: RwSignal<State>, name: &str) -> Option<String> {
     if !state
         .with_untracked(|s| actions::write_allowed(s) && s.files.loaded && s.files.mkdir.ready(s))
@@ -127,79 +118,6 @@ pub(super) fn start_relocation(
     capture_and_retain(state, |s, principal, operation| {
         Record::capture_relocation(s, principal, operation, movement)
     })
-}
-
-pub(super) fn start_directory_branch(
-    state: RwSignal<State>,
-    source: storage_contract::directory_git::DirectoryBranchCreateSource,
-    name: String,
-) -> Option<String> {
-    if !state.with_untracked(|s| {
-        actions::write_allowed(s)
-            && s.files.loaded
-            && s.files.mkdir.ready(s)
-            && s.files.directory_branches_supported
-            && s.files.repository_id == source.repository_id
-            && s.files.namespace_head == source.namespace_head
-    }) {
-        return None;
-    }
-    capture_and_retain(state, |s, principal, operation| {
-        Record::capture_directory_branch(s, principal, operation, source, name)
-    })
-}
-
-pub(super) fn start_historical_directory_branch(
-    state: RwSignal<State>,
-    source: storage_contract::directory_git::HistoricalDirectoryBranchSource,
-    name: String,
-) -> Option<String> {
-    if !state.with_untracked(|s| {
-        actions::write_allowed(s)
-            && s.files.loaded
-            && s.files.mkdir.ready(s)
-            && s.files.directory_branches_supported
-    }) {
-        return None;
-    }
-    capture_and_retain(state, |s, principal, operation| {
-        Record::capture_historical_directory_branch(s, principal, operation, source, name)
-    })
-}
-
-pub(super) fn start_directory_rename(
-    state: RwSignal<State>,
-    repository: &str,
-    branch: &str,
-    name: &str,
-) -> Option<String> {
-    if !state.with_untracked(|s| {
-        actions::write_allowed(s)
-            && s.files.loaded
-            && s.files.mkdir.ready(s)
-            && s.files.directory_branches_supported
-    }) {
-        return None;
-    }
-    capture_and_retain(state, |s, principal, operation| {
-        Record::capture_directory_rename(s, principal, operation, repository, branch, name)
-    })
-}
-
-pub(super) fn start_directory_checkout(state: RwSignal<State>, branch: &str) {
-    if !state.with_untracked(|s| {
-        actions::default_write_allowed(s)
-            && s.files.loaded
-            && s.files.mkdir.ready(s)
-            && s.files.directory_branches_supported
-            && s.files.directory_preview.as_ref().is_some_and(|preview| {
-                preview.at_directory(&s.files.directory)
-                    && preview.branch().is_some_and(|choice| choice.id() == branch)
-            })
-    }) {
-        return;
-    }
-    capture_and_retain(state, Record::capture_directory_checkout);
 }
 
 fn capture_and_retain(
@@ -230,9 +148,6 @@ fn retain(state: RwSignal<State>, record: Arc<Record>) -> Option<String> {
     }
     let epoch = state.with_untracked(|s| s.session_epoch);
     state.update(|s| {
-        if record.is_directory_checkout() {
-            s.files.default_operation = Some(id.clone());
-        }
         s.files.mkdir.records.push(Retained {
             record: Arc::clone(&record),
             phase: Phase::Pending,
@@ -458,14 +373,6 @@ pub(crate) fn restore(state: RwSignal<State>) {
         })
         .unwrap_or_default();
     for id in operations {
-        state.update(|s| {
-            if s.files.mkdir.records.iter().any(|retained| {
-                retained.record.operation().to_string() == id
-                    && retained.record.is_directory_checkout()
-            }) {
-                s.files.default_operation = Some(id.clone());
-            }
-        });
         actions::record_operation(state, FileOperation::unknown(&id));
     }
     actions::poll(state);
@@ -477,14 +384,6 @@ fn adopt_owner(state: &mut State, current: &(u64, Principal)) {
         .iter()
         .map(|retained| retained.record.operation().to_string())
         .collect();
-    if state
-        .files
-        .default_operation
-        .as_ref()
-        .is_some_and(|id| old_ids.contains(id))
-    {
-        state.files.default_operation = None;
-    }
     if model
         .records
         .iter()

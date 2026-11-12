@@ -176,7 +176,8 @@ fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
     ] {
         assert!(metadata::is_retired_directory_request(
             &format!("{origin}{path}"),
-            origin
+            origin,
+            "GET"
         ));
     }
     for path in [
@@ -191,16 +192,19 @@ fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
     ] {
         assert!(!metadata::is_retired_directory_request(
             &format!("{origin}{path}"),
-            origin
+            origin,
+            "GET"
         ));
     }
     assert!(!metadata::is_retired_directory_request(
         "http://other.test/api/repositories/r/directory-scopes",
-        origin
+        origin,
+        "GET"
     ));
     assert!(!metadata::is_retired_directory_request(
         "http://127.0.0.1:23456/api/repositories/r/directory-scopes",
-        origin
+        origin,
+        "GET"
     ));
 }
 
@@ -265,5 +269,42 @@ fn webdriver_error_http_preserves_protocol_failure_even_for_success_looking_valu
             assert!(error.contains("WebDriver POST /execute/sync"));
             assert!(error.contains(&value.to_string()));
         }
+    }
+}
+
+#[test]
+fn directory_network_guard_rejects_branch_writes_but_keeps_reads_and_file_defaults() {
+    let origin = "http://127.0.0.1:2345";
+    for path in [
+        "/api/file-manager/disks/P01/directory-branches",
+        "/api/file-manager/disks/P01/directory-branches/from-history",
+        "/api/repositories/repo/directory-branches/dbr",
+        "/api/repositories/repo/default-branch",
+    ] {
+        for method in ["POST", "PUT", "PATCH"] {
+            assert!(metadata::is_retired_directory_request(
+                &format!("{origin}{path}"),
+                origin,
+                method,
+            ));
+        }
+        assert!(!metadata::is_retired_directory_request(
+            &format!("{origin}{path}"),
+            origin,
+            "GET",
+        ));
+    }
+    for path in [
+        "/api/file-manager/files/file/branches",
+        "/api/file-manager/files/file/branches/br",
+        "/api/file-manager/files/file/default-branch",
+        "/api/file-manager/disks/P01/namespace",
+        "/api/file-manager/disks/P01/object-move",
+    ] {
+        assert!(!metadata::is_retired_directory_request(
+            &format!("{origin}{path}"),
+            origin,
+            "PUT",
+        ));
     }
 }

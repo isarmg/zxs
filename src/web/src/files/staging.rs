@@ -1,14 +1,12 @@
 //! Existing directory context for branch review, navigation and physical layout repair.
 mod layout;
-use super::{actions, branch};
+use super::actions;
 use crate::{
     api,
     ui::{State, accept_read_response},
 };
 use std::collections::BTreeSet;
-use storage_contract::directory_git::{
-    DirectoryBranchCreateSource, DirectoryGitChildStatus, DirectoryGitStatus,
-};
+use storage_contract::directory_git::{DirectoryGitChildStatus, DirectoryGitStatus};
 use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_local};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,72 +261,6 @@ fn load(state: RwSignal<State>, model: RwSignal<Model>, target: Option<Target>) 
         });
     });
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct BranchReview {
-    target: Target,
-    slot: String,
-    display_path: String,
-    source: DirectoryBranchCreateSource,
-}
-impl BranchReview {
-    pub(super) fn source(&self) -> &DirectoryBranchCreateSource {
-        &self.source
-    }
-
-    fn current(&self, state: &State) -> bool {
-        Target::capture(state).as_ref() == Some(&self.target)
-            && state.files.slot == self.slot
-            && state.files.directory == self.display_path
-    }
-
-    pub(super) fn submit(self, state: RwSignal<State>, name: String) -> Option<String> {
-        if !state.with_untracked(|state| self.current(state)) {
-            return None;
-        }
-        actions::directory_branch(state, self.source, name)
-    }
-
-    pub(super) fn submit_history(
-        self,
-        state: RwSignal<State>,
-        tree: storage_contract::DirectoryTreeId,
-        name: String,
-    ) -> Option<String> {
-        if !state.with_untracked(|state| self.current(state)) {
-            return None;
-        }
-        let source = storage_contract::directory_git::HistoricalDirectoryBranchSource::new(
-            self.source,
-            tree,
-        ).expect("invariant: the reviewed status and listing admit all current source fields");
-        actions::historical_directory_branch(state, source, name)
-    }
-}
-
-fn branch_review(state: &State, model: &Model) -> Option<BranchReview> {
-    if !state.files.directory_branches_supported {
-        return None;
-    }
-    let (target, status) = model.ready(state)?;
-    if !status.initialized || status.staged || status.unstaged || status.needs_restage {
-        return None;
-    }
-    Some(BranchReview {
-        target: target.clone(),
-        slot: state.files.slot.clone(),
-        display_path: state.files.directory.clone(),
-        source: DirectoryBranchCreateSource {
-            repository_id: status.repository_id.clone(),
-            directory_id: status.directory_id.clone(),
-            directory_branch_id: status.directory_branch_id.clone()?,
-            working_tree_id: status.working_tree_id.clone()?,
-            head_tree_id: status.head_tree_id.clone()?,
-            index_generation: status.index_generation,
-            namespace_head: target.namespace_head.clone(),
-        },
-    })
-}
-
 fn path_label(path: &str) -> String {
     if path.is_empty() {
         t("根目录", "Root directory")
@@ -459,9 +391,6 @@ fn child_view(
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let model = RwSignal::new(Model::default());
     let target = Memo::new(move |_| state.with(Target::capture));
-    let branch_source =
-        Signal::derive(move || state.with(|state| model.with(|model| branch_review(state, model))));
-    let branch_disabled = Signal::derive(move || branch_source.get().is_none());
     let children = Memo::new(move |_| {
         model.with(|model| {
             model
@@ -481,9 +410,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <h3 class="zxs-row">{t("已有目录上下文", "Existing folder context")}</h3>
                 <p class="zxs-row">
                     {t(
-                        "Web 已移除原目录仓库的初始化、暂存及提交。以下只保留已有上下文和布局操作，不代表新的 .zxs 目录快照功能。",
+                        "Web 已移除原目录仓库的初始化、暂存、提交及分支写操作。以下只保留已有上下文和布局操作，不代表新的 .zxs 目录快照功能。",
                         concat!(
-                            "Directory initialization, staging and commit actions were removed ",
+                            "Directory initialization, staging, commit and branch writes were removed ",
                             "from Web. Existing context and layout are not the new .zxs snapshots.",
                         ),
                     )}
@@ -541,14 +470,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <Show when=move ||model.with(|model| {
                     model.status.as_ref().is_some_and(|status|status.initialized)
                 })>
-                    <div class="zxs-file-toolbar zxs-flow">
-                        {branch::control(
-                            state,
-                            t("创建目录分支", "Create folder branch"),
-                            branch::Target::CurrentDirectory(branch_source),
-                            branch_disabled,
-                        )}
-                    </div>
                     <For
                         each=move ||children.get()
                         key=|child|(

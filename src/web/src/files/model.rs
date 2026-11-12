@@ -423,15 +423,6 @@ pub(crate) fn branch_name(branch: &FileBranch) -> String {
 pub(crate) fn directory_branch_value(branch: &DirectoryBranch) -> String {
     branch.id().to_owned()
 }
-pub(crate) fn selected_directory_branch(model: &Model) -> Option<(String, String, String)> {
-    let branch = viewed_directory_branch(model)?;
-    Some((
-        model.repository_id.clone(),
-        branch.id().to_owned(),
-        branch.name().to_owned(),
-    ))
-}
-
 pub(crate) fn viewed_directory_branch(model: &Model) -> Option<&DirectoryBranch> {
     if let Some(preview) = &model.directory_preview {
         return preview

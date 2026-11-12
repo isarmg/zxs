@@ -496,11 +496,20 @@ pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
         return document.querySelectorAll(
             '[data-initialize-directory-git],[data-stage-directory-owned],'+
             '[data-stage-directory-child],[data-commit-directory],'+
+            '[data-zxs-set-directory-default],'+
             'input[aria-label="Folder commit message"],input[aria-label="目录提交说明"]'
         ).length;
     "#)?;
     if controls != 0 {
         return Err(format!("retired directory write controls remain: {controls}").into());
+    }
+    let branch_controls = browser.script(r#"
+        return [...document.querySelectorAll('[data-zxs-current-directory-controls] button')]
+            .filter(button=>['Create folder branch','创建目录分支','Rename branch','重命名分支']
+                .includes(button.textContent.trim())).length;
+    "#)?;
+    if branch_controls != 0 {
+        return Err("retired directory branch controls remain".into());
     }
     browser.css("[data-review-directory-layout]")?;
     browser.click(&browser.css("[data-zxs-directory-files]:not([disabled])")?)?;
@@ -515,7 +524,7 @@ pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
 }
 
 /// This is a Web-request guard, not a declaration that backend routes are removed.
-pub(super) fn is_retired_directory_request(url: &str, origin: &str) -> bool {
+pub(super) fn is_retired_directory_request(url: &str, origin: &str, method: &str) -> bool {
     let Some(relative) = url
         .strip_prefix(origin)
         .filter(|path| path.starts_with('/'))
@@ -527,7 +536,15 @@ pub(super) fn is_retired_directory_request(url: &str, origin: &str) -> bool {
         .split_once("/directory-branches/")
         .and_then(|(_, tail)| tail.strip_suffix("/commits"))
         .is_some_and(|branch| !branch.is_empty() && !branch.contains('/'));
-    path.ends_with("/directory-scopes")
+    let branch_write = !matches!(method, "GET" | "HEAD")
+        && ((path.starts_with("/api/file-manager/disks/")
+            && (path.ends_with("/directory-branches")
+                || path.ends_with("/directory-branches/from-history")))
+            || (path.starts_with("/api/repositories/")
+                && (path.ends_with("/default-branch")
+                    || path.contains("/directory-branches/"))));
+    branch_write
+        || path.ends_with("/directory-scopes")
         || path.ends_with("/directory-select")
         || path.ends_with("/directory-git/initialize")
         || path.ends_with("/directory-git/stage")

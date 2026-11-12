@@ -47,9 +47,9 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         }};
         window.fetch = async function(...args) {
             const request=args[0], url=new URL(request.url,location.href);
-            if(request.method==='POST' && /^\/api\/file-manager\/disks\/[^/]+\/(namespace|namespace-batch|directory-branches)$/.test(url.pathname)) {
+            if(request.method==='POST' && (/^\/api\/file-manager\/disks\/[^/]+\/(namespace|namespace-batch)$/.test(url.pathname)||/^\/api\/file-manager\/files\/[^/]+\/branches$/.test(url.pathname))) {
                 const body=await request.clone().json();
-                if(!url.pathname.endsWith('/namespace-batch')){
+                if(url.pathname.endsWith('/namespace')){
                     const keys=[];
                     for(let index=0;index<localStorage.length;index++){
                         const key=localStorage.key(index);
@@ -175,9 +175,13 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 }
             })?;
             browser.keys(&input, "\u{e00c}")?;
+            browser.click(&browser.element(
+                "xpath",
+                "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
+            )?)?;
             let branch = enter(
                 browser,
-                ("Create folder branch", "创建目录分支"),
+                ("Branch from current content", "从当前内容创建分支"),
                 ".zxs-branch-name",
                 "e\u{301}",
             )?;
@@ -192,7 +196,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "rejected originals cleaned without touching unrelated browser storage",
                 || {
                     let recovery = browser.script("const p=window.__zxsNaming;return {retained:p.recovery.length,remaining:p.recovery.filter(r=>localStorage.getItem(r.key)!==null).length,unrelated:localStorage.getItem(p.unrelatedKey)===p.unrelatedValue}")?;
-                    if recovery["retained"] == 4
+                    if recovery["retained"] == 3
                         && recovery["remaining"] == 0
                         && recovery["unrelated"] == true
                     {
@@ -205,6 +209,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             println!(
                 "PASS inline NFC/Hangul focus, cancellation, explicit folder/branch confirmation and retained-original cleanup"
             );
+            browser.click(&browser.button("Files", "文件")?)?;
             let checkbox=browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
             browser.click(&checkbox)?;
             browser.click(&browser.button("Rename", "重命名")?)?;

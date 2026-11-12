@@ -177,13 +177,8 @@ fn directory_creation_validates_the_complete_path_budget() {
 }
 
 #[test]
-fn both_branch_rename_targets_keep_their_own_metadata_limit() {
+fn file_branch_rename_keeps_its_metadata_limit() {
     for target in [
-        Target::RenameDirectoryBranch {
-            repository: "repo".into(),
-            branch_id: "branch".into(),
-            name: "old".into(),
-        },
         Target::RenameFileBranch {
             file: "file".into(),
             branch_id: "branch".into(),
@@ -288,27 +283,6 @@ fn unloaded_note_targets_do_not_become_known_empty_notes() {
         Target::Note(NoteTarget::Version("unloaded-body".into())).initial(&state),
         None
     );
-}
-
-#[test]
-fn directory_branch_rename_keeps_the_record_identity_and_shares_cancel_and_byte_rules() {
-    let target = Target::RenameDirectoryBranch {
-        repository: "repository-a".into(),
-        branch_id: "directory-a".into(),
-        name: "auto-generated".into(),
-    };
-    let state = State::default();
-    assert_eq!(target.initial(&state), Some("auto-generated".into()));
-    assert!(target.input_kind() == InputKind::BranchName);
-    assert_eq!(edit_value("", target.input_kind()), Edit::Cancel);
-    assert_eq!(
-        edit_value(&"a".repeat(129), target.input_kind()),
-        Edit::Invalid
-    );
-    assert!(matches!(
-        edit_value(" renamed ", target.input_kind()),
-        Edit::NameError(_)
-    ));
 }
 
 fn active_state() -> State {

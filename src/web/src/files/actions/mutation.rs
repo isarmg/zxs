@@ -20,49 +20,6 @@ enum MutationAccess {
     DefaultView,
 }
 
-pub(crate) fn directory_branch(
-    state: RwSignal<State>,
-    source: storage_contract::directory_git::DirectoryBranchCreateSource,
-    name: String,
-) -> Option<String> {
-    crate::files::mkdir::start_directory_branch(state, source, name)
-}
-
-pub(crate) fn historical_directory_branch(
-    state: RwSignal<State>,
-    source: storage_contract::directory_git::HistoricalDirectoryBranchSource,
-    name: String,
-) -> Option<String> {
-    crate::files::mkdir::start_historical_directory_branch(state, source, name)
-}
-
-pub(crate) fn select_default_branch(state: RwSignal<State>, branch_id: String) {
-    crate::files::mkdir::start_directory_checkout(state, &branch_id);
-}
-
-pub(crate) fn rename_directory_branch(
-    state: RwSignal<State>,
-    repository: String,
-    branch_id: String,
-    name: String,
-) -> Option<String> {
-    if !state.with_untracked(|state| {
-        write_allowed(state)
-            && state.files.directory_branches_supported
-            && state.files.repository_id == repository
-    }) || repository.is_empty()
-        || branch_id.is_empty()
-        || name.len() > storage_contract::MAX_NOTE_BYTES
-    {
-        return None;
-    }
-    if let Err(source) = crate::files::model::validate_name(&name) {
-        let error = crate::files::naming::Error::new(&name, source);
-        set_notice(state, error.message());
-        return None;
-    }
-    crate::files::mkdir::start_directory_rename(state, &repository, &branch_id, &name)
-}
 pub(crate) fn rename_file_branch(
     state: RwSignal<State>,
     file: String,

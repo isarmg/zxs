@@ -20,9 +20,8 @@ pub(crate) use browse::{
     search, select_entry,
 };
 pub(crate) use mutation::{
-    create_branch, directory_branch, historical_directory_branch, record_failure,
-    rename_directory_branch, rename_file_branch, select_branch, select_default_branch,
-    set_default_file_branch, update_note,
+    create_branch, record_failure, rename_file_branch, select_branch, set_default_file_branch,
+    update_note,
 };
 pub(crate) use operation::{poll, record_operation, record_receipt};
 

@@ -456,7 +456,13 @@ fn exercise(
                     format!("metadata-only Web requested a file-content route: {url}").into(),
                 );
             }
-            if metadata::is_retired_directory_request(url, origin) {
+            if metadata::is_retired_directory_request(
+                url,
+                origin,
+                event["message"]["params"]["request"]["method"]
+                    .as_str()
+                    .unwrap_or_default(),
+            ) {
                 return Err(format!(
                     "Web requested a retired directory route or entry query: {url}"
                 )

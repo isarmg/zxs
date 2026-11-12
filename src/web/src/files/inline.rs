@@ -32,11 +32,6 @@ pub(super) fn first_folder_hint(state: RwSignal<State>) -> impl IntoView {
 #[derive(Clone)]
 pub(super) enum Target {
     CreateDirectory,
-    RenameDirectoryBranch {
-        repository: String,
-        branch_id: String,
-        name: String,
-    },
     RenameFileBranch {
         file: String,
         branch_id: String,
@@ -55,7 +50,7 @@ enum InputKind {
 impl Target {
     fn scope(&self) -> EditScope {
         match self {
-            Self::CreateDirectory | Self::RenameDirectoryBranch { .. } => EditScope::Location,
+            Self::CreateDirectory => EditScope::Location,
             Self::RenameFileBranch { .. } | Self::Note(_) => EditScope::History,
         }
     }
@@ -63,9 +58,7 @@ impl Target {
     fn input_kind(&self) -> InputKind {
         match self {
             Self::CreateDirectory => InputKind::NamespaceName,
-            Self::RenameDirectoryBranch { .. } | Self::RenameFileBranch { .. } => {
-                InputKind::BranchName
-            }
+            Self::RenameFileBranch { .. } => InputKind::BranchName,
             Self::Note(_) => InputKind::Note,
         }
     }
@@ -85,9 +78,7 @@ impl Target {
     fn initial(&self, state: &State) -> Option<String> {
         match self {
             Self::CreateDirectory => Some(String::new()),
-            Self::RenameDirectoryBranch { name, .. } | Self::RenameFileBranch { name, .. } => {
-                Some(name.clone())
-            }
+            Self::RenameFileBranch { name, .. } => Some(name.clone()),
             Self::Note(NoteTarget::File) => state.files.file_history.file_note().map(str::to_owned),
             Self::Note(NoteTarget::Node(id)) => state
                 .files
@@ -144,11 +135,6 @@ impl Target {
     fn submit(self, state: RwSignal<State>, value: String) -> Option<String> {
         match self {
             Self::CreateDirectory => actions::create_directory(state, &value),
-            Self::RenameDirectoryBranch {
-                repository,
-                branch_id,
-                ..
-            } => actions::rename_directory_branch(state, repository, branch_id, value),
             Self::RenameFileBranch {
                 file, branch_id, ..
             } => actions::rename_file_branch(state, file, branch_id, value),

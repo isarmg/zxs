@@ -55,9 +55,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
         crate::files::mkdir::settle(&mut s.files.mkdir, &id, status);
         s.notices.record_operation(s.session_epoch, &id, status);
         if s.files.default_operation.as_deref() == Some(&id) {
-            if matches!(status, SaveStatus::Published | SaveStatus::Degraded)
-                && crate::files::mkdir::default_completion_applies(s, &id)
-            {
+            if matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
                 s.files.directory_preview = None;
                 s.files.file_preview = None;
             }

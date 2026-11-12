@@ -18,6 +18,73 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_directory_branch_web_retirement_preserves_shared_recovery_and_bounded_ci(self):
+        paths = [
+            'docs/design/directory-branch-web-retirement.md',
+            'docs/tools/browser-smoke.md',
+            'src/web/src/files/actions/mod.rs',
+            'src/web/src/files/actions/mutation.rs',
+            'src/web/src/files/actions/operation.rs',
+            'src/web/src/files/branch.rs',
+            'src/web/src/files/detail/directory.rs',
+            'src/web/src/files/inline.rs',
+            'src/web/src/files/mkdir.rs',
+            'src/web/src/files/mkdir/storage.rs',
+            'src/web/src/files/mkdir/storage/directory.rs',
+            'src/web/src/files/model.rs',
+            'src/web/src/files/staging.rs',
+            'src/web/src/files/view.rs',
+            'src/web/src/files/view/directory_preview.rs',
+            'test/tools/browser-smoke/runner/backup_browse.js',
+            'test/tools/browser-smoke/runner/feedback_lifecycle.rs',
+            'test/tools/browser-smoke/runner/main.rs',
+            'test/tools/browser-smoke/runner/metadata.rs',
+            'test/tools/browser-smoke/runner/naming.rs',
+            'test/tools/browser-smoke/unit/backup_browse_probe_test.mjs',
+            'test/tools/browser-smoke/unit/feedback_lifecycle_probe_test.mjs',
+            'test/tools/browser-smoke/unit/main_tests.rs',
+            'test/web/unit/files/actions/mutation/tests.rs',
+            'test/web/unit/files/branch/tests.rs',
+            'test/web/unit/files/directory_branch_recovery_tests.rs',
+            'test/web/unit/files/directory_rename_recovery_tests.rs',
+            'test/web/unit/files/inline/tests.rs',
+            'test/web/unit/files/model/tests.rs',
+            'test/web/unit/files/namespace_recovery_tests.rs',
+            'test/web/unit/files/staging_tests.rs',
+            '.github/ci/targeted-tests.json',
+            'test/ci/test_targeted_ci.py',
+            'test/ci/test_directory_rename_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'], [
+            'ci-selection', 'directory-rename-recovery', 'historical-directory-web',
+            'legacy-directory-branch-web-retirement',
+            'legacy-directory-staging-web-retirement', 'paged-deletion-review',
+            'web-directory-history-retirement', 'web-recovery-principals',
+        ])
+        self.assertEqual(len(plan['rust_targets']), 8)
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_directory_rename_targeted_ci']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        group = self.policy['groups']['legacy-directory-branch-web-retirement']
+        self.assertEqual(group['rust_targets'][0]['prefixes'], [
+            'files::mkdir::storage::tests::', 'files::branch::tests::',
+            'files::inline::tests::', 'files::model::tests::', 'files::staging::tests::',
+            'files::actions::mutation::tests::', 'files::actions::operation::tests::',
+        ])
+        self.assertEqual(group['rust_targets'][0]['max_tests'], 144)
+        namespace = CI.select_plan(self.policy,
+                                  ['test/web/unit/files/namespace_recovery_tests.rs'])
+        self.assertEqual(namespace['groups'], ['legacy-directory-branch-web-retirement'])
+        self.assertEqual(len(namespace['rust_targets']), 4)
+        self.assertEqual(namespace['python_tests'], [])
+        rename = self.policy['groups']['directory-rename-recovery']
+        self.assertNotIn('files::mkdir::storage::rename_tests::',
+                         rename['rust_targets'][0]['prefixes'])
+        self.assertIn('files::mkdir::storage::tests::',
+                      rename['rust_targets'][0]['prefixes'])
+
     def test_readmission_fixture_retains_all_working_directory_consumers(self):
         path = 'test/engine/unit/engine/disk_readmission_tests.rs'
         required = [
@@ -137,7 +204,8 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(plan['groups'], [
             'browser-identity-generation', 'browser-smoke-fixture', 'ci-selection',
             'directory-rename-recovery',
-            'historical-directory-web', 'legacy-directory-staging-web-retirement',
+            'historical-directory-web', 'legacy-directory-branch-web-retirement',
+            'legacy-directory-staging-web-retirement',
             'paged-deletion-review', 'web-directory-history-retirement',
         ])
         self.assertEqual(len(plan['rust_targets']), 8)

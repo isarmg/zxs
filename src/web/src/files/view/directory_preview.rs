@@ -60,8 +60,8 @@ fn controls(state: RwSignal<State>, preview: Preview) -> impl IntoView {
             "{}: {name} · {}",
             t("只读审阅分支工作内容", "Read-only branch work preview"),
             t(
-                "显示选取时已保存的工作树，包括未提交更改，不是实时视图。尚未修改默认读取；请在该分支目录详情中明确设为默认。",
-                "This is the saved working tree selected for review, including uncommitted changes, not a live view. Default reads are unchanged; set the branch as default explicitly in its folder Details.",
+                "显示选取时已保存的工作树，包括未提交更改，不是实时视图。不会修改默认读取或 SMB 暴露。",
+                "This is the saved working tree selected for review, including uncommitted changes, not a live view. Default reads and SMB exposure are unchanged.",
             ),
         ),
         Kind::Committed => t(

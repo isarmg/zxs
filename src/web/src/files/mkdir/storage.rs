@@ -5,9 +5,6 @@ use data_serialization::{Deserialize, Serialize};
 use storage_contract::Principal;
 use storage_contract::history_window::HistoryRepositoryId;
 
-mod directory;
-use directory::DirectoryRequest;
-
 const PREFIX: &str = "zxs:folder-create:";
 pub(super) const MAX_RECORDS: usize = 32;
 const MAX_RECORD_BYTES: usize = 32 * 1024;
@@ -20,15 +17,10 @@ enum Format {
     FileRelocation,
     #[serialization(rename = "object-move-original-request")]
     ObjectMove,
-    #[serialization(rename = "directory-branch-original-request")]
-    DirectoryBranch,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Namespace {
-    DirectoryBranch {
-        request: DirectoryRequest,
-    },
     UninitializedRoot,
     // Already retained originals keep their exact request and receipt binding.
     // New moves are captured only as ObjectMove below.
@@ -74,22 +66,8 @@ impl Record {
             .as_ref()
             .map_or("", name_policy::PortablePath::as_str)
     }
-    pub(super) fn is_directory_checkout(&self) -> bool {
-        matches!(&self.stored.namespace, Namespace::DirectoryBranch { request } if request.is_checkout())
-    }
-    pub(super) fn checkout_applies(&self, state: &State) -> bool {
-        match &self.stored.namespace {
-            Namespace::DirectoryBranch { request } => {
-                state.files.slot == self.stored.slot
-                    && state.files.directory == self.path()
-                    && request.checkout_applies(state)
-            }
-            _ => true,
-        }
-    }
     pub(super) fn label(&self) -> String {
         let path = match &self.stored.namespace {
-            Namespace::DirectoryBranch { request } => request.label(self.path()),
             Namespace::FileRelocation { relocation } => format!(
                 "{} → {} (repository {})",
                 self.path(),
@@ -127,9 +105,6 @@ impl Record {
                 json!({"operation_id":self.operation(),"movement":movement}),
             );
         }
-        if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
-            return request.request(&self.stored.slot, self.path(), self.operation());
-        }
         if let Namespace::FileRelocation { relocation } = &self.stored.namespace {
             return (
                 "POST",
@@ -165,10 +140,6 @@ impl Record {
             return receipt["protection_at_publish"] == json!(protection)
                 && movement.matches_receipt(self.principal().as_str(), receipt);
         }
-        if let Namespace::DirectoryBranch { request } = &self.stored.namespace {
-            return self.digest.as_deref() == receipt["request_digest"].as_str()
-                && request.matches_receipt(receipt);
-        }
         if let Namespace::FileRelocation { relocation } = &self.stored.namespace {
             let Some(kind) = receipt["operation_kind"].as_str() else {
                 return false;
@@ -189,9 +160,7 @@ impl Record {
                 && receipt["result"]["path"].as_str() == Some(relocation.source.as_str());
         }
         let path = match &self.stored.namespace {
-            Namespace::DirectoryBranch { .. }
-            | Namespace::FileRelocation { .. }
-            | Namespace::ObjectMove { .. } => {
+            Namespace::FileRelocation { .. } | Namespace::ObjectMove { .. } => {
                 unreachable!("invariant: relocation handled above")
             }
             Namespace::UninitializedRoot => self.path(),
@@ -328,12 +297,10 @@ impl Record {
                 Namespace::UninitializedRoot | Namespace::Repository { .. }
             ) | (Format::FileRelocation, Namespace::FileRelocation { .. })
                 | (Format::ObjectMove, Namespace::ObjectMove { .. })
-                | (Format::DirectoryBranch, Namespace::DirectoryBranch { .. })
         ) {
             return Err(failure("The retained request format and action disagree."));
         }
-        if stored.path.is_none() && !matches!(&stored.namespace, Namespace::DirectoryBranch { .. })
-        {
+        if stored.path.is_none() {
             return Err(failure("The retained namespace request must have a path."));
         }
         let display_path = stored
@@ -354,10 +321,6 @@ impl Record {
                     ));
                 }
                 None
-            }
-            Namespace::DirectoryBranch { request } => {
-                request.validate(display_path)?;
-                Some(request.digest(&stored.principal)?)
             }
             Namespace::FileRelocation { relocation } => {
                 let source = relocation.source.as_str();
@@ -463,7 +426,7 @@ pub(super) fn remove(record: &Record) -> Result<(), api::Error> {
     Store::open()?.remove(&record.key(), |bytes| Ok(bytes == record.bytes.as_ref()))
 }
 
-// Unlike an optional field, the root path must be explicitly present as null.
+// Missing paths are rejected during decoding; null paths are rejected during binding.
 fn required_path<'de, D>(deserializer: D) -> Result<Option<name_policy::PortablePath>, D::Error>
 where
     D: data_serialization::Deserializer<'de>,
@@ -472,9 +435,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "../../../../../test/web/unit/files/directory_branch_recovery_tests.rs"]
+#[path = "../../../../../test/web/unit/files/namespace_recovery_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "../../../../../test/web/unit/files/directory_rename_recovery_tests.rs"]
-mod rename_tests;

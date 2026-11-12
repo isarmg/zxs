@@ -1,11 +1,10 @@
-//! Real default-branch receipts exercise workspace notification ownership.
+//! Real file-default receipts exercise workspace notification ownership.
 //! Browsing is observed without writes; only final receipt delivery is delayed.
 use super::*;
 
-const BRANCH: &str = "browser-notice-lifecycle";
 const NOTICE: &str = ".zxs-inline-feedback > .zxs-status";
-const DEFAULT: &str = "button[data-zxs-set-directory-default='true']";
-const BROWSE: &str = "//div[contains(@class,'zxs-select')][./label[normalize-space(.)='Browse folder branch' or normalize-space(.)='浏览目录分支']]/button[@role='combobox' and not(@disabled)]";
+const DEFAULT: &str = "button[data-zxs-set-file-default='true']";
+const BROWSE: &str = "//div[contains(@class,'zxs-select')][./label[normalize-space(.)='Browse file branch' or normalize-space(.)='浏览文件分支']]/button[@role='combobox' and not(@disabled)]";
 const DEFAULT_SUCCESS_EN: &str = "The default view is updated. Enabled SMB shares use this view.";
 const DEFAULT_SUCCESS_ZH: &str = "默认读取视图已更新；已启用的 SMB 共享使用该视图。";
 
@@ -17,13 +16,11 @@ const OBSERVE_FETCH: &str = r#"
         const request=args[0],url=new URL(typeof request==='string'?request:request.url,location.href);
         const method=(args[1]?.method||request.method||'GET').toUpperCase();
         const local=url.origin===location.origin&&url.pathname.startsWith('/api/');
-        const publication=local&&method==='PUT'&&/^\/api\/repositories\/[^/]+\/default-branch$/.test(url.pathname);
+        const publication=local&&method==='PUT'&&/^\/api\/file-manager\/files\/[^/]+\/default-branch$/.test(url.pathname);
         if(local&&!['GET','HEAD'].includes(method))probe.writes.push({method,path:url.pathname});
         const response=await original.apply(this,args);
-        if(local&&method==='GET'&&url.pathname.endsWith('/entries')&&url.searchParams.has('directory_branch_id')){
-            if(!response.ok)throw new Error('real folder preview failed');
-            const page=await response.clone().json();
-            if(page.preview!==true||page.writable!==false)throw new Error('folder preview was not read-only');
+        if(local&&method==='GET'&&/^\/api\/file-manager\/files\/[^/]+\/history$/.test(url.pathname)){
+            if(!response.ok)throw new Error('real file history read failed');
             probe.previews++;
         }else if(local&&method==='GET'&&url.pathname.endsWith('/entries')&&probe.delivered){
             if(!response.ok)throw new Error('real default view reload failed');
@@ -60,19 +57,18 @@ fn no_notice(browser: &Browser) -> Result<()> {
     }
 }
 
-fn create_branch(browser: &Browser) -> Result<()> {
-    browser.click(&browser.button("Create folder branch", "创建目录分支")?)?;
-    let input = browser.css(".zxs-branch-name:not([disabled])")?;
-    browser.keys(&input, BRANCH)?;
-    browser.keys(&input, "\u{e007}")?;
-    check(
-        browser,
-        "real folder branch registration",
-        "return !document.querySelector('.zxs-branch-name')&&/registered without switching|已登记，尚未切换/.test(document.querySelector('.zxs-inline-feedback > .zxs-status')?.textContent||'')",
-    )
+fn open_file(browser: &Browser) -> Result<()> {
+    browser.click(&browser.button("Files", "文件")?)?;
+    browser.click(&browser.element(
+        "xpath",
+        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
+    )?)?;
+    browser.element("xpath", BROWSE)?;
+    Ok(())
 }
 
 fn preview_branch(browser: &Browser) -> Result<()> {
+    open_file(browser)?;
     let combo = browser.element("xpath", BROWSE)?;
     let before = browser.script(
         "const p=window.__zxsNoticeDelivery;return {writes:p.writes.length,previews:p.previews}",
@@ -82,14 +78,19 @@ fn preview_branch(browser: &Browser) -> Result<()> {
         &format!("/element/{combo}/attribute/aria-controls"),
         None,
     )?;
-    let panel = panel.as_str().ok_or("folder combobox lacks a listbox")?;
+    let panel = panel.as_str().ok_or("file combobox lacks a listbox")?;
     browser.click(&combo)?;
-    browser.click(&browser.element("xpath", &select_option_xpath(panel, BRANCH))?)?;
+    let label = browser.script(&format!(
+        "return document.getElementById({}).querySelector('[role=option][aria-selected=true][aria-disabled=false]')?.textContent.trim()",
+        json!(panel),
+    ))?;
+    let label = label.as_str().ok_or("current file branch is missing")?;
+    browser.click(&browser.element("xpath", &select_option_xpath(panel, label))?)?;
     check(
         browser,
-        "read-only folder preview settled without mutation or notice",
+        "file history preview settled without mutation or notice",
         &format!(
-            "const p=window.__zxsNoticeDelivery,b=document.querySelector({});return p.previews==={}+1&&p.writes.length==={}&&b&&!b.disabled&&!document.querySelector({})",
+            "const p=window.__zxsNoticeDelivery,b=document.querySelector({});return p.previews>{}&&p.writes.length==={}&&b&&!b.disabled&&!document.querySelector({})",
             json!(DEFAULT),
             before["previews"],
             before["writes"],
@@ -168,7 +169,7 @@ fn exercise_notices(browser: &Browser) -> Result<()> {
     // Check while still away: returning to Files would itself clear a leaked notice.
     no_notice(browser)?;
     browser.click(&browser.button("Files", "文件")?)?;
-    browser.element("xpath", BROWSE)?;
+    open_file(browser)?;
     check(
         browser,
         "late receipt settled without reopening its old notice",
@@ -183,7 +184,7 @@ fn exercise_notices(browser: &Browser) -> Result<()> {
         ),
     )?;
     if browser.script(
-        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===11&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/repositories\\/[^/]+\\/default-branch$/.test(write.path))",
+        "const writes=window.__zxsNoticeDelivery.writes;return writes.length===11&&writes.every(write=>write.method==='PUT'&&/^\\/api\\/file-manager\\/files\\/[^/]+\\/default-branch$/.test(write.path))",
     )? != true {
         return Err("notification lifecycle did not publish exactly eleven default-branch receipts".into());
     }
@@ -198,8 +199,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         "xpath",
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-fixtures']",
     )?)?;
-    browser.css("[data-directory-git-initialized='true'][data-directory-git-staged='false'][data-directory-git-needs-restage='false']")?;
-    create_branch(browser)?;
+    open_file(browser)?;
     browser.script(OBSERVE_FETCH)?;
     with_cleanup(
         || exercise_notices(browser),
@@ -208,12 +208,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             Ok(())
         },
     )?;
-    browser.click(&browser.element(
-        "xpath",
-        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
-    )?)?;
     println!(
-        "PASS read-only folder browsing and real default-branch notices: page ownership, dismissal, repeated publication, five-second expiry and late receipt after navigation"
+        "PASS file history browsing and real file-default notices: page ownership, dismissal, repeated publication, five-second expiry and late receipt after navigation"
     );
     Ok(())
 }

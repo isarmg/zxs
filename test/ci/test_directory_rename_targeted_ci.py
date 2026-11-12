@@ -1,4 +1,4 @@
-"""Keep directory rename recovery consumers and every overlapping budget selected."""
+"""Keep shared recovery and surviving server rename coverage after Web retirement."""
 import importlib.util
 import json
 from pathlib import Path
@@ -68,7 +68,8 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         group = self.policy['groups']['directory-rename-recovery']
         native, product, wasm, server = group['rust_targets']
         self.assertEqual(native['package'], 'web-app')
-        self.assertIn('files::mkdir::storage::rename_tests::', native['prefixes'])
+        self.assertNotIn('files::mkdir::storage::rename_tests::', native['prefixes'])
+        self.assertIn('files::mkdir::storage::tests::', native['prefixes'])
         self.assertIn('files::actions::mutation::tests::', native['prefixes'])
         self.assertIn('files::actions::operation::tests::', native['prefixes'])
         self.assertIn('files::inline::tests::', native['prefixes'])

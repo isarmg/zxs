@@ -1,31 +1,11 @@
 //! Current-folder navigation, existing branch context and placement controls.
-use super::super::model::{
-    directory_branch_name, directory_branch_value, selected_directory_branch,
-};
+use super::super::model::{directory_branch_name, directory_branch_value};
 use super::super::{actions, backup, inline};
 use crate::ui::State;
 use web_interface::components::{Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    let default_disabled = Signal::derive(move || {
-        state.with(|s| {
-            !actions::default_write_allowed(s)
-                || !s.files.loaded
-                || !s.files.directory_branches_supported
-                || s.files.directory_preview.as_ref().is_none_or(|preview| {
-                    preview.branch().is_none() || !preview.at_directory(&s.files.directory)
-                })
-        })
-    });
-    let rename_branch = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .directory_branches_supported
-                .then(|| selected_directory_branch(&s.files))
-                .flatten()
-        })
-    });
     let folder_options = Signal::derive(move || {
         state.with(|s| {
             s.files
@@ -93,10 +73,8 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             </div>
         <div class="zxs-file-toolbar zxs-flow zxs-surface-end">
             <Select label=t("浏览目录分支","Browse folder branch") options=folder_options value=folder_value disabled=folder_disabled placeholder=t("尚无目录分支","No folder branches") on_change=Callback::new(move |value:String|actions::preview_directory_branch(state,value))/>
-            <button class="zxs-button" data-zxs-set-directory-default="true" disabled=move ||default_disabled.get() on:click=move |_|if let Some(id)=state.with_untracked(|s|super::super::model::viewed_directory_branch(&s.files).map(|branch|branch.id().to_owned())){actions::select_default_branch(state,id);}>{t("设为默认分支","Set as default branch")}</button>
-            {move ||rename_branch.get().map(|(repository,branch_id,name)|inline::control(state,t("重命名分支","Rename branch"),Some("rename"),inline::Target::RenameDirectoryBranch{repository,branch_id,name},mutation_disabled))}
             <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
-            <p class="zxs-row">{t("切换仅浏览分支，不改变默认分支。设为默认后才更新默认读取，已启用的 SMB 共享使用该视图；目录外文件保持不变。","Switching only browses a branch. Set it as default to update default reads, including enabled SMB shares; files outside the folder stay unchanged.")}</p>
+            <p class="zxs-row">{t("这里只浏览已有目录分支，不改变默认读取或 SMB 暴露。","Browsing existing folder branches does not change default reads or SMB exposure.")}</p>
         </div>
             {super::super::staging::view(state)}
             {backup::view(state)}

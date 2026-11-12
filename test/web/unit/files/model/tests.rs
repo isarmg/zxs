@@ -477,24 +477,6 @@ fn branch_browsing_uses_stable_ids_in_root_and_subfolders() {
         "auto-generated",
         "directory records never claim to own pending file content"
     );
-    let mut model = Model {
-        repository_id: "repository-a".into(),
-        directory_branches: vec![branch],
-        ..Default::default()
-    };
-    assert_eq!(
-        selected_directory_branch(&model),
-        Some((
-            "repository-a".into(),
-            "directory-a".into(),
-            "auto-generated".into()
-        ))
-    );
-    model.directory_branches.clear();
-    assert!(
-        selected_directory_branch(&model).is_none(),
-        "initial namespace main has no invented rename target"
-    );
     let mut invalid =
         crate::files::test_entries::branch_wire(json!({"name":"main","current":true}));
     invalid["directory_branch_id"] = Value::Null;

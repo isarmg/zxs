@@ -4,60 +4,13 @@ use web_interface::{html, i18n::t, prelude::*};
 
 #[derive(Clone)]
 pub(super) enum Target {
-    CurrentDirectory(Signal<Option<super::staging::BranchReview>>),
-    HistoricalDirectory {
-        current: Signal<Option<super::staging::BranchReview>>,
-        tree: storage_contract::DirectoryTreeId,
-    },
     CurrentFileVersion,
     HistoryNode(String),
 }
 
 impl Target {
-    fn scope(&self) -> super::inline::EditScope {
+    fn submit(self, state: RwSignal<State>, name: String) -> Option<String> {
         match self {
-            Self::CurrentDirectory(_) | Self::HistoricalDirectory { .. } => {
-                super::inline::EditScope::Location
-            }
-            Self::CurrentFileVersion | Self::HistoryNode(_) => super::inline::EditScope::History,
-        }
-    }
-
-    fn submit(
-        self,
-        state: RwSignal<State>,
-        name: String,
-        frozen: Option<super::staging::BranchReview>,
-    ) -> Option<String> {
-        match self {
-            Self::CurrentDirectory(current) => {
-                let frozen = frozen?;
-                if current.get_untracked().as_ref() != Some(&frozen) {
-                    crate::ui::set_notice(
-                        state,
-                        t(
-                            "目录来源已改变；请取消命名，刷新并重新核对来源。",
-                            "The folder source changed. Cancel the name, refresh and review its source again.",
-                        ),
-                    );
-                    return None;
-                }
-                frozen.submit(state, name)
-            }
-            Self::HistoricalDirectory { current, tree } => {
-                let frozen = frozen?;
-                if current.get_untracked().as_ref() != Some(&frozen) {
-                    crate::ui::set_notice(
-                        state,
-                        t(
-                            "目录或历史来源已改变；请取消命名并重新审阅。",
-                            "The folder or historical source changed. Cancel and review it again.",
-                        ),
-                    );
-                    return None;
-                }
-                frozen.submit_history(state, tree, name)
-            }
             Self::CurrentFileVersion | Self::HistoryNode(_) => {
                 let (version, node) = state.with_untracked(|s| file_source(&s.files, &self))?;
                 actions::create_branch(state, version, node, name)
@@ -87,7 +40,6 @@ fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, 
                 Some(record.id().to_owned()),
             ))
         }
-        Target::CurrentDirectory(_) | Target::HistoricalDirectory { .. } => None,
     }
 }
 
@@ -120,14 +72,12 @@ pub(super) fn control(
     target: Target,
     disabled: Signal<bool>,
 ) -> impl IntoView {
-    let draft = super::inline::Draft::new(state, target.scope());
+    let draft = super::inline::Draft::new(state, super::inline::EditScope::History);
     let editing = draft.editing;
     let value = draft.value;
     let error = draft.error;
     let label = StoredValue::new(label);
     let target = StoredValue::new(target);
-    // The name editor owns its reviewed source, even if metadata refreshes.
-    let frozen = RwSignal::new(None);
 
     view! {
         <span class="zxs-inline-branch zxs-flow zxs-flow--inline">
@@ -160,7 +110,7 @@ pub(super) fn control(
                                         Name::Invalid => error.set(true),
                                         Name::Rejected(error) => draft.name_error.set(Some(std::sync::Arc::new(error))),
                                         Name::Empty => draft.cancel_idle(),
-                                        Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name, frozen.get_untracked())),
+                                        Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name)),
                                     }
                                 }
                                 _ => {}
@@ -171,13 +121,6 @@ pub(super) fn control(
                 view! {
                     <button class="zxs-button" type="button" disabled=move || disabled.get()
                         on:click=move |_| if !disabled.get_untracked() {
-                            frozen.set(target.with_value(|target| match target {
-                                Target::CurrentDirectory(review)
-                                | Target::HistoricalDirectory { current: review, .. } => {
-                                    review.get_untracked()
-                                }
-                                Target::CurrentFileVersion | Target::HistoryNode(_) => None,
-                            }));
                             draft.start(String::new());
                         }>
                         {label.get_value()}
@@ -187,7 +130,7 @@ pub(super) fn control(
             {super::inline::name_feedback(draft, move |expected| {
                 if disabled.get_untracked() || draft.pending() || !draft.accept_name(expected) { return; }
                 match branch_name(&value.get_untracked()) {
-                    Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name, frozen.get_untracked())),
+                    Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name)),
                     Name::Rejected(error) => draft.name_error.set(Some(std::sync::Arc::new(error))),
                     Name::Invalid => error.set(true),
                     Name::Empty => draft.cancel_idle(),

@@ -103,7 +103,7 @@ fn a_missing_visible_version_never_uses_the_source_id_for_a_branch_request() {
                 "file_id":"file", "materialized":false, "version_id":null, "source_version_id":""
             })));
         });
-        let _ = Target::CurrentFileVersion.submit(state, "another".into(), None);
+        let _ = Target::CurrentFileVersion.submit(state, "another".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
 }
@@ -139,19 +139,4 @@ fn branch_nfc_errors_keep_original_and_candidate_without_producing_a_name() {
             name_policy::Error::UnsupportedCharacter(_)
         ));
     }
-}
-
-#[test]
-fn historical_directory_target_never_uses_file_history_or_an_unreviewed_source() {
-    Owner::new().with(|| {
-        let state = RwSignal::new(State::default());
-        let target = Target::HistoricalDirectory {
-            current: Signal::derive(|| None),
-            tree: "dtree_00000000000000000000000000000007".parse().unwrap(),
-        };
-        assert!(state.with_untracked(|state| file_source(&state.files, &target)).is_none());
-        assert!(target.submit(state, "history-draft".into(), None).is_none());
-        assert!(!state.with_untracked(|state| state.files.mutation_pending));
-        assert!(state.with_untracked(|state| state.files.operations.is_empty()));
-    });
 }

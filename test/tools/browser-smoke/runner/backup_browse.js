@@ -20,7 +20,7 @@ const modes = writable => writable ? ['Read/write directory', '读写目录'] : 
 const identityFields = ['entry_id', 'file_id', 'repository_id', 'repository_path', 'version_id', 'node_id', 'size'];
 const mutationLabels = [
     ['New folder', '新建文件夹'], ['Move', '移动'], ['Copy', '复制'],
-    ['Rename', '重命名'], ['Delete', '删除'], ['Create folder branch', '创建目录分支'],
+    ['Rename', '重命名'], ['Delete', '删除'],
     ['Primary placement', '主盘规则'], ['Backup settings', '备份设置']
 ];
 const detailMutations = [
@@ -54,7 +54,8 @@ function directoryView() {
         readonlyControls: mutationLabels.every(labels => {
             const matching = controls.filter(button => labels.includes(text(button)));
             return matching.length === 1 && matching[0].disabled;
-        }) && document.querySelector('[data-zxs-set-directory-default]')?.disabled === true
+        }) && !document.querySelector('[data-zxs-set-directory-default]')
+            && !controls.some(button => ['Create folder branch', '创建目录分支'].includes(text(button)))
             && table?.querySelector('thead input[type=checkbox]')?.disabled === true};
 }
 function validPath(path) {

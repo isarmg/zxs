@@ -64,7 +64,7 @@ const publication = scene.match(/^\s*("const writes=window\.__zxsNoticeDelivery\
 assert.ok(publication, 'missing final real-publication browser predicate');
 const verifyPublications = new Function('window', JSON.parse(publication[1]));
 const writes = count => Array.from({length: count}, (_, index) => ({
-    method: 'PUT', path: `/api/repositories/repo-${index}/default-branch`,
+    method: 'PUT', path: `/api/file-manager/files/file-${index}/default-branch`,
 }));
 let publicationCases = 0;
 const expectPublications = (label, actual, expected) => {
@@ -80,15 +80,16 @@ for (let index = 0; index < 11; index++) {
     for (const change of [
         {method: 'POST'}, {method: 'GET'}, {method: 'DELETE'},
         {path: '/api/repositories/repo/branches'},
-        {path: '/api/repositories//default-branch'},
-        {path: '/api/repositories/repo/default-branch/outcome'},
+        {path: '/api/file-manager/files//default-branch'},
+        {path: '/api/file-manager/files/file/default-branch/outcome'},
+        {path: '/api/repositories/repo/default-branch'},
     ]) {
         const actual = writes(11);
         Object.assign(actual[index], change);
         expectPublications(`wrong publication at ${index}: ${JSON.stringify(change)}`, actual, false);
     }
 }
-assert.equal(publicationCases, 71);
+assert.equal(publicationCases, 82);
 assert.ok(scene.includes("if(!response.ok)throw new Error('real default branch publication failed')"));
 assert.ok(scene.includes("typeof window.__zxsNoticeDelivery.release==='function'"));
 console.log(`PASS ${cases} real-copy and settled-notice observer model cases; ${publicationCases} exact-publication predicate cases; no browser publication executed`);
