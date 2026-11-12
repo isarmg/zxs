@@ -44,6 +44,19 @@ archive、snapshot/history 和 FILE 读取边界拒绝。旧格式数据原地�
 遗漏、额外事实或不属于该操作的事实。Current 的最终 Publication／D3、现场锁、
 文件身份、授权、取消与原恢复材料校验不因改名节点退役而省略。
 
+批次收据保存必需的原 typed namespace request，并与请求摘要绑定。
+transfers 的成员数、动作、逐项 source／target 和真实前后位置必须完整吻合。
+Move／Rename 缺失目标不能当复制跳过，清空 transfers 和 path_changes 也不是空证明。
+新格式 transfer 的 file_id／version_id 必需且可空：目录为 null，文件为合法 ID，
+不接受旧空字符串哨兵。位置证明采用成员索引，不对全局 occurrence 做二次交叉扫描。
+
+纯改名保留文件分支不可变 HEAD，工作区不能再把 HEAD 旧路径当作唯一当前位置。
+文件分支工作区捕获真实选中别名，显式上传路径选择一个 occurrence；stage、range、commit
+与 SMB 后续选择复验条目／上下文／正文及祖先选择代数。不能任取首个别名或把同一工作区
+改绑另一路径；创建后又发生改名时拒绝且保留暂存内容。完成与冷恢复只按已证明的原发布
+刷新实际提交位置，不用后来的任意 context 重绑旧工作区。无正文变化的保存不因位置投影
+制造提交，也不改写原 Current 历史快照。
+
 ## 复制与 FILE
 
 新身份复制没有“此新文件的旧位置”，因此不是本地 PathChanged。
@@ -58,6 +71,10 @@ archive、snapshot/history 和 FILE 读取边界拒绝。旧格式数据原地�
 FILE 记录只保存本文件归属、原事实身份／来源及映射版本的无路径投影，不保存外部
 repository/path。它不能独自证明或重建外部命名空间位置。实际 FILE 读取仍检查
 本地所有者、history、版本闭包和审计来源；新增事实行及其增量依赖须与生产编码同批。
+
+同池完整历史复制与普通 namespace Copy／Separate 不同，后者只派生当前正文新容器。
+跨池 foreign recipe 尚无完整新审计的目标映射，遇到非空路径事实或完整 Graph-copy audit
+明确拒绝且保全原来源，不静默导入、丢弃事实或自动迁移。
 
 ## 只读协议与界面
 

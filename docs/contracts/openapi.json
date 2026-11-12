@@ -12244,7 +12244,7 @@
           "created_at"
         ],
         "additionalProperties": false,
-        "description": "重命名形成的不可变文件路径节点。version_id复用真实正文，parent_node_ids连接内容或路径节点；创建路径节点不增加FileVersion或复制正文。"
+        "description": "旧路径节点的结构描述，仅保留为明确拒绝证据；新容器路径事实格式不接纳含非空 file_path_nodes 的池或历史包。当前改名及同身份移动写入独立 PathChanged 事实；路径变更本身不创建此节点，也不改变正文 HEAD 或祖先边。此结构定义不提供旧格式读取、自动迁移或覆盖原字节的权限。"
       },
       "FileMetadataNodeId": {
         "type": "string",

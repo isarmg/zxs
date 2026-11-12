@@ -170,9 +170,12 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
             .unwrap()
             .branch_id
             .unwrap();
-        // The pending branch already exists when these real path nodes arise.
+        // The pending branch already exists when these independent path facts arise.
+        let initial_context = engine.file_context(&source.repository_id, "source.txt").unwrap();
+        let initial_head = engine.file_branch_head(&initial_context.branch_id).unwrap();
+        let mut original_paths = Vec::new();
         for (old, new) in [("source.txt", "renamed.txt"), ("renamed.txt", "source.txt")] {
-            engine
+            let renamed = engine
                 .file_namespace(
                     &source.repository_id,
                     NamespaceOperation::parse(NamespaceOperationKind::Rename, old, Some(new))
@@ -181,11 +184,20 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
                     op(),
                 )
                 .unwrap();
+            let facts = renamed.result["path_changes"].as_array().unwrap();
+            assert_eq!(facts.len(), 1);
+            assert_eq!(facts[0]["operation_id"], renamed.operation_id.to_string());
+            assert_eq!(facts[0]["before"]["path"], old);
+            assert_eq!(facts[0]["after"]["path"], new);
+            original_paths.push(facts[0].clone());
         }
         let context = engine
             .file_context(&source.repository_id, "source.txt")
             .unwrap();
         let head = engine.file_branch_head(&context.branch_id).unwrap();
+        assert_eq!(context, initial_context);
+        assert_eq!(head, initial_head);
+        assert!(engine.state().file_path_nodes.is_empty());
         container_tags_fixture::edit(&mut engine, &original.file_id, &["keep-label".into()], &[], "admin", op())
             .unwrap();
         engine
@@ -219,25 +231,29 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
         assert_independent_graph(&engine, &source, &original.file_id);
         assert_independent_graph(&engine, &target, &copied.file_id);
         let copies = engine.file_history(&copied.file_id).unwrap();
-        let original_paths = before
-            .file_path_nodes
-            .values()
-            .filter(|node| node.file_id == original.file_id)
-            .collect::<Vec<_>>();
         assert_eq!(original_paths.len(), 2);
-        for node in original_paths {
-            assert!(
-                engine
-                    .state()
-                    .file_path_nodes
-                    .values()
-                    .any(|copy| copy.file_id == copied.file_id
-                        && copy.path == node.path
-                        && copy.previous_path == node.previous_path
-                        && copy.created_at == node.created_at
-                        && copy.operation_id == node.operation_id
-                        && copy.node_id != node.node_id)
-            );
+        let retained_paths = receipt.result["retained_lifecycle"]["path_changes"]
+            .as_array().unwrap();
+        assert_eq!(retained_paths.len(), original_paths.len());
+        assert!(engine.state().file_path_nodes.is_empty());
+        for original_fact in &original_paths {
+            let retained = retained_paths.iter()
+                .find(|fact| fact["source"]["event_id"] == original_fact["event_id"])
+                .unwrap();
+            // Source ID, actor, original paths, time and sequence are not remapped.
+            assert_eq!(&retained["source"], original_fact);
+            assert_eq!(retained["file_id"], copied.file_id);
+            assert_eq!(retained["history_tree_id"], target.history_tree_id);
+            let branch = &engine.state().branches[retained["branch_id"].as_str().unwrap()];
+            assert_eq!(branch.file_id.as_deref(), Some(copied.file_id.as_str()));
+            assert_eq!(branch.history_tree_id, target.history_tree_id);
+            for field in ["before_version_id", "after_version_id"] {
+                assert_eq!(retained[field], copied.version_id);
+                assert_eq!(
+                    engine.state().versions[retained[field].as_str().unwrap()].file_id,
+                    copied.file_id,
+                );
+            }
         }
 
         assert_eq!(copies.len(), versions.len());
@@ -312,6 +328,10 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
         let copied_context = engine
             .file_context(&target.repository_id, "copied.txt")
             .unwrap();
+        assert_eq!(
+            engine.file_branch_head(&copied_context.branch_id).unwrap(),
+            copied.version_id,
+        );
         assert!(
             container_tags_fixture::tags(&engine, &copied.file_id)
                 .contains("keep-label")

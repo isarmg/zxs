@@ -472,13 +472,10 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     );
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
     let renamed = history(&app, &token, file).await;
-    let path_node = renamed["identity"]["context"]["current_node_id"]
-        .as_str()
-        .unwrap();
-    success(
-        &app, &token, "PATCH",
-        &format!("/api/file-manager/files/{file}/nodes/{path_node}"),
-        Some(json!({"note":"独立路径备注","operation_id":new_id("op").unwrap()})),
+    assert_eq!(renamed["identity"]["context"]["current_node_id"], base);
+    assert_eq!(renamed["nodes"], initial["nodes"]);
+    assert_retained_path_change(
+        &app, &token, file, &renamed, repo, "report.txt", "renamed.txt",
     ).await;
     manager_upload(&app, &token, "renamed.txt", b"left body").await;
     let written = history(&app, &token, file).await;
@@ -501,7 +498,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         None,
     )
     .await;
-    assert_eq!(parents["parents"], json!([{"parent_node_id":path_node}]));
+    assert_eq!(parents["parents"], json!([{"parent_node_id":base}]));
     let historical = success(
         &app, &token, "POST", &tag_route,
         Some(json!({
@@ -556,6 +553,11 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     );
     let node = merged["result"]["node_id"].as_str().unwrap();
     assert!(node.starts_with("fmeta_"));
+    success(
+        &app, &token, "PATCH",
+        &format!("/api/file-manager/files/{file}/nodes/{node}"),
+        Some(json!({"note":"独立合并备注","operation_id":new_id("op").unwrap()})),
+    ).await;
     let after = history(&app, &token, file).await;
     assert_eq!(
         history_versions(&app, &token, file, &after, None).await["versions"]
@@ -573,6 +575,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .find(|item| item["node_id"] == node)
         .unwrap();
     assert_eq!(result["kind"], "merge");
+    assert_eq!(result["note"], "独立合并备注");
     assert_eq!(
         result["path"], "report.txt",
         "merge metadata describes its chosen source, independent of parent UUID order"

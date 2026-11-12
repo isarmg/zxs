@@ -856,16 +856,23 @@ async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_rep
                 deletions.paths.iter().any(|deleted| deleted.path == "b/first.txt")
             })
     }));
-    assert!(engine.state().file_path_nodes.values().any(|node| {
-        node.operation_id.to_string() == operation
-            && &node.history_tree_id == target_history
-            && node.previous_path == "b/first.txt"
-            && node.path == "moved.txt"
-    }));
+    // This move creates a distinct target container, not a same-container
+    // rename. Its copied content stays a version and has no arrival fnode.
+    assert!(engine.state().file_path_nodes.is_empty());
+    let operation: storage_contract::OperationId = operation.parse().unwrap();
+    assert_eq!(engine.state().operations[&operation].result["path_changes"], json!([]));
+    let target_file = target["file_id"].as_str().unwrap();
+    let target_version = target["version_id"].as_str().unwrap();
+    let version = &engine.state().versions[target_version];
+    assert_eq!(version.file_id, target_file);
+    assert_eq!(&version.history_tree_id, target_history);
+    let context = engine.file_context(target_repository, "moved.txt").unwrap();
+    assert_eq!(engine.file_branch_head(&context.branch_id).unwrap(), target_version);
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend.open_auth(&system).unwrap();
     let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
+    assert_eq!(version_bytes(&app, &token, target_version).await, b"cross-owner body");
     assert_eq!(operation_events(&app, &token, &moved, &target).await, events);
     let replay = success(
         &app,

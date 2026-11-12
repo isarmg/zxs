@@ -128,8 +128,23 @@ fn content_matches_legal_renames_keep_version_candidates_and_invalidate_old_root
     old.page().unwrap();
     // A committed file stays inside its stable owner. Entering that owner is
     // also legal for a file not committed in a different directory repository.
-    rename(&mut pool, "box/source", "box/renamed").unwrap();
-    rename(&mut pool, "peer", "box/imported").unwrap();
+    let source_context = pool.engine.file_context(&pool.repository, "box/source").unwrap();
+    let source_head = pool.engine.file_branch_head(&source_context.branch_id).unwrap();
+    let moved_receipt = rename(&mut pool, "box/source", "box/renamed").unwrap();
+    let imported_receipt = rename(&mut pool, "peer", "box/imported").unwrap();
+    for (receipt, from, to, file) in [
+        (&moved_receipt, "box/source", "box/renamed", &source),
+        (&imported_receipt, "peer", "box/imported", &peer),
+    ] {
+        let facts = receipt.result["path_changes"].as_array().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["operation_id"], receipt.operation_id.to_string());
+        assert_eq!(facts[0]["file_id"], file.file_id);
+        assert_eq!(facts[0]["before"]["path"], from);
+        assert_eq!(facts[0]["after"]["path"], to);
+        assert_eq!(facts[0]["before_version_id"], file.version_id);
+        assert_eq!(facts[0]["after_version_id"], file.version_id);
+    }
     assert_eq!(
         pool.engine
             .recheck_content_matches(&old)
@@ -149,14 +164,16 @@ fn content_matches_legal_renames_keep_version_candidates_and_invalidate_old_root
         (&peer.file_id, &peer.entry_id, &peer.version_id)
     );
     assert_eq!(pool.engine.state().versions.len(), 2);
-    let path_node = pool
+    let current_node = pool
         .engine
         .file_context(&pool.repository, "box/renamed")
         .unwrap()
         .node_id
         .unwrap();
-    assert!(pool.engine.state().file_path_nodes.contains_key(&path_node));
-    let request = pool.request(&moved, &path_node, None, 64);
+    assert_eq!(current_node, source.version_id);
+    assert_eq!(pool.engine.file_branch_head(&source_context.branch_id).unwrap(), source_head);
+    assert!(pool.engine.state().file_path_nodes.is_empty());
+    let request = pool.request(&moved, &current_node, None, 64);
     let before_query = storage_contract::canonical_json(pool.engine.state()).unwrap();
     let page = pool.page(request.clone());
     assert_eq!(page.source_version_id.as_str(), source.version_id);

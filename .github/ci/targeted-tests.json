@@ -3040,7 +3040,9 @@
           ],
           "exact": [
             "rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_sources",
-            "typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map"
+            "typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map",
+            "file_metadata_operations::tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies",
+            "history_alias_operations::cross_repository_move_keeps_source_deletion_and_target_rename_after_replay"
           ],
           "max_tests": 32
         }
@@ -8663,6 +8665,27 @@
         "container-lifecycle-contract",
         "container-lifecycle-web",
         "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/file_metadata_operations.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/history_alias_operations.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/engine/integration/content_matches/rename.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
       ]
     }
   ],
