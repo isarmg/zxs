@@ -2,9 +2,7 @@
 //! fork. The source stays in its repository; ordinary copy and direct rename
 //! retain their separate contracts.
 use super::*;
-use crate::business::history_copy::{
-    self, CopyKind, CopyRoute, Destination, FileHistoryCopyRequest,
-};
+use crate::business::history_copy::{self, CopyRoute, Destination, FileHistoryCopyRequest};
 
 fn unsupported() -> Error {
     Error::new(
@@ -197,49 +195,4 @@ pub(in crate::business) fn apply(
     let mut result = projection.result;
     result["retained_lifecycle"] = json!(projection.lifecycle);
     Ok(result)
-}
-
-impl Engine {
-    /// Read-only capture for an SMB rename. None means the ordinary direct
-    /// rename path, not that a copy or delete has already happened.
-    pub fn directory_file_export_request(
-        &self,
-        repository: &str,
-        source_path: &name_policy::LookupPath,
-        destination: &name_policy::PortablePath,
-    ) -> Result<Option<FileHistoryCopyRequest>> {
-        let state = self.state();
-        let object = self.locate_current_object(repository, source_path)?;
-        let repo = object.repository();
-        let view = self.admitted_current_namespaces()?;
-        let entries = current_entries(state, view, repository)?;
-        let source = object.entry();
-        if source.kind != NamespaceEntryKind::File
-            || !committed_departure(state, repository, entries, source, destination)?
-        {
-            return Ok(None);
-        }
-        let head = &state.branches[&repo.main_branch_id].head_commit_id;
-        let request = FileHistoryCopyRequest {
-            source_repository_id: repository.into(),
-            source_path: source.path().into(),
-            expected_source_head: head.clone(),
-            target_repository_id: repository.into(),
-            target_name: destination.as_str().into(),
-            expected_target_head: head.clone(),
-        };
-        // Capture the complete supported graph before recording a submit intent.
-        // The same checks run again under the mutation's exact original request.
-        CopyKind::DirectoryExport.sources(state, view, &request)?;
-        Ok(Some(request))
-    }
-
-    pub fn export_directory_file_history(
-        &mut self,
-        request: &FileHistoryCopyRequest,
-        principal: &str,
-        operation: OperationId,
-    ) -> Result<OperationResult> {
-        self.copy_file_history_kind(request, principal, operation, CopyKind::DirectoryExport)
-    }
 }

@@ -4,6 +4,8 @@
 
 ## 当前 CI 与失败闭环
 
+- [ ] GitHub 定向 CI 验证[旧目录导出孤儿入口退役](docs/design/directory-export-wrapper-retirement.md)：Engine 产品与全部登记消费者构建、保留目录所有权拒绝、普通文件改名的数据／标签／历史／重放以及独立历史复制故障恢复；旧 file.directory.export 的解码／永久收据／恢复实现原样保留，尚无本片专属冷恢复 fixture，不恢复非容器功能。
+
 - [ ] GitHub 定向 CI 验证[目录标签 HTTP 写入口退役](docs/design/directory-rename-http-retirement.md)：认证／匿名 PATCH 均拒绝、当前读取与冷开原标签保留、无新改名审计／收据、文件分支改名仍成功；继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部必选 trait 实现的构建闭包、永久收据与用户数据，不扩大到非容器文件或非容器目录。
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。

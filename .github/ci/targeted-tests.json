@@ -2159,9 +2159,114 @@
           "default_features": false
         }
       ]
+    },
+    "directory-export-wrapper-retirement": {
+      "reason": "Remove two unused Engine directory-export initiation wrappers; preserve retained publication decoding/recovery and scope-transfer guards, and compile all registered Engine consumers without enabling new directory functionality.",
+      "python_tests": [
+        "test_directory_export_retirement_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "mode": "check"
+        },
+        {
+          "package": "perf-check",
+          "manifest": "tools/perf-check/Cargo.toml",
+          "kind": "bin",
+          "name": "perf-check",
+          "mode": "check"
+        },
+        {
+          "package": "browser-smoke",
+          "manifest": "tools/browser-smoke/Cargo.toml",
+          "kind": "bin",
+          "name": "browser-smoke",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "business::directory_staging::tests::directory_index_and_heads_survive_cold_restart_and_receipts_replay"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "directory_git_index",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "rename::directory_git_rename_uncommitted_round_trip_keeps_history_tags_and_container",
+            "rename::directory_git_rename_committed_export_rejects_without_publication",
+            "rename::directory_git_rename_workspace_replace_cannot_remove_destination_before_rejection"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "file_history_copy",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_replay",
+            "history_copy_failure_boundaries_keep_source_and_recover_one_operation"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/directory_git/export.rs",
+      "groups": [
+        "directory-export-wrapper-retirement"
+      ]
+    },
+    {
+      "path": "test/ci/test_directory_export_retirement_ci.py",
+      "groups": [
+        "directory-export-wrapper-retirement"
+      ]
+    },
+    {
+      "path": "docs/design/directory-export-wrapper-retirement.md",
+      "groups": [
+        "directory-export-wrapper-retirement"
+      ]
+    },
     {
       "path": "test/server/integration/http_engine.rs",
       "groups": [
