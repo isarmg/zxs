@@ -1725,6 +1725,7 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/engine/src/file_deletion/freeze.rs',
                 'src/engine/src/foreign_import/identity_closure/graph/manifest.rs',
                 'src/engine/src/maintenance.rs',
+                'test/engine/integration/foreign_original_databases.rs',
             ],
             'container-tags-engine': [
                 'src/engine/src/engine/history_window/projection.rs',
@@ -1786,6 +1787,18 @@ class ContainerTagsSelection(unittest.TestCase):
                                          if key != 'selection_groups'}]))
                                 if origin == group]
                     self.assertCountEqual(selected, self.policy['groups'][group]['rust_targets'])
+
+    def test_foreign_nonempty_tag_copy_fixture_selects_its_real_integration_target(self):
+        path = 'test/engine/integration/foreign_original_databases.rs'
+        plan = CI.select_plan(self.policy, [path])
+        self.assertEqual(plan['groups'], ['container-tags-storage'])
+        target = next(target for target in plan['rust_targets']
+                      if target.get('name') == 'foreign_original_databases')
+        self.assertEqual(target['package'], 'storage-engine')
+        self.assertEqual(target['kind'], 'test')
+        self.assertTrue(target['whole'])
+        self.assertEqual(target['max_tests'], 24)
+        self.assertEqual(target['timeout_seconds'], 900)
 
     def test_atomic_change_keeps_every_old_and_new_selection_in_same_commit_shards(self):
         paths = [
