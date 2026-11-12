@@ -486,3 +486,55 @@ pub(super) fn is_file_body_request(url: &str, origin: &str) -> bool {
     let path = path.split(['?', '#']).next().unwrap_or_default();
     path.starts_with("/api/") && (path.ends_with("/content") || path.ends_with("/write-sessions"))
 }
+
+/// The retained directory read context must not expose the retired write controls.
+pub(super) fn directory_controls_retired(browser: &Browser) -> Result<()> {
+    browser.click(&browser.css("[data-zxs-current-directory-details]:not([disabled])")?)?;
+    browser.css("[data-zxs-current-directory-controls]")?;
+    browser.css("[data-directory-git-initialized='true']")?;
+    let controls = browser.script(r#"
+        return document.querySelectorAll(
+            '[data-initialize-directory-git],[data-stage-directory-owned],'+
+            '[data-stage-directory-child],[data-commit-directory],'+
+            'input[aria-label="Folder commit message"],input[aria-label="目录提交说明"]'
+        ).length;
+    "#)?;
+    if controls != 0 {
+        return Err(format!("retired directory write controls remain: {controls}").into());
+    }
+    browser.css("[data-review-directory-layout]")?;
+    browser.click(&browser.css("[data-zxs-directory-files]:not([disabled])")?)?;
+    browser.element(
+        "xpath",
+        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
+    )?;
+    println!(
+        "PASS directory write controls retired; existing layout review and file navigation remain"
+    );
+    Ok(())
+}
+
+/// This is a Web-request guard, not a declaration that backend routes are removed.
+pub(super) fn is_retired_directory_request(url: &str, origin: &str) -> bool {
+    let Some(relative) = url
+        .strip_prefix(origin)
+        .filter(|path| path.starts_with('/'))
+    else {
+        return false;
+    };
+    let (path, query) = relative.split_once('?').unwrap_or((relative, ""));
+    let directory_commit = path
+        .split_once("/directory-branches/")
+        .and_then(|(_, tail)| tail.strip_suffix("/commits"))
+        .is_some_and(|branch| !branch.is_empty() && !branch.contains('/'));
+    path.ends_with("/directory-scopes")
+        || path.ends_with("/directory-select")
+        || path.ends_with("/directory-git/initialize")
+        || path.ends_with("/directory-git/stage")
+        || path.ends_with("/directory-git/children/stage")
+        || directory_commit
+        || (path.ends_with("/entries")
+            && query
+                .split('&')
+                .any(|field| field.split('=').next() == Some("entry")))
+}

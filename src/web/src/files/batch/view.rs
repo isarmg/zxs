@@ -1,5 +1,5 @@
 //! Inline operation review using shared rows, frames and selects.
-use super::actions::{initialize_scope, load_sources, load_target, submit, toggle_source, update};
+use super::actions::{load_sources, load_target, submit, toggle_source, update};
 use super::*;
 use crate::icons::FileIcon;
 use web_interface::components::{Select, SelectOption};
@@ -18,7 +18,6 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             !file_actions::write_allowed(s)
                 || s.files.batch.as_ref().is_some_and(|draft| {
                     draft.loading
-                        || draft.registration.is_some()
                         || draft.submitted_operation.is_some()
                 })
         })
@@ -69,7 +68,13 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     view!{<label class="zxs-batch-check zxs-row"><input type="checkbox" disabled=move ||blocked.get() prop:checked=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.selected_sources.contains(&checked_id))) on:change=move |event|toggle_source(state,toggle_id.clone(),event_target_checked(&event))/><span>{branch_label(&branch)}</span></label>}
                 }).collect_view()}
             </fieldset>
-            <Show when=move ||sources.get().is_empty()&&!separation.get()&&!blocked.get()&&state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.source_resolved))><p class="zxs-row">{t("源目录需要手动初始化独立仓库。初始化会建立新的仓库边界，不自动提交文件或子仓库。","The source requires manual initialization as an independent repository. Initialization creates a repository boundary without committing files or child repositories.")}</p><button class="zxs-button" on:click=move |_|initialize_scope(state,false)>{t("初始化源目录独立仓库","Initialize independent source repository")}</button></Show>
+            <Show when=move ||sources.get().is_empty()&&!separation.get()&&!blocked.get()
+                &&state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.source_resolved))>
+                <p class="zxs-row">
+                    {t("源目录没有可用的目录分支，无法执行本次批次。",
+                        "The source has no available folder branch for this batch.")}
+                </p>
+            </Show>
             <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|!draft.source_resolved&&!draft.loading))><button class="zxs-button" disabled=move ||blocked.get() on:click=move |_|load_sources(state)>{t("重试读取源目录分支", "Retry loading source folder branches")}</button></Show>
             <div class="zxs-stack">{move ||entries.get().into_iter().map(move |entry|{
                 let id=entry_key(&entry);let value_id=StoredValue::new(id.clone());let input_id=StoredValue::new(id);let name=if separation.get(){format!("{}: {}",t("保留原件","Retained original"),selected_path(&entry))}else{entry.name().to_owned()};let dom_id=StoredValue::new(entry_id(&entry));
@@ -81,11 +86,17 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             }).collect_view()}</div>
             <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.kind.has_destination()))>
                 <div class="zxs-file-toolbar zxs-flow"><label class="zxs-batch-destination zxs-form-field"><span class="zxs-row">{t("目标目录（目录内相对路径，留空为根目录）","Destination folder (namespace-relative path; empty for root)")}</span><input class="zxs-input zxs-input--compact" type="text" aria-label=t("目标目录","Destination folder") disabled=move ||blocked.get() prop:value=move ||state.with(|s|s.files.batch.as_ref().map(|draft|draft.target_path.clone()).unwrap_or_default()) on:input=move |event|update(state,|draft|{draft.target_path=event_target_value(&event);draft.targets.clear();draft.target_resolved=false;for mapping in &mut draft.mappings{mapping.target.clear();}draft.generation+=1;draft.error.clear();}) on:keydown=move |event:web_sys::KeyboardEvent|if event.key()=="Enter"&&!event.is_composing(){event.prevent_default();load_target(state);}/></label><button class="zxs-button" disabled=move ||blocked.get() on:click=move |_|load_target(state)>{t("读取目标分支","Load destination branches")}</button></div>
-                <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.kind!=Kind::Separate&&draft.target_resolved&&draft.targets.is_empty()))><p class="zxs-row">{t("目标目录尚未初始化独立仓库；此操作不自动提交其内容。","The destination is not an independent repository yet; initialization does not commit its contents.")}</p><button class="zxs-button" disabled=move ||blocked.get() on:click=move |_|initialize_scope(state,true)>{t("初始化目标目录独立仓库","Initialize independent destination repository")}</button></Show>
+                <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft| {
+                    draft.kind!=Kind::Separate&&draft.target_resolved&&draft.targets.is_empty()
+                }))>
+                    <p class="zxs-row">
+                        {t("目标没有可用的目录分支，无法执行本次批次。",
+                            "The destination has no available folder branch for this batch.")}
+                    </p>
+                </Show>
                 <div class="zxs-stack">{move ||(0..mapping_count.get()).map(move |index|mapping_view(state,index,blocked)).collect_view()}</div>
                 <Show when=move ||!separation.get()><button class="zxs-button" disabled=move ||blocked.get()||state.with(|s|s.files.batch.as_ref().is_none_or(|draft|draft.selected_sources.is_empty())) on:click=move |_|update(state,|draft|{if let Some(source)=draft.selected_sources.first(){draft.mappings.push(Mapping{source:source.clone(),target:String::new()});}})>{t("添加分支映射","Add branch mapping")}</button></Show>
             </Show>
-            <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.registration.as_ref().is_some_and(|registration|registration.published)))><button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||file_actions::pending(s)||s.files.batch.as_ref().is_none_or(|draft|draft.loading)) on:click=move |_|reload_registered_scope(state)>{t("重试读取目录分支", "Retry loading folder branches")}</button></Show>
             {move ||confirmation.get().map(|expected| view! {
                 <button class="zxs-button" type="button" disabled=move ||blocked.get()
                     on:click=move |_|super::actions::confirm_name(state, &expected)>

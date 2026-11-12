@@ -30,7 +30,6 @@ mod backup_browse;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
-mod directory_git;
 mod disk_health;
 mod disk_tree;
 mod error_feedback;
@@ -332,7 +331,7 @@ fn exercise(
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
     metadata::backup_configuration_read(browser)?;
-    directory_git::children(browser)?;
+    metadata::directory_controls_retired(browser)?;
     naming::run(browser)?;
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
@@ -457,7 +456,7 @@ fn exercise(
                     format!("metadata-only Web requested a file-content route: {url}").into(),
                 );
             }
-            if directory_git::retired_request(url, origin) {
+            if metadata::is_retired_directory_request(url, origin) {
                 return Err(format!(
                     "Web requested a retired directory route or entry query: {url}"
                 )

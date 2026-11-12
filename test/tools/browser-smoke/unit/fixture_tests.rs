@@ -117,18 +117,26 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     let naming_git = engine
         .directory_git_status(&naming.repository_id, "")
         .unwrap();
+    assert!(naming_git.initialized);
+    assert_eq!(naming_git.repository_id, naming.repository_id);
+    assert_eq!(naming_git.directory_id, naming.repository_id);
+    assert_eq!(naming_git.path, "");
+    assert!(naming_git.directory_branch_id.is_some());
+    assert!(naming_git.head_tree_id.is_some());
     assert!(
-        !naming_git.initialized,
-        "the manual initialization browser flow must start uninitialized"
+        !naming_git.staged && !naming_git.unstaged && !naming_git.needs_restage,
+        "batch naming must start from the same committed source without Web initialization"
     );
-    assert!(naming_git.directory_branch_id.is_none());
-    assert!(naming_git.head_tree_id.is_none());
     drop(content);
     drop(engine);
     let error = seed_files(&temporary).unwrap_err();
     assert!(error.to_string().contains("fresh disposable pool"));
     let engine = Engine::open(&temporary.path().join("pool")).unwrap();
     assert_eq!(engine.file_history(&entries[0].file_id).unwrap().len(), 2);
+    assert_eq!(
+        engine.directory_git_status(&naming_git.repository_id, "").unwrap(),
+        naming_git
+    );
 }
 
 #[test]

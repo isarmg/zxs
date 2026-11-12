@@ -90,7 +90,6 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
             target_resolved: false,
             loading: false,
             submitted_operation: None,
-            registration: None,
             generation: 0,
             error: String::new(),
             name_error: None,
@@ -152,7 +151,7 @@ pub(super) fn load_sources(state: RwSignal<State>) {
                 return None;
             }
             let draft = s.files.batch.as_mut()?;
-            if draft.source_resolved || draft.loading || draft.registration.is_some() {
+            if draft.source_resolved || draft.loading {
                 return None;
             }
             draft.loading = true;
@@ -397,7 +396,7 @@ pub(super) fn load_target(state: RwSignal<State>) {
     let Some((target, generation, repository, disk_prefix, id, slot, epoch)) = state
         .with_untracked(|s| {
             let draft = s.files.batch.as_ref()?;
-            if draft.registration.is_some() || draft.loading || !draft.source_resolved {
+            if draft.loading || !draft.source_resolved {
                 return None;
             }
             Some((
@@ -459,8 +458,8 @@ pub(super) fn load_target(state: RwSignal<State>) {
         if !complete_target_scopes(state, epoch, &id, generation, result) {
             return;
         }
-        // No registered scope exists. Verify the live writable directory before
-        // offering registration, while leaving historical-only scopes readable.
+        // No registered scope exists. Verify the live writable directory
+        // without creating a scope; historical-only scopes remain readable.
         let cancellation = match start_scope_read(state, epoch, &id, generation) {
             Ok(Some(value)) => value,
             Ok(None) => return,
@@ -496,8 +495,8 @@ pub(super) fn load_target(state: RwSignal<State>) {
                     draft.target_resolved = true;
                     if draft.targets.is_empty() {
                         draft.error = t(
-                            "目标尚未独立初始化，请先初始化目标目录仓库。",
-                            "Initialize the destination directory as an independent repository first.",
+                            "目标没有可用的目录分支，无法执行本次批次。",
+                            "The destination has no available folder branch for this batch.",
                         );
                     }
                 }
@@ -513,273 +512,10 @@ pub(super) fn load_target(state: RwSignal<State>) {
         }
     });
 }
-pub(super) fn begin_scope_registration(
-    draft: &mut Draft,
-    operation_id: String,
-    destination: bool,
-) -> Option<ScopeRegistration> {
-    if draft.loading
-        || !draft.source_resolved
-        || draft.registration.is_some()
-        || draft.submitted_operation.is_some()
-        || (destination && (!draft.target_resolved || !draft.targets.is_empty()))
-        || (!destination && !draft.sources.is_empty())
-    {
-        return None;
-    }
-    let registration = ScopeRegistration {
-        operation_id,
-        destination,
-        path: if destination {
-            draft.target_path.clone()
-        } else {
-            draft.repository_path.clone()
-        },
-        generation: draft.generation,
-        published: false,
-    };
-    draft.registration = Some(registration.clone());
-    draft.loading = true;
-    Some(registration)
-}
-
-pub(super) fn initialize_scope(state: RwSignal<State>, destination: bool) {
-    let Some((repository, id, epoch, namespace_head)) = state.with_untracked(|s| {
-        if !file_actions::write_allowed(s) || !s.files.loaded {
-            return None;
-        }
-        let draft = s.files.batch.as_ref()?;
-        if draft.registration.is_some()
-            || draft.loading
-            || draft.repository != s.files.repository_id
-        {
-            return None;
-        }
-        Some((
-            draft.repository.clone(),
-            draft.id.clone(),
-            s.session_epoch,
-            s.files.namespace_head.clone(),
-        ))
-    }) else {
-        return;
-    };
-    let Some(operation_id) = crate::ui::file_operation_id(state) else {
-        return;
-    };
-    let Some(registration) = state
-        .try_update(|s| {
-            let registration = begin_scope_registration(
-                s.files.batch.as_mut()?,
-                operation_id.clone(),
-                destination,
-            )?;
-            s.files.mutation_pending = true;
-            Some(registration)
-        })
-        .flatten()
-    else {
-        return;
-    };
-    let (endpoint, body) = initialization_request(
-        &repository,
-        &registration.path,
-        &namespace_head,
-        &operation_id,
-    );
-    spawn_local(async move {
-        let result = api::request("POST", &endpoint, Some(body)).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => {
-                // The same settlement hook resumes reads for direct and polled receipts.
-                file_actions::record_receipt(state, &operation_id, value);
-            }
-            Err(error) => {
-                if error.mutation_outcome_unknown() {
-                    file_actions::record_operation(state, FileOperation::unknown(&operation_id));
-                } else {
-                    state.update(|s| {
-                        settle_operation(
-                            &mut s.files,
-                            &operation_id,
-                            super::super::model::SaveStatus::Rejected,
-                        );
-                    });
-                }
-                if same_draft(state, &id) {
-                    update(state, |draft| draft.error = error.to_string());
-                }
-                fail(state, error);
-            }
-        }
-        // Receipt settlement owns draft.loading: a confirmed receipt may already
-        // have started a follow-on read that this POST must not release.
-        state.update(|s| s.files.mutation_pending = false);
-    });
-}
-
-pub(super) fn initialization_request(
-    repository: &str,
-    path: &str,
-    namespace_head: &str,
-    operation_id: &str,
-) -> (String, Value) {
-    (
-        format!(
-            "/api/repositories/{}/directory-git/initialize",
-            api::segment(repository)
-        ),
-        json!({"path":path,"expected_namespace_head":namespace_head,"operation_id":operation_id}),
-    )
-}
-
-pub(crate) fn reload_registered_scope(state: RwSignal<State>) {
-    if !state.with_untracked(State::session_active) {
-        return;
-    }
-    let Some((epoch, draft, registration)) = state
-        .try_update(|s| {
-            let draft = s.files.batch.as_mut()?;
-            let registration = draft
-                .registration
-                .as_ref()
-                .filter(|registration| registration.published)?;
-            if draft.loading {
-                return None;
-            }
-            let registration = registration.clone();
-            draft.loading = true;
-            draft.error.clear();
-            Some((s.session_epoch, draft.clone(), registration))
-        })
-        .flatten()
-    else {
-        return;
-    };
-    spawn_local(async move {
-        let result = async {
-            let cancellation = start_scope_read(state, epoch, &draft.id, registration.generation)?
-                .ok_or_else(api::session_changed)?;
-            let value = api::cancellable_get(
-                &scope_endpoint(&draft.repository, &registration.path),
-                cancellation,
-            )
-            .await?;
-            if !current_session(state, epoch)
-                || !current_target(state, &draft.id, registration.generation)
-            {
-                return Err(api::session_changed());
-            }
-            let scopes = Scopes::parse(value, Projection::Summary)?;
-            if registration.destination
-                || scopes.repository != draft.repository
-                || scopes.branches.is_empty()
-            {
-                return Ok(scopes);
-            }
-            let branches = scopes.branches;
-            let cancellation = start_scope_read(state, epoch, &draft.id, registration.generation)?
-                .ok_or_else(api::session_changed)?;
-            api::cancellable_request(
-                "POST",
-                &selected_scope_endpoint(&draft.repository),
-                Some(selected_scope_body(&draft, &branches, &registration.path)),
-                cancellation,
-            )
-            .await
-            .and_then(|value| Scopes::parse(value, Projection::Selected))
-        }
-        .await;
-        complete_registered_scope(
-            state,
-            epoch,
-            &draft.id,
-            &registration.operation_id,
-            registration.generation,
-            result,
-        );
-    });
-}
-
-pub(super) fn complete_registered_scope(
-    state: RwSignal<State>,
-    epoch: u64,
-    id: &str,
-    operation_id: &str,
-    generation: u64,
-    result: Result<Scopes, api::Error>,
-) {
-    if !accept_read_response(state, epoch, &result)
-        || !state.with_untracked(|s| {
-            s.files.batch.as_ref().is_some_and(|draft| {
-                draft.id == id
-                    && draft.generation == generation
-                    && draft.registration.as_ref().is_some_and(|registration| {
-                        registration.operation_id == operation_id && registration.published
-                    })
-            })
-        })
-    {
-        return;
-    }
-    match result {
-        Ok(scopes) => update(state, |draft| {
-            draft.loading = false;
-            draft.scope_read = None;
-            let branches = scopes.branches;
-            if scopes.repository != draft.repository || branches.is_empty() {
-                draft.error = t(
-                    "目录分支记录尚未读取成功，请重试读取。",
-                    "Folder branch records could not be loaded. Retry the read.",
-                );
-                return;
-            }
-            if draft
-                .registration
-                .as_ref()
-                .expect("invariant: matching published registration was checked")
-                .destination
-            {
-                draft.targets = branches;
-                draft.target_resolved = true;
-            } else {
-                draft.sources = branches;
-                draft.source_resolved = true;
-                draft.selected_sources = draft
-                    .sources
-                    .iter()
-                    .filter(|branch| branch.summary().current())
-                    .map(branch_id)
-                    .collect();
-                draft.mappings = draft
-                    .selected_sources
-                    .iter()
-                    .map(|source| Mapping {
-                        source: source.clone(),
-                        target: String::new(),
-                    })
-                    .collect();
-            }
-            draft.registration = None;
-            draft.error.clear();
-        }),
-        Err(error) => {
-            update(state, |draft| {
-                draft.loading = false;
-                draft.scope_read = None;
-                draft.error = error.to_string();
-            });
-            fail(state, error);
-        }
-    }
-}
 /// Confirmation changes only the displayed original; the complete request is
 /// rebuilt against the current branch identities and target paths below.
 pub(super) fn accept_name(draft: &mut Draft, expected: &NameFailure) -> bool {
-    if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
+    if draft.loading || draft.submitted_operation.is_some() {
         return false;
     }
     if draft.name_error.as_ref() != Some(expected) {
@@ -830,7 +566,7 @@ pub(super) fn submit(state: RwSignal<State>) {
             return None;
         }
         let draft = s.files.batch.as_ref()?;
-        if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
+        if draft.loading || draft.submitted_operation.is_some() {
             return None;
         }
         Some((

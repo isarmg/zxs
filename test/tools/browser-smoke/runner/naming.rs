@@ -32,10 +32,9 @@ fn open_scope(browser: &Browser, name: &str) -> Result<()> {
 }
 
 pub(super) fn run(browser: &Browser) -> Result<()> {
-    // This persisted scope has content but no directory composition records.
-    // The separate history fixture must keep its real initialized parent edges.
+    // The persisted source is established by the private server-side fixture.
+    // Naming still exercises the real source identity without retired Web writes.
     open_scope(browser, super::fixture::NAMING_REPOSITORY)?;
-    super::directory_git::initialize_and_commit(browser)?;
     browser.script(r#"
         const original = window.fetch;
         const unrelatedKey='zxs:browser-smoke:recovery-unrelated',unrelatedValue='keep this unrelated record';
@@ -209,8 +208,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             let checkbox=browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
             browser.click(&checkbox)?;
             browser.click(&browser.button("Rename", "重命名")?)?;
-            // The explicit Git initialization and commit above established this
-            // source. Batch review must reuse it rather than create an old scope.
+            // The private fixture established this real source. Batch review
+            // must reuse its identity rather than create another scope.
             wait_for("registered and selected batch source scope", || {
                 let scope = browser.script(r#"
                     const editor=document.querySelector('.zxs-batch-editor');
@@ -227,7 +226,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             })?;
             no_write(browser, 4)?;
             println!(
-                "PASS initialized source repository and selected-entry read before batch NFC review"
+                "PASS persisted source repository and selected-entry read before batch NFC review"
             );
             let codepoints = browser.script(&format!(
                 "const input=document.querySelector('.zxs-batch-entry input');input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return Array.from(input.value,ch=>ch.codePointAt(0))",

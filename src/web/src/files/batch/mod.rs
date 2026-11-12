@@ -50,14 +50,6 @@ pub(crate) struct Mapping {
     source: String,
     target: String,
 }
-#[derive(Clone)]
-struct ScopeRegistration {
-    operation_id: String,
-    destination: bool,
-    path: String,
-    generation: u64,
-    published: bool,
-}
 struct ScopeRead(api::ReadCancellation);
 impl Drop for ScopeRead {
     fn drop(&mut self) {
@@ -96,7 +88,6 @@ pub(crate) struct Draft {
     mappings: Vec<Mapping>,
     loading: bool,
     submitted_operation: Option<String>,
-    registration: Option<ScopeRegistration>,
     generation: u64,
     error: String,
     name_error: Option<NameFailure>,
@@ -164,48 +155,23 @@ mod request;
 mod scopes;
 use scopes::{Projection, ScopeBranch, Scopes, SelectedFact};
 mod view;
-pub(crate) use actions::{reload_registered_scope, start};
+pub(crate) use actions::start;
 use request::{destination_endpoint, destination_path, request};
 pub(crate) use view::view;
 
 /// Keep uncertain transactions tied to their original operation. A namespace
-/// receipt closes only its matching draft; a registration receipt requests one
-/// follow-on read without discarding the review or repeating the registration.
+/// receipt closes only its matching draft; unrelated receipts preserve the review.
 pub(crate) fn settle_operation(
     model: &mut Model,
     id: &str,
     status: super::model::SaveStatus,
-) -> bool {
-    if let Some(draft) = model.batch.as_mut()
-        && let Some(registration) = draft.registration.as_mut()
-        && registration.operation_id == id
-    {
-        // Publication is terminal. Older receipts cannot revoke its association
-        // or release the follow-on read (including a failed read awaiting retry).
-        if registration.published {
-            return false;
-        }
-        match status {
-            super::model::SaveStatus::Published | super::model::SaveStatus::Degraded => {
-                registration.published = true;
-                draft.loading = false;
-                return true;
-            }
-            super::model::SaveStatus::Rejected => {
-                draft.registration = None;
-                draft.loading = false;
-                draft.error = super::model::publication_notice(status);
-            }
-            super::model::SaveStatus::Unknown => draft.loading = false,
-        }
-        return false;
-    }
+) {
     if !model
         .batch
         .as_ref()
         .is_some_and(|draft| draft.submitted_operation.as_deref() == Some(id))
     {
-        return false;
+        return;
     }
     match status {
         super::model::SaveStatus::Published | super::model::SaveStatus::Degraded => {
@@ -219,5 +185,4 @@ pub(crate) fn settle_operation(
         }
         super::model::SaveStatus::Unknown => {}
     }
-    false
 }

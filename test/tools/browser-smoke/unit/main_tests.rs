@@ -162,15 +162,19 @@ fn metadata_only_network_guard_distinguishes_content_and_metadata() {
 }
 
 #[test]
-fn directory_network_guard_rejects_retired_routes_and_entry_queries_only() {
+fn directory_network_guard_rejects_retired_web_writes_and_entry_queries_only() {
     let origin = "http://127.0.0.1:2345";
     for path in [
         "/api/repositories/repo_123/directory-scopes",
+        "/api/repositories/repo_123/directory-git/initialize",
+        "/api/repositories/repo_123/directory-git/stage",
+        "/api/repositories/repo_123/directory-git/children/stage",
+        "/api/repositories/repo_123/directory-branches/dbr_123/commits",
         "/api/file-manager/disks/P01/directory-select",
         "/api/file-manager/disks/P01/entries?entry=old",
         "/api/file-manager/disks/P01/entries?path=folder&entry=old",
     ] {
-        assert!(directory_git::retired_request(
+        assert!(metadata::is_retired_directory_request(
             &format!("{origin}{path}"),
             origin
         ));
@@ -178,19 +182,23 @@ fn directory_network_guard_rejects_retired_routes_and_entry_queries_only() {
     for path in [
         "/api/repositories/repo_123/directory-git?path=",
         "/api/repositories/repo_123/default-branch",
+        "/api/repositories/repo_123/directory-layout/reconcile",
+        "/api/repositories/repo_123/directory-branches/dbr_123",
+        "/api/file-manager/files/file_123/branches/br_123/commits",
+        "/api/file-manager/disks/P01/directory-branches",
         "/api/file-manager/disks/P01/entries?path=entry",
         "/api/file-manager/disks/P01/entries?path=folder&selected_path=folder/file&selected_entry_id=entry_123",
     ] {
-        assert!(!directory_git::retired_request(
+        assert!(!metadata::is_retired_directory_request(
             &format!("{origin}{path}"),
             origin
         ));
     }
-    assert!(!directory_git::retired_request(
+    assert!(!metadata::is_retired_directory_request(
         "http://other.test/api/repositories/r/directory-scopes",
         origin
     ));
-    assert!(!directory_git::retired_request(
+    assert!(!metadata::is_retired_directory_request(
         "http://127.0.0.1:23456/api/repositories/r/directory-scopes",
         origin
     ));

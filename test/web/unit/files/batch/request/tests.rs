@@ -38,10 +38,6 @@ fn summary_response(mut value: Value) -> Value {
     }
     value
 }
-fn admitted(value: Value) -> Scopes {
-    Scopes::parse(value, Projection::Selected).unwrap()
-}
-
 fn file(id: &str, path: &str, version: &str) -> Value {
     json!({"entry_id":id,"file_id":id,"path":path,"selected_path":path,"name":path.rsplit('/').next().unwrap(),"kind":"file","version_id":version})
 }
@@ -111,7 +107,6 @@ fn draft(kind: Kind) -> Draft {
         ],
         loading: false,
         submitted_operation: None,
-        registration: None,
         generation: 0,
         error: String::new(),
         name_error: None,
@@ -676,44 +671,6 @@ fn destination_lookup_replaces_cached_targets_using_authoritative_directory_iden
 }
 
 #[test]
-fn registration_poll_reloads_its_branch_records_without_reposting() {
-    Owner::new().with(|| {
-        for destination in [false, true] {
-            let mut batch = draft(Kind::Copy);
-            if destination {
-                batch.targets.clear();
-            } else {
-                batch.sources.clear();
-                batch.selected_sources.clear();
-                batch.mappings.clear();
-            }
-            // Use the exact synchronous registration admission used by the action.
-            assert!(super::super::actions::begin_scope_registration(&mut batch, "scope-original".into(), destination).is_some());
-            let state = RwSignal::new(State {
-                authenticated: true,
-                ..Default::default()
-            });
-            state.update(|s| s.files.batch = Some(batch));
-            file_actions::record_operation(state, crate::files::FileOperation::unknown("scope-original"));
-            assert!(state.with_untracked(file_actions::pending));
-            let mut receipt: Value = json_codec::from_str(include_str!("../../fixtures/namespace-batch-operation.json")).unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
-    receipt.as_object_mut().unwrap().remove("current_health");
-            receipt["operation_id"] = "scope-original".into();
-            receipt["operation_kind"] = "directory.git.initialize".into();
-            receipt["result"] = json!({"directory_branch_id":"registered","head_tree_id":"registered-tree"});
-            assert_eq!(file_actions::record_receipt(state, "scope-original", receipt), crate::files::model::SaveStatus::Published);
-            state.with_untracked(|s| {
-                assert!(!file_actions::pending(s));
-                let batch = s.files.batch.as_ref().unwrap();
-                assert!(batch.loading, "the successful poll must resume the scope read rather than offer another registration POST");
-                assert_eq!(batch.names[&entry_key(&batch.entries[0])], "new.txt");
-            });
-        }
-    });
-}
-
-#[test]
 fn target_scope_completion_ignores_superseded_reads_and_preserves_historical_scopes() {
     Owner::new().with(|| {
         let state = RwSignal::new(State { authenticated: true, session_epoch: 8, ..Default::default() });
@@ -740,206 +697,6 @@ fn target_scope_completion_ignores_superseded_reads_and_preserves_historical_sco
         assert!(super::super::actions::complete_target_scopes(state, 8, "draft", 3, Ok(summary_response(json!({"repository_id":"repo","directory_branches":[]})))));
         assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
         assert!(!state.with_untracked(|s| s.files.batch.as_ref().unwrap().target_resolved));
-    });
-}
-
-fn registration_review(destination: bool) -> RwSignal<State> {
-    let mut batch = draft(Kind::Copy);
-    if destination {
-        batch.targets.clear();
-    } else {
-        batch.sources.clear();
-        batch.selected_sources.clear();
-        batch.mappings.clear();
-    }
-    assert!(
-        super::super::actions::begin_scope_registration(
-            &mut batch,
-            "scope-original".into(),
-            destination,
-        )
-        .is_some()
-    );
-    let state = RwSignal::new(State {
-        authenticated: true,
-        session_epoch: 7,
-        ..Default::default()
-    });
-    state.update(|s| {
-        s.management.storage = crate::management::Storage::Ready;
-        s.files.writable = true;
-        s.files.batch = Some(batch);
-    });
-    state
-}
-fn scope_receipt() -> Value {
-    let mut receipt: Value = json_codec::from_str(include_str!(
-        "../../fixtures/namespace-batch-operation.json"
-    ))
-    .unwrap();
-    // Project the captured diagnostic into the outcome-only wire contract.
-    receipt.as_object_mut().unwrap().remove("current_health");
-    receipt["operation_id"] = "scope-original".into();
-    receipt["operation_kind"] = "directory.git.initialize".into();
-    receipt["result"] =
-        json!({"directory_branch_id":"registered","head_tree_id":"registered-tree"});
-    receipt
-}
-fn scope_read_error(status: u16) -> api::Error {
-    api::Error {
-        status,
-        code: storage_contract::ErrorCode::InjectedFailure,
-        message: "Scope read failed".into(),
-        retryable: true,
-        request_id: None,
-        source: None,
-    }
-}
-
-#[test]
-fn published_registration_read_failure_retries_only_the_read_and_keeps_inputs() {
-    Owner::new().with(|| {
-        for destination in [false, true] {
-            let state = registration_review(destination);
-            let original_names =
-                state.with_untracked(|s| s.files.batch.as_ref().unwrap().names.clone());
-            // A complete direct receipt uses the same hook as the later poll.
-            assert_eq!(
-                file_actions::record_receipt(state, "scope-original", scope_receipt()),
-                crate::files::model::SaveStatus::Published
-            );
-            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-            super::super::actions::complete_registered_scope(
-                state,
-                7,
-                "draft",
-                "scope-original",
-                0,
-                Err(scope_read_error(503)),
-            );
-            state.with_untracked(|s| {
-                let draft = s.files.batch.as_ref().unwrap();
-                assert!(!draft.loading);
-                assert_eq!(draft.names, original_names);
-                assert!(draft.registration.as_ref().unwrap().published);
-                assert!(!draft.error.is_empty());
-                assert!(!file_actions::pending(s));
-            });
-            // These real action entries must return before secure-ID generation
-            // or a new POST, even though general write admission is healthy.
-            super::super::actions::initialize_scope(state, destination);
-            super::super::actions::submit(state);
-            super::super::actions::load_target(state);
-            state.with_untracked(|s| {
-                assert!(!s.files.mutation_pending);
-                let draft = s.files.batch.as_ref().unwrap();
-                assert_eq!(draft.generation, 0);
-                assert!(!draft.loading);
-                assert!(draft.submitted_operation.is_none());
-                assert_eq!(
-                    draft.registration.as_ref().unwrap().operation_id,
-                    "scope-original"
-                );
-            });
-            reload_registered_scope(state);
-            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-            // A repeated receipt cannot release or duplicate the in-flight read.
-            file_actions::record_receipt(state, "scope-original", scope_receipt());
-            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-            let mut registered = branch("registered", if destination { "b" } else { "a" }, vec![]);
-            registered["current"] = true.into();
-            super::super::actions::complete_registered_scope(
-                state,
-                7,
-                "draft",
-                "scope-original",
-                0,
-                Ok(admitted(
-                    json!({"repository_id":"repo","directory_branches":[registered.clone()]}),
-                )),
-            );
-            state.with_untracked(|s| {
-                let draft = s.files.batch.as_ref().unwrap();
-                assert!(!draft.loading);
-                assert!(draft.registration.is_none());
-                assert!(draft.error.is_empty());
-                assert_eq!(draft.names, original_names);
-                if destination {
-                    assert_eq!(draft.targets, vec![scope(registered)]);
-                    assert!(draft.target_resolved);
-                } else {
-                    assert_eq!(draft.sources, vec![scope(registered)]);
-                    assert_eq!(
-                        draft.selected_sources,
-                        BTreeSet::from(["registered".into()])
-                    );
-                    assert_eq!(draft.mappings.len(), 1);
-                    assert_eq!(draft.mappings[0].source, "registered");
-                }
-                assert_eq!(s.files.operations.len(), 1);
-            });
-        }
-    });
-}
-
-#[test]
-fn registration_receipts_and_reads_belong_only_to_the_original_draft_and_session() {
-    Owner::new().with(|| {
-        let state = registration_review(true);
-        state.update(|s| {
-            assert!(!settle_operation(&mut s.files, "unrelated", crate::files::model::SaveStatus::Published));
-            assert!(!s.files.batch.as_ref().unwrap().registration.as_ref().unwrap().published);
-        });
-        file_actions::record_receipt(state, "scope-original", scope_receipt());
-        let ready = json!({"repository_id":"repo","directory_branches":[branch("registered", "b", vec![])]});
-        for (epoch, id, operation, generation) in [(6,"draft","scope-original",0),(7,"old-draft","scope-original",0),(7,"draft","other",0),(7,"draft","scope-original",1)] {
-            super::super::actions::complete_registered_scope(state, epoch, id, operation, generation, Ok(admitted(ready.clone())));
-            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-            assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().targets.is_empty()));
-        }
-        // Missing records after confirmed publication remain a read-retry, not
-        // permission to register again under a new operation ID.
-        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(json!({"repository_id":"repo","directory_branches":[]}))));
-        assert!(state.with_untracked(|s| s.files.batch.as_ref().unwrap().registration.is_some()));
-        assert!(!state.with_untracked(|s| s.files.batch.as_ref().unwrap().loading));
-        state.update(|s| s.files.batch = None);
-        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Ok(admitted(ready)));
-        assert!(state.with_untracked(|s| s.files.batch.is_none()));
-        // Closing the review cannot hide expiry of its still-current session.
-        super::super::actions::complete_registered_scope(state, 7, "draft", "scope-original", 0, Err(scope_read_error(401)));
-        assert!(!state.with_untracked(State::session_active));
-    });
-}
-
-#[test]
-fn rejected_registration_releases_only_its_own_post_for_explicit_retry() {
-    Owner::new().with(|| {
-        let state = registration_review(false);
-        state.update(|s| {
-            assert!(!settle_operation(
-                &mut s.files,
-                "other",
-                crate::files::model::SaveStatus::Rejected
-            ));
-            assert!(s.files.batch.as_ref().unwrap().registration.is_some());
-            assert!(!settle_operation(
-                &mut s.files,
-                "scope-original",
-                crate::files::model::SaveStatus::Rejected
-            ));
-            let draft = s.files.batch.as_mut().unwrap();
-            assert!(draft.registration.is_none());
-            assert!(!draft.loading);
-            assert_eq!(draft.names[&entry_key(&draft.entries[0])], "new.txt");
-            assert!(
-                super::super::actions::begin_scope_registration(
-                    draft,
-                    "retry-after-rejection".into(),
-                    false
-                )
-                .is_some()
-            );
-        });
     });
 }
 
@@ -970,63 +727,11 @@ fn a_replacement_source_without_own_scopes_stays_unregistered() {
             assert!(draft.selected_sources.is_empty());
             assert!(draft.mappings.is_empty());
             assert!(!draft.loading);
-            assert!(
-                super::super::actions::begin_scope_registration(
-                    draft,
-                    "new-directory-registration".into(),
-                    false
-                )
-                .is_some()
-            );
-            assert_eq!(draft.registration.as_ref().unwrap().path, "a");
+            assert!(draft.source_resolved);
+            assert!(request(draft).is_err());
+            assert!(draft.submitted_operation.is_none());
+            assert_eq!(draft.repository_path, "a");
         });
-    });
-}
-
-#[test]
-fn confirmed_registration_cannot_be_downgraded_by_late_receipts() {
-    use crate::files::model::SaveStatus;
-    Owner::new().with(|| {
-        for confirmed in [SaveStatus::Published, SaveStatus::Degraded] {
-            for late in [
-                SaveStatus::Unknown,
-                SaveStatus::Rejected,
-                SaveStatus::Published,
-                SaveStatus::Degraded,
-            ] {
-                for loading in [true, false] {
-                    let state = registration_review(true);
-                    state.update(|s| {
-                        assert!(settle_operation(&mut s.files, "scope-original", confirmed));
-                        let draft = s.files.batch.as_mut().unwrap();
-                        draft.loading = loading;
-                        draft.error = if loading {
-                            String::new()
-                        } else {
-                            "Retry this read".into()
-                        };
-                        let error = draft.error.clone();
-                        let names = draft.names.clone();
-                        assert!(!settle_operation(&mut s.files, "scope-original", late));
-                        let draft = s.files.batch.as_ref().unwrap();
-                        assert!(
-                            draft
-                                .registration
-                                .as_ref()
-                                .is_some_and(|registration| registration.published
-                                    && registration.operation_id == "scope-original"),
-                            "confirmed publication must keep its original read association"
-                        );
-                        assert_eq!(
-                            draft.loading, loading,
-                            "late receipts cannot release or restart the follow-on read"
-                        );
-                        assert_eq!(draft.error, error);
-                        assert_eq!(draft.names, names);
-                    });
-                }
-            }
-        }
     });
 }
 
@@ -1056,15 +761,12 @@ fn selected_scope_query_carries_only_captured_heads_and_selection_pairs() {
 }
 
 #[test]
-fn unresolved_sources_never_allow_submission_or_registration() {
+fn unresolved_sources_never_allow_submission() {
     let mut draft = draft(Kind::Delete);
     draft.source_resolved = false;
     assert!(request(&draft).is_err());
     draft.sources.clear();
-    assert!(
-        super::super::actions::begin_scope_registration(&mut draft, "must-not-write".into(), false)
-            .is_none()
-    );
+    assert!(request(&draft).is_err());
 }
 
 #[test]
@@ -1306,29 +1008,6 @@ fn batch_nfc_review_requires_a_selected_source_even_when_inputs_are_editable() {
     assert_eq!(body["items"][0]["target"]["path"], "é");
 }
 
-#[test]
-fn batch_repository_initialization_uses_new_git_contract_and_reviewed_namespace() {
-    let operation = "op_00000000000000000000000000000001";
-    let (endpoint, value) = super::super::actions::initialization_request(
-        "repo_00000000000000000000000000000001",
-        "folder",
-        "commit_00000000000000000000000000000001",
-        operation,
-    );
-    assert!(endpoint.ends_with("/directory-git/initialize"));
-    let request: storage_contract::directory_git::DirectoryGitInitializeBody =
-        json_codec::from_value(value).unwrap();
-    assert_eq!(request.path, "folder");
-    assert_eq!(
-        request.expected_namespace_head,
-        "commit_00000000000000000000000000000001"
-    );
-    assert_eq!(request.operation_id.to_string(), operation);
-    let view = include_str!("../../../../../../src/web/src/files/batch/view.rs");
-    assert!(view.contains("Initialize independent source repository"));
-    assert!(!view.contains("Register source folder branch records"));
-}
-
 fn separation_draft() -> Draft {
     let mut draft = draft(Kind::Separate);
     draft.entries.truncate(1);
@@ -1501,7 +1180,7 @@ fn separation_in_plain_subfolders_uses_owner_main_but_keeps_both_user_paths() {
 }
 
 #[test]
-fn separation_without_an_owner_blocks_instead_of_offering_registration() {
+fn separation_without_an_owner_blocks_without_a_mutation() {
     Owner::new().with(|| {
         let state = RwSignal::new(State {
             authenticated: true,
@@ -1524,8 +1203,35 @@ fn separation_without_an_owner_blocks_instead_of_offering_registration() {
             let review = s.files.batch.as_ref().unwrap();
             assert!(review.sources.is_empty());
             assert!(!review.error.is_empty());
-            assert!(review.registration.is_none());
+            assert!(review.submitted_operation.is_none());
             assert!(request(review).is_err());
+        });
+    });
+}
+
+#[test]
+fn empty_source_rejects_submission_before_allocating_a_mutation() {
+    Owner::new().with(|| {
+        let mut snapshot = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        snapshot.management.storage = crate::management::Storage::Ready;
+        snapshot.files.loaded = true;
+        snapshot.files.writable = true;
+        let mut batch = draft(Kind::Copy);
+        batch.sources.clear();
+        batch.selected_sources.clear();
+        batch.mappings.clear();
+        snapshot.files.batch = Some(batch);
+        let state = RwSignal::new(snapshot);
+        super::super::actions::submit(state);
+        state.with_untracked(|s| {
+            let batch = s.files.batch.as_ref().unwrap();
+            assert!(!batch.error.is_empty());
+            assert!(batch.submitted_operation.is_none());
+            assert!(!s.files.mutation_pending);
+            assert!(s.files.operations.is_empty());
         });
     });
 }

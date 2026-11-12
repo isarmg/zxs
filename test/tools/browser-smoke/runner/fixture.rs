@@ -131,7 +131,6 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         storage_engine::OperationId::generate().unwrap(),
     )?;
     seed_naming_scope(&mut engine)?;
-    super::directory_git::fixture::seed(&mut engine)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;
@@ -151,8 +150,9 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
     Ok(())
 }
 
-// Naming exercises explicit registration from an empty directory-branch scope.
-// Keep it separate from the already registered graph/parent-edge fixture.
+// Batch naming still consumes an established directory source. Seed it in this
+// private pool; the Web no longer initializes or commits directory repositories.
+// Keep this identity separate from the file-history fixture.
 fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
     let repository = engine.create_repository(
         &storage_engine::RepositoryName::parse(NAMING_REPOSITORY)?,
@@ -172,6 +172,8 @@ fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
         message: "Browser naming registration fixture".into(),
         request_digest: None,
     })?;
+    initialize_directory_fixture(engine, &repository, "")?;
+    commit_directory_fixture(engine, &repository.repository_id, "")?;
     Ok(())
 }
 

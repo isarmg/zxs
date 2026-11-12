@@ -1,4 +1,4 @@
-//! Actual directory branch and staging controls, owned by current-folder Details.
+//! Current-folder navigation, existing branch context and placement controls.
 use super::super::model::{
     directory_branch_name, directory_branch_value, selected_directory_branch,
 };
@@ -78,7 +78,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                     on:click=move |_|crate::ui::navigate(state,crate::ui::Page::Files)>{t("查看本目录文件","View this folder’s files")}</button>
                 {inline::control(state,t("新建文件夹","New folder"),Some("create"),inline::Target::CreateDirectory,mutation_disabled)}
                 <button class="zxs-button" data-directory-git-refresh="" disabled=move ||navigation_disabled.get()
-                    on:click=move |_|actions::refresh_directory(state)>{t("刷新目录与仓库状态","Refresh folder and repository status")}</button>
+                    on:click=move |_|actions::refresh_directory(state)>{t("刷新目录上下文","Refresh folder context")}</button>
                 <Show when=move ||state.with(|s|s.files.directory_preview.is_some())>
                     <button class="zxs-button" data-open-preview-origin="" disabled=move ||navigation_disabled.get()
                         on:click=move |_|actions::open_preview_origin(state)>{t("返回原目录详情", "Return to source folder Details")}</button>
@@ -98,7 +98,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <Show when=move ||state.with(|s|s.files.directory_preview.is_some())><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|actions::return_to_default(state)>{t("返回默认视图","Return to default view")}</button></Show>
             <p class="zxs-row">{t("切换仅浏览分支，不改变默认分支。设为默认后才更新默认读取，已启用的 SMB 共享使用该视图；目录外文件保持不变。","Switching only browses a branch. Set it as default to update default reads, including enabled SMB shares; files outside the folder stay unchanged.")}</p>
         </div>
-            <p class="zxs-row">{t("初始化、暂存、提交及 checkout 都针对这里显示的目录。目录合并尚未提供；不会调用旧整树历史分支或手工合并连线。", "Initialization, staging, commits and checkout apply to the folder shown here. Folder merging is not available; legacy whole-history branches and manual merge links are not used.")}</p>
             {super::super::staging::view(state)}
             {backup::view(state)}
             {super::super::placement::view(state)}

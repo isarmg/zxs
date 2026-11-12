@@ -18,6 +18,69 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_legacy_directory_staging_retirement_keeps_live_groups_with_eight_builds(self):
+        paths = [
+            'src/web/src/files/staging.rs', 'src/web/src/files/actions/mutation.rs',
+            'src/web/src/files/actions/mod.rs', 'src/web/src/files/detail/directory.rs',
+            'src/web/src/files/detail.rs', 'test/web/unit/files/staging_tests.rs',
+            'src/web/src/files/batch/actions.rs', 'src/web/src/files/batch/view.rs',
+            'src/web/src/files/batch/mod.rs', 'src/web/src/files/actions/operation.rs',
+            'test/web/unit/files/batch/request/tests.rs',
+            'test/tools/browser-smoke/runner/fixture.rs',
+            'test/tools/browser-smoke/runner/naming.rs',
+            'test/tools/browser-smoke/runner/main.rs',
+            'test/tools/browser-smoke/runner/metadata.rs',
+            'test/tools/browser-smoke/unit/fixture_tests.rs',
+            'test/tools/browser-smoke/unit/main_tests.rs',
+            'test/tools/browser-smoke/runner/directory_git.rs',
+            'test/tools/browser-smoke/runner/directory_git/children.rs',
+            'test/tools/browser-smoke/runner/directory_git/fixture.rs',
+            'test/tools/browser-smoke/unit/directory_git_probe_test.mjs',
+            'test/tools/browser-smoke/unit/directory_git_fixture_tests.rs',
+            'test/ci/test_directory_git_probe.py',
+            'docs/design/directory-staging-web-retirement.md',
+            'docs/tools/browser-smoke.md',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'], [
+            'browser-identity-generation', 'browser-smoke-fixture', 'ci-selection',
+            'directory-rename-recovery',
+            'historical-directory-web', 'legacy-directory-staging-web-retirement',
+            'paged-deletion-review', 'web-directory-history-retirement',
+        ])
+        self.assertEqual(len(plan['rust_targets']), 8)
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_directory_rename_targeted_ci']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assertNotIn('working-directory-prerequisite', plan['groups'])
+        browser = next(target for target in plan['rust_targets']
+                       if target['package'] == 'browser-smoke'
+                       and target.get('mode', 'test') == 'test')
+        self.assertTrue(any(selection['prefixes'] == ['fixture::tests::', 'tests::']
+                            for selection in browser['selections']))
+        web = next(target for target in plan['rust_targets']
+                   if target['package'] == 'web-app'
+                   and target.get('mode', 'test') == 'test')
+        self.assertTrue(any('files::batch::request::tests::' in selection.get('prefixes', [])
+                            and 'files::actions::operation::tests::'
+                            in selection.get('prefixes', [])
+                            for selection in web['selections']))
+
+    def test_deleted_directory_browser_writers_select_live_replacements_not_deleted_python(self):
+        for path in ['test/tools/browser-smoke/runner/directory_git.rs',
+                     'test/tools/browser-smoke/runner/directory_git/children.rs',
+                     'test/tools/browser-smoke/runner/directory_git/fixture.rs',
+                     'test/tools/browser-smoke/unit/directory_git_probe_test.mjs',
+                     'test/tools/browser-smoke/unit/directory_git_fixture_tests.rs',
+                     'test/ci/test_directory_git_probe.py']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['legacy-directory-staging-web-retirement'])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 4)
+
     def test_working_directory_paths_select_structural_io_and_registry_consumers(self):
         paths = [
             'src/contract/src/working_tree.rs',
@@ -85,6 +148,25 @@ class TargetedSelection(unittest.TestCase):
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
         ])
+
+    def test_directory_fault_script_changes_execute_the_real_ordinary_parent(self):
+        for path in ['test/platform/unit/fs_safety/directory-retry.sh',
+                     'test/platform/unit/fs_safety/directory_retry.c']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'],
+                                 ['held-directory-layout', 'working-directory-prerequisite'])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 4)
+                engine = next(target for target in plan['rust_targets']
+                              if target['package'] == 'storage-engine'
+                              and target.get('mode', 'test') == 'test')
+                self.assertEqual(engine['selection_groups'],
+                                 ['held-directory-layout', 'working-directory-prerequisite'])
+                self.assertTrue(any(
+                    'disk::owned::working_directory::tests::' in selection['prefixes']
+                    for selection in engine['selections']
+                ))
 
     def test_tooling_change_selects_only_related_python_modules(self):
         plan = CI.select_plan(self.policy, ['.github/scripts/check-targeted-ci.py'])

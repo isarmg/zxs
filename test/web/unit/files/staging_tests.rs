@@ -56,7 +56,6 @@ fn reviewed(value: json_codec::Value) -> (State, Model) {
     model.status = Some(decode(value, &target).unwrap());
     model.review_target = Some(target);
     model.reading = false;
-    model.message = "Review current work".into();
     (state, model)
 }
 #[test]
@@ -90,11 +89,10 @@ fn empty_directory_git_status_keeps_unborn_head_staged() {
     for field in ["added", "modified", "deleted"] {
         value[field] = "0".into();
     }
-    let (state, model) = reviewed(value.clone());
+    let (_, model) = reviewed(value.clone());
     let status = model.status.as_ref().unwrap();
     assert!(status.initialized && status.head_tree_id.is_none() && status.staged);
     assert_eq!(status.index_generation, 1);
-    assert!(commit_review(&state, &model).is_some());
 
     value["staged"] = false.into();
     assert_eq!(
@@ -104,14 +102,13 @@ fn empty_directory_git_status_keeps_unborn_head_staged() {
 
     value["head_tree_id"] = id("dtree", 1).into();
     value["index_generation"] = "2".into();
-    let (state, model) = reviewed(value);
+    let (_, model) = reviewed(value);
     let status = model.status.as_ref().unwrap();
     assert_eq!(
         status.head_tree_id.as_deref(),
         Some(id("dtree", 1).as_str())
     );
     assert!(!status.staged);
-    assert!(commit_review(&state, &model).is_none());
 }
 
 #[test]
@@ -135,18 +132,12 @@ fn directory_git_nullable_fields_are_required_not_legacy_defaults() {
     }
 }
 #[test]
-fn uninitialized_directory_belongs_to_ancestor_and_requires_manual_initialization() {
-    let (state, model) = reviewed(uninitialized());
-    assert_eq!(
-        initialize_review(&state, &model),
-        Some(Review::Initialize {
-            repository: id("repo", 1),
-            path: "folder".into(),
-            namespace_head: id("commit", 1)
-        })
-    );
-    assert!(commit_review(&state, &model).is_none());
-    assert!(child_review(&state, &model, &id("entry", 2)).is_none());
+fn uninitialized_directory_context_rejects_invalid_ownership_and_branch_fields() {
+    let status = decode(uninitialized(), &target()).unwrap();
+    assert!(!status.initialized);
+    let owner = status.owner.unwrap();
+    assert_eq!(owner.directory_id, id("repo", 1));
+    assert_eq!(owner.path, "");
     for change in 0..6 {
         let mut value = uninitialized();
         match change {
@@ -162,34 +153,6 @@ fn uninitialized_directory_belongs_to_ancestor_and_requires_manual_initializatio
     }
 }
 #[test]
-fn commit_pins_working_tree_and_index_without_committing_children() {
-    let mut value = wire();
-    value["children"] = json!([child()]);
-    let (state, model) = reviewed(value);
-    assert!(initialize_review(&state, &model).is_none());
-    assert_eq!(
-        commit_review(&state, &model),
-        Some(Review::Commit {
-            repository: id("repo", 1),
-            branch: id("dbr", 1),
-            tree: id("dtree", 1),
-            index_generation: 9_007_199_254_740_993,
-            message: CommitMessage::parse("Review current work").unwrap()
-        })
-    );
-    assert_eq!(
-        child_review(&state, &model, &id("entry", 2)),
-        Some(Review::StageChild {
-            repository: id("repo", 1),
-            directory: id("entry", 1),
-            branch: id("dbr", 1),
-            index_generation: 9_007_199_254_740_993,
-            child: id("entry", 2),
-            head: id("dtree", 2)
-        })
-    );
-}
-#[test]
 fn child_reference_is_explicit_and_never_inferred_from_parent_or_dirty_work() {
     let mut value = wire();
     let mut pending = child();
@@ -199,9 +162,8 @@ fn child_reference_is_explicit_and_never_inferred_from_parent_or_dirty_work() {
     pending["reference_changed"] = false.into();
     pending["staged"] = true.into();
     value["children"] = json!([pending]);
-    let (state, model) = reviewed(value);
+    let (_, model) = reviewed(value);
     assert!(model.status.as_ref().unwrap().children[0].staged);
-    assert!(child_review(&state, &model, &id("entry", 2)).is_none());
     for change in 0..5 {
         let mut value = wire();
         value["children"] = json!([child()]);
@@ -230,24 +192,23 @@ fn writes_require_fresh_review_same_session_and_no_pending_operation() {
             5 => state.files.mutation_pending = true,
             _ => unreachable!(),
         }
-        assert!(commit_review(&state, &model).is_none(), "change {change}");
+        assert!(model.ready(&state).is_none(), "change {change}");
     }
     let mut changed = model.clone();
     changed.reading = true;
-    assert!(commit_review(&original, &changed).is_none());
+    assert!(changed.ready(&original).is_none());
     changed.reading = false;
     changed.error = Some(invalid());
-    assert!(commit_review(&original, &changed).is_none());
+    assert!(changed.ready(&original).is_none());
 }
 #[test]
-fn repeated_reads_have_distinct_tokens_and_navigation_discards_draft() {
+fn repeated_reads_have_distinct_tokens_and_navigation_discards_old_context() {
     let (_, mut model) = reviewed(wire());
     let target = target();
     let first = model.begin(Some(target.clone()));
     let second = model.begin(Some(target.clone()));
     assert!(!model.current(&target, first));
     assert!(model.current(&target, second));
-    assert_eq!(model.message, "Review current work");
     assert!(
         model.status.is_some(),
         "failed refresh retains old read-only context"
@@ -255,96 +216,11 @@ fn repeated_reads_have_distinct_tokens_and_navigation_discards_draft() {
     let mut next = target;
     next.path = "another".into();
     model.begin(Some(next));
-    assert!(model.message.is_empty() && model.status.is_none());
+    assert!(model.status.is_none() && model.review_target.is_none());
 }
 #[test]
-fn directory_commit_message_uses_the_server_note_contract() {
-    let (state, mut model) = reviewed(wire());
-    for message in [
-        "".into(),
-        " \n ".into(),
-        "\u{2003}".into(),
-        "Review\twork".into(),
-        "Review\0work".into(),
-        "Review\u{85}work".into(),
-        "字".repeat(43),
-    ] {
-        model.message = message;
-        assert!(CommitMessage::parse(&model.message).is_err());
-        assert!(commit_review(&state, &model).is_none());
-    }
-    model.message = format!("{}ab", "字".repeat(42));
-    assert_eq!(model.message.len(), 128);
-    assert!(commit_review(&state, &model).is_some());
-    model.message = "  Review café / 资料  ".into();
-    let Some(Review::Commit { message, .. }) = commit_review(&state, &model) else {
-        panic!("valid commit note must remain available");
-    };
-    assert_eq!(message.as_str(), model.message);
-    model.status.as_mut().unwrap().staged = false;
-    assert!(commit_review(&state, &model).is_none());
-}
-
-#[test]
-fn changed_repository_boundaries_require_explicit_owned_restage() {
-    let mut value = wire();
-    value["needs_restage"] = true.into();
-    let (state, model) = reviewed(value);
-    assert!(commit_review(&state, &model).is_none());
-    assert_eq!(
-        owned_review(&state, &model),
-        Some(Review::StageOwned {
-            repository: id("repo", 1),
-            directory: id("entry", 1),
-            branch: id("dbr", 1),
-            tree: id("dtree", 1),
-            index_generation: 9_007_199_254_740_993
-        })
-    );
-    let mut value = wire();
-    value["children"] = json!([child()]);
-    value["children"][0]["needs_restage"] = true.into();
-    let (state, model) = reviewed(value);
-    assert!(
-        commit_review(&state, &model).is_some(),
-        "a child's boundary work never requires committing that child"
-    );
-    assert!(owned_review(&state, &model).is_none());
-    let mut value = uninitialized();
-    value["needs_restage"] = true.into();
-    assert!(decode(value, &target()).is_err());
-}
-
-#[test]
-fn fresh_child_pin_can_precede_owned_restage_without_authorizing_parent_commit() {
-    let mut value = wire();
-    value["needs_restage"] = true.into();
-    value["children"] = json!([child()]);
-    let (state, model) = reviewed(value);
-    assert!(owned_review(&state, &model).is_some());
-    assert!(child_review(&state, &model, &id("entry", 2)).is_some());
-    assert!(commit_review(&state, &model).is_none());
-
-    let mut refreshed = model.clone();
-    refreshed.status.as_mut().unwrap().index_generation += 1;
-    let Some(Review::StageChild {
-        index_generation, ..
-    }) = child_review(&state, &refreshed, &id("entry", 2))
-    else {
-        panic!("a refreshed direct child HEAD remains explicitly stageable");
-    };
-    assert_eq!(index_generation, 9_007_199_254_740_994);
-    assert!(commit_review(&state, &refreshed).is_none());
-}
-
-#[test]
-fn all_directory_reviews_share_fresh_scope_session_and_write_fences() {
-    let (original, initialize) = reviewed(uninitialized());
-    let (_, commit) = reviewed(wire());
-    let mut value = wire();
-    value["needs_restage"] = true.into();
-    value["children"] = json!([child()]);
-    let (_, staging) = reviewed(value);
+fn shared_directory_context_requires_fresh_scope_session_and_write_fences() {
+    let (original, model) = reviewed(wire());
     for change in 0..9 {
         let mut state = original.clone();
         match change {
@@ -359,47 +235,24 @@ fn all_directory_reviews_share_fresh_scope_session_and_write_fences() {
             8 => state.authenticated = false,
             _ => unreachable!(),
         }
-        assert!(
-            initialize_review(&state, &initialize).is_none(),
-            "initialize change {change}"
-        );
-        assert!(
-            commit_review(&state, &commit).is_none(),
-            "commit change {change}"
-        );
-        assert!(
-            owned_review(&state, &staging).is_none(),
-            "owned change {change}"
-        );
-        assert!(
-            child_review(&state, &staging, &id("entry", 2)).is_none(),
-            "child change {change}"
-        );
+        assert!(model.ready(&state).is_none(), "change {change}");
     }
 }
 
 #[test]
-fn unstaged_work_can_be_staged_without_forcing_it_into_an_existing_index_commit() {
+fn directory_status_keeps_required_work_and_boundary_fields() {
+    for field in ["unstaged", "needs_restage"] {
+        let mut value = uninitialized();
+        value[field] = true.into();
+        assert!(decode(value, &target()).is_err());
+        let mut value = wire();
+        value.as_object_mut().unwrap().remove(field);
+        assert!(decode(value, &target()).is_err());
+    }
     let mut value = wire();
-    value["unstaged"] = true.into();
-    let (state, mut model) = reviewed(value);
-    assert!(owned_review(&state, &model).is_some());
-    assert!(
-        commit_review(&state, &model).is_some(),
-        "the existing index remains committable"
-    );
-    model.status.as_mut().unwrap().staged = false;
-    assert!(commit_review(&state, &model).is_none());
-    assert!(owned_review(&state, &model).is_some());
-    let mut value = uninitialized();
-    value["unstaged"] = true.into();
-    assert!(decode(value, &target()).is_err());
-    let mut value = wire();
-    value.as_object_mut().unwrap().remove("unstaged");
-    assert!(
-        decode(value, &target()).is_err(),
-        "older responses are not silently upgraded"
-    );
+    value["children"] = json!([child()]);
+    value["children"][0]["needs_restage"] = true.into();
+    assert!(decode(value, &target()).unwrap().children[0].needs_restage);
 }
 
 #[test]
