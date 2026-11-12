@@ -2475,7 +2475,13 @@
     {
       "path": "test/engine/unit/engine/disk_readmission_tests.rs",
       "groups": [
-        "held-directory-layout"
+        "checkpoint-layout",
+        "held-directory-layout",
+        "ordinary-conversion-name-budget",
+        "paged-deletion-review",
+        "projection-cache-layout",
+        "typed-name-consumers",
+        "working-directory-prerequisite"
       ]
     },
     {

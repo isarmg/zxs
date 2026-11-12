@@ -41,7 +41,16 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         ])
         self.assertIn('historical-directory-web', plan['groups'])
         self.assertIn('web-recovery-principals', plan['groups'])
-        self.assertEqual(len(plan['rust_targets']), 4)
+        self.assertEqual(len(plan['rust_targets']), 6)
+        browser_targets = [target for target in plan['rust_targets']
+                           if target['package'] == 'browser-smoke']
+        self.assertCountEqual([
+            (target['manifest'], target['kind'], target['name'], target.get('mode', 'test'))
+            for target in browser_targets
+        ], [
+            ('tools/browser-smoke/Cargo.toml', 'bin', 'browser-smoke', 'test'),
+            ('tools/browser-smoke/Cargo.toml', 'bin', 'browser-smoke', 'check'),
+        ])
         self.assertLessEqual(len(plan['python_tests']), 8)
         native = next(target for target in plan['rust_targets']
                       if target['package'] == 'web-app'

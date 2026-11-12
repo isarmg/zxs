@@ -369,7 +369,7 @@ fn private_entry_sync_failure_preserves_created_identity_and_held_directory() {
         DirectoryCreateOutcome::Rejected(DirectoryIoError::Collision(_))
     ));
     let stage = std::env::var("ZXS_DIRECTORY_STAGE").unwrap();
-    println!("ZXS_WORKING_DIRECTORY_COMPLETE operation=create stage={stage}");
+    println!("\nZXS_WORKING_DIRECTORY_COMPLETE operation=create stage={stage}");
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn working_directory_rename_sync_failure_retains_installed_outcome() {
     let failed = format!("fail {}\n", host.display());
     let synced_source = format!("sync {}\n", parent.path().display());
     assert!(log.split_once(&failed).unwrap().1.contains(&synced_source));
-    println!("ZXS_WORKING_DIRECTORY_COMPLETE operation=install stage=parent");
+    println!("\nZXS_WORKING_DIRECTORY_COMPLETE operation=install stage=parent");
 }
 
 #[test]

@@ -575,98 +575,161 @@ fn readmission_rejects_replaced_identity_and_unclosed_old_logical_tail() {
 #[cfg(feature = "fault-injection")]
 #[test]
 fn readmission_every_durable_cut_resumes_only_exact_saved_operation() {
+    use std::io::Write;
+
     for cut in 0..17 {
-        let mut fixture = Fixture::new(true);
-        let mut points = vec![
-            "after_readmission_target_archive".into(),
-            "after_readmission_target_decision".into(),
-            "after_readmission_probe_admission".into(),
-            "after_readmission_activation_plan".into(),
-            "after_readmission_locator".into(),
-            "after_publication_1".into(),
-            "before_membership_activation_projection".into(),
-        ];
-        for disk in &fixture.config.disks[1..] {
-            points.push(format!("after_readmission_archive_{}", disk.disk_id));
-            points.push(format!("after_readmission_decision_{}", disk.disk_id));
-        }
-        for disk in &fixture.config.disks {
-            points.push(format!("after_readmission_marker_{}", disk.disk_id));
-            points.push(format!("after_readmission_seal_{}", disk.disk_id));
-        }
-        let point = points.remove(cut);
-        fixture.disable();
-        let operation = OperationId::generate().unwrap();
-        let archive = fixture.begin(operation);
-        fixture.engine.inject_fault_once(&point);
-        assert!(
-            fixture
-                .engine
-                .activate_disk_readmission(
-                    &archive.archive_path,
-                    &archive.root_hash,
-                    directory(&fixture.config.disks[0])
-                )
-                .is_err(),
-            "{point}"
-        );
-        drop(fixture.engine);
-        let root = fixture.temp.path().join("system");
-        let mut engine = if Engine::readmission_recovery_pending(&root).unwrap() {
-            assert!(
-                Engine::resume_disk_readmission_operation(
-                    &root,
-                    OperationId::generate().unwrap(),
-                    "admin",
-                    None
-                )
-                .is_err()
+        let started = std::time::Instant::now();
+        let progress = |phase: &str| {
+            let message = format!(
+                "\nZXS_READMISSION_CUT cut={cut} phase={phase} elapsed_ms={}\n",
+                started.elapsed().as_millis(),
             );
-            assert!(
-                Engine::resume_disk_readmission_operation(&root, operation, "another-actor", None)
-                    .is_err()
-            );
-            Engine::resume_disk_readmission_operation(&root, operation, "admin", None).unwrap()
-        } else {
-            let mut engine = Engine::open_for_recovery(&root).unwrap();
-            engine
-                .begin_disk_readmission(
-                    &fixture.config.disks[0].disk_id,
-                    "admin",
-                    operation,
-                    directory(&fixture.config.disks[0]),
-                )
-                .unwrap();
-            engine
-                .activate_disk_readmission(
-                    &archive.archive_path,
-                    &archive.root_hash,
-                    directory(&fixture.config.disks[0]),
-                )
-                .unwrap();
-            engine
+            let mut stderr = std::io::stderr().lock();
+            stderr.write_all(message.as_bytes()).unwrap();
+            stderr.flush().unwrap();
         };
-        assert_eq!(
-            engine.disk_readmission_status().unwrap().unwrap().phase,
-            DiskReadmissionPhase::Published,
-            "{point}"
-        );
-        assert_eq!(
-            engine.state.operations[&operation].kind, "disk-readmit",
-            "{point}"
-        );
-        assert!(
-            !engine.is_read_only(),
-            "published readmission remains read-only at {point}"
-        );
-        write(
-            &mut engine,
-            &fixture.branch,
-            "resumed.txt",
-            point.as_bytes(),
-        );
-        drop(engine);
-        assert!(Engine::open(&root).is_ok(), "{point}");
+        progress("cut.begin");
+        {
+            progress("fixture.begin");
+            let mut fixture = Fixture::new(true);
+            progress("fixture.end");
+            let mut points = vec![
+                "after_readmission_target_archive".into(),
+                "after_readmission_target_decision".into(),
+                "after_readmission_probe_admission".into(),
+                "after_readmission_activation_plan".into(),
+                "after_readmission_locator".into(),
+                "after_publication_1".into(),
+                "before_membership_activation_projection".into(),
+            ];
+            for disk in &fixture.config.disks[1..] {
+                points.push(format!("after_readmission_archive_{}", disk.disk_id));
+                points.push(format!("after_readmission_decision_{}", disk.disk_id));
+            }
+            for disk in &fixture.config.disks {
+                points.push(format!("after_readmission_marker_{}", disk.disk_id));
+                points.push(format!("after_readmission_seal_{}", disk.disk_id));
+            }
+            let point = points.remove(cut);
+            progress("disable.begin");
+            fixture.disable();
+            progress("disable.end");
+            let operation = OperationId::generate().unwrap();
+            progress("begin_archive.begin");
+            let archive = fixture.begin(operation);
+            progress("begin_archive.end");
+            progress("fault_activate.begin");
+            fixture.engine.inject_fault_once(&point);
+            assert!(
+                fixture
+                    .engine
+                    .activate_disk_readmission(
+                        &archive.archive_path,
+                        &archive.root_hash,
+                        directory(&fixture.config.disks[0])
+                    )
+                    .is_err(),
+                "{point}"
+            );
+            progress("fault_activate.end");
+            progress("original_engine_drop.begin");
+            drop(fixture.engine);
+            progress("original_engine_drop.end");
+            let root = fixture.temp.path().join("system");
+            progress("pending.begin");
+            let pending = Engine::readmission_recovery_pending(&root).unwrap();
+            progress("pending.end");
+            let mut engine = if pending {
+                progress("reject_operation.begin");
+                assert!(
+                    Engine::resume_disk_readmission_operation(
+                        &root,
+                        OperationId::generate().unwrap(),
+                        "admin",
+                        None
+                    )
+                    .is_err()
+                );
+                progress("reject_operation.end");
+                progress("reject_actor.begin");
+                assert!(
+                    Engine::resume_disk_readmission_operation(
+                        &root,
+                        operation,
+                        "another-actor",
+                        None
+                    )
+                    .is_err()
+                );
+                progress("reject_actor.end");
+                progress("resume.begin");
+                let engine = Engine::resume_disk_readmission_operation(
+                    &root,
+                    operation,
+                    "admin",
+                    None,
+                )
+                .unwrap();
+                progress("resume.end");
+                engine
+            } else {
+                progress("recovery_open.begin");
+                let mut engine = Engine::open_for_recovery(&root).unwrap();
+                progress("recovery_open.end");
+                progress("rebegin.begin");
+                engine
+                    .begin_disk_readmission(
+                        &fixture.config.disks[0].disk_id,
+                        "admin",
+                        operation,
+                        directory(&fixture.config.disks[0]),
+                    )
+                    .unwrap();
+                progress("rebegin.end");
+                progress("activate.begin");
+                engine
+                    .activate_disk_readmission(
+                        &archive.archive_path,
+                        &archive.root_hash,
+                        directory(&fixture.config.disks[0]),
+                    )
+                    .unwrap();
+                progress("activate.end");
+                engine
+            };
+            progress("published_assertions.begin");
+            assert_eq!(
+                engine.disk_readmission_status().unwrap().unwrap().phase,
+                DiskReadmissionPhase::Published,
+                "{point}"
+            );
+            assert_eq!(
+                engine.state.operations[&operation].kind, "disk-readmit",
+                "{point}"
+            );
+            assert!(
+                !engine.is_read_only(),
+                "published readmission remains read-only at {point}"
+            );
+            progress("published_assertions.end");
+            progress("write.begin");
+            write(
+                &mut engine,
+                &fixture.branch,
+                "resumed.txt",
+                point.as_bytes(),
+            );
+            progress("write.end");
+            progress("resumed_engine_drop.begin");
+            drop(engine);
+            progress("resumed_engine_drop.end");
+            progress("final_open_and_drop.begin");
+            assert!(Engine::open(&root).is_ok(), "{point}");
+            progress("final_open_and_drop.end");
+            progress("cleanup.begin");
+        }
+        progress("cleanup.end");
+        progress("cut.end");
     }
 }
 

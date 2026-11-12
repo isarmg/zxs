@@ -18,6 +18,35 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_readmission_fixture_retains_all_working_directory_consumers(self):
+        path = 'test/engine/unit/engine/disk_readmission_tests.rs'
+        required = [
+            'checkpoint-layout', 'held-directory-layout',
+            'ordinary-conversion-name-budget', 'paged-deletion-review',
+            'projection-cache-layout', 'typed-name-consumers',
+            'working-directory-prerequisite',
+        ]
+        plan = CI.select_plan(self.policy, [path])
+        self.assertEqual(plan['groups'], required)
+        self.assertEqual(len(plan['rust_targets']), 13)
+        self.assertEqual(plan['python_tests'], [])
+        held = self.policy['groups']['held-directory-layout']['rust_targets'][0]
+        self.assertEqual(held['max_tests'], 190)
+        self.assertEqual(held.get('timeout_seconds', 300), 300)
+        self.assertIn('engine::membership_transition::readmission::', held['prefixes'])
+        full = CI.select_plan(self.policy, [
+            path, 'test/engine/unit/disk/working_directory_tests.rs',
+            'test/ci/test_directory_rename_targeted_ci.py',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ])
+        self.assertEqual(full['groups'],
+                         sorted(required + ['ci-selection', 'directory-rename-recovery']))
+        self.assertEqual(len(full['rust_targets']), 13)
+        self.assertEqual(full['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_directory_rename_targeted_ci']))
+        self.assertEqual(len(full['python_tests']), 8)
+
     def test_publication_location_refactor_keeps_proof_and_live_layout_selections(self):
         paths = [
             'src/engine/src/journal.rs', 'src/engine/src/persist/layout.rs',
