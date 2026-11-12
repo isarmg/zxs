@@ -4,17 +4,6 @@ use crate::engine::disk_catalog::PreparedDiskScopes;
 use crate::engine::index::preparation::SystemEncodingInput;
 use super::encoding_memo;
 
-#[cfg(feature = "fault-injection")]
-mod timing;
-
-macro_rules! timed {
-    ($stage:expr, $expression:expr) => {{
-        #[cfg(feature = "fault-injection")]
-        let _timing = timing::Span::new($stage);
-        $expression
-    }};
-}
-
 const MAX_DATABASES: usize = 81; // SYSTEM plus current/history for 32 + 8 bindings.
 pub(super) const MAX_BYTES: usize = 128 * 1024 * 1024;
 
@@ -78,28 +67,24 @@ impl Scopes {
         index: usize,
         stop: &AtomicBool,
     ) -> Result<Self> {
-        #[cfg(feature = "fault-injection")]
-        let _capture_timing = timing::Capture::new();
         let root = &prepared.targets[index].root;
         let job = &prepared.task.selection().jobs()[index];
         let own = &prepared.projection.targets[index].node.identity;
-        timed!(0, {
-            named_target(root, job)?;
-            if registry
-                .verify(&prepared.targets[index], stop)?
-                .registration(own)?
-                != Some(crate::RegistrationMode::Enabled)
-            {
-                return Err(invalid(
-                    "published database target is not in its exact registry",
-                ));
-            }
-        });
-        let published = timed!(1, registry.state_at(&prepared.targets[index], stop))?;
+        named_target(root, job)?;
+        if registry
+            .verify(&prepared.targets[index], stop)?
+            .registration(own)?
+            != Some(crate::RegistrationMode::Enabled)
+        {
+            return Err(invalid(
+                "published database target is not in its exact registry",
+            ));
+        }
+        let published = registry.state_at(&prepared.targets[index], stop)?;
         let task = &prepared.task.installation.evidence.task.scoped;
         let mut disks = None;
         let (control, source) =
-            timed!(2, crate::engine::backup_preparation::native_control::archive::read_observed(
+            crate::engine::backup_preparation::native_control::archive::read_observed(
                 root,
                 job,
                 &task.objects.native.archive_hash,
@@ -113,7 +98,7 @@ impl Scopes {
                         .expect("invariant: admitted prefix initialized disk scopes")
                         .observe(candidate, hash, state, stop)
                 },
-            ))?;
+            )?;
         if control.state_hash != prepared.source_evidence().state_hash()
             || registry
                 .candidate()
@@ -128,13 +113,13 @@ impl Scopes {
         }
         let mut disks = disks
             .ok_or_else(|| invalid("published scopes have no authenticated genesis prefix"))?;
-        timed!(3, disks.extend_backup(
+        disks.extend_backup(
             registry.candidate(),
             registry.effective_config(),
             &source,
             &published,
             stop,
-        ))?;
+        )?;
         let mut scopes = Self {
             files: BTreeMap::new(),
             descriptors: Vec::new(),
@@ -149,7 +134,7 @@ impl Scopes {
         // authenticated disk history. A memo stores only deterministic SQL bytes.
         let configuration = registry.configuration();
         let publication = &configuration.publication.publication;
-        let memo_context = timed!(4, if prepared.scope_encoding.is_some() {
+        let memo_context = if prepared.scope_encoding.is_some() {
             encoding_memo::Context {
                 target: own,
                 device: job.target.device,
@@ -168,16 +153,14 @@ impl Scopes {
             }.digest(stop)?
         } else {
             None
-        });
+        };
         let mut encodings = encoding_memo::Session::new(
             prepared.scope_encoding.as_ref().zip(memo_context),
         );
         let checkpoint = || preparation_checkpoint(stop);
-        let input = timed!(4, SystemEncodingInput::new(&published, &checkpoint))?;
-        let system = timed!(5, encodings.system(input.input_hash(), || {
-            timed!(6, input.encode(&checkpoint))
-        }))?;
-        timed!(7, input.verify(&system, &checkpoint))?;
+        let input = SystemEncodingInput::new(&published, &checkpoint)?;
+        let system = encodings.system(input.input_hash(), || input.encode(&checkpoint))?;
+        input.verify(&system, &checkpoint)?;
         scopes.system_bytes = system.len();
         scopes.add(
             Scope::SystemCurrent {
@@ -185,17 +168,15 @@ impl Scopes {
             },
             system,
         )?;
-        timed!(8, disks.finish_with_encoder(&published, stop, |current, history| {
+        disks.finish_with_encoder(&published, stop, |current, history| {
             let input = if encodings.enabled() {
                 // These complete snapshots include identity, header and every
                 // historical change, not just the final publication State.
-                timed!(9, encoding_memo::digest(&(current, history), stop))?
+                encoding_memo::digest(&(current, history), stop)?
             } else {
                 None
             };
-            timed!(10, encodings.disk_pair(input, || {
-                timed!(11, PreparedDiskScopes::encode_pair(current, history))
-            }))
+            encodings.disk_pair(input, || PreparedDiskScopes::encode_pair(current, history))
         }, |identity, current, history| {
             scopes.add(
                 Scope::DiskCurrent {
@@ -206,8 +187,8 @@ impl Scopes {
             scopes.add(Scope::DiskHistory { identity }, history)?;
             scopes.disks += 1;
             Ok(())
-        }))?;
-        scopes.manifest = timed!(12, canonical_json(&Manifest {
+        })?;
+        scopes.manifest = canonical_json(&Manifest {
             format: "zxs-backup-published-scoped-databases",
             source_fence_hash: prepared.source_fence_hash(),
             decision_hash: publication.decision_hash.as_str(),
@@ -216,15 +197,13 @@ impl Scopes {
             registry: &configuration.registry,
             target: own,
             databases: &scopes.descriptors,
-        }))?;
+        })?;
         if scopes.manifest.len() > MAX_COMPLETION {
             return Err(budget());
         }
-        timed!(12, {
-            named_target(root, job)?;
-            preparation_checkpoint(stop)?;
-            encodings.commit();
-        });
+        named_target(root, job)?;
+        preparation_checkpoint(stop)?;
+        encodings.commit();
         Ok(scopes)
     }
     fn add(&mut self, scope: Scope, bytes: Vec<u8>) -> Result<()> {
