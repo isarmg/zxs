@@ -3,6 +3,7 @@
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,26 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 PLAN_PATH = '.github/ci/targeted-tests.json'
+
+
+def observe_backup_process(target, name):
+    """Only this already-selected current-build test gets read-only observation."""
+    return (target.get('mode', 'test') == 'test'
+            and target.get('package') == 'storage-engine'
+            and target.get('manifest') == 'src/engine/Cargo.toml'
+            and target.get('kind') == 'test'
+            and target.get('name') == 'recursive_backup_paths'
+            and name == (
+                'backup_preparation::transaction_serving::'
+                'same_backup_switch_serves_and_replays_normal_successor_publications'))
+
+
+def backup_process_sampler():
+    path = ROOT / '.github/scripts/backup-process-sampling.py'
+    spec = importlib.util.spec_from_file_location('backup_process_sampling', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def step_summary(summary):
@@ -301,7 +322,7 @@ class Run:
     def save(self):
         (self.directory / 'summary.json').write_text(json.dumps(self.summary, indent=2) + '\n')
 
-    def command(self, args, timeout=60):
+    def command(self, args, timeout=60, *, observe_process=False):
         index = len(self.summary['commands'])
         record = {'command': args, 'status': 'incomplete'}
         self.summary['commands'].append(record)
@@ -312,8 +333,22 @@ class Run:
         record.update(stdout=str(stdout), stderr=str(stderr))
         try:
             with stdout.open('w') as out, stderr.open('w') as err:
-                result = subprocess.run(args, cwd=self.root, env=self.environment,
-                                        stdout=out, stderr=err, timeout=timeout)
+                if observe_process:
+                    diagnostic = self.directory / f'{index:03}.sampling.log'
+                    record['process_sampling'] = {
+                        'path': str(diagnostic),
+                        'role': 'external observation, not test success evidence',
+                        'status': 'requested; inspect observation log for availability',
+                    }
+                    self.save()
+                    # Do not retry execution if observation reports a failure.
+                    # The sampler owns exactly one child and the original deadline.
+                    result = backup_process_sampler().run(
+                        args, cwd=self.root, env=self.environment, stdout=out,
+                        stderr=err, timeout=timeout, diagnostic_path=diagnostic)
+                else:
+                    result = subprocess.run(args, cwd=self.root, env=self.environment,
+                                            stdout=out, stderr=err, timeout=timeout)
         except Exception as error:
             record.update(status='timed-out' if isinstance(error, subprocess.TimeoutExpired)
                           else 'error', error=f'{type(error).__name__}: {error}')
@@ -424,8 +459,11 @@ class Run:
                 self.save()
                 return
             try:
-                output = self.command([str(binary), '--exact', name, '--test-threads=1'],
-                                      timeouts[name])
+                arguments = [str(binary), '--exact', name, '--test-threads=1']
+                if observe_backup_process(target, name):
+                    output = self.command(arguments, timeouts[name], observe_process=True)
+                else:
+                    output = self.command(arguments, timeouts[name])
                 passed_test(output, len(names))
             except Exception as error:
                 self.failure('test', error, configuration=target, name=name)
