@@ -351,3 +351,52 @@ fn live_wal_move_readback_rejects_changed_rows_without_repairing_them() {
     }
     writer.close().unwrap();
 }
+
+fn admitted_encoding_state(state: &State) -> AdmittedState {
+    let raw: crate::history_package::RawState =
+        storage_contract::decode_strict(&storage_contract::canonical_json(state).unwrap()).unwrap();
+    AdmittedState::try_from(raw).unwrap()
+}
+
+#[test]
+fn reusable_system_input_keeps_exact_bytes_and_distinguishes_same_sequence_rows() {
+    let (_temp, engine, expected) = fixture();
+    let admitted = admitted_encoding_state(engine.state());
+    let input = SystemEncodingInput::new(&admitted, &|| Ok(())).unwrap();
+    let actual = input.encode(&|| Ok(())).unwrap();
+    assert_eq!(actual, expected);
+    input.verify(&actual, &|| Ok(())).unwrap();
+
+    let mut changed = engine.state().clone();
+    let file = changed.versions.values().next().unwrap().file_id.clone();
+    changed.file_notes.insert(file, "different encoding input".into());
+    let changed = admitted_encoding_state(&changed);
+    let other = SystemEncodingInput::new(&changed, &|| Ok(())).unwrap();
+    assert_ne!(input.input_hash(), other.input_hash());
+    assert!(other.verify(&actual, &|| Ok(())).is_err());
+}
+
+#[test]
+fn reusable_system_input_rechecks_supplied_sqlite_instead_of_trusting_its_key() {
+    let (_temp, engine, bytes) = fixture();
+    let admitted = admitted_encoding_state(engine.state());
+    let input = SystemEncodingInput::new(&admitted, &|| Ok(())).unwrap();
+    input.verify(&bytes, &|| Ok(())).unwrap();
+    let corrupted = change(&bytes, "DELETE FROM file_history_versions");
+    assert_eq!(
+        input.verify(&corrupted, &|| Ok(())).unwrap_err().code(),
+        ErrorCode::ContainerLayoutInvalid
+    );
+}
+
+#[test]
+fn reusable_system_input_checks_cancellation_at_construction_encoding_and_readback() {
+    let (_temp, engine, bytes) = fixture();
+    let admitted = admitted_encoding_state(engine.state());
+    let stopped = AtomicBool::new(true);
+    let checkpoint = || preparation_checkpoint(&stopped);
+    assert!(SystemEncodingInput::new(&admitted, &checkpoint).is_err());
+    let input = SystemEncodingInput::new(&admitted, &|| Ok(())).unwrap();
+    assert_eq!(input.encode(&checkpoint).unwrap_err().code(), ErrorCode::OperationAborted);
+    assert_eq!(input.verify(&bytes, &checkpoint).unwrap_err().code(), ErrorCode::OperationAborted);
+}

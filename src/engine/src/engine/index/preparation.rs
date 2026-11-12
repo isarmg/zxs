@@ -17,7 +17,10 @@ pub(in crate::engine) fn encode_observed(
     admitted: &AdmittedState,
     checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
-    encode_state(admitted.state(), checkpoint)
+    let input = SystemEncodingInput::new(admitted, checkpoint)?;
+    let bytes = input.encode(checkpoint)?;
+    input.verify(&bytes, checkpoint)?;
+    Ok(bytes)
 }
 
 /// A private unaccepted move draft is not an admitted snapshot. Keep this
@@ -46,11 +49,74 @@ pub(in crate::engine) fn encode_move_candidate(
     encode_state(draft.state(), checkpoint)
 }
 
+/// One bounded immutable SYSTEM encoder input. This value contains no proof of
+/// a live database or target binding. Reused bytes still require verify().
+pub(in crate::engine) struct SystemEncodingInput<'a> {
+    state: &'a State,
+    input_hash: [u8; 32],
+}
+
+impl<'a> SystemEncodingInput<'a> {
+    pub(in crate::engine) fn new(
+        admitted: &'a AdmittedState,
+        checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<Self> {
+        Self::from_state(admitted.state(), checkpoint)
+    }
+
+    fn from_state(state: &'a State, checkpoint: &impl Fn() -> Result<()>) -> Result<Self> {
+        checkpoint()?;
+        // Preserve the original complete input bound before SQL projection.
+        let bytes = crate::disk::encode_metadata(state, MAX_BYTES)?;
+        Ok(Self {
+            state,
+            input_hash: *blake3::hash(&bytes).as_bytes(),
+        })
+    }
+
+    pub(in crate::engine) fn input_hash(&self) -> [u8; 32] {
+        self.input_hash
+    }
+
+    /// Encode only. The caller must run verify() before returning or retaining
+    /// these bytes, just as it must for bytes supplied by an encoding memo.
+    pub(in crate::engine) fn encode(
+        &self,
+        checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        checkpoint()?;
+        encode_sql(self.state, checkpoint)
+    }
+
+    pub(in crate::engine) fn verify(
+        &self,
+        bytes: &[u8],
+        checkpoint: &impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        checkpoint()?;
+        require_output_size(bytes.len())?;
+        readback::verify(bytes, self.state, checkpoint)
+    }
+}
+
+fn require_output_size(bytes: usize) -> Result<()> {
+    if bytes > MAX_BYTES {
+        return Err(Error::new(
+            ErrorCode::ResourceLimit,
+            "prepared system index exceeds 64 MiB",
+        ));
+    }
+    Ok(())
+}
+
 fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<Vec<u8>> {
-    checkpoint()?;
-    // Bound the entire input before SQL rows duplicate parts of it. This is a
-    // preparation budget, not a limit silently truncating the serving index.
-    crate::disk::encode_metadata(state, MAX_BYTES)?;
+    let input = SystemEncodingInput::from_state(state, checkpoint)?;
+    let bytes = input.encode(checkpoint)?;
+    input.verify(&bytes, checkpoint)?;
+    Ok(bytes)
+}
+
+fn encode_sql(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<Vec<u8>> {
     let bytes = crate::sqlite_connection::run(
         SqliteConnectOptions::new()
             .in_memory(true)
@@ -86,18 +152,10 @@ fn encode_state(state: &State, checkpoint: &impl Fn() -> Result<()>) -> Result<V
             tx.commit().await?;
             checkpoint()?;
             let bytes = connection.serialize(None).await?;
-            if bytes.len() > MAX_BYTES {
-                return Err(Error::new(
-                    ErrorCode::ResourceLimit,
-                    "prepared system index exceeds 64 MiB",
-                ));
-            }
+            require_output_size(bytes.len())?;
             Ok(bytes.to_vec())
         },
     )?;
-    // Close the encoding connection before decoding the actual serialized
-    // image. No stored self-digest can replace the original source State.
-    readback::verify(&bytes, state, checkpoint)?;
     Ok(bytes)
 }
 

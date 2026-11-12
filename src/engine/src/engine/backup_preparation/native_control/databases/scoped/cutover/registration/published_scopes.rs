@@ -8,6 +8,7 @@ use crate::engine::backup_preparation::native_control::databases::materials::{
 };
 use crate::engine::membership_transition::{AdmittedBackupDecision, BackupFirstPublicationHash};
 
+pub(super) mod encoding_memo;
 pub(super) mod projection;
 use projection::Scopes;
 

@@ -153,7 +153,10 @@ fn run(
         status.phase = BackupPreparationPhase::Verifying;
         status.detail = "verifying every installed whole-unit image before one native registry/placement choice; original writes remain fenced".into();
     })?;
-    let prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
+    let mut prepared = PreparedBackupRegistry::capture(task, targets, stop)?;
+    // This prepared value stays on this worker stack and is never returned to
+    // a retained inspection reader. Drop/error/retry destroys its pure-byte memo.
+    prepared.scope_encoding = Some(published_scopes::encoding_memo::ScopeEncodingMemo::new());
     let hash = match choices.recover_decision_if_present(&prepared, stop)? {
         Some(hash) => hash,
         None => {

@@ -245,6 +245,8 @@ pub(in crate::engine) struct PreparedBackupRegistry {
     task: Task,
     targets: Vec<Target>,
     projection: BackupRegistryProjection,
+    // Disabled for all general/retained readers. Only runtime::run enables it.
+    scope_encoding: Option<published_scopes::encoding_memo::ScopeEncodingMemo>,
 }
 impl PreparedBackupRegistry {
     fn capture(task: Task, targets: Vec<Target>, stop: &AtomicBool) -> Result<Self> {
@@ -255,6 +257,7 @@ impl PreparedBackupRegistry {
             task,
             targets,
             projection,
+            scope_encoding: None,
         })
     }
     pub(in crate::engine) fn source_evidence(&self) -> &BackupSourceFenceEvidence {

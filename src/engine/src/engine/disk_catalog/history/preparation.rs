@@ -142,6 +142,21 @@ impl PreparedDiskScopes {
         self,
         admitted: &AdmittedState,
         stop: &AtomicBool,
+        store: impl FnMut(DiskRegistrationIdentity, Vec<u8>, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        self.finish_with_encoder(admitted, stop, Self::encode_pair, store)
+    }
+
+    /// Supply derived bytes only. Prefix/row checks and actual SQLite readback
+    /// remain outside the encoder so a memo cannot certify its own result.
+    pub(in crate::engine) fn finish_with_encoder(
+        self,
+        admitted: &AdmittedState,
+        stop: &AtomicBool,
+        mut encode: impl FnMut(
+            &DiskCatalogSnapshot,
+            &DiskHistorySnapshot,
+        ) -> Result<(Vec<u8>, Vec<u8>)>,
         mut store: impl FnMut(DiskRegistrationIdentity, Vec<u8>, Vec<u8>) -> Result<()>,
     ) -> Result<()> {
         for disk in self.disks {
@@ -158,9 +173,8 @@ impl PreparedDiskScopes {
                 header: disk.header,
                 changes: disk.changes.rows,
             };
-            let current_hash = storage_contract::object_hash("disk-current-catalog", &current)?;
-            let current_bytes = super::super::database::encode(&current, &current_hash)?;
-            let history_bytes = database::encode(&history, &digest(&history)?)?;
+            let (current_bytes, history_bytes) = encode(&current, &history)?;
+            preparation_checkpoint(stop)?;
             if super::super::database::read(&current_bytes, &current.identity)? != current
                 || database::read(&history_bytes, &current.identity)? != history
             {
@@ -172,4 +186,18 @@ impl PreparedDiskScopes {
         }
         Ok(())
     }
+
+    pub(in crate::engine) fn encode_pair(
+        current: &DiskCatalogSnapshot,
+        history: &DiskHistorySnapshot,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        let current_hash = storage_contract::object_hash("disk-current-catalog", current)?;
+        let current_bytes = super::super::database::encode(current, &current_hash)?;
+        let history_bytes = database::encode(history, &digest(history)?)?;
+        Ok((current_bytes, history_bytes))
+    }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/disk_scope_encoding_tests.rs"]
+mod encoding_tests;

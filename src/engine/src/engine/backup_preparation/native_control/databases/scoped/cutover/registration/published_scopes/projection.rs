@@ -1,6 +1,8 @@
 //! Real SQLite encoders fed by each target's own authenticated native history.
 use super::*;
 use crate::engine::disk_catalog::PreparedDiskScopes;
+use crate::engine::index::preparation::SystemEncodingInput;
+use super::encoding_memo;
 
 const MAX_DATABASES: usize = 81; // SYSTEM plus current/history for 32 + 8 bindings.
 pub(super) const MAX_BYTES: usize = 128 * 1024 * 1024;
@@ -128,7 +130,37 @@ impl Scopes {
             system_bytes: 0,
             manifest: Vec::new(),
         };
-        let system = crate::engine::index::preparation::encode(&published, stop)?;
+        // Every call above still verifies this target's registry, archive and
+        // authenticated disk history. A memo stores only deterministic SQL bytes.
+        let configuration = registry.configuration();
+        let publication = &configuration.publication.publication;
+        let memo_context = if prepared.scope_encoding.is_some() {
+            encoding_memo::Context {
+                target: own,
+                device: job.target.device,
+                inode: job.target.inode,
+                operation: job.request.operation_id,
+                source_fence: prepared.source_fence_hash(),
+                archive: &task.objects.native.archive_hash,
+                candidate: registry.candidate().hash(),
+                decision: publication.decision_hash.as_str(),
+                publication: &publication.publication_hash,
+                authority: &publication.authority_hash,
+                snapshot: &publication.snapshot_hash,
+                first_sequence: publication.first_sequence,
+                registry: &configuration.registry,
+                configuration: &configuration.config_hash,
+            }.digest(stop)?
+        } else {
+            None
+        };
+        let mut encodings = encoding_memo::Session::new(
+            prepared.scope_encoding.as_ref().zip(memo_context),
+        );
+        let checkpoint = || preparation_checkpoint(stop);
+        let input = SystemEncodingInput::new(&published, &checkpoint)?;
+        let system = encodings.system(input.input_hash(), || input.encode(&checkpoint))?;
+        input.verify(&system, &checkpoint)?;
         scopes.system_bytes = system.len();
         scopes.add(
             Scope::SystemCurrent {
@@ -136,7 +168,16 @@ impl Scopes {
             },
             system,
         )?;
-        disks.finish(&published, stop, |identity, current, history| {
+        disks.finish_with_encoder(&published, stop, |current, history| {
+            let input = if encodings.enabled() {
+                // These complete snapshots include identity, header and every
+                // historical change, not just the final publication State.
+                encoding_memo::digest(&(current, history), stop)?
+            } else {
+                None
+            };
+            encodings.disk_pair(input, || PreparedDiskScopes::encode_pair(current, history))
+        }, |identity, current, history| {
             scopes.add(
                 Scope::DiskCurrent {
                     identity: identity.clone(),
@@ -147,8 +188,6 @@ impl Scopes {
             scopes.disks += 1;
             Ok(())
         })?;
-        let configuration = registry.configuration();
-        let publication = &configuration.publication.publication;
         scopes.manifest = canonical_json(&Manifest {
             format: "zxs-backup-published-scoped-databases",
             source_fence_hash: prepared.source_fence_hash(),
@@ -163,6 +202,8 @@ impl Scopes {
             return Err(budget());
         }
         named_target(root, job)?;
+        preparation_checkpoint(stop)?;
+        encodings.commit();
         Ok(scopes)
     }
     fn add(&mut self, scope: Scope, bytes: Vec<u8>) -> Result<()> {
