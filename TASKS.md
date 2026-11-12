@@ -14,7 +14,7 @@
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
 
-- [ ] 闭环 Backup 原900秒事务超时：#1326 准确84b已通过73Rust/29Python/Engine检查，Finalize差分与测试侧分段真实执行；小型归档snapshot/history约占53%，不据此认定某次clone为根因。下一窄片仅借用已认证index/history-root Value并转移snapshot auth Value，保留全图/现场/预算/取消/错误链差分，待后继GitHub验证；#1323/#1324原事务仍超时，其他未完验证不替代。继续定位与修复，不缓存State/Report、不放宽原900、不预称三范围恢复完成；不安装/提权/改安全设置。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
+- [ ] 闭环 Backup 原900秒事务超时：#1327 准确cb507/84b原事务仍超时，本轮约816秒首次观察到native metadata已安装阶段，但后继切换/冷重放未完；55项foreign-original/平台回归通过，主Engine单元片仍待工件，不作全过结论。继续验证同一publication的Finalize摘要单次复用及真实错误/读取预算差分，并审查嵌套全量验证的纯编码复用边界；不缓存State/Report、不跳现场读回、不放宽原900、不预称三范围恢复完成，不安装/提权/改安全设置。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
 
 - [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
 

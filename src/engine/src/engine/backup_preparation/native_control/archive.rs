@@ -617,7 +617,7 @@ fn verify_observed(
             ));
         }
         verify_publication_seal(&candidate, &publication, &seal)?;
-        verify_journal_receipts(
+        let finalize_hash = verify_journal_receipts(
             &candidate,
             &publication,
             &seal,
@@ -625,8 +625,8 @@ fn verify_observed(
             &manifest.members,
             &journals,
         )?;
-        let finalize_hash = object_hash("finalize", &publication.finalize)?;
-        let finalize: crate::journal::Finalize = typed(source, "finalize", &finalize_hash)?;
+        let finalize: crate::journal::Finalize =
+            typed(source, "finalize", finalize_hash.as_str())?;
         if finalize != publication.finalize {
             return Err(invalid("original FINALIZE differs"));
         }
@@ -721,6 +721,20 @@ fn verify_receipt_prefix(
     Ok(())
 }
 
+// Constructed only from this exact FINALIZE value by the canonical hash authority.
+// Carrying the digest does not admit the independent target object or its bytes.
+struct FinalizeDigest(String);
+
+impl FinalizeDigest {
+    fn compute(finalize: &crate::journal::Finalize) -> Result<Self> {
+        Ok(Self(object_hash("finalize", finalize)?))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 fn verify_journal_receipts(
     candidate: &Candidate,
     publication: &Publication,
@@ -728,21 +742,21 @@ fn verify_journal_receipts(
     published: &Published,
     members: &[OriginalMember],
     journals: &[JournalSlots],
-) -> Result<()> {
-    let finalize_hash = object_hash("finalize", &publication.finalize)?;
+) -> Result<FinalizeDigest> {
+    let finalize_hash = FinalizeDigest::compute(&publication.finalize)?;
     for (member, slots) in members.iter().zip(journals) {
         let records = slots
             .get(&candidate.sequence)
             .ok_or_else(|| invalid("original member omits a publication slot"))?;
         for (record, _) in records {
             let expected = match record.record_type {
-                RecordType::Prepare => &candidate.snapshot_hash,
-                RecordType::Accept => &published.candidate,
-                RecordType::Finalize => &finalize_hash,
-                RecordType::Publication => &published.publication,
+                RecordType::Prepare => candidate.snapshot_hash.as_str(),
+                RecordType::Accept => published.candidate.as_str(),
+                RecordType::Finalize => finalize_hash.as_str(),
+                RecordType::Publication => published.publication.as_str(),
                 _ => return Err(invalid("unsupported original journal record")),
             };
-            if record.candidate_hash != published.candidate || record.object_hash != *expected {
+            if record.candidate_hash != published.candidate || record.object_hash != expected {
                 return Err(invalid("original journal references another decision"));
             }
         }
@@ -773,7 +787,7 @@ fn verify_journal_receipts(
             return Err(invalid("original journal repeats its publication slot"));
         }
     }
-    Ok(())
+    Ok(finalize_hash)
 }
 
 fn verify_payloads(
