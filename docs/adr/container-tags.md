@@ -95,6 +95,8 @@ snapshot 与 history root 采用直接描述容器标签语义的格式标记，
 
 拟同时替换现有 active `DiskSealFormat` 的 Genesis/Generation 语义标记，不保留旧反序列化变体。该决定不是仅拒绝含标签的旧节点：整个旧池的服务开启、offline check/export、旧备份恢复也会明确拒绝，包括原本没有标签的池。程序不提供自动迁移，也不重写旧 seal/ID/hash。这一用户可见影响属于本 ADR 的待确认格式范围，不以“用户不需要兼容”省略影响说明。
 
+同批格式闭包还包括 `membership_transition/pending.rs::PendingFormat`、`membership_transition/archive/persistent.rs` 中用于 `ArchiveRoot` 与 `ArchiveBinding` 的两种 Format，以及 `backup_preparation/native_control/archive.rs::FORMAT`。后两者是不同的 serving archive 与 preparation archive，不能只改其中一个。同步更新格式分派比较，但不因 `membership-pending` 同名就改变磁盘目录路径。
+
 启动拒绝必须在 authoritative recovery 写入前生效。只修改 snapshot marker 不足以证明此点：现有 journal preflight 在 pending/barrier failure 会早停，而恢复可继续；完整 State 重解码会扩大成本和改变合法恢复行为。因此禁止为本片直接添加“扫描所有历史并重建所有 State”的补丁。
 
 静态调用链核查显示，普通启动的 `DiskResources::open → DiskHandle::open → decode_seal` 在 `prepare_recovery_resources`、引擎锁与 journal writer 之前。非空旧 seal 不能被当作离线空盘；Generation discovery 的 rejected-member 记录也不直接为其自动覆盖授予权限。这不是所有旁路的运行证明。
@@ -111,16 +113,18 @@ snapshot 与 history root 采用直接描述容器标签语义的格式标记，
 | --- | --- | --- |
 | 普通 Genesis 启动 | `engine/membership_transition` discovery 的 `marker_path_at → decode_seal`；随后 `disk::DiskResources::open → DiskHandle::open` | 旧 active seal 阻止普通资源进入 recovery；控制锁例外如上。测试旧池及健康多数加一个旧 seal，源 seal/对象/日志不变 |
 | Generation 启动 | `discover_root_authority → verify_held_generation_from → predecessor_seal_matches`，最终资源再次准入 seal | discovery 的单成员错误记录不能成为覆盖权限；测试混合成员、合法 predecessor、排除根不被访问或覆盖 |
-| `membership-pending` | marker 与 predecessor 对 pending 有独立分支；后续 joint/archive/State 准入 | active seal 门禁不能覆盖此路。必须在 `install_marker`、generation namespace 和 active seal 写入前拒绝旧 archive/root/State；目前待闭合 |
+| `membership-pending` | `admission::inspect_new_root` 解码并比对完整 PendingDiskSeal，启动/晋升另经 marker、predecessor 与 activation namespace 判断 | active seal 门禁不能覆盖此路。新 PendingFormat 不得把旧非空根视为未初始化；无 seal 的旧 staging 还要由 ArchiveBinding 准入拒绝 |
 | native archive | `engine/backup_preparation/native_control/archive.rs::read_observed → verify_observed → original_journals`，随后 snapshot 准入 | typed archived seal 和新 snapshot 都必须准入后才能安装目标材料；外壳新、内层旧仍拒绝 |
-| native serving restore/resume | `engine/membership_transition/pending/activation/backup/startup` 的 completed discovery/authentication、native read/seal 验证 | `resume::into_completed → saved.complete()` 可同步标记。完成和未完成 resume 的全部首写须由新格式准入覆盖，目前待闭合 |
+| native serving restore/resume | `prepare_resume → authenticate → native::read → authority::read_archive_base → persistent::read_generation_base` 解码实际 ArchiveRoot、State、candidate、seal | 这些步骤先于 `PreparedBackupResume::into_completed → saved.complete()`；打开已有 writer lock 不创建缺失锁。新 archive/State 格式仍须落实并验证 completed/unfinished 两条路 |
 | history package import | `restore_history_package → load_package → graph::resolve_with_objects → manifest.validate` | 源读取先于业务 mutate/内容安装；不依赖 seal，必须独立拒绝旧 history marker、缺标签 map 和节点标签字段 |
 | foreign import | `ForeignSource::inspect → foreign_import/inspect.rs::decode_seal → read_local_disk_configuration`，另有 identity closure | inspect 只读不是 commit 准入证明。发布前 source revalidate、manifest projection 和新标签映射须同批闭合 |
 | FILE rescue | `inspect_object_database_material → FileScope::read → file_database::read_material`；重建经 `validate_records → SCHEMA.encode` | 此 API 只生成 SQLite bytes，不安装全局 State；输出文件调用方仍是独立边界。旧 rows 不得通过新 wrapper 重编码并沿用旧 hash |
 | maintenance | 已打开 Engine 的 `create_split_plan/commit_plan` 及 `maintenance.rs` 身份映射 | 计划持久化和安装前须有新标签记录完整证明；不能因启动已准入就漏掉新身份的独立标签 |
 | offline check/export | `offline_check_in_context` 先 decode seal；export 另验版本、local publication、payload | export 经 `verified_full_copy` 写目的地。旧池断代也拒绝旧正文导出，测试源不变、目的地未创建/覆盖 |
 
-入口缺口不能以普通 startup 已通过替代。尤其 pending、backup resume、foreign commit 和 rescue 输出调用方必须在格式提交前给出具体源码闭包及 GitHub 行为证据。
+`ArchiveStore::admit` 对非空 staging 先解码/比对 `ArchiveBinding`；`install_generation_archive` 先认证/解码 ArchiveRoot 后安装。两者必须使用同一新语义，拒绝无 seal 的旧 staging，不能绕过旧 pending 拒绝后从 archive 继续写。
+
+入口缺口不能以普通 startup 已通过替代。尤其 pending、backup resume、foreign commit 和 rescue 输出调用方必须在格式提交前给出新模型的具体源码闭包及 GitHub 行为证据。pending 旧 seal、新 seal 加旧 archive、无 seal 加旧 staging、completed/unfinished resume、两种 archive 均需独立拒绝测试，同时保留新格式中断恢复成功用例。
 
 ## 7. 实施与验收
 
