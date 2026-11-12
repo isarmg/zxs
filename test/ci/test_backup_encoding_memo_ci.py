@@ -10,6 +10,8 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving.rs',
+    'test/engine/unit/backup_serving_cost_tests.rs',
     '.github/scripts/backup-process-sampling.py',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes/projection/timing.rs',
     "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration.rs",
@@ -58,6 +60,9 @@ class BackupEncodingMemoSelection(unittest.TestCase):
                       unit['prefixes'])
         self.assertIn('container_storage::backup_entities::budget_tests::',
                       unit['prefixes'])
+        self.assertIn(
+            'engine::backup_preparation::native_control::databases::scoped::cutover::'
+            'registration::serving::cost_tests::', unit['prefixes'])
         self.assertEqual(product['mode'], 'check')
         self.assertFalse(product['default_features'])
         self.assertEqual(transaction['name'], 'recursive_backup_paths')

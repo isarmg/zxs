@@ -290,3 +290,7 @@ pub(super) fn observe(
 ) -> Result<BackupServingImagesReport> {
     Plan::capture(prepared, decision, expected, stop)?.observe(prepared, decision, expected, stop)
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../test/engine/unit/backup_serving_cost_tests.rs"]
+mod cost_tests;

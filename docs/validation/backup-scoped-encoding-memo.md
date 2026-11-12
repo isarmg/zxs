@@ -102,3 +102,49 @@ CI runner 直接启动同一二进制及原 `--exact` 参数一次。外部旁�
 诊断失败不改真实退出码，超时仍 kill/reap 直接子进程并沿用原 TimeoutExpired、
 后续范围 blocked 与 descendant cleanup unproven 语义。采样日志不是测试通过证据；
 仍以原真实测试输出为准。日志保存在现有 `*.log` 工件范围，未扩大 Rust 选测或构建范围；新增 26 项 Python 回归及有界旁采样。
+
+## #1284、#1286 的真实结果
+
+撤除源内计时的 `c53244a376416bfdc4abb4f270bc05937ef65ca8`（#1284）：
+60 项 Rust、8 个模块共 125 项 Python 和 1 个 Engine 无默认特性产品检查通过。
+外部采样提交 `2b8bb1eec646705785918b3a39215f783c752f48`（#1286）：
+60 项 Rust、8 个模块共 151 项 Python（本采样/选测模块 28 项）及同一产品检查通过。
+两轮唯一失败均为原完整事务 900 秒超时，已选范围没有 skipped 或 blocked；
+未选择的全仓测试不因此算作执行。
+
+#1286 的 180 次外部采样均通过身份复核、没有线程截断，持续到约 895.20 秒。
+进程累计 user CPU 约 814.04 秒、system CPU 约 84.72 秒；
+主工作线程 CPU 约 809.19 秒、调度等待约 0.191 秒。
+逻辑读取累计约 5.69 GB、约 1,100 万次读调用，物理 `read_bytes` 为 0。
+这支持“持续计算/逻辑读取”，不支持“整个进程长期睡死”；
+不能据此定位热函数、排除忙循环，或把逻辑读取当成真实物理磁盘流量。
+
+原集成测试每 2 秒只读观察持久阶段，#1286 首次见到 serving/scopes/common/Current/
+aliases/盘根库/SYSTEM 约为 38/56/102/166/296/434/712 秒；
+native metadata 尚未完成即到原期限。这不是各函数的精确执行时间。
+现有 perf 工具存在、内核 `perf_event_paranoid=4`，没有修改策略或认定实际采样获准。
+
+工件：
+- #1284：https://github.com/isarmg/zxs/actions/runs/43193433620/artifacts/13932314079
+- #1286：https://github.com/isarmg/zxs/actions/runs/43195614937/artifacts/13933119830
+
+## 真实 native serving 组件基准
+
+新增 lib 测试仅在 `test/` 调用外侧计时，生产代码只增加标准测试模块接线。
+夹具保持原用例的三层源链、两个新目标、一个文件的两份版本（共 40 字节）和空
+namespace 目录，不初始化普通目录 Git。通过真实 Engine 入口推进到实体准备，
+持有原 source/target 锁及 SYSTEM quiescence token，执行现有原生决定、发布、
+registry 与 serving 安装；不伪造“已发布 State”、manifest 或物理文件树。
+进度展示写入不是业务权威，此测试不把展示状态用作准入凭据。
+
+测量 first-publication observation、configuration inspection、published-registry
+capture/observation、serving Plan capture、registry/State 读取、完整对象数据库准备/读回、
+镜像捕获/真实物理验证以及包含 verify 回调的 with-image 调用。全局上游调用及每个目标
+均在安装后首次观测并重复一次，
+同时比较真实数据库字节、manifest 与目标报告；不是冷缓存基准，也没有时间阈值。
+边界有包含关系，不能把各项相加充当总耗时。所有原准入与现场验证继续执行，
+无生产计数器、测试专用替换实现、环境开关或 API 可见性扩大。
+
+该夹具止于 published serving image 安装，未执行后续 scopes、SYSTEM、ordinary-serving
+切换与恢复；不能代替真实完整切换与冷重放。原 900 秒集成仍独立选中，
+不放宽预算；新基准尚未在本地或 GitHub 执行，结果以随后准确提交的 CI 工件为准。
