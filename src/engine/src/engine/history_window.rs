@@ -39,8 +39,8 @@ pub use permanent_removal_cleanup::{
     RemovalReplicaCleanupState,
 };
 pub use read::{
-    ContentMatchRead, FileHistorySourceRead, HistoryWindowRead, PermanentNodeRetirementOutcome,
-    SharedHistoryRead,
+    ContentMatchRead, FileHistorySourceRead, FileLifecycleRead, HistoryWindowRead,
+    PermanentNodeRetirementOutcome, SharedHistoryRead,
 };
 
 #[cfg(test)]

@@ -146,8 +146,9 @@ mod history_selection;
 pub use directory_history::DirectoryHistoryRead;
 mod history_window;
 pub use history_window::{
-    ContentMatchRead, CoupledNodeRetirement, FileHistorySourceRead, HistoryWindowCancellation,
-    HistoryWindowRead, PermanentNodeRemovalAnalysis, PermanentNodeRemovalSelection,
+    ContentMatchRead, CoupledNodeRetirement, FileHistorySourceRead, FileLifecycleRead,
+    HistoryWindowCancellation, HistoryWindowRead, PermanentNodeRemovalAnalysis,
+    PermanentNodeRemovalSelection,
     PermanentNodeRetirementOutcome, PermanentRemovalCleanupObservation, RemovalCleanupScope,
     RemovalParentProjection, RemovalReplicaCleanup, RemovalReplicaCleanupState, SharedHistoryRead,
 };

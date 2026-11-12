@@ -121,6 +121,17 @@ fn direct_row(
 /// receipt holds its complete imported prefix, so this never chases a mutable
 /// source file or recursively follows copy ancestry.
 pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<LifecycleRow>> {
+    events_projected(view, file, || Ok(()), Ok)
+}
+
+/// The audit remains complete: cancellation returns an error, never a prefix.
+pub(crate) fn events_projected<T>(
+    view: StateProjection<'_>,
+    file: &str,
+    mut checkpoint: impl FnMut() -> Result<()>,
+    mut project: impl FnMut(LifecycleRow) -> Result<T>,
+) -> Result<Vec<T>> {
+    checkpoint()?;
     if view.owners().malformed_deletion_receipts()
         || view.owners().malformed_history_copy_receipts()
     {
@@ -136,15 +147,17 @@ pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<Lifecy
     let mut events = BTreeMap::new();
     let mut ids = BTreeSet::new();
     let mut insert = |event: LifecycleRow| -> Result<()> {
+        checkpoint()?;
         if events.len() == 65_536 {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
                 "retained deletion audit exceeds its event budget",
             ));
         }
-        if !ids.insert(event.operation_id) || events.insert(event.sequence, event).is_some() {
+        if !ids.insert(event.operation_id) || events.contains_key(&event.sequence) {
             return Err(invalid());
         }
+        events.insert(event.sequence, project(event)?);
         Ok(())
     };
     for id in rows.history_copies.keys() {

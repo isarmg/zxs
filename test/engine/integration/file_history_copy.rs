@@ -708,3 +708,6 @@ mod move_ordinary;
 
 #[path = "file_history_copy/move_execution.rs"]
 mod move_execution;
+
+#[path = "file_history_copy/lifecycle_page.rs"]
+mod lifecycle_page;

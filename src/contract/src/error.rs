@@ -266,6 +266,11 @@ impl std::fmt::Display for ErrorCode {
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("{source}")]
+    FileLifecycle {
+        source: crate::file_lifecycle::LifecycleError,
+        retryable: bool,
+    },
     #[error("INVALID_ID: invalid {prefix} identifier")]
     InvalidIdentifier {
         prefix: &'static str,
@@ -325,7 +330,8 @@ impl Error {
     }
     pub fn retryable(mut self) -> Self {
         match &mut self {
-            Self::InvalidIdentifier { retryable, .. }
+            Self::FileLifecycle { retryable, .. }
+            | Self::InvalidIdentifier { retryable, .. }
             | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
@@ -337,7 +343,8 @@ impl Error {
     }
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::InvalidIdentifier { retryable, .. }
+            Self::FileLifecycle { retryable, .. }
+            | Self::InvalidIdentifier { retryable, .. }
             | Self::IdentifierGeneration { retryable, .. }
             | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
@@ -348,6 +355,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::FileLifecycle { source, .. } => source.code(),
             Self::InvalidIdentifier { .. } => ErrorCode::InvalidId,
             Self::IdentifierGeneration { .. } => ErrorCode::InternalError,
             Self::Message { code, .. } => *code,
@@ -359,6 +367,7 @@ impl Error {
     }
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
+            Self::FileLifecycle { source, .. } => source.to_string().into(),
             Self::InvalidIdentifier { prefix, .. } => format!("invalid {prefix} identifier").into(),
             Self::IdentifierGeneration { .. } => "identifier generation failed".into(),
             Self::Message { message, .. } => message.as_str().into(),

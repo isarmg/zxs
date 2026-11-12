@@ -14,6 +14,7 @@ pub mod encoding;
 pub mod file_deletion_batch;
 pub mod file_deletion_review;
 pub mod file_history_merge;
+pub mod file_lifecycle;
 pub mod file_relocation;
 pub mod history_window;
 mod id;
