@@ -508,7 +508,23 @@ SYSTEM 的递归 observation 数量不因这次局部合并减少。
 取消则对照原错误码/source 链及其优先于坏材料的顺序。
 拒绝前后比较整个夹具的目录结构与文件字节，不覆盖权限、mtime 等元数据。
 测试只恢复它自己改坏的字节/路径，再次执行真实验证；不修复用户材料。
-本片尚待 GitHub 定向运行，不能以静态等价或单项通过宣称端到端加速。
+本片已在 #1318 的准确 `19aa38ea4866f8982997cafdea40ccabce2fb537`
+及比较基线 `258d7a7b1265bcda32792d9199b10153f2cef571` 执行：
+71 项 Rust、9 个 Python 模块共 205 项，以及 Engine 无默认特性产品检查通过。
+新增真实编码/现场拒绝用例实际为 13.73 秒；组件观察为 79.01 秒。
+installation 两轮 inclusive 为 270.691/270.328 毫秒，
+registry 为 294.294/294.887 毫秒，仍不是跨 runner 收益或同次排它成本证明。
+唯一失败仍是原 exact/max1/900 事务，selected skipped/blocked 均为空。
+其 SYSTEM 约 572 秒报告完成后，native metadata 仍未完成。
+
+#1318 unit 工件：
+https://github.com/isarmg/zxs/actions/runs/43258570252/artifacts/13963202968
+ZIP SHA256：
+`a51e3656d9cc8dc3654eb8ebee10abff2aada5ee2f14645ff8735773506009c8`。
+原完整事务工件：
+https://github.com/isarmg/zxs/actions/runs/43258570252/artifacts/13962694792
+ZIP SHA256：
+`9a85d6abbcc9b14b4cc5f07189d984d84088baf7ef4f82c457aeb81499f19111`。
 
 ## #1315 原完整事务仍失败
 
@@ -529,3 +545,56 @@ SYSTEM 的递归 observation 数量不因这次局部合并减少。
 https://github.com/isarmg/zxs/actions/runs/43253328028/artifacts/13962105785
 ZIP SHA256：
 `a8f8946d86154c6d4f49fdce757297060798e679b8e96a61814506294c9bf92c`。
+
+## 原生归档 Source 的测试侧成本分解
+
+当前未获得可用的外部函数采样能力，因此只在根测试中追加一个受限观察，
+不修改生产代码、API、缓存、计数器、hook 或原 900 秒事务。
+沿用现有三原盘、一目标、一文件一版本的 Genesis 归档夹具；
+不等同于完整事务的两目标、两版本或 generation/registry 归档。
+
+执行顺序为生产 `read_observed` → 测试侧复制 Source 分桶 →
+生产 `read_observed` → 直接委托真实 Target 的 Source → 固定故障差分 →
+恢复夹具主动改坏的字节后再次生产 `read_observed`。
+各次完整 Report、State、读取预算相同，成功路径的 object/journal 调用数也对照。
+生产入口持续验证 manifest 与原 immutable task 的绑定；
+对象分桶及 `verify_observed` 总桶不包含预先读/解码 manifest 的时间。
+
+复制边界仅为现有 Target::object 的
+checkpoint → 地址/有界真实读取 → account → strict JSON → authenticate。
+journal/account/budget 仍委托同一个真实 Target。
+分别记录地址构造与读取、strict parse、认证整体和 journal 整体的 Duration，
+以及实际次数和字节，最后直接写 stderr，避免成功 libtest 捕获掉诊断。
+认证桶仍包括其域检查、规范化、域哈希、大小和摘要比较，
+不能把该桶全部算作可省的编码时间。
+整体桶还包含 typed 解码/回编码、State/历史/收据等验证及计时开销。
+
+非法 kind/hash 地址、缺文件、坏 JSON、错误摘要、MAX_READS、
+剩余字节预算耗尽和取消，均与独立真实 Target 比较错误码/source 链及最终预算。
+这些差分约束测试复制漂移，不替代今后的代码审查，也不授权删除生产检查。
+
+日志仅输出固定标签与数值，不输出内容、路径、操作或摘要。
+`backup-archive-test-copy-us` 属于测试侧分解；
+`backup-archive-delegated-us` 才是直接委托真实 Target 的完整调用观察。
+两条路径是先后独立调用，均已预热并含观测开销，不是冷缓存或配对 A/B。
+新观察尚未运行 GitHub，不能据此先认定 JSON/hash 是主耗时。
+
+## #1320 完整比较基线中的原事务
+
+准确 head `1c0cfb43fe656f67f3a4f5ad3b49f818b55263d0`，
+base `39bcae218116b2d8f925120d9a8f34cea791df5a`。
+独立 shard 3 成功构建并实际运行唯一原事务，仍在 900 秒超时；
+该片无 Rust/Python 通过或产品检查，selected skipped/blocked 均为空。
+不能把 #1318 的窄片通过归入这个分片，其他分片由完整汇总分别核实。
+
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM 约为
+46/72/130/212/380/548/888 秒，native metadata 未完成。
+180 个有效样本至约 895.266 秒，进程 user/system 为 828.84/70.50 秒，
+worker CPU 818.509 秒、调度等待 0.235 秒；
+逻辑读取 4,560,328,414 字节、8,973,313 次，物理 read_bytes 为 0。
+同一 Task 编码修改在不同 runner 上仍有明显时长差异，不能声称确定加速。
+
+工件：
+https://github.com/isarmg/zxs/actions/runs/43261366402/artifacts/13966215855
+ZIP SHA256：
+`44e23f87531a2df87e4fd0afeaead765083ab88bda54b45ba0b2499c7a60e88f`。

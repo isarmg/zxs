@@ -3,7 +3,7 @@
 //! degraded publications are not admitted by this archive and are not claimed here.
 use super::*;
 use crate::{BackupPreparationPhase, CommitRequest, OperationId, RepositoryName};
-use std::{fs, os::unix::fs::DirBuilderExt};
+use std::{fs, io::Write, os::unix::fs::DirBuilderExt};
 
 fn operation() -> OperationId {
     OperationId::generate().unwrap()
@@ -295,5 +295,306 @@ fn real_native_objects_keep_owned_decode_results_errors_and_projection_rejection
         )
         .unwrap(),
         report,
+    );
+}
+
+struct ObservedSource<'a> {
+    target: Target<'a>,
+    reads: std::time::Duration,
+    parses: std::time::Duration,
+    authentications: std::time::Duration,
+    journals: std::time::Duration,
+    objects: usize,
+    object_bytes: usize,
+    journal_calls: usize,
+}
+
+impl<'a> ObservedSource<'a> {
+    fn new(root: &'a DiskRoot, stop: &'a AtomicBool) -> Self {
+        Self {
+            target: Target { root, stop, budget: Budget::default() },
+            reads: std::time::Duration::ZERO,
+            parses: std::time::Duration::ZERO,
+            authentications: std::time::Duration::ZERO,
+            journals: std::time::Duration::ZERO,
+            objects: 0,
+            object_bytes: 0,
+            journal_calls: 0,
+        }
+    }
+}
+
+// This test-side decomposition is not a production function profiler.
+// Keep Target's read, accounting and failure order; no extra cancellation point.
+impl Source for ObservedSource<'_> {
+    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
+        crate::history_package::preparation_checkpoint(self.target.stop)?;
+        self.objects += 1;
+        let started = std::time::Instant::now();
+        let read = (|| {
+            self.target.root.read_bytes(
+                &object_path(self.target.root.path(), kind, hash)?,
+                MAX_BYTES - self.target.budget.bytes,
+            )
+        })();
+        self.reads += started.elapsed();
+        let bytes = read?;
+        self.object_bytes += bytes.len();
+        self.target.budget.account(bytes.len())?;
+
+        let started = std::time::Instant::now();
+        let parsed = storage_contract::strict_json(&bytes);
+        self.parses += started.elapsed();
+        let value = parsed?;
+
+        let started = std::time::Instant::now();
+        let authenticated = AuthenticatedMetadataObject::authenticate(kind, hash, value);
+        self.authentications += started.elapsed();
+        authenticated
+    }
+
+    fn journal(&mut self, index: usize, expected: &OriginalMember) -> Result<Vec<u8>> {
+        self.journal_calls += 1;
+        let started = std::time::Instant::now();
+        let result = self.target.journal(index, expected);
+        self.journals += started.elapsed();
+        result
+    }
+
+    fn budget(&self) -> &Budget {
+        self.target.budget()
+    }
+
+    fn account(&mut self, bytes: usize) -> Result<()> {
+        self.target.account(bytes)
+    }
+}
+
+// Whole calls are delegated unchanged; this is the no-copy comparison.
+struct DelegatedSource<'a> {
+    target: Target<'a>,
+    objects: std::time::Duration,
+    journals: std::time::Duration,
+    object_calls: usize,
+    journal_calls: usize,
+}
+
+impl Source for DelegatedSource<'_> {
+    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
+        self.object_calls += 1;
+        let started = std::time::Instant::now();
+        let result = self.target.object(kind, hash);
+        self.objects += started.elapsed();
+        result
+    }
+
+    fn journal(&mut self, index: usize, expected: &OriginalMember) -> Result<Vec<u8>> {
+        self.journal_calls += 1;
+        let started = std::time::Instant::now();
+        let result = self.target.journal(index, expected);
+        self.journals += started.elapsed();
+        result
+    }
+
+    fn budget(&self) -> &Budget {
+        self.target.budget()
+    }
+
+    fn account(&mut self, bytes: usize) -> Result<()> {
+        self.target.account(bytes)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ObjectFailure {
+    Kind,
+    Hash,
+    Missing,
+    Digest,
+    Reads,
+    Bytes,
+}
+
+fn compare_object_failures(root: &DiskRoot, manifest: &Manifest) {
+    let stop = AtomicBool::new(false);
+    let original_hash = &manifest.publications[0].candidate;
+    let path = object_path(root.path(), "candidate", original_hash).unwrap();
+    let original = fs::read(&path).unwrap();
+    let missing_hash = "0".repeat(64);
+    assert!(!object_path(root.path(), "candidate", &missing_hash).unwrap().exists());
+    for case in [
+        ObjectFailure::Kind, ObjectFailure::Hash, ObjectFailure::Missing,
+        ObjectFailure::Digest, ObjectFailure::Reads, ObjectFailure::Bytes,
+    ] {
+        let mut production = Target { root, stop: &stop, budget: Budget::default() };
+        let mut observed = ObservedSource::new(root, &stop);
+        match case {
+            ObjectFailure::Reads => {
+                production.budget.reads = MAX_READS;
+                observed.target.budget.reads = MAX_READS;
+            }
+            ObjectFailure::Bytes => {
+                production.budget.bytes = MAX_BYTES;
+                observed.target.budget.bytes = MAX_BYTES;
+            }
+            ObjectFailure::Digest => fs::write(&path, b"{}").unwrap(),
+            ObjectFailure::Kind | ObjectFailure::Hash | ObjectFailure::Missing => {}
+        }
+        let kind = match case {
+            ObjectFailure::Kind => "not-an-archive-kind",
+            ObjectFailure::Hash | ObjectFailure::Missing | ObjectFailure::Digest
+            | ObjectFailure::Reads | ObjectFailure::Bytes => "candidate",
+        };
+        let hash = match case {
+            ObjectFailure::Hash => "not-a-hash",
+            ObjectFailure::Missing => missing_hash.as_str(),
+            ObjectFailure::Kind | ObjectFailure::Digest | ObjectFailure::Reads
+            | ObjectFailure::Bytes => original_hash.as_str(),
+        };
+        let expected = production.object(kind, hash).err().unwrap();
+        let actual = observed.object(kind, hash).err().unwrap();
+        assert_eq!(error_signature(&actual), error_signature(&expected));
+        assert_eq!(observed.budget().bytes, production.budget().bytes);
+        assert_eq!(observed.budget().reads, production.budget().reads);
+        if matches!(case, ObjectFailure::Digest) {
+            assert_eq!(fs::read(&path).unwrap(), b"{}");
+            fs::write(&path, &original).unwrap();
+        }
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+}
+
+#[test]
+fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let system = DiskRoot::open(&fixture._temp.path().join("system")).unwrap();
+    let task = NativeTask::read(&system).unwrap();
+    let stop = AtomicBool::new(false);
+    let manifest_bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let manifest: Manifest = decode_proof(&manifest_bytes).unwrap();
+    assert_eq!(object_hash(FORMAT, &manifest).unwrap(), task.archive_hash);
+
+    let before = read_observed(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    let mut source = ObservedSource::new(&root, &stop);
+    let started = std::time::Instant::now();
+    let observed = verify_observed(
+        &manifest, &manifest_bytes, task.selection.first(), &mut source,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    let total = started.elapsed();
+    let after = read_observed(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    assert_eq!(observed.0, before.0);
+    assert_eq!(after.0, before.0);
+    assert_eq!(
+        canonical_json(observed.1.state()).unwrap(),
+        canonical_json(before.1.state()).unwrap(),
+    );
+    assert_eq!(
+        canonical_json(after.1.state()).unwrap(),
+        canonical_json(before.1.state()).unwrap(),
+    );
+    assert_eq!(source.budget().reads, before.0.metadata_read_steps);
+    assert_eq!(source.budget().bytes, before.0.verified_metadata_bytes);
+    assert!(source.objects > 0);
+    assert!(source.journal_calls > 0);
+    // Fixed fields only. Total includes these buckets and all downstream validation;
+    // the remainder also includes timing/accounting overhead, not a named function.
+    // Diagnostic write failure must not replace the behavioral result.
+    let _ = writeln!(
+        std::io::stderr(),
+        concat!(
+            "[backup-archive-test-copy-us] verify_inclusive={} ",
+            "object_read_inclusive={} strict_parse={} authenticate_inclusive={} ",
+            "journal_inclusive={} objects={} object_bytes={} journals={} ",
+            "budget_reads={} budget_bytes={}"
+        ),
+        total.as_micros(), source.reads.as_micros(), source.parses.as_micros(),
+        source.authentications.as_micros(), source.journals.as_micros(),
+        source.objects, source.object_bytes, source.journal_calls,
+        source.budget().reads, source.budget().bytes,
+    );
+
+    let mut delegated = DelegatedSource {
+        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        objects: std::time::Duration::ZERO,
+        journals: std::time::Duration::ZERO,
+        object_calls: 0,
+        journal_calls: 0,
+    };
+    let started = std::time::Instant::now();
+    let direct = verify_observed(
+        &manifest, &manifest_bytes, task.selection.first(), &mut delegated,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    let direct_total = started.elapsed();
+    assert_eq!(direct.0, before.0);
+    assert_eq!(
+        canonical_json(direct.1.state()).unwrap(),
+        canonical_json(before.1.state()).unwrap(),
+    );
+    assert_eq!(delegated.budget().reads, before.0.metadata_read_steps);
+    assert_eq!(delegated.budget().bytes, before.0.verified_metadata_bytes);
+    assert_eq!(delegated.object_calls, source.objects);
+    assert_eq!(delegated.journal_calls, source.journal_calls);
+    // Diagnostic write failure must not replace the behavioral result.
+    let _ = writeln!(
+        std::io::stderr(),
+        concat!(
+            "[backup-archive-delegated-us] verify_inclusive={} object_inclusive={} ",
+            "journal_inclusive={} objects={} journals={} budget_reads={} budget_bytes={}"
+        ),
+        direct_total.as_micros(), delegated.objects.as_micros(),
+        delegated.journals.as_micros(), delegated.object_calls, delegated.journal_calls,
+        delegated.budget().reads, delegated.budget().bytes,
+    );
+
+    compare_object_failures(&root, &manifest);
+
+    // Both Sources must preserve cancellation and actual corrupt-byte failures.
+    let path = object_path(root.path(), "candidate", &manifest.publications[0].candidate).unwrap();
+    let original = fs::read(&path).unwrap();
+    for cancelled in [true, false] {
+        if !cancelled {
+            fs::write(&path, b"{").unwrap();
+        }
+        let stop = AtomicBool::new(cancelled);
+        let mut production = Target { root: &root, stop: &stop, budget: Budget::default() };
+        let mut observed = ObservedSource::new(&root, &stop);
+        let expected = verify_observed(
+            &manifest, &manifest_bytes, task.selection.first(), &mut production,
+            &mut |_, _, _, _| Ok(()),
+        ).err().unwrap();
+        let actual = verify_observed(
+            &manifest, &manifest_bytes, task.selection.first(), &mut observed,
+            &mut |_, _, _, _| Ok(()),
+        ).err().unwrap();
+        assert_eq!(error_signature(&actual), error_signature(&expected));
+        assert_eq!(observed.budget().bytes, production.budget().bytes);
+        assert_eq!(observed.budget().reads, production.budget().reads);
+        if cancelled {
+            assert_eq!(actual.code(), ErrorCode::OperationAborted);
+            assert_eq!(fs::read(&path).unwrap(), original);
+        } else {
+            assert_eq!(fs::read(&path).unwrap(), b"{");
+        }
+        assert_eq!(fs::read(manifest_path(root.path())).unwrap(), manifest_bytes);
+    }
+    // Repair only this fixture's deliberate corruption, then use production again.
+    fs::write(&path, original).unwrap();
+    let restored = read_observed(
+        &root, task.selection.first(), &task.archive_hash, &stop,
+        &mut |_, _, _, _| Ok(()),
+    ).unwrap();
+    assert_eq!(restored.0, before.0);
+    assert_eq!(
+        canonical_json(restored.1.state()).unwrap(),
+        canonical_json(before.1.state()).unwrap(),
     );
 }
