@@ -1086,10 +1086,10 @@ fn decomposed_verify_observed(
     }
     let report = BackupNativeControlReport {
         archive_hash: costs.measure(ArchiveStage::ReportArchive, source, |_| {
-            object_hash(FORMAT, manifest)
+            Ok(object_hash(FORMAT, manifest)?)
         })?,
         state_hash: costs.measure(ArchiveStage::ReportState, source, |_| {
-            object_hash("backup-prepared-state", state.state())
+            Ok(object_hash("backup-prepared-state", state.state())?)
         })?,
         snapshot_hash: manifest.through_snapshot.clone(),
         sequence: manifest.through_sequence,
