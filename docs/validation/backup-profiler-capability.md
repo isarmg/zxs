@@ -75,5 +75,29 @@ GDB true/false 成功只证明这两个固定进程的启动/退出协议，不�
 
 本片的 GitHub Python 回归使用受控 mock 验证资源/退出/路由契约，
 不是实际工具权限证据。手动探测 workflow 即使成功，也只代表该诊断已完成，
-不代表原 Backup 事务通过。当前尚未执行本片 GitHub 回归或手动工具探测；
-未本地执行脚本、编译、测试、格式化或 selector。
+不代表原 Backup 事务通过。未本地执行脚本、编译、测试、格式化或 selector。
+
+## 首次 GitHub 实测与入口修复
+
+手动能力探测 #1 已在准确提交
+`20fe040f4991eda82f03a487bb6b9ca3e7a4a9d1` 完成：
+https://github.com/isarmg/zxs/actions/runs/43255097448
+工件 `13961282560` 的 ZIP SHA256 为
+`aa739e12ad72b8a92ea819a42c91e5127ec75f71410025ee044fff4d3d3aca2e`。
+
+报告 `complete=true`、`status=completed`，仅表示固定无业务子进程诊断完成。
+固定搜索范围 `/usr/bin:/bin` 内未找到 GDB。
+perf 版本为 7.0.14，但 true/false 两次功能探测均返回 1、分类为
+`tool_error`，没有获得有效事件计数，工具总状态为 `unavailable`。
+此结果没有区分具体失败原因，不能将其推断为已确认权限拒绝，
+也没有证明可用的函数级采样能力。没有安装工具、提权或修改安全设置。
+
+同提交 push CI #1316 的 planner 已通过，但实际选测前的 workflow 入口门拒绝：
+`ValueError: development workflow entrypoints changed`。
+这是新手动 workflow 尚未登记到精确允许配方所致，
+不是 Python mock 回归失败；该轮 Python 回归尚未执行。
+修复仅为此已审手动配方登记独立名称和完整字节，
+保留三份完整 workflow 与两份 SQLite 例外的原准入规则。
+新增回归覆盖实际文件准入、自动触发、写权限、预算、凭据、
+安装/命令/HEAD/吞错/工件失败门漂移与未批准名称的拒绝。
+修复后的 GitHub 回归结果仍待核实，原 900 秒事务不因这次诊断而视为通过。

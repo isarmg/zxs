@@ -14,7 +14,7 @@
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
 
-- [ ] 闭环 Backup 原 900 秒事务超时：#1312 准确d1a/24a完整相关基线中330项Rust、176Python及Engine产品检查通过，含新借用解码差分、旧格式拒绝/冷开和21项readmission；唯一失败仍原900超时，不能声称加速或三范围共同恢复完成。仅准备现成perf/GDB与无业务子进程的手动短时能力探测，不改安全设置/安装/提权，不替代原定向验证。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
+- [ ] 闭环 Backup 原 900 秒事务超时：#1312 准确d1a/24a完整相关基线中330项Rust、176Python及Engine产品检查通过，含新借用解码差分、旧格式拒绝/冷开和21项readmission；唯一失败仍原900超时，不能声称加速或三范围共同恢复完成。20fe手动能力探测已完成，但固定搜索范围内GDB未装、perf7.0.14两次tool_error，未证明可用函数采样；不改安全设置/安装/提权。#1316在Python执行前被未登记workflow精确入口门拒绝，补唯一配方与拒绝漂移回归后仍待GitHub验证，不替代原定向测试。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
 
 - [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
 

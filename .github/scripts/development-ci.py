@@ -124,6 +124,47 @@ jobs:
           retention-days: 7
 """
 
+BACKUP_PROFILER = 'backup-profiler-capability.yml'
+# Exact manual diagnostics only; no project workload or general manual exemption.
+BACKUP_PROFILER_WORKFLOW = r"""name: Backup profiler capability
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-profiler-capability-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  capability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Probe existing tools with fixed non-business children
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .github/scripts/backup-profiler-capability.py \
+            --head "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/backup-profiler-capability.json"
+      - name: Retain capability evidence, not project test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backup-profiler-capability-${{ github.sha }}
+          path: ${{ runner.temp }}/backup-profiler-capability.json
+          if-no-files-found: error
+          retention-days: 7
+"""
+
 PAUSE = '    if: ${{ false }}\n'
 PUBLISH_CONDITION = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 HEADER = '# Development short CI: long checks are paused, not passed. See docs/ci/development-short-ci.md.\n'
@@ -326,7 +367,11 @@ def check_workflows(root):
     """Fail on any unreviewed entrypoint, override, ignored failure or recipe drift."""
     live = root / '.github/workflows'
     names = {path.name for path in live.iterdir() if path.suffix in {'.yml', '.yaml'}}
-    manual = {SQLITE_MAINTENANCE: SQLITE_WORKFLOW, SQLITE_IMPORT: SQLITE_IMPORT_WORKFLOW}
+    manual = {
+        SQLITE_MAINTENANCE: SQLITE_WORKFLOW,
+        SQLITE_IMPORT: SQLITE_IMPORT_WORKFLOW,
+        BACKUP_PROFILER: BACKUP_PROFILER_WORKFLOW,
+    }
     required = set(SNAPSHOT_SHA256)
     if not required <= names or not names <= required | set(manual):
         raise ValueError('development workflow entrypoints changed')

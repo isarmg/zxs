@@ -278,6 +278,69 @@ class DevelopmentCiPolicy(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'retained full recipe changed'):
             POLICY.check_workflows(self.root)
 
+
+    def install_profiler_workflow(self):
+        actual = (ROOT / '.github/workflows' / POLICY.BACKUP_PROFILER).read_text()
+        self.assertEqual(actual, POLICY.BACKUP_PROFILER_WORKFLOW)
+        (self.root / '.github/workflows' / POLICY.BACKUP_PROFILER).write_text(actual)
+
+    def test_actual_profiler_recipe_is_an_exact_optional_manual_exception(self):
+        POLICY.check_workflows(self.root)
+        self.install_profiler_workflow()
+        POLICY.check_workflows(self.root)
+        POLICY.check_workflows(ROOT)
+        # The two independently reviewed maintenance recipes retain admission.
+        for name, recipe in (
+            (POLICY.SQLITE_MAINTENANCE, POLICY.SQLITE_WORKFLOW),
+            (POLICY.SQLITE_IMPORT, POLICY.SQLITE_IMPORT_WORKFLOW),
+        ):
+            (self.root / '.github/workflows' / name).write_text(recipe)
+        POLICY.check_workflows(self.root)
+
+    def test_profiler_automatic_triggers_are_not_authorized(self):
+        self.install_profiler_workflow()
+        for trigger in ('push', 'pull_request', 'pull_request_target', 'schedule', 'workflow_run'):
+            with self.subTest(trigger=trigger):
+                self.reject_edit(
+                    POLICY.BACKUP_PROFILER, 'on:\n', f'on:\n  {trigger}:\n',
+                )
+
+    def test_profiler_write_permissions_and_budget_drift_are_rejected(self):
+        self.install_profiler_workflow()
+        for old, new in (
+            ('  contents: read\n', '  contents: write\n'),
+            ('permissions:\n', 'permissions:\n  actions: write\n'),
+            ('    timeout-minutes: 2\n', '    timeout-minutes: 3\n'),
+            ('    timeout-minutes: 2\n', '    timeout-minutes: 1\n'),
+            ('          persist-credentials: false\n', '          persist-credentials: true\n'),
+        ):
+            with self.subTest(old=old, new=new):
+                self.reject_edit(POLICY.BACKUP_PROFILER, old, new)
+
+    def test_profiler_installation_or_command_drift_is_rejected(self):
+        self.install_profiler_workflow()
+        for old, new in (
+            ('          set -euo pipefail\n',
+             '          set -euo pipefail\n          sudo apt-get install gdb\n'),
+            ('python3 .github/scripts/backup-profiler-capability.py', 'python3 other-probe.py'),
+            ('--head "$GITHUB_SHA"', '--head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+            ('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+             'test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || true'),
+            ('    timeout-minutes: 2\n',
+             '    timeout-minutes: 2\n    continue-on-error: true\n'),
+            ('          if-no-files-found: error\n', '          if-no-files-found: ignore\n'),
+        ):
+            with self.subTest(old=old, new=new):
+                self.reject_edit(POLICY.BACKUP_PROFILER, old, new)
+
+    def test_identical_manual_recipe_under_an_unreviewed_name_is_rejected(self):
+        self.install_profiler_workflow()
+        (self.root / '.github/workflows/unreviewed-profiler.yml').write_text(
+            POLICY.BACKUP_PROFILER_WORKFLOW,
+        )
+        with self.assertRaisesRegex(ValueError, 'entrypoints'):
+            POLICY.check_workflows(self.root)
+
     def test_static_entrypoint_checks_policy_before_other_regressions(self):
         source = (ROOT / '.github/scripts/check.sh').read_text()
         static = source.split('  static)\n', 1)[1].split('    ;;', 1)[0]
