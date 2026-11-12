@@ -1057,9 +1057,19 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     // The fixture helper checkpoints its source before creating the alternate.
     let alternate = create(&mut engine, "", "whole-view-draft");
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
-    let saved_tree = engine.state.directory_branches[&saved_root]
+    let saved_working_tree = engine.state.directory_branches[&saved_root]
         .head_tree_id
         .clone();
+    let saved_working_bytes = canonical_json(
+        &engine.state.directory_trees[&saved_working_tree],
+    )
+    .unwrap();
+    let saved_head = engine.state.directory_git_repositories[&repo.repository_id]
+        .branches[&saved_root]
+        .head_tree_id
+        .clone()
+        .unwrap();
+    let saved_entries = engine.list_tree(&repo.main_branch_id).unwrap();
     let saved_contexts = engine.state.file_contexts.clone();
     engine
         .select_default_directory_branch(
@@ -1077,10 +1087,21 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    // Checkout rebuilds ordinary child working scopes and their root references.
+    // The committed HEAD and every retained tree remain immutable, while the
+    // restored namespace and per-path file contexts must be exactly preserved.
     assert_eq!(
-        engine.state.directory_branches[&saved_root].head_tree_id,
-        saved_tree
+        engine.state.directory_git_repositories[&repo.repository_id]
+            .branches[&saved_root]
+            .head_tree_id
+            .as_ref(),
+        Some(&saved_head),
     );
+    assert_eq!(
+        canonical_json(&engine.state.directory_trees[&saved_working_tree]).unwrap(),
+        saved_working_bytes,
+    );
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap(), saved_entries);
     assert_eq!(engine.state.file_contexts, saved_contexts);
     assert_eq!(engine.state.directory_branches[&frozen], frozen_branch);
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();

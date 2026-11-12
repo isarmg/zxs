@@ -179,8 +179,21 @@ fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes(
 #[test]
 fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
     for generation in [0, u64::MAX] {
-        let bytes = format!(
+        let prior_bytes = format!(
             r#"{{"branches":{{}},"business_generation":"{generation}","commits":{{}},"content_states":{{}},"control_auth":null,"directory_git_repositories":{{}},"events":[],"file_deletions":{{}},"histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"placements":{{}},"plans":{{}},"protection_policies":{{}},"repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#
+        );
+        assert!(decode_strict::<State>(prior_bytes.as_bytes()).is_err());
+        let bytes = format!(
+            concat!(
+                r#"{{"branches":{{}},"business_generation":"{}","commits":{{}},"#,
+                r#""container_tags":{{}},"content_states":{{}},"control_auth":null,"#,
+                r#""directory_git_repositories":{{}},"events":[],"file_deletions":{{}},"#,
+                r#""histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"#,
+                r#""operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"#,
+                r#""placements":{{}},"plans":{{}},"protection_policies":{{}},"#,
+                r#""repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#,
+            ),
+            generation,
         );
         let state = State {
             business_generation: generation,
@@ -190,6 +203,7 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         assert_eq!(decode_strict::<State>(bytes.as_bytes()).unwrap(), state);
         for field in [
             "business_generation",
+            "container_tags",
             "directory_git_repositories",
             "file_deletions",
             "history_boundaries",

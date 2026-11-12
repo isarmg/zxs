@@ -18,6 +18,42 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_state_and_alias_fixture_paths_select_their_real_regressions(self):
+        cases = [
+            ('test/contract/unit/lib/tests.rs', ['portable-path-consumers'],
+             'storage-contract', 'tests::'),
+            ('test/engine/unit/history_package/tests.rs',
+             ['container-tags-storage', 'portable-path-consumers'],
+             'storage-engine', 'history_package::tests::'),
+            ('test/engine/unit/journal/snapshot_incremental_oracle_tests.rs',
+             ['container-tags-storage'], 'storage-engine',
+             'journal::snapshot_incremental_oracle_tests::'),
+        ]
+        for path, groups, package, prefix in cases:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], groups)
+                selected = []
+                for target in plan['rust_targets']:
+                    selections = target.get('selections', [
+                        {key: value for key, value in target.items()
+                         if key != 'selection_groups'}])
+                    selected.extend(zip(target['selection_groups'], selections))
+                self.assertTrue(any(
+                    item['package'] == package and prefix in item.get('prefixes', [])
+                    for _, item in selected))
+                for group in groups:
+                    for original in self.policy['groups'][group]['rust_targets']:
+                        self.assertIn((group, original), selected)
+        combined = CI.select_plan(self.policy, [case[0] for case in cases] + [
+            '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
+        ], shardable=True)
+        self.assertEqual(combined['groups'], [
+            'ci-selection', 'container-tags-storage', 'portable-path-consumers',
+        ])
+        self.assertEqual(combined['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+
     def test_directory_branch_web_retirement_preserves_shared_recovery_and_bounded_ci(self):
         paths = [
             'docs/design/directory-branch-web-retirement.md',
