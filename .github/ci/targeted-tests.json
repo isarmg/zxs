@@ -29,7 +29,9 @@
           "manifest": "src/server/Cargo.toml",
           "kind": "test",
           "name": "phase1_smb_rpc",
-          "features": ["core"],
+          "features": [
+            "core"
+          ],
           "exact": [
             "soft_deletion::public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity"
           ],
@@ -51,8 +53,12 @@
           "manifest": "tools/contract-check/Cargo.toml",
           "kind": "bin",
           "name": "contract-check",
-          "prefixes": ["shared_history_tests::"],
-          "exact": ["tests::checked_in_contracts_and_document_examples_are_consistent"],
+          "prefixes": [
+            "shared_history_tests::"
+          ],
+          "exact": [
+            "tests::checked_in_contracts_and_document_examples_are_consistent"
+          ],
           "max_tests": 8,
           "timeout_seconds": 900
         }
@@ -2930,6 +2936,13 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "backup-profiler-capability": {
+      "reason": "Bounded capability diagnostics use only installed tools and fixed non-business child programs. Mock protocol/lifecycle regressions and workflow selection run here; actual profiler availability is checked only by the explicit manual workflow and is not a project-test pass.",
+      "python_tests": [
+        "test_backup_profiler_capability"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -7933,6 +7946,34 @@
       "path": "test/engine/unit/history_package/tests.rs",
       "groups": [
         "container-tags-storage"
+      ]
+    },
+    {
+      "path": ".github/scripts/backup-profiler-capability.py",
+      "groups": [
+        "backup-profiler-capability",
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "test/ci/test_backup_profiler_capability.py",
+      "groups": [
+        "backup-profiler-capability",
+        "ci-selection"
+      ]
+    },
+    {
+      "path": ".github/workflows/backup-profiler-capability.yml",
+      "groups": [
+        "backup-profiler-capability",
+        "ci-selection"
+      ]
+    },
+    {
+      "path": "docs/validation/backup-profiler-capability.md",
+      "groups": [
+        "backup-profiler-capability",
+        "ci-selection"
       ]
     }
   ],
