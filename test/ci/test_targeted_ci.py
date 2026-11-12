@@ -262,6 +262,45 @@ class TargetedSelection(unittest.TestCase):
                          sorted(self.policy['groups']['ci-selection']['python_tests']))
         self.assertEqual(len(full['python_tests']), 7)
 
+
+    def assert_backup_memo_union_preserves_selections(self, plan):
+        # Coalescing Cargo identities must retain every original group's selector.
+        for group in plan['groups']:
+            expected = self.policy['groups'][group]['rust_targets']
+            actual = []
+            for target in plan['rust_targets']:
+                selections = target.get('selections', [
+                    {key: value for key, value in target.items()
+                     if key != 'selection_groups'}
+                ])
+                self.assertEqual(len(selections), len(target['selection_groups']))
+                actual.extend(selection for origin, selection in
+                              zip(target['selection_groups'], selections)
+                              if origin == group)
+            self.assertEqual(actual, expected, group)
+        memo = self.policy['groups']['backup-scoped-encoding-memo']['rust_targets']
+        self.assertEqual(memo[0]['max_tests'], 96)
+        self.assertEqual(memo[0]['timeout_seconds'], 900)
+        transactions = [
+            selection
+            for target in plan['rust_targets']
+            for selection in target.get('selections', [target])
+            if selection.get('name') == 'recursive_backup_paths'
+        ]
+        self.assertEqual(len(transactions), 1)
+        transaction = transactions[0]
+        self.assertEqual(transaction['package'], 'storage-engine')
+        self.assertEqual(transaction['kind'], 'test')
+        self.assertEqual(transaction['exact'], [
+            'backup_preparation::transaction_serving::'
+            'same_backup_switch_serves_and_replays_normal_successor_publications'
+        ])
+        self.assertEqual(transaction['max_tests'], 1)
+        self.assertEqual(transaction['timeout_seconds'], 900)
+        self.assertTrue(transaction['isolate'])
+        self.assertFalse(transaction.get('whole', False))
+        self.assertEqual(transaction.get('prefixes', []), [])
+
     def test_publication_location_refactor_keeps_proof_and_live_layout_selections(self):
         paths = [
             'src/engine/src/journal.rs', 'src/engine/src/persist/layout.rs',
@@ -274,13 +313,16 @@ class TargetedSelection(unittest.TestCase):
         ]
         plan = CI.select_plan(self.policy, paths)
         self.assertEqual(plan['groups'], [
-            'checkpoint-layout', 'ci-selection', 'held-directory-layout',
+            'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+            'held-directory-layout',
             'projection-cache-layout', 'version-publication-location',
         ])
-        self.assertEqual(len(plan['rust_targets']), 4)
+        self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']))
-        self.assertEqual(len(plan['python_tests']), 7)
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_backup_encoding_memo_ci']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assert_backup_memo_union_preserves_selections(plan)
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine'
                       and target.get('mode', 'test') == 'test'
@@ -320,9 +362,16 @@ class TargetedSelection(unittest.TestCase):
         for path in ['src/engine/src/journal.rs', 'src/engine/src/engine/provenance.rs']:
             with self.subTest(path=path):
                 plan = CI.select_plan(self.policy, [path])
-                self.assertEqual(plan['groups'],
-                                 ['held-directory-layout', 'version-publication-location'])
-                self.assertEqual(len(plan['rust_targets']), 3)
+                required = ['held-directory-layout', 'version-publication-location']
+                if path == 'src/engine/src/journal.rs':
+                    required.insert(0, 'backup-scoped-encoding-memo')
+                    self.assertEqual(len(plan['rust_targets']), 4)
+                    self.assertEqual(plan['python_tests'], ['test_backup_encoding_memo_ci'])
+                    self.assert_backup_memo_union_preserves_selections(plan)
+                else:
+                    self.assertEqual(len(plan['rust_targets']), 3)
+                    self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(plan['groups'], required)
 
     def test_legacy_directory_staging_retirement_keeps_live_groups_with_eight_builds(self):
         paths = [
@@ -557,9 +606,16 @@ class TargetedSelection(unittest.TestCase):
     def test_layout_and_ci_changes_union_groups_once(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
                             'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
-        self.assertEqual(len(plan['rust_targets']), 4)
-        self.assertEqual(len(plan['groups']), 5)
-        self.assertIn('test_development_ci', plan['python_tests'])
+        self.assertEqual(len(plan['rust_targets']), 5)
+        self.assertEqual(plan['groups'], [
+            'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+            'held-directory-layout', 'projection-cache-layout', 'version-publication-location',
+        ])
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']
+                                + ['test_backup_encoding_memo_ci']))
+        self.assertEqual(len(plan['python_tests']), 8)
+        self.assert_backup_memo_union_preserves_selections(plan)
 
     def test_container_history_dag_routes_both_layout_consumers_and_boundaries(self):
         paths = [
