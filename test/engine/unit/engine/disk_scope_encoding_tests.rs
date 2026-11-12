@@ -40,7 +40,7 @@ impl Fixture {
 
     fn scopes(&self) -> PreparedDiskScopes {
         let stop = AtomicBool::new(false);
-        let mut scopes = PreparedDiskScopes::new(self.engine.config()).unwrap();
+        let mut scopes = PreparedDiskScopes::new(&self.engine.config).unwrap();
         crate::engine::disk_catalog::visit_published_prefix(
             &self.engine,
             self.engine.state().sequence,

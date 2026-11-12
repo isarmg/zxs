@@ -258,7 +258,7 @@ impl DiskPairFixture {
     ) -> crate::engine::disk_catalog::PreparedDiskScopes {
         use crate::engine::disk_catalog::{PreparedDiskScopes, visit_published_prefix};
         let stop = AtomicBool::new(false);
-        let mut scopes = PreparedDiskScopes::new(self.engine.config()).unwrap();
+        let mut scopes = PreparedDiskScopes::new(&self.engine.config).unwrap();
         visit_published_prefix(
             &self.engine,
             self.engine.state().sequence,

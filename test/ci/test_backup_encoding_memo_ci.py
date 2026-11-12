@@ -7,6 +7,7 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes/projection/timing.rs',
     "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration.rs",
     "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/runtime.rs",
     "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_scopes.rs",
