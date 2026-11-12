@@ -95,6 +95,38 @@ fn admit(state: &crate::State) -> AdmittedState {
     let raw: RawState = storage_contract::decode_strict(&canonical_json(state).unwrap()).unwrap();
     AdmittedState::try_from(raw).unwrap()
 }
+
+#[test]
+fn scoped_backup_database_snapshot_preserves_transition_projection_bytes() {
+    let fixture = Fixture::new();
+    let stop = AtomicBool::new(false);
+    for admitted in [&fixture.original, &fixture.published] {
+        let prepared = backup_databases::PreparedDatabases::capture(admitted, &stop).unwrap();
+        assert_eq!(prepared.file_count(), 1);
+        assert_eq!(prepared.directory_count(), 2);
+        // The transition remains an independent reference for the original
+        // capture contract; production only needs this same immutable State.
+        let transition = crate::state_projection::ProjectionTransition::new(
+            admitted.state(),
+            admitted.state(),
+            None,
+        )
+        .unwrap();
+        for database in prepared.into_databases() {
+            let (scope, actual) = database.into_parts();
+            let expected = match scope {
+                backup_databases::Scope::File { history, file } => {
+                    file_database::prepare(transition.previous(), &file, &history).unwrap()
+                }
+                backup_databases::Scope::Directory { directory, .. } => {
+                    directory_database::prepare(admitted.state(), &directory).unwrap()
+                }
+            };
+            assert_eq!(actual, expected.bytes);
+        }
+    }
+}
+
 fn database_path(object: &Object) -> PathBuf {
     object.entity.root.path().join(object.entity.leaf())
 }

@@ -5,6 +5,68 @@ use super::*;
 use std::io::Read;
 use storage_engine::{BackupTopologyTarget, BackupTransactionRequest};
 
+// Write directly to the process stream: libtest retains eprintln! output until
+// a test returns, which would hide the last completed stage on a CI timeout.
+fn diagnostic(start: std::time::Instant, stage: &str) {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "[backup transaction +{:?}] {stage}",
+        start.elapsed()
+    );
+}
+
+struct ProgressDiagnostic {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ProgressDiagnostic {
+    fn start(system: PathBuf, started: std::time::Instant) -> Self {
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let path = system.join("backup-preparation/progress.json");
+            let mut previous = None;
+            loop {
+                // This is an observer only. Bound diagnostic reads separately
+                // from the production progress reader; never create the file.
+                if let Ok(file) = fs::File::open(&path) {
+                    let mut bytes = Vec::new();
+                    if file.take(64 * 1024 + 1).read_to_end(&mut bytes).is_ok()
+                        && bytes.len() <= 64 * 1024
+                        && previous.as_ref() != Some(&bytes)
+                    {
+                        diagnostic(
+                            started,
+                            &format!("durable progress: {}", String::from_utf8_lossy(&bytes)),
+                        );
+                        previous = Some(bytes);
+                    }
+                }
+                match stopped.recv_timeout(std::time::Duration::from_secs(2)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        Self {
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for ProgressDiagnostic {
+    fn drop(&mut self) {
+        // Disconnect wakes recv_timeout immediately, including during unwinding.
+        // Join before TempDir teardown; no diagnostic worker leaks to other tests.
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 fn full_route() -> (tempfile::TempDir, Engine, Repository) {
     let (temp, mut engine, _) = setup();
     let repository = engine
@@ -35,6 +97,8 @@ fn transaction(engine: &Engine, paths: Vec<PathBuf>) -> BackupTransactionRequest
 }
 
 fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
+    let started = std::time::Instant::now();
+    diagnostic(started, "prepared: start transaction");
     let operation = request.preparation.operation_id;
     engine
         .start_backup_transaction(
@@ -54,17 +118,21 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
         BackupPreparationPhase::ScopedDatabasesPrepared,
         BackupPreparationPhase::CutoverInputsPrepared,
     ] {
+        diagnostic(started, &format!("prepared: wait for {phase:?}"));
         let status = engine.wait_backup_preparation().unwrap();
+        diagnostic(started, &format!("prepared: observed {:?}", status.phase));
         assert_eq!(status.phase, phase, "{status:?}");
         assert!(engine.membership_fence_status().is_none());
         assert!(!engine.state().operations.contains_key(&operation));
         if phase != BackupPreparationPhase::CutoverInputsPrepared {
+            diagnostic(started, "prepared: continue transaction");
             engine
                 .continue_backup_transaction(operation, "admin")
                 .unwrap();
         }
     }
     // A non-decision continuation cannot implicitly stop the source.
+    diagnostic(started, "prepared: verify non-decision continuation");
     assert_eq!(
         engine
             .continue_backup_transaction(operation, "admin")
@@ -73,13 +141,17 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
         BackupPreparationPhase::CutoverInputsPrepared
     );
     assert!(engine.membership_fence_status().is_none());
+    diagnostic(started, "prepared: begin source cutover fence");
     engine
         .begin_backup_cutover_fence(operation, "admin")
         .unwrap();
+    diagnostic(started, "prepared: continue fenced transaction");
     engine
         .continue_backup_transaction(operation, "admin")
         .unwrap();
+    diagnostic(started, "prepared: wait for target entities");
     let status = engine.wait_backup_preparation().unwrap();
+    diagnostic(started, &format!("prepared: observed {:?}", status.phase));
     assert_eq!(
         status.phase,
         BackupPreparationPhase::TargetEntitiesPrepared,
@@ -98,10 +170,13 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
     for disk in &engine.config().disks {
         assert!(!disk.root.join("metadata/membership-generations").exists());
     }
+    diagnostic(started, "prepared: start registry placement decision");
     engine
         .start_backup_registry_placement_decision(operation, "admin")
         .unwrap();
+    diagnostic(started, "prepared: wait for ordinary serving installation");
     let status = engine.wait_backup_preparation().unwrap();
+    diagnostic(started, &format!("prepared: observed {:?}", status.phase));
     assert_eq!(
         status.phase,
         BackupPreparationPhase::GenerationOrdinaryServingInstalled,
@@ -116,6 +191,7 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
             .phase,
         BackupPreparationPhase::GenerationOrdinaryServingInstalled
     );
+    diagnostic(started, "prepared: complete");
 }
 
 fn body(engine: &Engine, version: &str) -> Vec<u8> {
@@ -127,7 +203,11 @@ fn body(engine: &Engine, version: &str) -> Vec<u8> {
 
 #[test]
 fn same_backup_switch_serves_and_replays_normal_successor_publications() {
+    let started = std::time::Instant::now();
+    diagnostic(started, "main: create full route");
     let (temp, mut engine, repository) = full_route();
+    let _progress = ProgressDiagnostic::start(temp.path().join("system"), started);
+    diagnostic(started, "main: create original publications");
     let old = save(
         &mut engine,
         &repository,
@@ -164,7 +244,9 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         ],
     );
     let operation = request.preparation.operation_id;
+    diagnostic(started, "main: prepare transaction");
     prepared(&mut engine, &request);
+    diagnostic(started, "main: inspect published configuration");
     // The admitted source chain already runs primary-first. The published
     // configuration must preserve it before appending the selected fanout.
     let configured = engine
@@ -177,9 +259,11 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         json_codec::to_value(&originals).unwrap()
     );
     assert!(engine.is_read_only());
+    diagnostic(started, "main: complete registry placement decision");
     let result = engine
         .complete_backup_registry_placement_decision(operation, "admin")
         .unwrap();
+    diagnostic(started, "main: registry placement decision completed");
     assert_eq!(result.kind, "backup-target-replacement");
     assert_eq!(
         fs::read(temp.path().join("system/config.json")).unwrap(),
@@ -200,6 +284,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
             .unwrap(),
         Some(request.clone())
     );
+    diagnostic(started, "main: retry completed registry placement decision");
     assert_eq!(
         engine
             .complete_backup_registry_placement_decision(operation, "admin")
@@ -208,6 +293,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     );
     // An exact retried Start does not demand now-nonempty directories or start
     // a new worker. No caller-supplied replacement FD is consumed.
+    diagnostic(started, "main: retry completed transaction start");
     assert_eq!(
         engine
             .start_backup_transaction(request.clone(), Vec::new())
@@ -215,6 +301,7 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
             .phase,
         BackupPreparationPhase::GenerationServingActive
     );
+    diagnostic(started, "main: read retained bodies and receipts");
     assert_eq!(body(&engine, &old.version_id), b"retained first body");
     assert_eq!(body(&engine, &latest.version_id), b"retained current body");
     for (id, receipt) in before.iter() {
@@ -234,12 +321,14 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
             .unwrap(),
         ("P01".into(), 4)
     );
+    diagnostic(started, "main: save ordinary successor");
     let after = save(
         &mut engine,
         &repository,
         "nested/after",
         b"ordinary successor body",
     );
+    diagnostic(started, "main: ordinary successor saved");
     let placement = &engine.state().placements[&after.version_id];
     assert_eq!(placement.route_slot_ids, ["P01", "B01", "C02", "C03"]);
     assert_eq!(placement.target_copies, 4);
@@ -252,8 +341,11 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         BackupPreparationPhase::GenerationServingActive
     );
     let system = temp.path().join("system");
+    diagnostic(started, "main: drop live engine");
     drop(engine);
+    diagnostic(started, "main: open cold engine");
     let mut engine = Engine::open(&system).unwrap();
+    diagnostic(started, "main: cold engine opened");
     assert_eq!(engine.operation(operation).unwrap(), result);
     assert_eq!(
         engine.backup_preparation_status().unwrap().phase,
@@ -261,12 +353,16 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     );
     assert_eq!(body(&engine, &old.version_id), b"retained first body");
     assert_eq!(body(&engine, &after.version_id), b"ordinary successor body");
+    diagnostic(started, "main: save successor after cold replay");
     save(
         &mut engine,
         &repository,
         "nested/again",
         b"writer survives cold replay",
     );
+    diagnostic(started, "main: successor after cold replay saved");
+    drop(engine);
+    diagnostic(started, "main: cold engine dropped");
 }
 
 #[test]

@@ -5,7 +5,7 @@ use super::{directory_database, file_database};
 use crate::{
     Error, ErrorCode, Result, canonical_json,
     history_package::{AdmittedState, preparation_checkpoint},
-    state_projection::ProjectionTransition,
+    state_projection::ProjectionSnapshot,
 };
 use data_serialization::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicBool};
@@ -126,8 +126,8 @@ impl PreparedDatabases {
         {
             return Err(budget());
         }
-        let transition = ProjectionTransition::new(state, state, None)?;
-        let view = transition.previous();
+        let snapshot = ProjectionSnapshot::new(state);
+        let view = snapshot.view();
         let mut prepared = Self {
             databases: Vec::new(),
             bytes: 0,
