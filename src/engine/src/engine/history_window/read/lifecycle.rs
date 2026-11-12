@@ -13,7 +13,9 @@ pub struct FileLifecycleRead {
     source: State,
 }
 impl FileLifecycleRead {
-    /// O(State membership + retained lifecycle) work per page, NOT O(page size).
+    /// O(permanent receipt ownership + retained lifecycle) work per page, NOT
+    /// O(page size). Ownership scanning checks cancellation between receipts;
+    /// one receipt's classification and decoding are not interruptible.
     /// Existing source admission caps retained events at 65,536 and copied audit
     /// envelopes at 12 MiB. Full audit admission retains summaries, not accumulated
     /// frontiers; one source receipt/envelope still needs complete decoding.
@@ -29,14 +31,14 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::Changed.into_error().into());
         }
-        let projection = crate::state_projection::ProjectionSnapshot::new(&self.source);
+        let source = crate::state_projection::lifecycles::LifecycleSource::capture(
+            &self.source,
+            &self.request.file_id,
+            || self.read.cancellation.checkpoint(),
+        )?;
         self.read.cancellation.checkpoint()?;
-        if let Some(rows) = projection
-            .view()
-            .owners()
-            .file_rows(self.request.file_id.as_str())
-        {
-            for operation in rows.history_copies.keys() {
+        if let Some(copies) = source.view().copies() {
+            for operation in copies.keys() {
                 self.read.cancellation.checkpoint()?;
                 // Graph-only copies predate retained audit evidence. The FILE
                 // projection supports them, but this endpoint must not report
@@ -46,9 +48,8 @@ impl FileLifecycleRead {
                 }
             }
         }
-        let events = crate::file_deletion::retained::events_projected(
-            projection.view(),
-            self.request.file_id.as_str(),
+        let events = crate::file_deletion::retained::events_from_source(
+            source.view(),
             || self.read.cancellation.checkpoint(),
             |event| {
                 if event.node.file_id != self.request.file_id.as_str()

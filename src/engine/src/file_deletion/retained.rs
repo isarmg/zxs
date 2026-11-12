@@ -60,8 +60,12 @@ fn invalid() -> Error {
     )
 }
 
-fn direct(view: StateProjection<'_>, id: OperationId, file: &str) -> Result<LifecycleRow> {
+fn direct(
+    view: crate::state_projection::lifecycles::LifecycleView<'_>,
+    id: OperationId,
+) -> Result<LifecycleRow> {
     let state = view.state();
+    let file = view.file().as_str();
     let receipt = &state.operations[&id];
     if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
         let movement = view.object_move(id)?;
@@ -121,29 +125,46 @@ fn direct_row(
 /// receipt holds its complete imported prefix, so this never chases a mutable
 /// source file or recursively follows copy ancestry.
 pub(crate) fn events(view: StateProjection<'_>, file: &str) -> Result<Vec<LifecycleRow>> {
-    events_projected(view, file, || Ok(()), Ok)
+    let rows = view.owners().file_rows(file);
+    admit_source(
+        view.owners().malformed_deletion_receipts()
+            || view.owners().malformed_history_copy_receipts(),
+        rows.map_or(0, |rows| rows.history_copies.len()),
+    )?;
+    // Preserve the existing FILE adapter's malformed-before-absent precedence.
+    // An absent key has no source, even when its caller supplied invalid text.
+    if rows.is_none() {
+        return Ok(Vec::new());
+    }
+    let file = storage_contract::history_window::HistoryFileId::parse(file)?;
+    collect_events(view.lifecycle(&file), || Ok(()), Ok)
+}
+
+fn admit_source(malformed: bool, copies: usize) -> Result<()> {
+    if malformed || copies > 1 {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 /// The audit remains complete: cancellation returns an error, never a prefix.
-pub(crate) fn events_projected<T>(
-    view: StateProjection<'_>,
-    file: &str,
+pub(crate) fn events_from_source<T>(
+    view: crate::state_projection::lifecycles::LifecycleView<'_>,
+    mut checkpoint: impl FnMut() -> Result<()>,
+    project: impl FnMut(LifecycleRow) -> Result<T>,
+) -> Result<Vec<T>> {
+    checkpoint()?;
+    admit_source(view.malformed(), view.copies().map_or(0, |copies| copies.len()))?;
+    collect_events(view, checkpoint, project)
+}
+
+fn collect_events<T>(
+    view: crate::state_projection::lifecycles::LifecycleView<'_>,
     mut checkpoint: impl FnMut() -> Result<()>,
     mut project: impl FnMut(LifecycleRow) -> Result<T>,
 ) -> Result<Vec<T>> {
-    checkpoint()?;
-    if view.owners().malformed_deletion_receipts()
-        || view.owners().malformed_history_copy_receipts()
-    {
-        return Err(invalid());
-    }
-    let Some(rows) = view.owners().file_rows(file) else {
-        return Ok(Vec::new());
-    };
-    if rows.history_copies.len() > 1 {
-        return Err(invalid());
-    }
     let state = view.state();
+    let file = view.file().as_str();
     let mut events = BTreeMap::new();
     let mut ids = BTreeSet::new();
     let mut insert = |event: LifecycleRow| -> Result<()> {
@@ -160,7 +181,7 @@ pub(crate) fn events_projected<T>(
         events.insert(event.sequence, project(event)?);
         Ok(())
     };
-    for id in rows.history_copies.keys() {
+    for id in view.copies().into_iter().flat_map(|copies| copies.keys()) {
         let receipt = &state.operations[id];
         if receipt.operation_id != *id {
             return Err(invalid());
@@ -180,8 +201,8 @@ pub(crate) fn events_projected<T>(
             }
         }
     }
-    for id in rows.deletion_operations.keys() {
-        insert(direct(view, *id, file)?)?;
+    for id in view.deletions().into_iter().flat_map(|deletions| deletions.keys()) {
+        insert(direct(view, *id)?)?;
     }
     Ok(events.into_values().collect())
 }

@@ -4,7 +4,7 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的容量与真实浏览器验收：降低每页全 State 索引成本，核对阶段内取消和大来源的耗时/分配；不以分页宣称 O(page) 成本。只读删除/恢复/Import 切片已有 contract/Engine、HTTP 和 Web native/WASM 定向证据；完整改名/移动操作轴仍待实施。
+- [ ] 定向验证[容器生命周期读取](docs/design/container-lifecycle-read.md)的目标收据来源：移除每页无关 State 成员索引构造，核验逐收据取消、全局坏收据拒绝、原错误优先及 FILE/复制/Import 共用准入；仍扫描全部永久收据，不以分页宣称 O(page) 成本或实测加速。大来源耗时/分配与真实 Chrome 尚待验收；完整改名/移动操作轴及删除不再建 D 节点仍待实施。
 
 - [ ] 完成[容器标签新格式](docs/adr/container-tags.md)完整提交的 GitHub 定向复验：#1304 四片已取齐，1837 Rust／193 Python／11 编译检查通过，但仍有 36 项失败记录及 2 项 skipped。复验旧 Web／contract／复制／SMB 和流式 CAS 修正，闭环 31 项 Engine 失败，包括历史父边取消与首份 Current 修复准入顺序；夹具修复保留真实写入、穷尽字段、拒旧及冷开断言。以 39bcae2 完整基线核新 head 全并集。原备份 900 秒事务仍超时，完整保留并隔离，不以其他分片通过替代其成功；验清旧格式无破坏拒绝、复制保留、CAS、普通／Current 冷开、备份／resume、撤权／晚响应／未知结果，不自动迁移或删除旧材料。真实 Chrome 和完整池恢复仍未验证。
 

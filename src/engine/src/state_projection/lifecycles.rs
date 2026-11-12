@@ -245,3 +245,134 @@ impl DerivedOwners {
 
 // A typed operation key avoids stringify/reparse at every file materialization.
 pub(crate) type DeletionOperations = SharedRecords<(), OperationId>;
+
+/// Only lifecycle membership for one file, not a general State projection.
+/// All receipts are classified so malformed unrelated ownership still fails closed.
+pub(crate) struct LifecycleSource<'a> {
+    state: &'a State,
+    file: &'a storage_contract::history_window::HistoryFileId,
+    deletions: DeletionOperations,
+    copies: DeletionOperations,
+    malformed: bool,
+    moves: crate::state_projection::move_receipts::MoveReceipts<'a>,
+}
+
+impl<'a> LifecycleSource<'a> {
+    pub(crate) fn capture(
+        state: &'a State,
+        file: &'a storage_contract::history_window::HistoryFileId,
+        mut checkpoint: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Self> {
+        checkpoint()?;
+        let mut source = Self {
+            state,
+            file,
+            deletions: DeletionOperations::new(),
+            copies: DeletionOperations::new(),
+            malformed: false,
+            moves: crate::state_projection::move_receipts::MoveReceipts::new(state),
+        };
+        for (id, receipt) in state.operations.iter() {
+            checkpoint()?;
+            for (membership, owner) in [
+                (Membership::Deletion, owner(receipt)),
+                (Membership::HistoryCopy, history_copy_owner(receipt)),
+            ] {
+                let included = match owner {
+                    DeletionOwner::Other => false,
+                    DeletionOwner::Malformed => {
+                        source.malformed = true;
+                        false
+                    }
+                    DeletionOwner::File(owner) => owner == file.as_str(),
+                    DeletionOwner::Files(owners) => owners.contains(&file.as_str()),
+                };
+                if included {
+                    match membership {
+                        Membership::Deletion => source.deletions.insert(*id, ()),
+                        Membership::HistoryCopy => source.copies.insert(*id, ()),
+                    };
+                }
+            }
+        }
+        checkpoint()?;
+        Ok(source)
+    }
+
+    pub(crate) fn view(&self) -> LifecycleView<'_> {
+        LifecycleView {
+            state: self.state,
+            file: self.file,
+            members: Some(LifecycleMembers {
+                deletions: &self.deletions,
+                copies: &self.copies,
+            }),
+            malformed: self.malformed,
+            moves: &self.moves,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LifecycleView<'a> {
+    state: &'a State,
+    file: &'a storage_contract::history_window::HistoryFileId,
+    members: Option<LifecycleMembers<'a>>,
+    malformed: bool,
+    moves: &'a crate::state_projection::move_receipts::MoveReceipts<'a>,
+}
+
+#[derive(Clone, Copy)]
+struct LifecycleMembers<'a> {
+    deletions: &'a DeletionOperations,
+    copies: &'a DeletionOperations,
+}
+
+impl<'a> LifecycleView<'a> {
+    pub(crate) fn state(self) -> &'a State {
+        self.state
+    }
+
+    pub(crate) fn file(self) -> &'a storage_contract::history_window::HistoryFileId {
+        self.file
+    }
+
+    pub(crate) fn deletions(self) -> Option<&'a DeletionOperations> {
+        self.members.map(|members| members.deletions)
+    }
+
+    pub(crate) fn copies(self) -> Option<&'a DeletionOperations> {
+        self.members.map(|members| members.copies)
+    }
+
+    pub(crate) fn malformed(self) -> bool {
+        self.malformed
+    }
+
+    pub(crate) fn object_move(
+        self,
+        id: OperationId,
+    ) -> crate::Result<std::sync::Arc<crate::state_projection::move_receipts::MoveReceipt>> {
+        self.moves.get(id)
+    }
+}
+
+impl<'a> crate::state_projection::StateProjection<'a> {
+    pub(crate) fn lifecycle(
+        self,
+        file: &'a storage_contract::history_window::HistoryFileId,
+    ) -> LifecycleView<'a> {
+        let rows = self.owners.file_rows(file.as_str());
+        LifecycleView {
+            state: self.state,
+            file,
+            members: rows.map(|rows| LifecycleMembers {
+                deletions: &rows.deletion_operations,
+                copies: &rows.history_copies,
+            }),
+            malformed: self.owners.malformed_deletion_receipts()
+                || self.owners.malformed_history_copy_receipts(),
+            moves: self.moves,
+        }
+    }
+}

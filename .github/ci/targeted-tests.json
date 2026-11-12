@@ -2372,7 +2372,7 @@
       ]
     },
     "container-lifecycle-engine": {
-      "reason": "Project only authenticated permanent D/undo/import facts; preserve original FILE database audit consumers, complete source admission, cold reopen, retained-copy evidence, cancellation and no-fabrication failures.",
+      "reason": "Project only authenticated permanent D/undo/import facts; preserve original FILE database audit consumers, complete source admission, cold reopen, retained-copy evidence, cancellable receipt ownership scans, shared move decoding and no-fabrication failures.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -2382,7 +2382,8 @@
           "prefixes": [
             "engine::history_window::read::lifecycle::tests::",
             "container_storage::file_database::tests::",
-            "file_deletion::batch::undo::tests::"
+            "file_deletion::batch::undo::tests::",
+            "state_projection::move_receipts_tests::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900
@@ -7352,6 +7353,24 @@
     },
     {
       "path": "src/engine/src/engine/history_window/read/lifecycle.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/lifecycles.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/move_receipts.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/state_projection/move_receipts_tests.rs",
       "groups": [
         "container-lifecycle-engine"
       ]

@@ -507,6 +507,50 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
                          ('storage-server', 'test', 'phase1_save_tags', ['core']))
 
+    def test_lifecycle_receipt_source_keeps_shared_readers_and_endpoint_checks(self):
+        paths = [
+            'src/engine/src/state_projection/lifecycles.rs',
+            'src/engine/src/state_projection/move_receipts.rs',
+            'src/engine/src/file_deletion/retained.rs',
+            'src/engine/src/engine/history_window/read/lifecycle.rs',
+            'test/engine/unit/state_projection/move_receipts_tests.rs',
+            'test/engine/unit/engine/file_lifecycle_tests.rs',
+        ]
+        group = self.policy['groups']['container-lifecycle-engine']
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['container-lifecycle-engine'])
+                selected = [
+                    {key: value for key, value in selection.items()
+                     if key != 'selection_groups'}
+                    for target in plan['rust_targets']
+                    for selection in target.get('selections', [target])
+                ]
+                for target in group['rust_targets']:
+                    self.assertIn(target, selected)
+        engine = group['rust_targets'][0]
+        self.assertEqual(engine['prefixes'], [
+            'engine::history_window::read::lifecycle::tests::',
+            'container_storage::file_database::tests::',
+            'file_deletion::batch::undo::tests::',
+            'state_projection::move_receipts_tests::',
+        ])
+        self.assertEqual(engine['max_tests'], 96)
+        self.assertEqual(engine['timeout_seconds'], 900)
+        self.assertEqual(group['rust_targets'][1]['prefixes'], ['lifecycle_page::'])
+        self.assertEqual(group['rust_targets'][1]['max_tests'], 8)
+        complete = CI.select_plan(self.policy, paths + [
+            'docs/design/container-lifecycle-read.md', 'TASKS.md',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ])
+        self.assertEqual(complete['groups'], [
+            'ci-selection', 'container-lifecycle-engine',
+            'container-lifecycle-http', 'container-lifecycle-web',
+        ])
+        self.assertLessEqual(len(complete['rust_targets']), 16)
+        self.assertLessEqual(len(complete['python_tests']), 8)
+
     def test_unknown_and_empty_changes_need_target_selection(self):
         for changed in ([], ['__unmapped_fixture__/unknown.rs']):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
