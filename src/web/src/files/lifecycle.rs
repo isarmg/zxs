@@ -252,7 +252,13 @@ fn event_view(file: HistoryFileId, event: Event) -> impl IntoView {
             id=anchor
             data-zxs-lifecycle-operation=operation
         >
-            <h4 class="zxs-row">{action_label(event.action)}</h4>
+            <p
+                class="zxs-row"
+                role="heading"
+                {web_interface::attr::custom::custom_attribute("aria-level", "4")}
+            >
+                {action_label(event.action)}
+            </p>
             <p class="zxs-row">{event_time(&event)}</p>
             <p class="zxs-row">
                 {format!("{}: {}", t("操作", "Operation"), event.operation_id)}
