@@ -17,7 +17,9 @@ enum WriteRoute {
 impl WriteRoute {
     fn path(self) -> &'static str {
         match self {
-            Self::FileTags => "/api/file-manager/files/file/tags",
+            Self::FileTags => {
+                "/api/file-manager/files/file_00000000000000000000000000000001/tags"
+            }
             Self::DiskWriteSession => "/api/file-manager/disks/P01/write-sessions",
             Self::WorkspaceCommit => "/api/workspaces/workspace/commit",
         }
@@ -26,13 +28,10 @@ impl WriteRoute {
     fn body(self) -> Vec<u8> {
         let body = match self {
             Self::FileTags => json!({
-                "targets": [{
-                    "branch_id": "fbr_00000000000000000000000000000001",
-                    "source_node_id": "ver_00000000000000000000000000000001",
-                    "expected_node_id": "ver_00000000000000000000000000000001"
-                }],
-                "add": ["reviewed"],
-                "remove": [],
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "file.txt",
+                "expected_generation": "0",
+                "tags": ["reviewed"],
                 "operation_id": "op_00000000000000000000000000000001"
             }),
             Self::DiskWriteSession | Self::WorkspaceCommit => workspace_body("POST", self.path()),

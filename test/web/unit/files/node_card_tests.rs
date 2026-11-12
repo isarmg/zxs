@@ -108,7 +108,6 @@ fn every_displayed_action_has_a_distinct_name_and_accessible_label() {
         Action::Move,
         Action::PathChange,
         Action::Merge,
-        Action::Merge,
     ];
     let names = actions
         .iter()
@@ -118,5 +117,6 @@ fn every_displayed_action_has_a_distinct_name_and_accessible_label() {
     for action in actions {
         assert!(!action.label().is_empty());
         assert_ne!(action.name(), "delete");
+        assert_ne!(action.name(), "tags");
     }
 }

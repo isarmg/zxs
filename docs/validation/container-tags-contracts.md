@@ -55,12 +55,23 @@ format 是 `container-tags-radix-map-roots`；原格式及缺根输入明确拒�
 旧 `file-merge-tag-history.json` 的原字节 SHA-256 仍为
 `21cf9e64a0d677cffc4398500fc965c9f7bfd59272913e3a37ad455bcd6246d6`，继续明确拒绝。
 
+## 后继契约消费者验证
+
+[#1304](https://github.com/isarmg/zxs/actions/runs/43227554097) 在准确提交
+`09b7715f3d9aa2f85820fd8dc561cc1a800936bc`、同一完整基线 `39bcae2` 的分片 2
+实际通过全部 13 项所选 contract-check 测试，包含三份真实捕获的严格 DTO、OpenAPI、
+跨响应身份/集合/代数绑定、旧格式拒绝和文档 schema 一致性。工件为 13948639188，
+ZIP SHA-256 为 `4958c7bb6e3c139e97df66041db1dde13edca59a4c10bc1558acfa7ba3e21390`。
+这项复验未修改三份真实输入或旧拒绝输入的字节。
+
 ## 未完成的验证
 
 #1300 整体失败，不是完整标签验收通过。原备份事务 900 秒超时后，Web 原生/WASM、
 browser Rust 和 contract-check 均列为 blocked；该 run 没有执行新固定输入的离线复验。
 上述 HTTP 单项通过不覆盖其余失败、完整恢复或真实 Chrome。
 
-新固定输入及断言仍须在后继准确 SHA 的 GitHub 定向 contract-check 中复验。
+#1304 的 contract-check 通过不等于整批通过：同分片仍有旧 Web 动作清单、contract
+单元测试编译、复制夹具及 SMB 模块选择失败；其他分片的原备份事务仍然超时。
+Web 原生/WASM 编译已通过，543 项 Web 行为通过、1 项上述清单断言失败。
 本地未编译、测试、格式化或运行验证脚本。静态合成向量不替代真实 HTTP 证据，
-真实捕获也不替代契约工具及 Web 的执行结果。
+真实捕获和离线契约执行也不替代真实 Chrome、完整池恢复及其他未选择目标。

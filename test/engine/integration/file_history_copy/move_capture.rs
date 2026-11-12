@@ -216,7 +216,7 @@ fn move_capture_rejects_target_change_and_preserves_source() {
 }
 
 #[test]
-fn move_capture_includes_tag_only_branch_changes() {
+fn move_capture_includes_container_tag_changes_without_changing_branch_heads() {
     let mut fixture = Fixture::new(false);
     let original = entry(&fixture.engine, &fixture.source, "source.txt");
     let branch = fixture
@@ -233,8 +233,18 @@ fn move_capture_includes_tag_only_branch_changes() {
         .unwrap();
     let before = capture(&fixture);
     let head = fixture.engine.file_branch_head(&branch).unwrap();
-    container_tags_fixture::edit(&mut fixture.engine, &original.file_id, &["retained-label".into()], &[], "admin", op())
-        .unwrap();
+    let versions = fixture.engine.state().versions.clone();
+    let metadata = fixture.engine.state().file_metadata_nodes.clone();
+    let paths = fixture.engine.state().file_path_nodes.clone();
+    container_tags_fixture::edit(
+        &mut fixture.engine,
+        &original.file_id,
+        &["retained-label".into()],
+        &[],
+        "admin",
+        op(),
+    )
+    .unwrap();
     assert_eq!(
         recheck_error(&fixture.engine, &before),
         ErrorCode::WorkspaceChanged
@@ -244,9 +254,18 @@ fn move_capture_includes_tag_only_branch_changes() {
         before.source_records_digest(),
         after.source_records_digest()
     );
-    assert_ne!(
-        before.branch_heads()[&branch],
-        after.branch_heads()[&branch]
+    assert_eq!(before.branch_heads(), after.branch_heads());
+    assert_eq!(fixture.engine.file_branch_head(&branch).unwrap(), head);
+    assert_eq!(fixture.engine.state().versions, versions);
+    assert_eq!(fixture.engine.state().file_metadata_nodes, metadata);
+    assert_eq!(fixture.engine.state().file_path_nodes, paths);
+    let labels = &fixture.engine.state().container_tags[
+        &original.file_id.parse::<storage_contract::FileId>().unwrap()
+    ];
+    assert_eq!(labels.generation(), storage_contract::Generation::new(1));
+    assert_eq!(
+        labels.tags().iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+        vec!["retained-label"]
     );
 }
 

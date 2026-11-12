@@ -170,8 +170,8 @@ SYSTEM 增加 catalog family 39；既有永久审计主体、事件、状态的 
 - browser-smoke 消费者已经改用真实 GET/CAS 和容器编辑器。定向组执行 Node 观察器
   夹具并编译 Rust 驱动，不运行 Chrome；合成历史分页仍明确为合成输入。
 - 新格式真实 HTTP 捕获已从 #1300 准确提交的受控 wire 工件逐字取回，作为独立的
-  历史、标签 Snapshot 和 Operation 正向 fixture；对应 HTTP 单项通过，离线契约消费
-  尚待后继执行。原工件、摘要与边界见[契约证据](../validation/container-tags-contracts.md)。
+  历史、标签 Snapshot 和 Operation 正向 fixture；对应 HTTP 单项通过，#1304 的
+  所选 13 项 contract-check 也已通过。原工件、摘要与边界见[契约证据](../validation/container-tags-contracts.md)。
   旧真实节点标签捕获保留原字节作拒绝证据，不能手改它冒充新服务响应。
 
 ### 7.2 首次完整定向执行与修复待验
@@ -207,3 +207,37 @@ Web 原生/WASM、browser Rust、contract-check、FILE history copy 和 phase1_s
 本修复批只把原备份的完整 Cargo 身份安排到独立分片，不删除其原选择或放宽 900 秒。
 后继仍以同一完整基线重跑全并集，任一失败、超时、缺失或 blocked 都使总验收失败。
 真实 Chrome、全池激活恢复与未选择目标仍不在本次证据内。
+
+### 7.3 后继分片证据与剩余修复
+
+[#1304](https://github.com/isarmg/zxs/actions/runs/43227554097) 的准确 head 为
+`09b7715f3d9aa2f85820fd8dc561cc1a800936bc`，完整基线仍是
+`39bcae218116b2d8f925120d9a8f34cea791df5a`。计划保留 34 个 Cargo 配置和
+13 个 Python 模块，原备份 Cargo 身份独立后共四片，计划摘要为
+`cbcb938945401f756be256fa9b9141da7c7e3f55669eeb9468f23f673c19a1b7`。
+
+截至本修复片，已取得以下结果，不能合称整批通过：
+
+| 分片 | 实际证据 | 剩余问题 |
+| --- | --- | --- |
+| 0 | live 执行已进入 Engine unit 测试，原九条编译诊断已不再阻断 | 工件尚未返回，HTTP/Engine/Python 的最终通过与失败待核 |
+| 1，工件 13950581200 | 112 Python 通过；blocked/skipped 均为零 | 原备份唯一事务仍在 900 秒超时 |
+| 2，工件 13948639188 | 664 Rust、4 编译检查通过；blocked 为零 | 四项失败、两项 skipped，见下文 |
+| 3，工件 13948788033 | 171 Rust、5 编译检查通过 | 本片无失败、skipped 或 blocked |
+
+分片 2 已真实通过 Web native 与 WASM 编译、543 项 Web 行为、19 项 browser Rust
+夹具、13 项 contract-check、15 项 phase1_save_tags、两个 phase1_tag_cold_replay
+和三个 phase1_tag_regressions。两处冷恢复的原失败用例及 Current 新回归已通过。
+browser Rust 和 Node 夹具不是实际 Chrome，foreign prepared graph 也不等于安装后
+双向写入或完整池恢复。
+
+四项剩余问题是旧 Web 清单重复列 Merge、contract 单元夹具仍引用已移除 Tags 枚举、
+复制捕获夹具仍要求标签改变分支头，以及 SMB 删除审阅的模块选择漏了父路径。
+本修复片按新容器语义保留对应真实断言，不改生产实现、原预算或备份超时：
+旧捕获仍因标签变化失效，但所有分支头及正文/元数据/路径历史不变；旧 `tags` 枚举
+输入明确拒绝；SMB 选择绑定实际 `http_soft_deletion::deletion_review::`。
+
+另迁移已有流式标签 HTTP 测试的合法 CAS 正向控制，保留撤权、取消、截断和超限的
+全部九项时序测试，并将它们纳入原有界 HTTP 组。固定 phase-one 清单跟随当前测试名
+及新增生命周期/分页删除用例；只选择其 Python 合成驱动回归，不启动全套 phase-one
+Rust gate。新增选择及所有修复仍待新 head 的 GitHub 执行，不能由 #1304 推定已通过。

@@ -1834,6 +1834,7 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/contract/src/error.rs',
                 'src/contract/src/model.rs', 'src/contract/src/tracked.rs',
                 'src/contract/src/file_container_tags.rs',
+                'test/contract/unit/model/domain_state_tests.rs',
                 'docs/tools/contract-check/tests/fixtures/merge-tags-backup.md',
                 'test/tools/contract-check/fixtures/merge-tags-backup/'
                 'file-container-tags-history.json',
@@ -1872,6 +1873,7 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/server/src/http_boundary.rs',
                 'src/server/src/http_file_tags.rs', 'src/server/src/operation_wire.rs',
                 'src/server/src/backend_file_tags.rs', 'src/client/src/lib.rs',
+                'test/server/unit/phase_one_write_admission.rs',
             ],
             'container-tags-web': [
                 'src/web/src/files/model.rs',
@@ -1916,6 +1918,33 @@ class ContainerTagsSelection(unittest.TestCase):
                                          if key != 'selection_groups'}]))
                                 if origin == group]
                     self.assertCountEqual(selected, self.policy['groups'][group]['rust_targets'])
+
+    def test_phase_one_inventory_changes_run_only_the_bounded_driver_regressions(self):
+        for path in ['.github/scripts/check-phase-one-core.py',
+                     'test/ci/test_phase_one_core.py']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['phase-one-inventory'])
+                self.assertEqual(plan['python_tests'], ['test_phase_one_core'])
+                self.assertEqual(plan['rust_targets'], [])
+
+    def test_container_tag_selection_keeps_streamed_admission_and_actual_smb_module(self):
+        groups = self.policy['groups']
+        http = groups['container-tags-http']['rust_targets']
+        self.assertIn('backend_admission_tests::phase_one_write_admission::',
+                      http[0]['prefixes'])
+        self.assertEqual(http[0]['max_tests'], 96)
+        self.assertEqual(http[0]['features'], ['core'])
+        smb = next(target for target in http if target.get('name') == 'phase1_smb_rpc')
+        self.assertEqual(smb['prefixes'],
+                         ['soft_deletion::', 'http_soft_deletion::deletion_review::'])
+        self.assertEqual(smb['max_tests'], 96)
+        self.assertEqual(smb['timeout_seconds'], 900)
+        contract = groups['container-tags-contract']['rust_targets'][0]
+        self.assertIn('model::domain_state_tests::'
+                      'domain_states_preserve_wire_strings_without_accepting_other_shapes',
+                      contract['exact'])
+        self.assertEqual(contract['max_tests'], 96)
 
     def test_database_repair_source_and_fixture_select_completed_and_pending_regressions(self):
         for path in ['src/engine/src/database_install.rs',

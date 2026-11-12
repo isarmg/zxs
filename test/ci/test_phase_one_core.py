@@ -122,12 +122,12 @@ class ArtifactTests(unittest.TestCase):
 class InventoryTests(unittest.TestCase):
     def test_reviewed_inventory_keeps_existing_cases_and_adds_current_feature_regressions(self):
         self.assertEqual(len(set(GATE['SERVER_TESTS'])), 29)
-        self.assertEqual(len(set(GATE['FILE_TESTS'])), 14)
+        self.assertEqual(len(set(GATE['FILE_TESTS'])), 15)
         self.assertEqual(len(set(GATE['DIRECTORY_TESTS'])), 33)
         self.assertEqual(len(set(GATE['DIRECTORY_SAFETY_TESTS'])), 5)
         self.assertEqual(len(set(GATE['STAGED_SOURCE_TESTS'])), 2)
         self.assertEqual(len(set(GATE['TAG_TESTS'])), 3)
-        self.assertEqual(len(set(GATE['SMB_TESTS'])), 11)
+        self.assertEqual(len(set(GATE['SMB_TESTS'])), 12)
         self.assertEqual(len(set(GATE['COLD_TAG_TESTS'])), 2)
         self.assertEqual(len(set(GATE['CONTRACT_TESTS'])), 1)
         self.assertEqual(len(set(GATE['MOUNT_TESTS'])), 2)
@@ -407,11 +407,11 @@ class OrchestrationTests(unittest.TestCase):
     def summary(self):
         return json.loads((self.root / 'target/phase-one-core/summary.json').read_text())
 
-    def test_pipeline_builds_once_and_runs_106_unique_cases_without_whole_engine_suite(self):
+    def test_pipeline_builds_once_and_runs_108_unique_cases_without_whole_engine_suite(self):
         gate = self.run_gate()
         self.assertEqual(gate.summary['status'], 'passed')
-        self.assertEqual(gate.summary['passed_count'], 106)
-        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 106)
+        self.assertEqual(gate.summary['passed_count'], 108)
+        self.assertEqual(len({(x['target'], x['name']) for x in gate.summary['passed']}), 108)
         calls = self.calls()
         self.assertEqual([x['tool'] for x in calls[:3]], ['cargo', 'cargo', 'cargo'])
         self.assertTrue(all(x['cwd'] == str(self.root) for x in calls))
@@ -458,7 +458,7 @@ class OrchestrationTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 self.run_gate(engine_regression_output=output)
             self.assertEqual(self.summary()['status'], 'failed')
-            self.assertEqual(len(self.summary()['passed']), 103)
+            self.assertEqual(len(self.summary()['passed']), 105)
             self.assertNotIn('passed_count', self.summary())
 
     def test_engine_regression_failure_replaces_old_success(self):
@@ -466,7 +466,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_gate(engine_regression_exit=101)
         self.assertEqual(self.summary()['status'], 'failed')
-        self.assertEqual(len(self.summary()['passed']), 103)
+        self.assertEqual(len(self.summary()['passed']), 105)
         self.assertNotIn('passed_count', self.summary())
 
     def test_old_tree_without_readmission_source_fails_before_cargo(self):
@@ -499,7 +499,7 @@ class OrchestrationTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 self.run_gate(readmission_output=output)
             self.assertEqual(self.summary()['status'], 'failed')
-            self.assertEqual(len(self.summary()['passed']), 102)
+            self.assertEqual(len(self.summary()['passed']), 104)
             self.assertNotIn('passed_count', self.summary())
 
     def test_readmission_nonzero_exit_does_not_preserve_an_old_success(self):
@@ -507,7 +507,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_gate(readmission_exit=101)
         self.assertEqual(self.summary()['status'], 'failed')
-        self.assertEqual(len(self.summary()['passed']), 102)
+        self.assertEqual(len(self.summary()['passed']), 104)
         self.assertNotIn('passed_count', self.summary())
         self.assertEqual(self.summary()['commands'][-1]['returncode'], 101)
 
@@ -529,7 +529,7 @@ class OrchestrationTests(unittest.TestCase):
                 self.run_gate(mount_exit=code)
             summary = self.summary()
             self.assertEqual(summary['status'], 'failed')
-            self.assertEqual(len(summary['passed']), 100)
+            self.assertEqual(len(summary['passed']), 102)
             self.assertNotIn('passed_count', summary)
             self.assertEqual(summary['commands'][-1]['returncode'], code)
 
@@ -581,7 +581,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_gate(ignored='storage_engine')
         self.assertEqual(self.summary()['status'], 'failed')
-        self.assertEqual(len(self.summary()['passed']), 100)
+        self.assertEqual(len(self.summary()['passed']), 102)
         self.assertNotIn('passed_count', self.summary())
 
     def test_ignored_directory_safety_target_never_completes_the_gate(self):

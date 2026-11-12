@@ -19,7 +19,8 @@ macro_rules! roundtrip {
 fn domain_states_preserve_wire_strings_without_accepting_other_shapes() {
     roundtrip!(DirectoryBatchKind, Move, Copy, Delete, Rename, Separate);
     roundtrip!(BranchKind, File, Full);
-    roundtrip!(FileMetadataKind, Tags, Merge);
+    roundtrip!(FileMetadataKind, Merge);
+    assert!(json_codec::from_str::<FileMetadataKind>("\"tags\"").is_err());
     roundtrip!(HistoryState, Active, Archived);
     roundtrip!(BranchState, Active, Archived, Migrated, Merged);
     roundtrip!(WorkspaceState, Open, Sealed, Committed, Aborted);

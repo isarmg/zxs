@@ -2463,6 +2463,13 @@
         }
       ]
     },
+    "phase-one-inventory": {
+      "reason": "Keep the existing phase-one driver inventory aligned with current container fixtures; execute only its synthetic Python driver regressions, not the full phase-one Rust gate",
+      "python_tests": [
+        "test_phase_one_core"
+      ],
+      "rust_targets": []
+    },
     "container-tags-contract": {
       "reason": "Container-owned strict Tag/TagSet and CAS response binding; required typed FileId records and removed node tag wire fields",
       "python_tests": [],
@@ -2475,6 +2482,9 @@
             "tracked::tests::",
             "history_window::tests::",
             "shared_history::tests::"
+          ],
+          "exact": [
+            "model::domain_state_tests::domain_states_preserve_wire_strings_without_accepting_other_shapes"
           ],
           "max_tests": 96,
           "timeout_seconds": 900
@@ -2658,7 +2668,8 @@
             "operation_wire::container_tags_tests::",
             "engine_backend::file_manager::time_tests::",
             "engine_backend::revocation_tests::",
-            "engine_backend::file_manager::history_nodes::tests::"
+            "engine_backend::file_manager::history_nodes::tests::",
+            "backend_admission_tests::phase_one_write_admission::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900,
@@ -2701,7 +2712,7 @@
           "manifest": "src/server/Cargo.toml",
           "prefixes": [
             "soft_deletion::",
-            "deletion_review::"
+            "http_soft_deletion::deletion_review::"
           ],
           "max_tests": 96,
           "timeout_seconds": 900,
@@ -7628,6 +7639,30 @@
       "path": "test/tools/contract-check/fixtures/merge-tags-backup/file-container-tags-operation.json",
       "groups": [
         "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/contract/unit/model/domain_state_tests.rs",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/server/unit/phase_one_write_admission.rs",
+      "groups": [
+        "container-tags-http"
+      ]
+    },
+    {
+      "path": ".github/scripts/check-phase-one-core.py",
+      "groups": [
+        "phase-one-inventory"
+      ]
+    },
+    {
+      "path": "test/ci/test_phase_one_core.py",
+      "groups": [
+        "phase-one-inventory"
       ]
     }
   ],

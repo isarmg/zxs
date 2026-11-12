@@ -74,7 +74,7 @@ SERVER_TESTS = (
 )
 FILE_TESTS = (
     'unicode_save_tags_unchanged_body_and_replacement_survive_cold_open',
-    'empty_file_and_truncate_to_empty_keep_identity_and_node_labels',
+    'empty_file_and_truncate_to_empty_keep_identity_and_container_tags',
     'same_named_files_on_two_level_one_disks_keep_independent_tags',
     'rejection::revoked_file_mutations_leave_history_and_bytes_unchanged_after_cold_open',
     'rejection::stale_tag_failure_is_atomic_and_does_not_consume_retry_identity',
@@ -85,6 +85,7 @@ FILE_TESTS = (
     'discovery::cookie_activation_rejects_missing_csrf_and_cross_origin_without_writes',
     'discovery::cookie_activation_rejects_unbrowseable_names_before_intent_and_can_retry',
     'discovery::replaced_directory_and_logged_out_cookie_cannot_activate_reviewed_selection',
+    'file_lifecycle::file_lifecycle_real_router_delete_undo_auth_current_root_and_read_only',
     'content_matches::content_matches_real_router_is_read_only_authenticated_and_root_bound',
     'shared_history::shared_history_real_router_automatically_joins_transitive_files_with_exact_auth_and_root',
 )
@@ -135,8 +136,8 @@ STAGED_SOURCE_TESTS = (
     'disk_exit_allows_fixed_child_history_and_replays_after_reopen',
 )
 TAG_TESTS = (
-    'fresh_duplicate_input_is_one_tag_but_exact_receipt_still_binds_raw_request',
-    'reused_old_path_does_not_retarget_file_tags_or_break_exact_replay',
+    'container_replacement_keeps_content_graph_and_replays_exact_cas',
+    'reused_old_path_does_not_retarget_container_tags_or_break_exact_replay',
     'current_tags_ignore_retired_directory_identity_and_keep_root_and_history',
 )
 SMB_TESTS = (
@@ -148,6 +149,8 @@ SMB_TESTS = (
     'directory_rename::public_smb_directory_git_rename_committed_export_preserves_source_target_and_receipt_identity',
     'http_soft_deletion::http_whole_file_deletion_retains_all_branches_replays_after_undo_and_cold_opens',
     'http_soft_deletion::soft_delete_adapter_checks_current_auth_and_preserves_cross_interface_receipt_identity',
+    'http_soft_deletion::deletion_review::'
+    'oversized_deletion_is_paged_and_undo_retains_the_complete_durable_receipt',
     'soft_deletion::public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file',
     'soft_deletion::public_http_deletion_is_discoverable_and_undo_is_exact_authenticated_and_durable',
     'soft_deletion::public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identity',
