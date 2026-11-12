@@ -128,6 +128,13 @@ mod workspace_commit;
 #[cfg(test)]
 pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
+mod directory_snapshot_source;
+pub use directory_snapshot_source::{
+    DirectorySnapshotBudget, DirectorySnapshotContent, DirectorySnapshotEntry,
+    DirectorySnapshotLimits, DirectorySnapshotPreview, DirectorySnapshotSourceError,
+    DirectorySnapshotSourcePlan, DirectorySnapshotUsage, DirectorySnapshotVerificationError,
+    VerifiedDirectorySnapshotSource,
+};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod read_view;

@@ -465,6 +465,15 @@ macro_rules! methods {
                 ) -> Result<storage_contract::StagedFile, $crate::ApiError>;
             }
             optional {
+                fn directory_snapshot_source(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _request: $crate::ReadDirectorySnapshotSource,
+                    _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+                ) -> Result<$crate::DirectorySnapshotSourcePreview, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
 
 
                 /// Require the original native save's terminal workspace reconciliation.

@@ -2,6 +2,10 @@
 use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
     let routes = Router::new()
+        .route(
+            "/api/file-manager/directory-snapshot-source",
+            get(http_directory_snapshot_source::read),
+        )
         .route("/api/file-manager/disks", get(disks))
         .route(
             "/api/file-manager/detached-history",

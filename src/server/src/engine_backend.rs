@@ -17,6 +17,7 @@ mod backup_transaction;
 mod branch;
 mod content;
 mod directory_deletion;
+mod directory_snapshot_source;
 mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
@@ -397,6 +398,15 @@ impl EngineBackend {
 }
 
 impl Backend for EngineBackend {
+    fn directory_snapshot_source(
+        &self,
+        identity: &Identity,
+        request: crate::ReadDirectorySnapshotSource,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<crate::DirectorySnapshotSourcePreview, ApiError> {
+        directory_snapshot_source::read(self, identity, request, cancellation)
+    }
+
     fn operation(
         &self,
         identity: &Identity,

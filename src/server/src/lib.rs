@@ -54,6 +54,11 @@ pub use backend_file_history_move::{
     MoveTargetName, ReplaceCurrentFile,
 };
 mod backend_directory_deletion;
+mod backend_directory_snapshot_source;
+mod http_directory_snapshot_source;
+pub use backend_directory_snapshot_source::{
+    DirectorySnapshotSourcePreview, ReadDirectorySnapshotSource,
+};
 pub use backend_directory_deletion::{
     CurrentDirectoryDeletion, DeleteCurrentDirectory, PrepareCurrentDirectoryDeletion,
     ReadDirectoryDeletions,

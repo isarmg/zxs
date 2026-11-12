@@ -45,6 +45,12 @@ mod persist;
 pub mod disk_authority;
 mod engine;
 pub use engine::DetachedHistoryRead;
+pub use engine::{
+    DirectorySnapshotBudget, DirectorySnapshotContent, DirectorySnapshotEntry,
+    DirectorySnapshotLimits, DirectorySnapshotPreview, DirectorySnapshotSourceError,
+    DirectorySnapshotSourcePlan, DirectorySnapshotUsage, DirectorySnapshotVerificationError,
+    VerifiedDirectorySnapshotSource,
+};
 pub use engine::FileHistoryMoveTargetReport;
 pub use engine::ReadView;
 pub use engine::{
