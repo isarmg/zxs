@@ -9548,7 +9548,7 @@
     "/api/file-manager/files/{file}/shared-history": {
       "get": {
         "operationId": "readFileSharedHistory",
-        "description": "Automatically discover the complete same-history connected component using all retained nonempty size/hash commitments. Preserve independent file, branch and event IDs; equality relations are not ancestor edges. Includes current bodyless deletion nodes and PURGED/MIGRATED metadata without body I/O. At most 64 files, 512 events/versions, 256 branches, 2048 ancestry edges and 1 MiB JSON. A request-local index admits at most 65536 same-history versions; all scanned headers/parent records/branch entries share a 1048576 work budget. Overflow returns 429, never a successful partial component. Capture/recheck exact history root and current administrator authentication around lock-free preparation. Does not create persistent links or implement cross-history associations or disk lifecycle changes.",
+        "description": "Automatically discover the complete same-history connected component using all retained nonempty size/hash commitments. Preserve independent file, branch and content-related node IDs; equality relations are not ancestor edges. Includes retained content nodes of soft-deleted files and PURGED/MIGRATED metadata without body I/O, not independent deletion records or frozen-frontier edges. Every graph node requires its file's retained version. At most 64 files, 512 nodes/versions, 256 branches, 2048 ancestry edges and 1 MiB JSON. A request-local index admits at most 65536 same-history versions; all scanned headers/parent records/branch entries share a 1048576 work budget. Overflow returns 429, never a successful partial component. Capture/recheck exact history root and current administrator authentication around lock-free preparation. Does not create persistent links or implement cross-history associations or disk lifecycle changes.",
         "parameters": [
           {
             "name": "file",
@@ -9826,7 +9826,7 @@
     "/api/files/{file}/deletion": {
       "get": {
         "operationId": "getCurrentFileDeletion",
-        "description": "返回当前无正文删除节点或null。完整frontier最多4096个分支/父边，响应最多1MiB；超限拒绝而非截断。没有version_id。",
+        "description": "返回当前独立删除记录或null，不创建内容图节点或祖先边。完整冻结frontier最多4096个分支/前沿条目，响应最多1MiB；超限拒绝而非截断。没有version_id。",
         "parameters": [
           {
             "name": "file",
@@ -9917,7 +9917,7 @@
     "/api/files/{file}/deletion/undo": {
       "post": {
         "operationId": "undoCurrentFileDeletion",
-        "description": "唯一管理员以准确当前删除节点ID撤销删除，恢复同一稳定文件及原路径SMB可见性。重试复用原operation_id；旧删除ID不能撤销后来的删除。不清除正文、历史或旧回执。",
+        "description": "唯一管理员以准确当前删除记录ID撤销删除，恢复同一稳定文件及原路径SMB可见性。重试复用原operation_id；旧删除ID不能撤销后来的删除。不清除正文、历史或旧回执。",
         "parameters": [
           {
             "name": "file",
@@ -19863,7 +19863,7 @@
           "created_at"
         ],
         "additionalProperties": false,
-        "description": "当前稳定文件的无正文软删除节点，精确连接所有保留分支各自HEAD。branch_heads与父边闭包由Engine验证；禁止伪造version_id。删除该记录即撤销，旧操作回执仍保留。"
+        "description": "当前稳定文件的独立软删除记录，不是内容图节点。branch_heads及parent_node_ids保存删除时的完整冻结前沿，由Engine验证，不作为内容祖先边；没有version_id。精确撤销移除此当前记录，旧操作回执和历史证据仍保留。"
       },
       "FileDeletions": {
         "type": "object",
@@ -20502,7 +20502,7 @@
           "branches",
           "shared_contents"
         ],
-        "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, event and branch IDs remain distinct. Bodyless deletion nodes and purged metadata remain visible. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
+        "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, content-related node and branch IDs remain distinct. Retained content nodes remain visible after soft deletion or body purge; independent deletion records and frozen frontiers are not content nodes or ancestor edges. Every graph node references its file's retained version. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
       },
       "IndependentRetainedVersion": {
         "type": "object",

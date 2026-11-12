@@ -323,6 +323,7 @@
           ],
           "kind": "test",
           "name": "http_engine",
+          "isolate": true,
           "prefixes": [
             "backup_namespace::"
           ]

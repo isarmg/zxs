@@ -304,3 +304,36 @@ Web native 的 43 项所选测试包含已修动作清单，全部通过；WASM 
 仍失败的是已知 Current 夹具、历史 DTO 固定字段清单残留 `tags`，以及 phase-one
 Python 库存遗漏 4 项已接线的历史目录测试。后两项只修测试消费者与准确库存，不
 恢复旧节点标签、启动普通目录开发或放宽 whole-target 完整性检查。
+
+
+### 7.6 后继精确复验与未完成的完整基线
+
+[#1313](https://github.com/isarmg/zxs/actions/runs/43252265119) 使用 head
+`f9fbbe665a0c3e2c1473f1a4961cdceefa2b7d0e`、基线
+`d1a8ad179271355f4e0cb9ec509214ac19f393ea`，完整所选范围通过：420 项 Rust、
+148 项 Python、7 项编译检查，failed/skipped/blocked 均为空，整片聚合成功。
+计划摘要为 `bc52ee666bee0fa1c1ed1186282df69ab51a0d8c65a49bc9e989778789fea68d`。
+结果工件 13961891843 的 ZIP SHA-256 为
+`7e16135f6c2db8c0cd66571ef800d139d2e75658eb422e1f4bcd82cb1a26e673`；
+聚合工件 13962475714 的 ZIP SHA-256 为
+`beae9f0c523caaf6fbc8cdcb23a1769188dc5b44219aa9adcfbbdbfe15e6206e`。
+它验证了新 State 的固定字节、别名恢复夹具，以及完整 15 项 snapshot oracle，
+不把增量基线冒充全部容器功能通过。
+
+此前完整 `39bcae218116b2d8f925120d9a8f34cea791df5a` 基线的
+[#1307](https://github.com/isarmg/zxs/actions/runs/43243068871)，head 为
+`ac7711126764a66ae286c261ce5dbc5bb45a5233`，最终失败。第 0 片作业从
+15:00:38 UTC 至 16:31:01 UTC 后被取消，上传的 summary 状态为 `incomplete`；
+已完成 306 项 Rust、81 项 Python、1 项编译检查，最后一个 Engine 单测编译命令
+仍为 incomplete。该片的 failed/skipped/blocked 数组为空，不代表后方未完成测试
+通过，也不是执行器逐项记录的 blocked。工件 13962632157 的 ZIP SHA-256 为
+`2400294b5e0adce08a77ec4366d9c4667fbd0575ad13fa799f6f7d40dc945e92`。
+其余片中，原 Backup 900 秒事务失败；State 固定字节失败由后继 #1313 的准确测试
+闭环，不能回写为 #1307 成功。
+
+后继完整基线 #1315 的第 0 片尚未取得完成证据。已经取齐的第 1/2/3 片分别保留
+原备份超时、删除图旧正向向量的两条失败，以及独立消费者的通过记录，详见
+[删除图证据](../design/shared-file-history.md#删除事实与内容图脱钩)。本次将完整
+HTTP Cargo 身份按既有隔离机制独立安排，保留原选择、预算、90 分钟作业限制与
+失败聚合，再按新 head 的同一完整基线复验。它不取消旧运行、不放宽原 900 秒，
+不证明测试变快；真实 Chrome 和完整池恢复仍未验证。

@@ -2012,6 +2012,67 @@ class ContainerTagsSelection(unittest.TestCase):
                 'same_backup_switch_serves_and_replays_normal_successor_publications',
             ])
 
+    def test_http_identity_is_isolated_with_every_original_selection_and_budget(self):
+        def is_http(target):
+            return (target['package'] == 'storage-server'
+                    and target.get('name') == 'http_engine')
+
+        # Use every real HTTP owner, not an invented subset of its integration tests.
+        owners = {
+            name: copy.deepcopy(group) for name, group in self.policy['groups'].items()
+            if any(is_http(target) for target in group['rust_targets'])
+        }
+        http_owners = sorted(owners)
+        for name in ['backup-scoped-encoding-memo', 'ci-selection']:
+            owners[name] = copy.deepcopy(self.policy['groups'][name])
+        policy = {
+            'groups': owners,
+            'rules': [{'path': 'selected.rs', 'groups': sorted(owners)}],
+            'unexecuted': 'Only these real owners are selected by the synthetic change.',
+        }
+        plan = CI.select_plan(policy, ['selected.rs'], shardable=True)
+        targets = [target for target in plan['rust_targets'] if is_http(target)]
+        self.assertEqual(len(targets), 1)
+        http = targets[0]
+        self.assertEqual(http['selection_groups'], http_owners)
+        self.assertEqual(len(http['selections']), len(http_owners))
+        for name, selection in zip(http['selection_groups'], http['selections']):
+            self.assertIn(selection, owners[name]['rust_targets'])
+
+        previous = copy.deepcopy(policy)
+        original = next(target for target in
+                        previous['groups']['portable-path-consumers']['rust_targets']
+                        if is_http(target))
+        self.assertIs(original.pop('isolate'), True)
+        self.assertEqual(original['prefixes'], ['backup_namespace::'])
+        self.assertEqual(original['max_tests'], 160)
+        normalized = copy.deepcopy(plan)
+        normalized_http = next(target for target in normalized['rust_targets']
+                               if is_http(target))
+        for name, selection in zip(normalized_http['selection_groups'],
+                                   normalized_http['selections']):
+            if name == 'portable-path-consumers':
+                self.assertIs(selection.pop('isolate'), True)
+        self.assertEqual(normalized, CI.select_plan(previous, ['selected.rs'], shardable=True))
+
+        shards = CI.shard_tools().partition(plan)
+        http_shards = [shard for shard in shards
+                       if any(is_http(target) for target in shard['rust_targets'])]
+        self.assertEqual(len(http_shards), 1)
+        self.assertEqual(http_shards[0]['rust_targets'], [http])
+        self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                         plan['rust_targets'])
+        self.assertEqual([module for shard in shards for module in shard['python_tests']],
+                         plan['python_tests'])
+        self.assertLessEqual(len(shards), 16)
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+            backup = [target for target in shard['rust_targets']
+                      if target.get('name') == 'recursive_backup_paths']
+            if backup:
+                self.assertEqual(shard['rust_targets'], backup)
+
     def test_wire_capture_destination_is_owned_by_the_exact_run_evidence_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             run = CI.Run(Path(directory))

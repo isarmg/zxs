@@ -9662,7 +9662,7 @@
         "created_at"
       ],
       "additionalProperties": false,
-      "description": "当前稳定文件的无正文软删除节点，精确连接所有保留分支各自HEAD。branch_heads与父边闭包由Engine验证；禁止伪造version_id。删除该记录即撤销，旧操作回执仍保留。"
+      "description": "当前稳定文件的独立软删除记录，不是内容图节点。branch_heads及parent_node_ids保存删除时的完整冻结前沿，由Engine验证，不作为内容祖先边；没有version_id。精确撤销移除此当前记录，旧操作回执和历史证据仍保留。"
     },
     "FileDeletions": {
       "type": "object",
@@ -10301,7 +10301,7 @@
         "branches",
         "shared_contents"
       ],
-      "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, event and branch IDs remain distinct. Bodyless deletion nodes and purged metadata remain visible. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
+      "description": "Complete bounded same-history file component automatically derived from retained nonempty content. Equality hubs are non-temporal; original file, content-related node and branch IDs remain distinct. Retained content nodes remain visible after soft deletion or body purge; independent deletion records and frozen frontiers are not content nodes or ancestor edges. Every graph node references its file's retained version. Cross-file ancestry, missing equality groups, disconnected members and cycles are rejected by semantic validation. This read conveys no write authority, body health or durable association/split publication."
     },
     "IndependentRetainedVersion": {
       "type": "object",

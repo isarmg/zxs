@@ -12,6 +12,7 @@ fn shared_history_published_contract_matches_strict_component_semantics() {
     let core_validator = validator(&core).unwrap();
     let api_validator = validator(&api).unwrap();
     let mut count = 0;
+    let mut prior_deletion_count = 0;
     for group in ["positive", "negative"] {
         for case in array(&vectors[group])
             .unwrap()
@@ -19,6 +20,12 @@ fn shared_history_published_contract_matches_strict_component_semantics() {
             .filter(|case| case["schema"] == "SharedHistoryGraph")
         {
             count += 1;
+            if case["name"] == "shared-history-prior-bodyless-deletion-keeps-relationship" {
+                prior_deletion_count += 1;
+                assert_eq!(group, "negative");
+                assert_eq!(case["layer"], "schema");
+                assert_eq!(case["value"]["nodes"][0]["kind"], "deletion");
+            }
             let shape_valid = group == "positive" || case["layer"] == "semantic";
             assert_eq!(
                 core_validator.is_valid(&case["value"]),
@@ -41,6 +48,7 @@ fn shared_history_published_contract_matches_strict_component_semantics() {
         }
     }
     assert_eq!(count, 14);
+    assert_eq!(prior_deletion_count, 1);
     let operation = &api["paths"]["/api/file-manager/files/{file}/shared-history"]["get"];
     assert_eq!(
         operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
