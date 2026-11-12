@@ -209,3 +209,7 @@ pub(crate) fn validate_candidate_seals(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/provenance_publication_tests.rs"]
+mod publication_tests;

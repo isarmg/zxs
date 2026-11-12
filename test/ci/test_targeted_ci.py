@@ -18,6 +18,68 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_publication_location_refactor_keeps_proof_and_live_layout_selections(self):
+        paths = [
+            'src/engine/src/journal.rs', 'src/engine/src/persist/layout.rs',
+            'src/engine/src/engine/provenance.rs',
+            'src/engine/src/journal/version_publication.rs',
+            'test/engine/unit/journal/version_publication_fixture.rs',
+            'test/engine/unit/journal/version_publication_tests.rs',
+            'test/engine/unit/engine/provenance_publication_tests.rs',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'], [
+            'checkpoint-layout', 'ci-selection', 'held-directory-layout',
+            'projection-cache-layout', 'version-publication-location',
+        ])
+        self.assertEqual(len(plan['rust_targets']), 4)
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(plan['python_tests']), 7)
+        engine = next(target for target in plan['rust_targets']
+                      if target['package'] == 'storage-engine'
+                      and target.get('mode', 'test') == 'test'
+                      and not target.get('features'))
+        proof = next(selection for selection in engine['selections']
+                     if 'journal::version_publication::tests::'
+                     in selection.get('prefixes', []))
+        self.assertEqual(proof['prefixes'], [
+            'journal::version_publication::tests::',
+            'engine::provenance::publication_tests::',
+            'journal::proof_decoding_tests::', 'engine::reads::tests::',
+            'engine::integrity_scrub::tests::',
+        ])
+        self.assertEqual(proof['max_tests'], 144)
+        self.assertEqual(proof['exact'], [
+            'disk::export_tests::offline_tombstones_bind_retained_version_metadata_and_directory',
+            'disk::export_tests::restored_tombstones_need_no_source_payload_proofs',
+        ])
+        product = next(target for target in plan['rust_targets']
+                       if target.get('mode') == 'check')
+        self.assertEqual(product['package'], 'storage-engine')
+        self.assertFalse(product['default_features'])
+
+    def test_publication_location_sources_have_no_unmapped_leaf(self):
+        paths = [
+            'src/engine/src/journal/version_publication.rs',
+            'test/engine/unit/journal/version_publication_fixture.rs',
+            'test/engine/unit/journal/version_publication_tests.rs',
+            'test/engine/unit/engine/provenance_publication_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['version-publication-location'])
+                self.assertEqual(len(plan['rust_targets']), 2)
+                self.assertEqual(plan['python_tests'], [])
+        for path in ['src/engine/src/journal.rs', 'src/engine/src/engine/provenance.rs']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'],
+                                 ['held-directory-layout', 'version-publication-location'])
+                self.assertEqual(len(plan['rust_targets']), 3)
+
     def test_legacy_directory_staging_retirement_keeps_live_groups_with_eight_builds(self):
         paths = [
             'src/web/src/files/staging.rs', 'src/web/src/files/actions/mutation.rs',
@@ -248,7 +310,7 @@ class TargetedSelection(unittest.TestCase):
         plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
                             'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
         self.assertEqual(len(plan['rust_targets']), 4)
-        self.assertEqual(len(plan['groups']), 4)
+        self.assertEqual(len(plan['groups']), 5)
         self.assertIn('test_development_ci', plan['python_tests'])
 
     def test_unknown_and_empty_changes_need_target_selection(self):

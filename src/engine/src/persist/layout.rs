@@ -21,6 +21,30 @@ pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new(".zxs").expect("invariant: snapshot repository is one canonical entry")
 });
 
+/// The current publication adapter alone consumes these layout names. They do
+/// not establish locations for unified FILE containers or disk proof domains.
+pub(crate) static HISTORIES: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("histories").expect("invariant: histories uses one canonical entry")
+});
+
+pub(crate) static VERSIONS: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("versions").expect("invariant: versions uses one canonical entry")
+});
+
+pub(crate) static VERSION_PUBLICATION_PROOF: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("publication-proof.json")
+        .expect("invariant: local publication proof uses one canonical entry")
+});
+
+pub(crate) static VERSION_COMMIT_PROOF: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("commit-proof.json")
+        .expect("invariant: local commit proof uses one canonical entry")
+});
+
+pub(crate) static VERSION_TOMBSTONE: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("purged.json").expect("invariant: local tombstone uses one canonical entry")
+});
+
 pub(crate) static DISK_IDENTITY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("disk.json").expect("invariant: disk identity uses one canonical entry")
 });
