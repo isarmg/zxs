@@ -1029,7 +1029,7 @@ fn decomposed_verify_observed(
             verify_publication_seal(&candidate, &publication, &seal)
         })?;
         costs.measure(ArchiveStage::JournalReceipts, source, |_| {
-            verify_journal_receipts(
+            encoded_reference_verify_journal_receipts(
                 &candidate, &publication, &seal, published, &manifest.members, &journals,
             )
         })?;
@@ -1100,4 +1100,221 @@ fn decomposed_verify_observed(
         verified_metadata_bytes: source.budget().bytes,
     };
     Ok((report, state))
+}
+
+// Independent repeated-hash reference retains the receipt gate before the
+// second hash in decomposed_verify_observed, including its original error order.
+fn encoded_reference_verify_journal_receipts(
+    candidate: &Candidate,
+    publication: &Publication,
+    seal: &PublicationSeal,
+    published: &Published,
+    members: &[OriginalMember],
+    journals: &[JournalSlots],
+) -> Result<()> {
+    let finalize_hash = object_hash("finalize", &publication.finalize)?;
+    for (member, slots) in members.iter().zip(journals) {
+        let records = slots
+            .get(&candidate.sequence)
+            .ok_or_else(|| invalid("original member omits a publication slot"))?;
+        for (record, _) in records {
+            let expected = match record.record_type {
+                RecordType::Prepare => &candidate.snapshot_hash,
+                RecordType::Accept => &published.candidate,
+                RecordType::Finalize => &finalize_hash,
+                RecordType::Publication => &published.publication,
+                _ => return Err(invalid("unsupported original journal record")),
+            };
+            if record.candidate_hash != published.candidate || record.object_hash != *expected {
+                return Err(invalid("original journal references another decision"));
+            }
+        }
+        for receipt in publication
+            .finalize
+            .accepts
+            .iter()
+            .chain(&publication.finalize_receipts)
+            .chain(&seal.receipts)
+            .filter(|receipt| receipt.disk_id == member.disk_id)
+        {
+            if receipt.slot_id != member.slot_id
+                || !records
+                    .iter()
+                    .any(|(record, hash)| record == &receipt.record && hash == &receipt.frame_hash)
+            {
+                return Err(invalid(
+                    "original receipt is absent from its owner's journal",
+                ));
+            }
+        }
+        if records
+            .iter()
+            .filter(|(record, _)| record.record_type == RecordType::Publication)
+            .count()
+            != 1
+        {
+            return Err(invalid("original journal repeats its publication slot"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn real_finalize_digest_reuse_preserves_archive_failures_and_read_budgets() {
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let system = DiskRoot::open(&fixture._temp.path().join("system")).unwrap();
+    let task = NativeTask::read(&system).unwrap();
+    let stop = AtomicBool::new(false);
+    let manifest_bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let manifest: Manifest = decode_proof(&manifest_bytes).unwrap();
+    assert!(manifest.publications.len() > 1);
+    let baseline = read_observed(
+        &root,
+        task.selection.first(),
+        &task.archive_hash,
+        &stop,
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    let original_files = fixture_file_bytes(fixture._temp.path());
+    let mut source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let publication: Publication =
+        typed(&mut source, "publication", &manifest.publications[0].publication).unwrap();
+    let finalize_hash = object_hash("finalize", &publication.finalize).unwrap();
+    let finalize_path = object_path(root.path(), "finalize", &finalize_hash).unwrap();
+    let finalize_bytes = fs::read(&finalize_path).unwrap();
+    let journal_path = journal_path(root.path(), 0);
+    let journal_bytes = fs::read(&journal_path).unwrap();
+
+    let compare = |succeeds: bool| {
+        let files = fixture_file_bytes(fixture._temp.path());
+        let mut actual_source = Target { root: &root, stop: &stop, budget: Budget::default() };
+        let mut reference_source = DelegatedSource {
+            target: Target { root: &root, stop: &stop, budget: Budget::default() },
+            objects: std::time::Duration::ZERO,
+            journals: std::time::Duration::ZERO,
+            object_calls: 0,
+            journal_calls: 0,
+        };
+        let mut costs = ArchiveStageCosts::default();
+        let expected = decomposed_verify_observed(
+            &manifest,
+            &manifest_bytes,
+            task.selection.first(),
+            &mut reference_source,
+            &mut costs,
+        );
+        let actual = verify_observed(
+            &manifest,
+            &manifest_bytes,
+            task.selection.first(),
+            &mut actual_source,
+            &mut |_, _, _, _| Ok(()),
+        );
+        assert_eq!(actual_source.budget.reads, reference_source.budget().reads);
+        assert_eq!(actual_source.budget.bytes, reference_source.budget().bytes);
+        assert_eq!(fixture_file_bytes(fixture._temp.path()), files);
+        if succeeds {
+            let actual = actual.unwrap();
+            let expected = expected.unwrap();
+            assert_eq!(actual.0, expected.0);
+            assert_eq!(actual.0, baseline.0);
+            assert_eq!(
+                canonical_json(actual.1.state()).unwrap(),
+                canonical_json(expected.1.state()).unwrap(),
+            );
+            assert_eq!(
+                canonical_json(actual.1.state()).unwrap(),
+                canonical_json(baseline.1.state()).unwrap(),
+            );
+            None
+        } else {
+            let actual = match actual {
+                Err(error) => error_signature(&error),
+                Ok(_) => panic!("damaged archive unexpectedly admitted"),
+            };
+            let expected = match expected {
+                Err(error) => error_signature(&error),
+                Ok(_) => panic!("reference unexpectedly admitted damaged archive"),
+            };
+            assert_eq!(actual, expected);
+            Some(actual)
+        }
+    };
+    assert!(compare(true).is_none());
+
+    // Exercise the changed receipt gate itself with real admitted journal records.
+    // This local record mutation is not claimed to be a reauthenticated archive.
+    let published = &manifest.publications[0];
+    let candidate: Candidate = typed(&mut source, "candidate", &published.candidate).unwrap();
+    let seal: PublicationSeal =
+        typed(&mut source, "backup-publication-seal", &published.seal).unwrap();
+    let (journals, _) = original_journals(&manifest, &mut source).unwrap();
+    let digest = verify_journal_receipts(
+        &candidate, &publication, &seal, published, &manifest.members, &journals,
+    )
+    .unwrap();
+    assert_eq!(digest.as_str(), finalize_hash);
+    let mut changed_journals = journals.clone();
+    let record = &mut changed_journals[0].get_mut(&candidate.sequence).unwrap()[0].0;
+    record.candidate_hash = manifest.publications[1].candidate.clone();
+    assert_ne!(record.candidate_hash, published.candidate);
+    fs::write(&finalize_path, b"invalid standalone FINALIZE").unwrap();
+    let gate_files = fixture_file_bytes(fixture._temp.path());
+    let mut gate_source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let actual = verify_journal_receipts(
+        &candidate, &publication, &seal, published, &manifest.members, &changed_journals,
+    )
+    .and_then(|digest| typed::<crate::journal::Finalize>(
+        &mut gate_source, "finalize", digest.as_str(),
+    ));
+    let expected = encoded_reference_verify_journal_receipts(
+        &candidate, &publication, &seal, published, &manifest.members, &changed_journals,
+    );
+    let actual = actual.err().expect("changed journal reference must fail before FINALIZE read");
+    let expected = expected.unwrap_err();
+    assert_eq!(actual.code(), ErrorCode::PublicationInvalid);
+    assert_eq!(error_signature(&actual), error_signature(&expected));
+    assert_eq!(gate_source.budget.reads, 0);
+    assert_eq!(gate_source.budget.bytes, 0);
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), gate_files);
+    fs::write(&finalize_path, &finalize_bytes).unwrap();
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+
+    // Alter only our fixture's retained bytes, without changing any authenticated
+    // reference. Both algorithms must actually reread and reject the damaged file.
+    fs::write(&finalize_path, b"invalid standalone FINALIZE").unwrap();
+    let finalize_error = compare(false).unwrap();
+    fs::write(&finalize_path, &finalize_bytes).unwrap();
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+
+    fs::write(&journal_path, b"invalid original journal").unwrap();
+    let journal_error = compare(false).unwrap();
+    fs::write(&finalize_path, b"invalid standalone FINALIZE").unwrap();
+    let both_error = compare(false).unwrap();
+    assert_eq!(both_error, journal_error);
+    assert_ne!(finalize_error, journal_error);
+    fs::write(&journal_path, &journal_bytes).unwrap();
+    fs::write(&finalize_path, &finalize_bytes).unwrap();
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    compare(false).unwrap();
+    stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(compare(true).is_none());
+    let restored = read_observed(
+        &root,
+        task.selection.first(),
+        &task.archive_hash,
+        &stop,
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(restored.0, baseline.0);
+    assert_eq!(
+        canonical_json(restored.1.state()).unwrap(),
+        canonical_json(baseline.1.state()).unwrap(),
+    );
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
 }

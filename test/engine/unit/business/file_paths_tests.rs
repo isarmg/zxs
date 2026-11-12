@@ -687,6 +687,7 @@ fn renamed_file_workspace_binds_explicit_path_and_keeps_unchanged_content_head()
     engine.stage_range(
         &workspace.workspace_id, &new_id("entry").unwrap(), "c.txt", 0, b"B", None,
     ).unwrap();
+    let saved_workspace_id = workspace.workspace_id.clone();
     let saved = engine.commit_workspace(CommitRequest {
         workspace_id: workspace.workspace_id,
         operation_id: OperationId::generate().unwrap(),
@@ -697,11 +698,18 @@ fn renamed_file_workspace_binds_explicit_path_and_keeps_unchanged_content_head()
         request_digest: None,
     }).unwrap();
     assert!(crate::persist::path_changes::read(&saved).unwrap().is_empty());
+    let saved_path = name_policy::PortablePath::parse("c.txt").unwrap();
+    engine.validate_workspace_file_selection(
+        &engine.workspace(&saved_workspace_id).unwrap(), &saved_path,
+    ).unwrap();
     let entry = entries(&engine, &repository)["c.txt"].clone();
     assert_eq!(engine.file_branch_head(&context.branch_id).unwrap(), entry.version_id);
     assert!(engine.state().file_path_nodes.is_empty());
     drop(engine);
     let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    engine.validate_workspace_file_selection(
+        &engine.workspace(&saved_workspace_id).unwrap(), &saved_path,
+    ).unwrap();
     let mut bytes = Vec::new();
     engine.open_content(&entry.version_id).unwrap().file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"Body");

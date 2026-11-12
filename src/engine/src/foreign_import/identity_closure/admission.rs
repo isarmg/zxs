@@ -200,6 +200,14 @@ impl ForeignAdmissionRecipe {
                 "foreign recipe differs from its exact original full State",
             ));
         }
+        for receipt in self.source.0.operations.values() {
+            if receipt.kind == crate::business::history_copy::KIND
+                || crate::persist::path_changes::is_kind(&receipt.kind)
+                    && !crate::persist::path_changes::read(receipt)?.is_empty()
+            {
+                return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
+            }
+        }
         // Even an undone D contributes permanent file-local history through
         // lifecycle/copy receipts. Until that ledger is remapped, do not claim
         // a complete target merely because no current deletion remains.

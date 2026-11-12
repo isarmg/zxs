@@ -2946,6 +2946,125 @@
         "test_backup_profiler_capability"
       ],
       "rust_targets": []
+    },
+    "container-path-facts-engine": {
+      "reason": "Persist real path facts without content nodes; preserve complete batch identity, occurrence-bound workspace edits, exact replay and cold Current admission, pathless FILE rescue, retained-copy provenance and explicit foreign-source refusal.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "persist::path_changes::tests::",
+            "business::file_paths_tests::",
+            "business::composition_tests::",
+            "business::history_copy::retained::tests::",
+            "business::history_move::projection::native::tests::"
+          ],
+          "max_tests": 80
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "engine::disk_registry::current::tests::rename::",
+            "engine::disk_registry::current::tests::batches::",
+            "engine::disk_registry::current::tests::workspace_overlap::",
+            "engine::disk_registry::current::path_notes::tests::"
+          ],
+          "max_tests": 96
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "exact": [
+            "foreign_import::identity_closure::admission::tests::real_path_facts_are_rejected_before_foreign_capture_changes_original_bytes"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "branch_alias_operations",
+          "whole": true,
+          "max_tests": 160
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "file_history_copy",
+          "whole": true,
+          "max_tests": 128
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "content_matches",
+          "whole": true,
+          "max_tests": 96
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "container-path-facts-http": {
+      "reason": "Real container rename/move keeps content graph and body identity, then exposes precise paged path facts; retained notes still use genuine metadata nodes and cold/authorization boundaries remain intact.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "http_engine",
+          "prefixes": [
+            "note_boundary::",
+            "backup_namespace::"
+          ],
+          "exact": [
+            "rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_sources",
+            "typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map"
+          ],
+          "max_tests": 32
+        }
+      ]
+    },
+    "container-path-facts-schema": {
+      "reason": "Strict nested lifecycle detail, stable record identity and four-part continuation tokens are consumed by both schemas and the real typed contract checker; old flat events and path-node semantics are rejected.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "prefixes": [
+            "lifecycle_tests::"
+          ],
+          "exact": [
+            "tests::checked_in_contracts_and_document_examples_are_consistent"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -8014,6 +8133,536 @@
       "path": "test/engine/unit/history_package/graph/tests.rs",
       "groups": [
         "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/batch.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_paths.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_copy.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_copy/graph.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_copy/retained.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/mod.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/object_move/graph.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/object_move/projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/file_location.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/changes.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/material.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/rows.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/file_synchronization.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/path_changes.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/path_changes/batch.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/read/lifecycle.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/file_deletion/retained.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/state_read.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/mod.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/path_changes.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/files.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/lifecycles.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/identity_closure/admission.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/object_move_scenarios.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/content_matches/shared_history.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/lifecycle_page.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/composition_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file_paths_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/history_move_native_lifecycle_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/retained_history_copy_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_rename_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_workspace_overlap_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_path_note_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/file_lifecycle_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/file_database_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/path_changes_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/foreign_admission_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_lifecycle.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-lifecycle-contract",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "src/contract/src/id.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-lifecycle-contract",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "src/contract/src/kind.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-lifecycle-contract",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "src/contract/src/lib.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-lifecycle-contract",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_lifecycle.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-lifecycle-contract",
+        "container-lifecycle-http",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/note_boundary.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/backup_namespace.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/file_lifecycle.rs",
+      "groups": [
+        "container-path-facts-http",
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/lifecycle.rs",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/lifecycle_tests.rs",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/15-api-and-errors.md",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/components/web.md",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/contracts/core.schema.json",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/contracts/openapi.json",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/contracts/vectors.json",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "tools/contract-check/src/main.rs",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "tools/contract-check/src/lifecycle.rs",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/unit/lifecycle_tests.rs",
+      "groups": [
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/adr/container-path-facts.md",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-path-facts-http",
+        "container-lifecycle-http",
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
+      ]
+    },
+    {
+      "path": "docs/design/container-lifecycle-read.md",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-path-facts-http",
+        "container-lifecycle-http",
+        "container-lifecycle-contract",
+        "container-lifecycle-web",
+        "container-path-facts-schema"
       ]
     }
   ],

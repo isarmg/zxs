@@ -738,3 +738,42 @@ MetadataIndex 的引用/枚举及 PagedHistoryRoot 的完整 Repository/HistoryT
 保留既有图、snapshot、readmission、共享消费者与原 exact/max1/900 选择，
 追加 read_owned 直接映射/前缀，原 max_tests 与 timeout 不变。
 此片尚待准确后继 SHA 的 GitHub 验证，不预称收益或完整恢复闭环。
+
+## #1327 当前结果与单次 FINALIZE 摘要复用
+
+准确 head `cb50776d9212b0a7bbc27c9531d8d737156963fb`，
+base `84b574a4d8b12416f33f246d84162285cd4df487`。
+第 2 片的 17 项 foreign-original 与 38 项平台安全回归通过，
+selected failed/skipped/blocked 为空；主 Engine 单元片仍待最终工件，
+不能把这 55 项归为全部选测通过。
+
+独立原事务仍在 900 秒超时，selected skipped/blocked 为空。
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM/native metadata
+约为 24/36/66/108/192/280/456/816 秒，后续普通服务切换和冷重放没有完成证据。
+180 个样本末点约 895.145 秒；进程 user/system 为 814.60/81.19 秒，
+worker CPU 为 832.667 秒、调度等待 0.155 秒；
+逻辑读取 8,891,222,223 字节／17,501,514 次，物理 read_bytes 为 0。
+不同 runner 的进度前移不能单独归因于借用解码或作为确定性能收益。
+
+原事务工件：
+https://github.com/isarmg/zxs/actions/runs/43276175345/artifacts/13972056881
+ZIP SHA256：
+`d307816e5e2ad8cf2f5d914bc557eaf71f8ae052664c6f5da4e7a250c5c3711e`。
+第 2 片工件 13970487497，ZIP SHA256：
+`9824345e00705af2621df3fd9a5db68d12a38c31b9d3620a662388f7275efc72`。
+
+下一窄片针对同一个 publication.finalize 的两次纯摘要计算：
+verify_journal_receipts 保留原首行 object_hash 的位置、算法和错误来源，
+成功后返回只能经该计算构造的私有 FinalizeDigest；调用者使用它读取独立 FINALIZE，
+不再计算第二次。它不携带磁盘准入证明，不新增缓存、序列化形态或公开接口。
+所有 receipt gate、Source 实读、预算、取消、typed 回编码及后续 State/history 检查保持。
+
+根测试保留原双哈希 receipt 算法和完整分段参考编排。
+真实多 publication 夹具比较完整 Report、State、read/byte 预算及源文件路径和字节，
+覆盖坏原 journal、坏独立 FINALIZE、两者同时损坏、取消和恢复后完整再读。
+另以真实已准入 JournalSlots 的局部记录变异检查 receipt gate 的错误优先：
+同时损坏独立 FINALIZE，gate 仍先拒绝且不发起 Source 读取。
+该局部变异不冒充重认证的完整坏归档；文件比较不声称验证权限或 mtime。
+
+此片尚未本地编译或测试，待准确后继 GitHub 定向验证；
+原 exact/max1/900 与所有既有选择保留，不声称该摘要重复是超时主因。

@@ -331,3 +331,67 @@ fn undone_deletion_history_is_not_silently_reduced_to_only_the_live_graph() {
     assert!(fixture.source.state().operations.contains_key(&deleted));
     assert!(fixture.source.state().operations.contains_key(&undone));
 }
+
+#[test]
+fn real_path_facts_are_rejected_before_foreign_capture_changes_original_bytes() {
+    fn bytes(
+        path: &std::path::Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                bytes(&entry.path(), files);
+            } else if kind.is_file() {
+                // SQLite shared-memory reader locks are not authoritative bytes.
+                if !entry.file_name().to_string_lossy().ends_with("-shm") {
+                    files.insert(entry.path(), fs::read(entry.path()).unwrap());
+                }
+            }
+        }
+    }
+    let mut fixture = fixture();
+    let repository = fixture.source.state().repositories.values().next().unwrap().clone();
+    let renamed = fixture.source.file_namespace(
+        &repository.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "document.txt", Some("renamed.txt"),
+        ).unwrap(),
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(crate::persist::path_changes::read(&renamed).unwrap().len(), 1);
+    let source_before = canonical_json(fixture.source.state()).unwrap();
+    let current_before = canonical_json(fixture.current.state()).unwrap();
+    let mut roots: Vec<_> = fixture.source.config().disks.iter()
+        .map(|disk| disk.root.clone()).collect();
+    roots.push(fixture.source.root.clone());
+    roots.push(fixture.current.root.clone());
+    let mut before = std::collections::BTreeMap::new();
+    for root in &roots {
+        bytes(root, &mut before);
+    }
+    let baseline = &fixture.recipe.identities.baseline;
+    let names = fixture.current.capture_foreign_identity_target(ForeignIdentityTargetRequest {
+        proposed_configuration: fixture.target.clone(),
+        operation_id: baseline.operation_id,
+        request_digest: baseline.request_digest.parse().unwrap(),
+        chain_digest: baseline.chain_digest.parse().unwrap(),
+        registration_proposal_digest: baseline.registration_proposal_digest.parse().unwrap(),
+    }).unwrap();
+    let preview =
+        crate::foreign_import::tests::inspect(&fixture.source.config().disks[1].root).unwrap();
+    let error = fixture.current.capture_foreign_admission_recipe(&names, &preview).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+    assert!(matches!(error, Error::PathChange(crate::PathChangeError::ForeignSource)));
+    assert_eq!(canonical_json(fixture.source.state()).unwrap(), source_before);
+    assert_eq!(canonical_json(fixture.current.state()).unwrap(), current_before);
+    let mut after = std::collections::BTreeMap::new();
+    for root in &roots {
+        bytes(root, &mut after);
+    }
+    assert_eq!(after, before);
+    assert_eq!(fixture.source.state().operations[&renamed.operation_id], renamed);
+    assert!(!fixture.target.disks[1].root.exists());
+}

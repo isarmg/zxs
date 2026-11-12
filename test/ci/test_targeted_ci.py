@@ -2305,5 +2305,148 @@ class ContainerTagsSelection(unittest.TestCase):
                     self.assertLessEqual(target.get('timeout_seconds', 300), 900)
 
 
+class ContainerPathFactSelection(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    @staticmethod
+    def selections(plan, group):
+        return [
+            selection
+            for target in plan['rust_targets']
+            for origin, selection in zip(
+                target['selection_groups'],
+                target.get('selections', [{
+                    key: value for key, value in target.items()
+                    if key != 'selection_groups'
+                }]),
+            )
+            if origin == group
+        ]
+
+    def test_real_path_authorities_select_complete_producer_and_consumer_groups(self):
+        cases = {
+            'container-path-facts-engine': [
+                'src/engine/src/persist/path_changes.rs',
+                'src/engine/src/business/file_paths.rs',
+                'src/engine/src/business/workspace/file_location.rs',
+                'src/engine/src/business/history_copy/retained.rs',
+                'src/engine/src/engine/disk_registry/current/path_changes.rs',
+                'src/engine/src/engine/disk_registry/current/path_changes/batch.rs',
+                'src/engine/src/engine/recovery/workspace_receipts.rs',
+                'src/engine/src/container_storage/file_database/material.rs',
+                'src/engine/src/foreign_import/identity_closure/admission.rs',
+                'test/engine/unit/path_changes_tests.rs',
+                'test/engine/unit/business/file_paths_tests.rs',
+                'test/engine/unit/business/retained_history_copy_tests.rs',
+                'test/engine/unit/engine/current_namespace_rename_tests.rs',
+                'test/engine/unit/engine/current_namespace_workspace_overlap_tests.rs',
+                'test/engine/unit/engine/current_path_note_tests.rs',
+                'test/engine/unit/foreign_import/foreign_admission_tests.rs',
+            ],
+            'container-path-facts-http': [
+                'test/server/integration/http_engine.rs',
+                'test/server/integration/http_engine/note_boundary.rs',
+                'test/server/integration/http_engine/backup_namespace.rs',
+                'test/server/integration/phase1_save_tags/file_lifecycle.rs',
+            ],
+            'container-path-facts-schema': [
+                'src/contract/src/file_lifecycle.rs',
+                'src/contract/src/kind.rs',
+                'tools/contract-check/src/lifecycle.rs',
+                'test/tools/contract-check/unit/lifecycle_tests.rs',
+                'docs/contracts/core.schema.json',
+                'docs/contracts/openapi.json',
+                'docs/contracts/vectors.json',
+                'docs/adr/container-path-facts.md',
+            ],
+        }
+        for group, paths in cases.items():
+            for path in paths:
+                with self.subTest(path=path, group=group):
+                    plan = CI.select_plan(self.policy, [path], shardable=True)
+                    self.assertIn(group, plan['groups'])
+                    self.assertCountEqual(
+                        self.selections(plan, group),
+                        self.policy['groups'][group]['rust_targets'],
+                    )
+
+    def test_path_batch_retains_every_shared_selection_and_budget_when_sharded(self):
+        paths = [
+            'src/contract/src/lib.rs', 'src/engine/src/business/workspace.rs',
+            'src/engine/src/engine/disk_registry/current/path_changes.rs',
+            'src/engine/src/metadata_map.rs', 'src/engine/src/disk.rs',
+            'src/engine/src/engine/backup_preparation/native_control/archive.rs',
+            'test/server/integration/http_engine.rs',
+            'docs/adr/container-path-facts.md', 'docs/contracts/core.schema.json',
+            'test/web/unit/files/lifecycle_tests.rs',
+            'test/tools/contract-check/unit/lifecycle_tests.rs',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py', 'TASKS.md',
+        ]
+        plan = CI.select_plan(self.policy, paths, shardable=True)
+        self.assertTrue({
+            'container-path-facts-engine', 'container-path-facts-http',
+            'container-path-facts-schema', 'container-lifecycle-contract',
+            'container-lifecycle-engine', 'container-lifecycle-http',
+            'container-lifecycle-web', 'container-tags-format',
+            'backup-scoped-encoding-memo', 'ci-selection',
+        } <= set(plan['groups']))
+        shards = CI.shard_tools().partition(plan)
+        self.assertEqual(
+            [target for shard in shards for target in shard['rust_targets']],
+            plan['rust_targets'],
+        )
+        self.assertEqual(
+            [name for shard in shards for name in shard['python_tests']],
+            plan['python_tests'],
+        )
+        self.assertLessEqual(len(shards), 16)
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+        for group in plan['groups']:
+            self.assertCountEqual(
+                self.selections(plan, group), self.policy['groups'][group]['rust_targets'],
+            )
+
+    def test_path_selection_keeps_real_current_copy_http_and_typed_schema_tests(self):
+        engine = self.policy['groups']['container-path-facts-engine']['rust_targets']
+        self.assertEqual(engine[0]['prefixes'], [
+            'persist::path_changes::tests::', 'business::file_paths_tests::',
+            'business::composition_tests::', 'business::history_copy::retained::tests::',
+            'business::history_move::projection::native::tests::',
+        ])
+        self.assertEqual(engine[1]['prefixes'], [
+            'engine::disk_registry::current::tests::rename::',
+            'engine::disk_registry::current::tests::batches::',
+            'engine::disk_registry::current::tests::workspace_overlap::',
+            'engine::disk_registry::current::path_notes::tests::',
+        ])
+        self.assertEqual(engine[2]['exact'], [
+            'foreign_import::identity_closure::admission::tests::'
+            'real_path_facts_are_rejected_before_foreign_capture_changes_original_bytes',
+        ])
+        self.assertEqual([target['name'] for target in engine[3:6]], [
+            'branch_alias_operations', 'file_history_copy', 'content_matches',
+        ])
+        self.assertTrue(all(target['whole'] for target in engine[3:6]))
+        self.assertEqual([target['max_tests'] for target in engine[:6]],
+                         [80, 96, 1, 160, 128, 96])
+        self.assertEqual(engine[6]['mode'], 'check')
+        self.assertIs(engine[6]['default_features'], False)
+        http = self.policy['groups']['container-path-facts-http']['rust_targets'][0]
+        self.assertEqual((http['name'], http['features'], http['max_tests']),
+                         ('http_engine', ['core'], 32))
+        self.assertEqual(http['prefixes'], ['note_boundary::', 'backup_namespace::'])
+        schema = self.policy['groups']['container-path-facts-schema']['rust_targets'][0]
+        self.assertEqual(schema['prefixes'], ['lifecycle_tests::'])
+        self.assertEqual(schema['exact'], [
+            'tests::checked_in_contracts_and_document_examples_are_consistent',
+        ])
+        self.assertEqual(schema['max_tests'], 8)
+        self.assertTrue(all(target['timeout_seconds'] == 900
+                            for target in engine + [http, schema]))
+
+
 if __name__ == '__main__':
     unittest.main()

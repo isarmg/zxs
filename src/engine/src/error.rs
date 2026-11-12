@@ -486,6 +486,8 @@ impl ContainerTagsError {
 /// Failures at the permanent namespace-fact publication boundary.
 #[derive(Debug, error_definition::Error)]
 pub enum PathChangeError {
+    #[error("foreign admission cannot preserve path/copy audit; original records were not changed")]
+    ForeignSource,
     #[error("file workspace occurrence changed; staged bytes are preserved")]
     WorkspaceLocation,
     #[error("path change does not match its permanent publication")]
@@ -503,6 +505,7 @@ impl PathChangeError {
         match self {
             Self::Limit => ErrorCode::ResourceLimit,
             Self::WorkspaceLocation => ErrorCode::FileBranchConflict,
+            Self::ForeignSource => ErrorCode::UnsupportedOperation,
             Self::Publication | Self::Encoding(_) | Self::Principal(_) => ErrorCode::PublicationInvalid,
         }
     }

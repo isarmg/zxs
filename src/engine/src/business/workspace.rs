@@ -315,10 +315,24 @@ impl Engine {
     ) -> Result<()> {
         let key = path.key();
         validate_directory_selection_key(&self.state, workspace, key)?;
-        if self.state.branches.get(&workspace.branch_id).is_some_and(|branch| branch.file_id.is_some()) {
+        if self.state.branches.get(&workspace.branch_id)
+            .is_some_and(|branch| branch.file_id.is_some())
+        {
+            // Completion binds the just-published destination. Its body is no
+            // longer the pre-save base; the saved context still fences reuse.
+            let published;
+            let entries = if workspace.state == WorkspaceState::Committed {
+                published = self.namespace_snapshot(&workspace.branch_id)?;
+                published.entries()
+            } else {
+                self.workspace_namespace_entries(workspace)?
+            };
             let projected = file_location::project(
-                self.state(), self.admitted_current_namespaces()?, workspace,
-                self.workspace_namespace_entries(workspace)?, path,
+                self.state(),
+                self.admitted_current_namespaces()?,
+                workspace,
+                entries,
+                path,
             )?;
             let entry = projected.binary_search_by(|entry| entry.lookup_key().cmp(key))
                 .ok().map(|index| &projected[index])
@@ -1044,11 +1058,25 @@ impl Engine {
     }
     /// Keep ordinary completion and restart reconstruction on one definition.
     pub(crate) fn refresh_workspace_contexts(state: &State, completed: &mut Workspace) {
-        if let Some(repo) = repository::main_for_branch(state, &completed.branch_id) {
+        let file_branch = state.branches.get(&completed.branch_id)
+            .filter(|branch| branch.file_id.is_some());
+        let repository = repository::main_for_branch(state, &completed.branch_id)
+            .or_else(|| {
+                file_branch.and_then(|branch| {
+                    state.repositories.values()
+                        .find(|repo| repo.history_tree_id == branch.history_tree_id)
+                })
+            });
+        if let Some(repo) = repository {
             for file in completed.files.values() {
                 if let Some(context) =
                     directory::context_at_key(state, &repo.repository_id, file.path.key())
                 {
+                    // Only this workspace's published occurrence may refresh an
+                    // independent file branch, not another alias or selection.
+                    if file_branch.is_some() && context.branch_id != completed.branch_id {
+                        continue;
+                    }
                     completed.selected_file_contexts.insert(
                         directory::context_key_from_key(&repo.repository_id, file.path.key()),
                         context,
