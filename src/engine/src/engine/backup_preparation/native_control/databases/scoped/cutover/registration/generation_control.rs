@@ -2,6 +2,7 @@
 //! closes the fenced-original evidence gap, not the new writer publication.
 use super::*;
 use crate::disk::encode_metadata;
+use crate::engine::backup_preparation::native_control::archive::generation_objects;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, FileReference, Namespace, PreparedFiles,
 };
@@ -77,10 +78,14 @@ impl Plan {
             .scoped
             .objects
             .native;
-        let prefix = crate::engine::backup_preparation::native_control::archive::generation_objects::collect(
-            &prepared.targets[index].root, &prepared.task.selection().jobs()[index],
-            &native.archive_hash, stop,
-        )?;
+        let root = &prepared.targets[index].root;
+        let job = &prepared.task.selection().jobs()[index];
+        let prefix = match prepared.scope_encoding.as_ref() {
+            Some(memo) => generation_objects::collect_with_committed_encodings(
+                root, job, native, stop, memo,
+            )?,
+            None => generation_objects::collect(root, job, &native.archive_hash, stop)?,
+        };
         let archive = PreparedBackupControl::capture(frozen, prefix, stop)?;
         let decision_hash = decision.hash();
         let manifest = encode_metadata(
@@ -254,3 +259,7 @@ pub(super) fn read_authority_input(
     let report = plan.report(decision, prepared.targets.len(), &inspection);
     Ok((plan.archive, report))
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../../../../test/engine/unit/backup_generation_encoding_probe.rs"]
+pub(super) mod encoding_probe;

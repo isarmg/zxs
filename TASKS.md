@@ -14,7 +14,7 @@
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
 
-- [ ] 闭环 Backup 原900秒事务超时：#1332准确f6/34bc完整467 Rust／186 Python／1产品检查通过，但原900仍失败；readmission原300秒仅本轮298.55秒通过，不预称成本已修复。#1333准确40ef/f6的published scopes真实probe及86 Rust／186 Python／1产品检查已过，原900仍失败。后继Current archive replay仅命中同一账户已提交纯编码，不预留/填充/commit；保留真实读取、strict parse、完整State/history/finish及全部尾验，待准确后继GitHub验证。不缓存准入结果、不放宽原900、不预称三范围恢复完成。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
+- [ ] 闭环 Backup 原900秒事务超时：#1332准确f6/34bc完整467 Rust／186 Python／1产品检查通过，但原900仍失败；readmission原300秒仅本轮298.55秒通过，不预称成本已修复。#1333准确40ef/f6的published scopes真实probe及86 Rust／186 Python／1产品检查已过，原900仍失败。后继Current archive replay仅命中同一账户已提交纯编码，不预留/填充/commit；保留真实读取、strict parse、完整State/history/finish及全部尾验，68a23的#1334主Engine和原900仍待验证；下一窄片将generation-control原前缀收集接入同一只读账户，完整Control/材料读回不变，待准确后继GitHub验证。不缓存准入结果、不放宽原900、不预称三范围恢复完成。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
 
 - [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
 

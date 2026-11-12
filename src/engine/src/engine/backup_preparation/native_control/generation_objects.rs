@@ -45,9 +45,29 @@ pub(in crate::engine::backup_preparation::native_control) fn collect(
     expected: &str,
     stop: &AtomicBool,
 ) -> Result<BackupNativeObjects> {
+    collect_at(root, job, ExpectedArchiveDigest(expected), stop, None)
+}
+
+pub(in crate::engine::backup_preparation::native_control) fn collect_with_committed_encodings(
+    root: &DiskRoot,
+    job: &Job,
+    task: &NativeTask,
+    stop: &AtomicBool,
+    encodings: &ScopeEncodingMemo,
+) -> Result<BackupNativeObjects> {
+    collect_at(root, job, ExpectedArchiveDigest(&task.archive_hash), stop, Some(encodings))
+}
+
+fn collect_at(
+    root: &DiskRoot,
+    job: &Job,
+    expected: ExpectedArchiveDigest<'_>,
+    stop: &AtomicBool,
+    encodings: Option<&ScopeEncodingMemo>,
+) -> Result<BackupNativeObjects> {
     let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST)?;
     let manifest: Manifest = decode_proof(&bytes)?;
-    if object_hash(FORMAT, &manifest)? != expected {
+    if object_hash(FORMAT, &manifest)? != expected.0 {
         return Err(invalid(
             "native generation objects belong to another original prefix",
         ));
@@ -57,7 +77,7 @@ pub(in crate::engine::backup_preparation::native_control) fn collect(
             root,
             stop,
             budget: Budget::default(),
-            encodings: None,
+            encodings: encodings.map(Encodings::Committed),
         },
         objects: BTreeMap::new(),
     };
