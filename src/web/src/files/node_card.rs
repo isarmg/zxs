@@ -12,7 +12,6 @@ pub(super) enum Action {
     PathChange,
     Tags,
     Merge,
-    Snapshot,
 }
 
 impl Action {
@@ -24,7 +23,6 @@ impl Action {
             Self::PathChange => "path-change",
             Self::Tags => "tags",
             Self::Merge => "merge",
-            Self::Snapshot => "snapshot",
         }
     }
 
@@ -36,7 +34,6 @@ impl Action {
             Self::PathChange => t("路径变化", "Path changed"),
             Self::Tags => t("标签更改", "Tags changed"),
             Self::Merge => t("分支合并", "Branches merged"),
-            Self::Snapshot => t("目录提交", "Folder committed"),
         }
     }
 }

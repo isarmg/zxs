@@ -10,7 +10,6 @@
   --zxs-history-path: #a1a1aa;
   --zxs-history-tags: #d8b4fe;
   --zxs-history-merge: #f9a8d4;
-  --zxs-history-snapshot: #86efac;
   --zxs-history-delete: #fca5a5;
 }
 
@@ -28,7 +27,6 @@
     --zxs-history-path: #a1a1aa;
     --zxs-history-tags: #d8b4fe;
     --zxs-history-merge: #f9a8d4;
-    --zxs-history-snapshot: #86efac;
     --zxs-history-delete: #fca5a5;
   }
 }

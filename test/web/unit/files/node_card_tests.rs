@@ -110,7 +110,6 @@ fn every_displayed_action_has_a_distinct_name_and_accessible_label() {
         Action::PathChange,
         Action::Tags,
         Action::Merge,
-        Action::Snapshot,
     ];
     let names = actions
         .iter()

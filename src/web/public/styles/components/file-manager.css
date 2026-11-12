@@ -78,7 +78,6 @@
 .zxs-node-action[data-history-action=path-change] { color: var(--zxs-history-path); }
 .zxs-node-action[data-history-action=tags] { color: var(--zxs-history-tags); }
 .zxs-node-action[data-history-action=merge] { color: var(--zxs-history-merge); }
-.zxs-node-action[data-history-action=snapshot] { color: var(--zxs-history-snapshot); }
 /* The deletion glyph is designed, but current history wire has no deletion
  * node. No renderer assigns this action without such an admitted fact. */
 .zxs-node-action[data-history-action=delete] { color: var(--zxs-history-delete); }

@@ -659,19 +659,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     let branch_source =
         Signal::derive(move || state.with(|state| model.with(|model| branch_review(state, model))));
     let branch_disabled = Signal::derive(move || branch_source.get().is_none());
-    let history_target = Memo::new(move |_| {
-        state.with(|state| {
-            if state.files.selected.is_some() {
-                return None;
-            }
-            model.with(|model| {
-                let (_, status) = model.reviewed(state)?;
-                Some(super::directory_history::Target::current_directory(
-                    state, status,
-                ))
-            })
-        })
-    });
     let children = Memo::new(move |_| {
         model.with(|model| {
             model
@@ -778,7 +765,6 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <p class="zxs-row" role="status">{move ||model.with(|model|format!("{} / {} UTF-8 bytes",model.message.len(),storage_contract::MAX_NOTE_BYTES))}</p>
                 {move ||message_error.get().map(|reason|view!{<p class="zxs-row zxs-inline-error" role="status" data-directory-commit-message-error="" title=reason>{t("提交说明须包含非空白内容，最多 128 UTF-8 字节，且不能包含换行或控制字符。", "Enter a nonblank commit message of at most 128 UTF-8 bytes, without line breaks or control characters.")}</p>})}
             </Show>
-            {super::directory_history::current_directory_view(state, history_target, branch_source)}
             {layout::view(state, model)}
         </section>
     </Show>}

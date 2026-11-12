@@ -11,7 +11,6 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
         "tags" => "M3 3h8l10 10-8 8L3 11V3m4 4h.01",
         "content" => "M6 3h8l4 4v14H6V3m8 0v5h4M9 12h6m-6 4h4",
         "merge" => "M6 3v5c0 4 12 4 12 8v5M18 3v18m-4-4 4 4 4-4",
-        "snapshot" => "M3 20V5h6l3 3h9v12H3m5-6 3 3 5-6",
         "path-change" => "M3 6h7l3 4h8M3 18h7l3-4h8m-3-7 3 3-3 3m-12 2-3 3 3 3",
         "logout" => "M10 3H3v18h7m5-15 6 6-6 6m-8-6h14",
         "refresh" => "M19.518 9.264a8 8 0 1 1-4.782-4.782",

@@ -32,7 +32,6 @@ fn select_option_locator_pins_scroll_wrapper_enabled_state_and_exact_label() {
     assert!(component.contains("aria-disabled=option.disabled.to_string()"));
     for scene in [
         include_str!("../runner/feedback_lifecycle.rs"),
-        include_str!("../runner/directory_history.rs"),
     ] {
         assert!(scene.contains("select_option_xpath(panel,"));
         assert!(

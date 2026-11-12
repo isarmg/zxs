@@ -106,8 +106,6 @@ pub enum ErrorSource {
     DirectoryGit(#[source] json_codec::Error),
     #[error("invalid directory layout result: {0}")]
     DirectoryLayout(#[source] json_codec::Error),
-    #[error("invalid directory history: {0}")]
-    DirectoryHistory(#[source] crate::files::DirectoryHistoryError),
     #[error("invalid directory page: {0}")]
     DirectoryPage(#[source] crate::files::DirectoryPageError),
     #[error("invalid service API path: {0}")]

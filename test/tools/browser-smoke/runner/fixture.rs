@@ -8,9 +8,6 @@ const FILE: &str = "browser-smoke.txt";
 const FILE_BRANCH: &str = "browser-smoke-alternate";
 const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: 测试\n"];
 pub(super) const NAMING_REPOSITORY: &str = "browser-naming";
-pub(super) const DIRECTORY_REPOSITORY: &str = "browser-directory-history";
-pub(super) const DIRECTORY_PATH: &str = "nested-history";
-pub(super) const DIRECTORY_PREVIEW: &str = "readonly-history-preview";
 
 /// Build a declared three-tier test pool and publish a real management authority.
 /// First activation now creates independent roots, so it must not be repurposed
@@ -134,7 +131,6 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         storage_engine::OperationId::generate().unwrap(),
     )?;
     seed_naming_scope(&mut engine)?;
-    seed_directory_history(&mut engine)?;
     super::directory_git::fixture::seed(&mut engine)?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
@@ -176,73 +172,6 @@ fn seed_naming_scope(engine: &mut Engine) -> Result<()> {
         message: "Browser naming registration fixture".into(),
         request_digest: None,
     })?;
-    Ok(())
-}
-
-// A real parent preview is needed to select a read-only child directory. The
-// disk-root listing itself is never a directory-branch preview.
-fn seed_directory_history(engine: &mut Engine) -> Result<()> {
-    let repository = engine.create_repository(
-        &storage_engine::RepositoryName::parse(DIRECTORY_REPOSITORY)?,
-        "P01",
-        3,
-        PRINCIPAL,
-        storage_engine::OperationId::generate()?,
-    )?;
-    let path = format!("{DIRECTORY_PATH}/{FILE}");
-    let initial = write_directory_history_version(
-        engine,
-        &repository.main_branch_id,
-        &path,
-        "initial directory version\n",
-    )?;
-    let directory = initial
-        .path
-        .parent()
-        .expect("invariant: the history fixture file is nested")
-        .into();
-    initialize_directory_fixture(engine, &repository, DIRECTORY_PATH)?;
-    commit_directory_fixture(engine, &repository.repository_id, DIRECTORY_PATH)?;
-    for payload in PAYLOADS {
-        write_directory_history_version(engine, &repository.main_branch_id, &path, payload)?;
-        commit_directory_fixture(engine, &repository.repository_id, DIRECTORY_PATH)?;
-    }
-    // Both child labels reference the same real head; registration invents no
-    // extra history node. Capture that child in the parent's real preview.
-    engine.create_directory_branches(
-        &repository.repository_id,
-        Some(&directory),
-        &storage_engine::BranchName::parse("shared-history-head")?,
-        PRINCIPAL,
-        storage_engine::OperationId::generate()?,
-    )?;
-    initialize_directory_fixture(engine, &repository, "")?;
-    let parent = engine.directory_git_status(&repository.repository_id, "")?;
-    let child = engine.directory_git_status(&repository.repository_id, DIRECTORY_PATH)?;
-    engine.stage_directory_git_child(
-        &repository.repository_id,
-        &storage_engine::directory_git::DirectoryGitStageChildBody {
-            directory_id: parent.directory_id,
-            directory_branch_id: parent
-                .directory_branch_id
-                .ok_or("parent fixture is not initialized")?,
-            expected_index_generation: parent.index_generation,
-            child_directory_id: child.directory_id,
-            expected_child_head_tree_id: child
-                .head_tree_id
-                .ok_or("child fixture is not committed")?,
-            operation_id: storage_engine::OperationId::generate()?,
-        },
-        PRINCIPAL,
-    )?;
-    commit_directory_fixture(engine, &repository.repository_id, "")?;
-    engine.create_directory_branches(
-        &repository.repository_id,
-        None,
-        &storage_engine::BranchName::parse(DIRECTORY_PREVIEW)?,
-        PRINCIPAL,
-        storage_engine::OperationId::generate()?,
-    )?;
     Ok(())
 }
 
@@ -305,26 +234,6 @@ pub(super) fn commit_directory_fixture(
         operation_id: storage_engine::OperationId::generate()?,
     })?;
     Ok(())
-}
-
-fn write_directory_history_version(
-    engine: &mut Engine,
-    branch: &str,
-    path: &str,
-    payload: &str,
-) -> Result<storage_engine::StagedFile> {
-    let workspace = engine.create_workspace(branch, PRINCIPAL)?;
-    let staged = engine.stage_bytes(&workspace.workspace_id, path, payload.as_bytes())?;
-    engine.commit_workspace(CommitRequest {
-        workspace_id: workspace.workspace_id,
-        operation_id: storage_engine::OperationId::generate()?,
-        principal: PRINCIPAL.into(),
-        expected_head: workspace.base_head,
-        fencing_token: workspace.fencing_token,
-        message: "Real read-only directory history fixture".into(),
-        request_digest: None,
-    })?;
-    Ok(staged)
 }
 
 #[cfg(test)]

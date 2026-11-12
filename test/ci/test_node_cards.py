@@ -24,7 +24,7 @@ class NodeCards(unittest.TestCase):
         for filename, background in [("tokens.css", "#ffffff"), ("tokens.dark.css", "#18181b")]:
             values = dict(re.findall(r"--zxs-history-([a-z]+): (#[0-9a-f]{6});",
                                      (STYLES / "tokens" / filename).read_text()))
-            self.assertEqual(set(values), {"content", "rename", "move", "path", "tags", "merge", "snapshot", "delete"})
+            self.assertEqual(set(values), {"content", "rename", "move", "path", "tags", "merge", "delete"})
             self.assertEqual(len(set(values.values())), len(values))
             for name, color in values.items():
                 light, dark = sorted([luminance(color), luminance(background)], reverse=True)
@@ -32,8 +32,8 @@ class NodeCards(unittest.TestCase):
 
     def test_actions_have_distinct_stroke_shapes_without_relying_on_color(self):
         source = (ROOT / "src/web/src/icons.rs").read_text()
-        paths = dict(re.findall(r'"(content|rename|move|path-change|tags|merge|snapshot|delete)" => "([^"]+)"', source))
-        self.assertEqual(len(paths), 8)
+        paths = dict(re.findall(r'"(content|rename|move|path-change|tags|merge|delete)" => "([^"]+)"', source))
+        self.assertEqual(len(paths), 7)
         self.assertEqual(len(set(paths.values())), len(paths))
 
     def test_two_rows_native_disclosure_and_unchanged_control_ownership_are_wired(self):
@@ -45,11 +45,11 @@ class NodeCards(unittest.TestCase):
         self.assertIn('<summary class="zxs-node-card zxs-frame"', card)
         self.assertIn('role="img" aria-label=action.label() title=action.label()', card)
         self.assertNotIn("Action::Delete", card)
-        for filename in ["version_tree.rs", "directory_history/view.rs"]:
+        for filename in ["version_tree.rs"]:
             source = (ROOT / "src/web/src/files" / filename).read_text()
             self.assertIn('<details class="zxs-node-disclosure">', source)
             self.assertIn("node_card::summary(", source)
-        for runner in ("tree_frames.rs", "directory_history.rs"):
+        for runner in ("tree_frames.rs",):
             tree = (ROOT / "test/tools/browser-smoke/runner" / runner).read_text()
             self.assertLess(tree.index("node_cards::open_first(browser)?;"),
                             tree.index('include_str!("history_title_rows.js")'))

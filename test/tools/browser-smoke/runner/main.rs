@@ -31,7 +31,6 @@ mod contour_evidence;
 mod contours;
 mod diagnostics;
 mod directory_git;
-mod directory_history;
 mod disk_health;
 mod disk_tree;
 mod error_feedback;
@@ -47,6 +46,7 @@ mod history_cancellation;
 mod history_windows;
 mod integrity_scrub;
 mod lifecycle;
+mod listing_preview;
 mod management;
 mod management_queue_lifecycle;
 mod metadata;
@@ -367,7 +367,7 @@ fn exercise(
     note_recovery::run(browser)?;
     metadata_edit(browser)?;
     feedback_lifecycle::run(browser)?;
-    directory_history::run(browser)?;
+    listing_preview::run(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;
     wait_for("seeded file in activity history", || {
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }

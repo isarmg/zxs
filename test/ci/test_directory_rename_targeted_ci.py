@@ -11,8 +11,6 @@ CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
 
 PATHS = [
-    'src/web/src/files/directory_history/view/branches.rs',
-    'test/web/unit/files/directory_history/rename_tests.rs',
     'src/web/src/files/actions/mutation.rs',
     'src/web/src/files/mkdir.rs',
     'src/web/src/files/mkdir/storage.rs',
@@ -65,7 +63,6 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         self.assertIn('files::actions::mutation::tests::', native['prefixes'])
         self.assertIn('files::actions::operation::tests::', native['prefixes'])
         self.assertIn('files::inline::tests::', native['prefixes'])
-        self.assertIn('files::directory_history::view::branches::tests::', native['prefixes'])
         self.assertEqual(product['mode'], 'check')
         self.assertNotIn('compile_target', product)
         self.assertEqual(wasm['mode'], 'check')
