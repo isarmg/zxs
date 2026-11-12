@@ -761,3 +761,119 @@ fn prior_manifest_sharing_golden_is_rejected_without_rewriting() {
     let bundle: Value = json_codec::from_slice(bytes).unwrap();
     assert!(json_codec::from_str::<HistoryManifest>(bundle["logical"].as_str().unwrap()).is_err());
 }
+
+fn owned_root_decode(root: &AuthenticatedMetadataObject) -> Result<PagedHistoryRoot> {
+    let decoded: PagedHistoryRoot = json_codec::from_value(root.value().clone())?;
+    if decoded.maps.len() != Field::ALL.len()
+        || Field::ALL
+            .iter()
+            .any(|field| !decoded.maps.contains_key(field.name()))
+    {
+        return Err(invalid("history root has an invalid logical schema"));
+    }
+    for reference in decoded.maps.values() {
+        reference.validate()?;
+    }
+    Ok(decoded)
+}
+
+fn root_decoder_error_chain(error: &Error) -> (storage_contract::ErrorCode, Vec<String>) {
+    let mut chain = Vec::new();
+    let mut current: Option<&dyn std::error::Error> = Some(error);
+    while let Some(error) = current {
+        chain.push(error.to_string());
+        current = error.source();
+    }
+    (error.code(), chain)
+}
+
+#[test]
+fn history_root_borrowed_decode_matches_owned_admission_on_real_objects() {
+    let (_, valid, _) = encoded(&manifest(), MAX_METADATA);
+    let mut cases = vec![valid.clone(), Value::Null, Value::Array(Vec::new())];
+    for field in ["format", "repository", "history", "maps"] {
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove(field);
+        cases.push(value);
+        let mut value = valid.clone();
+        value[field] = Value::Null;
+        cases.push(value);
+    }
+    let mut unknown = valid.clone();
+    unknown["unknown"] = Value::Bool(true);
+    cases.push(unknown);
+    let mut previous = valid.clone();
+    previous["format"] = Value::String("radix-map-roots".into());
+    cases.push(previous);
+    for value in [json!("01"), json!(0), json!("-1"), json!("18446744073709551616")] {
+        let mut changed = valid.clone();
+        changed["history"]["generation"] = value.clone();
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["repository"]["smb_binding_generation"] = value;
+        cases.push(changed);
+    }
+    for value in [Value::Null, json!(false), json!({"name": "not a string"})] {
+        let mut changed = valid.clone();
+        changed["repository"]["name"] = value;
+        cases.push(changed);
+    }
+    let mut state = valid.clone();
+    state["history"]["state"] = json!("not-a-history-state");
+    cases.push(state);
+    let mut sparse = valid.clone();
+    sparse["repository"].as_object_mut().unwrap().remove("file_manager_root");
+    cases.push(sparse);
+    let mut explicit = valid.clone();
+    explicit["repository"]["file_manager_root"] = json!(false);
+    explicit["history"]["main_branch_id"] = Value::Null;
+    explicit["history"]["provenance"] = json!("historical provenance");
+    cases.push(explicit);
+    let field = Field::ALL[0].name();
+    let mut missing = valid.clone();
+    missing["maps"].as_object_mut().unwrap().remove(field);
+    cases.push(missing);
+    for reference in [
+        Value::Null,
+        json!({"kind": "unknown", "hash": "0".repeat(64)}),
+        json!({"kind": "state-page", "hash": "bad"}),
+        json!({"kind": "state-page", "hash": null}),
+        json!({"kind": "state-page", "hash": "0".repeat(64), "extra": 1}),
+    ] {
+        let mut value = valid.clone();
+        value["maps"][field] = reference;
+        cases.push(value);
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([
+        temp.path().join("a"),
+        temp.path().join("b"),
+        temp.path().join("c"),
+    ]).unwrap();
+    let disk = &config.disks[0];
+    for value in cases {
+        let prepared =
+            PreparedMetadataObject::new("history-manifest", &value, MAX_METADATA).unwrap();
+        prepared.store(std::slice::from_ref(disk)).unwrap();
+        let path = object_path(disk, "history-manifest", &prepared.hash);
+        let before = std::fs::read(&path).unwrap();
+        let object = crate::journal::load_authenticated_object(
+            disk, "history-manifest", &prepared.hash,
+        ).unwrap();
+        let expected = owned_root_decode(&object);
+        let actual = decode_history_root(&object);
+        match (expected, actual) {
+            (Ok(expected), Ok(actual)) => {
+                assert_eq!(canonical_json(&expected).unwrap(), canonical_json(&actual).unwrap());
+            }
+            (Err(expected), Err(actual)) => {
+                assert_eq!(root_decoder_error_chain(&expected), root_decoder_error_chain(&actual));
+            }
+            (expected, actual) => {
+                panic!("decode result differs: owned={}, borrowed={}", expected.is_ok(),
+                    actual.is_ok());
+            }
+        }
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+}

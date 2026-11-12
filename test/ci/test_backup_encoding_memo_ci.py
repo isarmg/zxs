@@ -16,6 +16,7 @@ PATHS = [
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/installation.rs',
     'test/engine/unit/backup_installation_encoding_tests.rs',
+    'test/engine/unit/metadata_map/read_owned_tests.rs',
     'test/engine/unit/backup_published_scope_context_tests.rs',
     'test/engine/unit/backup_original_scope_encoding_tests.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/first_candidate.rs',
@@ -49,6 +50,27 @@ class BackupEncodingMemoSelection(unittest.TestCase):
                 plan = CI.select_plan(self.policy, [path])
                 self.assertIn('backup-scoped-encoding-memo', plan['groups'])
                 self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
+
+    def test_graph_decoder_consumers_keep_backup_and_existing_shared_coverage(self):
+        for path in [
+            'src/engine/src/journal.rs',
+            'src/engine/src/metadata_map.rs',
+            'src/engine/src/history_package/graph.rs',
+            'test/engine/unit/history_package/graph/tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('backup-scoped-encoding-memo', plan['groups'])
+        group = self.policy['groups']['backup-scoped-encoding-memo']
+        self.assertIn('metadata_map::read_owned_tests::',
+                      group['rust_targets'][0]['prefixes'])
+        journal = CI.select_plan(self.policy, ['src/engine/src/journal.rs'])
+        self.assertIn('version-publication-location', journal['groups'])
+        self.assertIn('held-directory-layout', journal['groups'])
+        metadata = CI.select_plan(self.policy, ['src/engine/src/metadata_map.rs'])
+        self.assertIn('container-tags-storage', metadata['groups'])
+        graph = CI.select_plan(self.policy, ['src/engine/src/history_package/graph.rs'])
+        self.assertIn('container-tags-storage', graph['groups'])
 
     def test_complete_slice_keeps_product_check_before_original_900_second_transaction(self):
         plan = CI.select_plan(self.policy, PATHS + [

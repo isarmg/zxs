@@ -389,7 +389,7 @@ fn collect_reused<'a>(
 
 /// Shared root-schema boundary for full resolution and exact-closure scrub.
 pub(crate) fn decode_history_root(root: &AuthenticatedMetadataObject) -> Result<PagedHistoryRoot> {
-    let decoded: PagedHistoryRoot = json_codec::from_value(root.value().clone())?;
+    let decoded = PagedHistoryRoot::deserialize(root.value())?;
     if decoded.maps.len() != Field::ALL.len()
         || Field::ALL
             .iter()

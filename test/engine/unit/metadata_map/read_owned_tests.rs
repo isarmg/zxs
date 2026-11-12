@@ -80,3 +80,108 @@ fn streamed_move_still_rejects_nonmap_leaf_and_wrong_route_before_returning_valu
         }
     }
 }
+
+fn owned_index_decode(object: &AuthenticatedMetadataObject) -> Result<MetadataIndex> {
+    let index: MetadataIndex = json_codec::from_value(object.value().clone())?;
+    if index.prefix.len() >= RADIX_DEPTH
+        || !hexadecimal(&index.prefix)
+        || index.children.is_empty()
+        || index.children.len() > 16
+    {
+        return Err(invalid("invalid metadata map index"));
+    }
+    for (digit, child) in &index.children {
+        if digit.len() != 1 || !hexadecimal(digit) {
+            return Err(invalid("invalid metadata map radix digit"));
+        }
+        child.validate()?;
+    }
+    Ok(index)
+}
+
+fn decoder_error_chain(error: &Error) -> (storage_contract::ErrorCode, Vec<String>) {
+    let mut chain = Vec::new();
+    let mut current: Option<&dyn std::error::Error> = Some(error);
+    while let Some(error) = current {
+        chain.push(error.to_string());
+        current = error.source();
+    }
+    (error.code(), chain)
+}
+
+#[test]
+fn index_borrowed_decode_matches_owned_admission_on_real_objects() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = crate::Config::development([
+        temp.path().join("a"),
+        temp.path().join("b"),
+        temp.path().join("c"),
+    ]).unwrap();
+    let disk = &config.disks[0];
+    let values = (0..140)
+        .map(|index| (format!("entry-{index}"), Value::String("payload".into())))
+        .collect();
+    let mut encoder = Encoder::new(MAX_METADATA);
+    let reference = encoder.map(values).unwrap();
+    assert_eq!(reference.kind(), ReferenceKind::Index);
+    for object in encoder.finish() {
+        object.store(std::slice::from_ref(disk)).unwrap();
+    }
+    let original = crate::journal::load_authenticated_object(
+        disk, "metadata-index", reference.hash(),
+    ).unwrap();
+    let valid = original.value().clone();
+    let mut cases = vec![valid.clone(), Value::Null, Value::Array(Vec::new())];
+    let mut unknown = valid.clone();
+    unknown["unknown"] = Value::Bool(true);
+    cases.push(unknown);
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("prefix");
+    cases.push(missing);
+    for prefix in [Value::Null, Value::Bool(false), Value::String("g".into()),
+        Value::String("f".repeat(64))]
+    {
+        let mut value = valid.clone();
+        value["prefix"] = prefix;
+        cases.push(value);
+    }
+    let edge = valid["children"].as_object().unwrap().values().next().unwrap().clone();
+    for children in [
+        Value::Object(Map::new()),
+        json_codec::json!({"ab": edge.clone()}),
+        json_codec::json!({"g": edge.clone()}),
+        json_codec::json!({"a": {"kind": "unknown", "hash": "0".repeat(64)}}),
+        json_codec::json!({"a": {"kind": "state-page", "hash": "BAD"}}),
+        json_codec::json!({"a": {"kind": "state-page"}}),
+        json_codec::json!({"a": {"kind": "state-page", "hash": null}}),
+        json_codec::json!({"a": {"kind": "state-page", "hash": "0".repeat(64), "x": 1}}),
+    ] {
+        let mut value = valid.clone();
+        value["children"] = children;
+        cases.push(value);
+    }
+    for value in cases {
+        let prepared = PreparedMetadataObject::new("metadata-index", &value, MAX_METADATA).unwrap();
+        prepared.store(std::slice::from_ref(disk)).unwrap();
+        let path = crate::journal::object_path(disk, "metadata-index", &prepared.hash);
+        let before = std::fs::read(&path).unwrap();
+        let object = crate::journal::load_authenticated_object(
+            disk, "metadata-index", &prepared.hash,
+        ).unwrap();
+        let expected = owned_index_decode(&object);
+        let actual = decode_index(&object);
+        match (expected, actual) {
+            (Ok(expected), Ok(actual)) => {
+                assert_eq!(canonical_json(&expected).unwrap(), canonical_json(&actual).unwrap());
+            }
+            (Err(expected), Err(actual)) => {
+                assert_eq!(decoder_error_chain(&expected), decoder_error_chain(&actual));
+            }
+            (expected, actual) => {
+                panic!("decode result differs: owned={}, borrowed={}", expected.is_ok(),
+                    actual.is_ok());
+            }
+        }
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+}

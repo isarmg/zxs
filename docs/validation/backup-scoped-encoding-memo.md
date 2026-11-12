@@ -672,3 +672,69 @@ object/journal 时间、调用数和读取计费增量。原生产调用前后�
 该参考编排有维护漂移风险，必须对照生产顺序、完整结果/预算和拒绝行为。
 已有 Source 两种观察、Finalize 差分和原 exact/max1/900 事务均保持。
 新分解尚待 GitHub 实测，不先断言余下热点或超时已解决。
+
+## #1324 编译修正及 #1326 分段实测
+
+#1324 的 `6c823c4bcb9af0d439a05e019411d51ccc032a62` / `3366f8806eef38f9e510821ebca2b110a91557e1`
+在测试计时闭包遗漏原 object_hash 的 contract → Engine 错误转换，
+两处 E0308 使 Engine 单测编译失败、该目标因前提失败未执行；
+185 项 Python 和 Engine 产品检查通过，独立原事务仍 900 秒超时。
+两行 `Ok(object_hash(...)?)` 修复只恢复原错误转换，不改生产。
+
+unit 工件 13968157943，ZIP SHA256：
+`f0f5c8519e1213440eeb96faf60e90ac0a789679e6cca5056d267765efbf39a2`。
+原事务工件 13968374604，ZIP SHA256：
+`ff4a94e196a1546879bbdad572bc1934f0fd26918cdf1bf555ce647eeb597c5b`。
+运行：https://github.com/isarmg/zxs/actions/runs/43271555224 。
+
+修正后的 #1326 准确 head `84b574a4d8b12416f33f246d84162285cd4df487`，
+base `628a4593e8d4fc2b3a877745ffb46ac10d5c9f16`：
+unit 分片 73 项 Rust、29 项 Python、Engine 无默认特性检查通过，
+selected failed/skipped/blocked 均为空。Source 观察 0.62 秒，
+Finalize 真实差分 0.63 秒，证明此前编译失败部分现在实际执行；
+不是 #1323 共享组或原 900 秒事务的完整通过。
+
+小型 Genesis 顺序分解 whole inclusive 为 11,942 微秒。主要分段如下，
+Source 列是同一次分段中的真实 Source 子集，不是可直接消除的成本。
+
+| 阶段 | inclusive 微秒 | Source inclusive 微秒 | object 次数 |
+| --- | ---: | ---: | ---: |
+| SnapshotAdmission | 3,332 | 1,902 | 120 |
+| HistoryBinding | 3,025 | 1,593 | 28 |
+| PublicationSeal | 867 | 0 | 0 |
+| Snapshot typed | 830 | 544 | 3 |
+| Publication typed | 790 | 517 | 3 |
+| Journals | 642 | 110 | 3 |
+| Payloads | 424 | 234 | 3 |
+| ReportState | 395 | 0 | 0 |
+
+snapshot/history 合计约 53%，提示进一步审查图读入、组装和准入，
+不证明其中某次 clone 是主热点。169 次对象读、91,345 对象字节及
+392 次/118,659 字节总计费与生产对照相同。
+同 runner 的复制 Source 总桶 11,966、直接委托总桶 11,865 微秒；
+这些独立先后调用不能和 #1322 跨 runner 数字相减为优化收益。
+
+工件：
+https://github.com/isarmg/zxs/actions/runs/43272729994/artifacts/13969008524
+ZIP SHA256：
+`922fcac3ea61a54ec660aec5eed7d8318168644735afeaad9ad2a1e09f5f74dc`。
+
+## 已认证图对象的局部借用与所有权转移
+
+下一窄片仅把 MetadataIndex 和 PagedHistoryRoot 的
+`from_value(object.value().clone())` 改为在同一已认证 Value 上借用反序列化，
+所有后验 schema、引用、radix 路由和语义条件留在原位置。
+snapshot 的 control-auth 则消费该局部认证对象的 Value，不再深克隆；
+它原有的 load 认证和最终 RawState 解码/完整准入保持。
+
+这不减少真实读取，不改变 Source 预算、取消、认证、地址去重或图遍历顺序，
+不缓存 State、Report 或有效性证明。并非泛化声称所有自定义反序列化器等价：
+MetadataIndex 的引用/枚举及 PagedHistoryRoot 的完整 Repository/HistoryTree
+字段单独核对；新增两项差分通过真实磁盘 store/load 和重算正确摘要到达解码。
+成功比较完整规范字节，失败比较 code/source 链，覆盖缺失/null/未知字段、
+格式、十进制字符串、枚举、引用和合法省略，验证器不改写源文件。
+错误链断言不另声称单独检查了 JSON 分类或行列位置。
+
+保留既有图、snapshot、readmission、共享消费者与原 exact/max1/900 选择，
+追加 read_owned 直接映射/前缀，原 max_tests 与 timeout 不变。
+此片尚待准确后继 SHA 的 GitHub 验证，不预称收益或完整恢复闭环。

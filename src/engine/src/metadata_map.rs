@@ -415,7 +415,7 @@ pub(crate) fn visit_objects(
 
 /// Parse one current index schema for both full resolution and closure walking.
 pub(crate) fn decode_index(object: &AuthenticatedMetadataObject) -> Result<MetadataIndex> {
-    let index: MetadataIndex = json_codec::from_value(object.value().clone())?;
+    let index = MetadataIndex::deserialize(object.value())?;
     if index.prefix.len() >= RADIX_DEPTH
         || !hexadecimal(&index.prefix)
         || index.children.is_empty()

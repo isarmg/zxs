@@ -1090,7 +1090,7 @@ fn resolve_raw_snapshot(
         "topology_generation".into(),
         snapshot.topology_generation.to_string().into(),
     );
-    out.insert("control_auth".into(), auth.value().clone());
+    out.insert("control_auth".into(), auth.into_value());
     for (field, reference) in snapshot.maps {
         out.insert(
             field,
