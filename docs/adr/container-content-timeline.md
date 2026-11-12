@@ -276,3 +276,7 @@ A、B 均有两节点，A 的最上卡片高度为 40，B 为 120。两者同为
 - [软删除与精确撤销](https://github.com/isarmg/zxs/blob/cae7608111919637398004a0a3140eebb477c7bc/src/engine/src/file_deletion/lifecycle.rs#L43-L165)
 - [文件本地数据库范围与行格式](https://github.com/isarmg/zxs/blob/cae7608111919637398004a0a3140eebb477c7bc/src/engine/src/container_storage/file_database/rows.rs#L1-L64)
 - [旧复制材料不得伪装为完整生命周期副本](https://github.com/isarmg/zxs/blob/cae7608111919637398004a0a3140eebb477c7bc/src/engine/src/container_storage/file_database.rs#L107-L130)
+
+## 删除/恢复真实来源的独立实施片
+
+[生命周期读取](../design/container-lifecycle-read.md)把已有永久 D/undo 和已删除状态导入材料接为只读分页记录，事件身份使用 operation_id，未知时间保持未知。它不改内容图、不迁移标签、不补造 graph-only copy 缺失的审计前缀，也不替代本 ADR 的完整操作区段排序/布局要求。准确接线与定向验证结果按该切片记录；完整操作时间线仍待后续实施。

@@ -4,7 +4,7 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] GitHub 定向 CI 验证[容器历史窗口无环准入](docs/design/container-history-dag-admission.md)：真实响应拒绝可见环，合法父边完整保留；覆盖分页/More/跨页端点、编辑文本保留与迟到失败隔离、全部四节点图及原布局回归，取得 Web native/WASM 产品编译证据。未本地编译或测试；完整操作时间线、容器级标签与真实浏览器仍待完成。
+- [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的容量与真实浏览器验收：降低每页全 State 索引成本，核对阶段内取消和大来源的耗时/分配；不以分页宣称 O(page) 成本。只读删除/恢复/Import 切片已有 contract/Engine、HTTP 和 Web native/WASM 定向证据；完整改名/移动操作轴、容器级标签迁移仍待实施。
 
 - [ ] 继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部消费者的构建闭包、永久收据与用户数据，不恢复非容器功能；已完成的 HTTP 写入口退役见[说明](docs/design/directory-rename-http-retirement.md)。
 
