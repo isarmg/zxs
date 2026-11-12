@@ -106,7 +106,7 @@ def select_plan(policy, changed, *, shardable=False):
         timeouts = group.get('python_timeouts', {})
         if (not isinstance(modules, list)
                 or any(not isinstance(module, str)
-                       or not re.fullmatch(r'test_[a-z_]+', module) for module in modules)
+                       or not re.fullmatch(r'test_[a-z0-9_]+', module) for module in modules)
                 or len(set(modules)) != len(modules)
                 or not isinstance(timeouts, dict) or not set(timeouts) <= set(modules)
                 or any(type(value) is not int or not 1 <= value <= 900
@@ -121,7 +121,7 @@ def select_plan(policy, changed, *, shardable=False):
         targets.extend(group['rust_targets'])
         origins.extend([name] * len(group['rust_targets']))
     python_limit = 128 if shardable else 8
-    if len(python_tests) > python_limit or any(not re.fullmatch(r'test_[a-z_]+', n) for n in python_tests):
+    if len(python_tests) > python_limit or any(not re.fullmatch(r'test_[a-z0-9_]+', n) for n in python_tests):
         raise ValueError('invalid Python modules')
     if not (targets or python_tests):
         raise ValueError('target selection must be bounded and nonempty')

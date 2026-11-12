@@ -621,6 +621,26 @@ class TargetedSelection(unittest.TestCase):
         self.assertNotIn('engineering-guidance',
                          {item['group'] for item in plain['python_selections']})
 
+    def test_python_module_names_accept_digits_but_not_paths_or_import_expressions(self):
+        for name in ['test_phase1_file_probes', 'test_1', 'test_tags_v2']:
+            policy = {
+                'groups': {'probe': {'reason': 'module-name fixture',
+                                     'python_tests': [name], 'rust_targets': []}},
+                'rules': [{'path': 'probe', 'groups': ['probe']}],
+                'unexecuted': 'unrelated modules',
+            }
+            with self.subTest(name=name):
+                plan = CI.select_plan(policy, ['probe'])
+                self.assertEqual(plan['python_tests'], [name])
+                self.assertEqual(plan['python_timeouts'], {name: 120})
+                self.assertEqual(plan['rust_targets'], [])
+        for name in ['', 'test_', 'phase1_file_probes', 'test_x.py',
+                     'test_x/y', 'test_x\\y', '../test_x', 'test_x y',
+                     'test_x\n', 'test_x;exit', 'test_x-y']:
+            policy['groups']['probe']['python_tests'] = [name]
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                CI.select_plan(policy, ['probe'])
+
     def test_python_budget_rejects_invalid_values_and_unselected_modules(self):
         invalid = [
             [], {'test_engineering_guidance': 0}, {'test_engineering_guidance': 901},
