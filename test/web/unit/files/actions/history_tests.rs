@@ -733,3 +733,60 @@ fn cancelled_and_reopened_identical_selections_cannot_receive_the_old_drafts_sta
         );
     });
 }
+
+fn cyclic_response(target: &Target, request: &HistoryWindowRequest) -> json_codec::Value {
+    let mut page = json_codec::to_value(response(target, request, NODE, NODE)).unwrap();
+    let mut second = page["nodes"][0].clone();
+    second["node_id"] = NEXT_NODE.into();
+    second["version_id"] = NEXT_NODE.into();
+    second["current"] = false.into();
+    second["sequence"] = "0".into();
+    page["nodes"].as_array_mut().unwrap().push(second);
+    page["edges"] = json!([
+        {"node_id":NODE, "parent_node_id":NEXT_NODE, "endpoint":"in_window"},
+        {"node_id":NEXT_NODE, "parent_node_id":NODE, "endpoint":"in_window"}
+    ]);
+    page
+}
+
+#[test]
+fn cyclic_response_preserves_visible_history_and_editors_but_closes_writes() {
+    let mut state = loaded_state();
+    state.files.history_editors = 1;
+    state.files.checked_nodes = crate::files::tags::tests::selection(&["kept"]);
+    state.files.history_aux.begin(Resource::Relation, None);
+    state.files.history_aux.begin(Resource::Field, None);
+    let before = state.files.file_history.clone();
+    let target = Target::capture(&state).unwrap();
+    let request = make_request(&target, HistoryCollection::Nodes, None, None, false).unwrap();
+    let result = history::admit(cyclic_response(&target, &request), &request, None);
+    let error = complete_nodes(&mut state, &target, 8, result, false).unwrap_err();
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(api::ErrorSource::FileHistory(history::DecodeError::Relation(_)))
+    ));
+    assert_eq!(state.files.file_history.nodes(), before.nodes());
+    assert_eq!(state.files.file_history.file_note(), before.file_note());
+    assert_eq!(state.files.file_history.window_key(), before.window_key());
+    assert!(state.files.file_history.loaded());
+    assert!(!state.files.file_history.ready());
+    assert!(!state.files.history_loading);
+    assert!(!state.files.history_aux.loading());
+    assert!(!crate::files::actions::history_write_allowed(&state));
+    assert_eq!(state.files.history_editors, 1);
+    assert!(state.files.checked_nodes.contains("kept"));
+}
+
+#[test]
+fn stale_cyclic_response_does_not_invalidate_a_successor_window() {
+    let mut state = loaded_state();
+    let target = Target::capture(&state).unwrap();
+    let request = make_request(&target, HistoryCollection::Nodes, None, None, false).unwrap();
+    let result = history::admit(cyclic_response(&target, &request), &request, None);
+    state.files.history_generation = 9;
+    let before = state.files.file_history.clone();
+    assert!(!complete_nodes(&mut state, &target, 8, result, false).unwrap());
+    assert_eq!(state.files.file_history, before);
+    assert!(state.files.file_history.ready());
+    assert!(state.files.history_loading);
+}

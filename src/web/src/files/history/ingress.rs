@@ -1,8 +1,8 @@
 //! A network page is admitted against the exact request before entering UI state.
 //! The API reader already enforces the shared response-byte limit.
-use super::DecodeError;
+use crate::files::history::DecodeError;
 use json_codec::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::history_window as wire;
 
 pub(super) fn admit(
@@ -315,6 +315,52 @@ fn nodes_page(
                 "history edge endpoints disagree with the window",
             ));
         }
+    }
+    acyclic_window(nodes, edges)
+}
+
+/// Only visible edges participate. Missing parent pages and outside-window
+/// endpoints remain unresolved, rather than being treated as complete roots.
+fn acyclic_window(
+    nodes: &[wire::HistoryNodeSummary],
+    edges: &[wire::HistoryGraphEdge],
+) -> Result<(), DecodeError> {
+    let positions = nodes
+        .iter()
+        .enumerate()
+        .map(|(position, node)| (&node.node_id, position))
+        .collect::<BTreeMap<_, _>>();
+    let mut children = vec![Vec::new(); nodes.len()];
+    let mut remaining_parents = vec![0usize; nodes.len()];
+    for edge in edges {
+        if edge.endpoint == wire::HistoryEndpoint::InWindow {
+            // nodes_page has already admitted unique identities and endpoints.
+            let parent = positions[&edge.parent_node_id];
+            let child = positions[&edge.node_id];
+            children[parent].push(child);
+            remaining_parents[child] += 1;
+        }
+    }
+    let mut ready = remaining_parents
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count == 0)
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let mut visited = 0;
+    while let Some(parent) = ready.pop() {
+        visited += 1;
+        for &child in &children[parent] {
+            remaining_parents[child] -= 1;
+            if remaining_parents[child] == 0 {
+                ready.push(child);
+            }
+        }
+    }
+    if visited != nodes.len() {
+        return Err(DecodeError::Relation(
+            "history window contains cyclic parent relations",
+        ));
     }
     Ok(())
 }

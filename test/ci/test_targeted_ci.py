@@ -407,6 +407,41 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(len(plan['groups']), 5)
         self.assertIn('test_development_ci', plan['python_tests'])
 
+    def test_container_history_dag_routes_both_layout_consumers_and_boundaries(self):
+        paths = [
+            'src/web/src/files/history/ingress.rs',
+            'src/web/src/files/version_tree.rs',
+            'test/web/unit/files/history/window_tests.rs',
+            'test/web/unit/files/version_tree/tests.rs',
+            'test/web/unit/files/actions/history_tests.rs',
+            'docs/design/container-history-dag-admission.md',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('container-history-dag-admission', plan['groups'])
+                web = next(target for target in plan['rust_targets']
+                           if target['package'] == 'web-app'
+                           and target.get('mode', 'test') == 'test')
+                prefixes = {prefix for selection in web['selections']
+                            for prefix in selection.get('prefixes', [])}
+                self.assertTrue({
+                    'files::history::ingress::tests::',
+                    'files::actions::history::tests::',
+                    'files::version_tree::tests::',
+                    'files::shared_history::tests::',
+                } <= prefixes)
+                self.assertTrue(any(target['package'] == 'storage-contract'
+                                    and target.get('mode', 'test') == 'test'
+                                    for target in plan['rust_targets']))
+                checks = [target for target in plan['rust_targets']
+                          if target['package'] == 'web-app' and target.get('mode') == 'check']
+                self.assertEqual(len(checks), 2)
+                self.assertEqual(sum(target.get('compile_target') == 'wasm32-unknown-unknown'
+                                     for target in checks), 1)
+        self.assertIn('web-directory-history-retirement',
+                      CI.select_plan(self.policy, [paths[1]])['groups'])
+
     def test_unknown_and_empty_changes_need_target_selection(self):
         for changed in ([], ['__unmapped_fixture__/unknown.rs']):
             with self.subTest(changed=changed), self.assertRaises(ValueError):

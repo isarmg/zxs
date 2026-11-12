@@ -645,3 +645,170 @@ fn invalid_paths_and_notes_retain_their_boundary_error_sources() {
         Err(DecodeError::Name(_))
     ));
 }
+
+fn graph_page(
+    request: &wire::HistoryWindowRequest,
+    count: u64,
+    pairs: &[(u64, u64)],
+) -> wire::HistoryWindowPage {
+    let mut page = nodes(request, count);
+    if let wire::HistoryWindowPage::Nodes { edges, .. } = &mut page {
+        *edges = pairs
+            .iter()
+            .map(|&(child, parent)| wire::HistoryGraphEdge {
+                node_id: node(child).node_id,
+                parent_node_id: node(parent).node_id,
+                endpoint: if parent <= count {
+                    wire::HistoryEndpoint::InWindow
+                } else {
+                    wire::HistoryEndpoint::OutsideWindow
+                },
+            })
+            .collect();
+    }
+    page
+}
+
+#[test]
+fn cyclic_parent_relations_are_rejected_without_dropping_edges() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    for pairs in [
+        vec![(1, 1)],
+        vec![(1, 2), (2, 1)],
+        vec![(1, 2), (2, 3), (3, 1), (4, 5)],
+    ] {
+        let page = graph_page(&request, 5, &pairs);
+        assert!(matches!(
+            admit(value(&page), &request, None),
+            Err(DecodeError::Relation(_))
+        ));
+    }
+}
+
+#[test]
+fn visible_dag_keeps_forks_merges_transitive_edges_and_unrelated_sequences() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    // Sequence presentation does not establish ancestry. This DAG deliberately
+    // has older child sequences, a fork, a merge and a redundant ancestry edge.
+    let page = graph_page(&request, 4, &[(2, 1), (3, 1), (4, 2), (4, 3), (4, 1)]);
+    assert_eq!(
+        value(&admit(value(&page), &request, None).unwrap()),
+        value(&page)
+    );
+}
+
+#[test]
+fn partial_parent_and_page_boundaries_do_not_fabricate_or_hide_a_visible_cycle() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    let parent_request = read_request(wire::HistoryCollection::NodeParents {
+        node_id: node(1).node_id,
+    });
+    let more = cursor(
+        &parent_request,
+        wire::HistoryPosition::Start,
+        wire::HistoryDirection::Forward,
+    );
+    let mut page = graph_page(&request, 2, &[(1, 2), (2, 3)]);
+    if let wire::HistoryWindowPage::Nodes { nodes, page, .. } = &mut page {
+        nodes[0].parents = wire::HistoryParentSet::More { cursor: more };
+        page.next_cursor = Some(cursor(
+            &request,
+            wire::HistoryPosition::Node {
+                sequence: 998,
+                node_id: node(2).node_id,
+            },
+            wire::HistoryDirection::Forward,
+        ));
+    }
+    assert_eq!(
+        value(&admit(value(&page), &request, None).unwrap()),
+        value(&page)
+    );
+    if let wire::HistoryWindowPage::Nodes { edges, .. } = &mut page {
+        edges.push(wire::HistoryGraphEdge {
+            node_id: node(2).node_id,
+            parent_node_id: node(1).node_id,
+            endpoint: wire::HistoryEndpoint::InWindow,
+        });
+    }
+    assert!(matches!(
+        admit(value(&page), &request, None),
+        Err(DecodeError::Relation(_))
+    ));
+}
+
+#[test]
+fn bounded_chain_empty_page_and_maximum_window_are_admitted_without_recursion() {
+    let mut request = read_request(wire::HistoryCollection::Nodes);
+    request.limit = wire::HistoryPageLimit::for_collection(64, &request.collection).unwrap();
+    assert!(accepted(&nodes(&request, 0), &request));
+    let pairs = (1..64).map(|child| (child, child + 1)).collect::<Vec<_>>();
+    let page = graph_page(&request, 64, &pairs);
+    assert!(accepted(&page, &request));
+    let mut cycle = pairs;
+    cycle.push((64, 1));
+    assert!(!accepted(&graph_page(&request, 64, &cycle), &request));
+}
+
+fn reference_has_cycle(count: u64, pairs: &[(u64, u64)]) -> bool {
+    (1..=count).any(|start| {
+        let mut pending = pairs
+            .iter()
+            .filter(|(child, _)| *child == start)
+            .map(|(_, parent)| *parent)
+            .collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        while let Some(parent) = pending.pop() {
+            if parent == start {
+                return true;
+            }
+            if seen.insert(parent) {
+                pending.extend(
+                    pairs
+                        .iter()
+                        .filter(|(child, _)| *child == parent)
+                        .map(|(_, parent)| *parent),
+                );
+            }
+        }
+        false
+    })
+}
+
+#[test]
+fn response_admission_matches_reachability_for_every_four_node_directed_graph() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    let candidates = (1..=4)
+        .flat_map(|child| {
+            (1..=4)
+                .filter(move |&parent| child != parent)
+                .map(move |parent| (child, parent))
+        })
+        .collect::<Vec<_>>();
+    let mut acyclic = 0;
+    for mask in 0..1usize << candidates.len() {
+        let pairs = candidates
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .map(|(_, pair)| *pair)
+            .collect::<Vec<_>>();
+        let expected = !reference_has_cycle(4, &pairs);
+        assert_eq!(
+            accepted(&graph_page(&request, 4, &pairs), &request),
+            expected,
+            "mask {mask}"
+        );
+        acyclic += usize::from(expected);
+    }
+    assert_eq!(acyclic, 543);
+}
+
+
+#[test]
+fn duplicate_visible_and_external_parent_edges_are_rejected_at_admission() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    for pairs in [vec![(1, 2), (1, 2)], vec![(1, 3), (1, 3)]] {
+        assert!(!accepted(&graph_page(&request, 2, &pairs), &request));
+    }
+}
