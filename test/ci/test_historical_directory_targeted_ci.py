@@ -147,14 +147,16 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^invalid Python modules$'):
             CI.select_plan(self.policy, notes + policy)
         plans = [CI.select_plan(self.policy, batch) for batch in [authorization, notes, policy]]
-        self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 9, 0])
+        # HTTP retirement adds a core product check without dropping any old selection.
+        self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 10, 0])
         self.assertEqual([len(plan['python_tests']) for plan in plans], [1, 2, 7])
         self.assertCountEqual([path for plan in plans for path in plan['changed_paths']], paths)
         self.assertEqual(plans[0]['groups'], [
             'portable-path-consumers', 'server-authorization', 'shared-history-http-boundary',
         ])
         self.assertEqual(plans[1]['groups'], [
-            'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
+            'directory-rename-http-retirement', 'note-http-boundary', 'note-target-consumers',
+            'paged-deletion-review',
             'server-authorization', 'version-metadata-read',
         ])
         self.assertEqual(plans[2]['groups'], ['ci-selection'])

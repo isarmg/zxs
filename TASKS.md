@@ -4,7 +4,9 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] GitHub 定向 CI 验证[旧目录导出孤儿入口退役](docs/design/directory-export-wrapper-retirement.md)：Engine 产品与全部登记消费者构建、保留目录所有权拒绝、普通文件改名的数据／标签／历史／重放以及独立历史复制故障恢复；旧 file.directory.export 的解码／永久收据／恢复实现原样保留，尚无本片专属冷恢复 fixture，不恢复非容器功能。
+- [ ] GitHub 定向 CI 验证[旧目录导出孤儿入口退役](docs/design/directory-export-wrapper-retirement.md)：#1274 的 6 项 Rust、124 项 Python、Engine 无默认产品及 helper/perf 构建通过；server/core 与 browser-smoke 因共享 PATCH import 缺失未构建，需在修复后完成两消费者验证。保留目录所有权拒绝、普通文件改名与独立历史复制；旧 file.directory.export 的解码／永久收据／恢复实现原样保留，尚无本片专属冷恢复 fixture，不恢复非容器功能。
+
+- [ ] 修复 #1273：共享 file_manager 的文件分支改名和节点备注仍需 PATCH 路由构造器，恢复其共享导入（不恢复目录 PATCH），同步历史 policy 分批 9→10 的产品检查与组断言。原轮 154 项 Rust、121 项 Python 及 Web 原生/WASM 产品检查通过，6 个 server 构建失败导致 HTTP 行为未执行；待准确后继提交复验。
 
 - [ ] GitHub 定向 CI 验证[目录标签 HTTP 写入口退役](docs/design/directory-rename-http-retirement.md)：认证／匿名 PATCH 均拒绝、当前读取与冷开原标签保留、无新改名审计／收据、文件分支改名仍成功；继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部必选 trait 实现的构建闭包、永久收据与用户数据，不扩大到非容器文件或非容器目录。
 

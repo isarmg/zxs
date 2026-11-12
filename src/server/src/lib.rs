@@ -255,7 +255,7 @@ use http_routing::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::Response,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use json_codec::{Value, json};
 use std::{
