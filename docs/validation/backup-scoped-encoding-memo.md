@@ -847,3 +847,48 @@ published_scopes 的独立 Session 边界不在这次编码复用范围内，均
 warm 后坏 raw、duplicate、缺件、取消仍拒绝，验证器不修复原文件；
 测试只恢复自己改坏的夹具。保留原 exact/max1/900 和原全部选择／限额。
 该实现仍待准确后继 GitHub 定向验证，不宣称 900 秒问题或完整三范围恢复已闭环。
+
+## #1330 编译闭包与 #1331 精确单元证据
+
+纯编码复用的首个生产提交 2fb0399 的 #1330 因遗漏独立 generation_objects
+构造点而编译失败：Target 新增的生命周期与 encodings 字段没有接入。
+该轮 38 Rust／186 Python 通过，但 Engine 单元、产品检查和原事务均未进入执行；
+原事务是编译前提失败，不能称作本轮 900 秒超时。
+后继 f6aef8c 仅为该独立读取点补足类型参数和 None，保留它的完整不缓存读取，
+并补精确 CI 路径，不改任何验证或限额。
+
+#1331 准确 head `f6aef8cbab5c1e7e268bcffb78185acdc9efad2f`，
+base `2fb0399cbf8a9336f4539d986816141e541df81a` 的第 0 片：
+86 Rust／186 Python／1 Engine 无默认特性产品检查通过，
+selected failed/skipped/blocked 均为空。新增 9 项 journal、共享预算、
+碰撞、晚取消和真实 archive 差分已实际执行；现有 component 测试为 80.15 秒。
+这些不是原事务或配对性能结果。原 900 秒独立片及以 34bc 为基线的
+完整生产变更复验 #1332 仍待完成证据。
+工件：https://github.com/isarmg/zxs/actions/runs/43309061210/artifacts/13985347231
+ZIP SHA256：
+`cd9c13fd08c25f4ed5bf050096573b954d37c91a67fd4b201e32367c66f405ad`。
+
+## published_scopes 同账户的局部接线
+
+published_scopes 原有独立 Session 现在复用同一个 request-local memo，
+在真实 archive 读取前建立仅用于规范编码的 Transaction。
+完整 raw＋域相等仍是唯一复用条件，不提前求值 SQL binding；
+原 registry.verify、state_at、每个 archive 对象的真实读取、strict parse、
+typed／State／历史验证及派生观察不动。SQL Context／Session 仍在
+archive 与 extend_backup 完成后的原位置计算。
+
+规范编码与 SQL 共享原 32 MiB／256 项及所有 pending 预留。
+两者只在本次 Scopes::capture 原 named_target → checkpoint 尾门后提交；
+之前的失败或取消释放 pending。外层 Plan、其他目标、完成记录或读回仍可能失败，
+不把这个局部提交声称为整个事务成功或新的准入权限。
+
+新增 cfg(test) probe 复用已有真实三原盘／两目标／两版本 serving 夹具，
+不复制 setup、不扩大生产可见性。None／cold／warm 比较完整 target reports、
+SYSTEM 与有效配置每盘的 current/history SQLite 字节。
+预热后分别改坏每个目标的原生 snapshot，完整错误链与 None 一致，
+每次错误调用后立即对照整个夹具目录名及文件字节；只恢复测试自改字节。
+不声称验证权限／mtime。新增检查前保存原 memo，结束还原，
+不把它的预热计入原计时循环；原测试断言、所选用例数与时限均保留。
+
+此接线尚待准确后继 SHA 的 GitHub 验证，pool-snapshot 独立读链仍未接入。
+不据该局部复用宣称 900 秒问题、实际改名或 SYSTEM／DISK／FILE 完整恢复已闭环。
