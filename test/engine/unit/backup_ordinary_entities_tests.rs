@@ -6,6 +6,68 @@ use std::{
     os::unix::fs::{PermissionsExt, symlink},
 };
 
+fn fill_entry_budget(image: &mut Image<'_>, remaining: usize) {
+    let count = image.files.len() + image.directories.len() + image.locator_paths.len();
+    for index in count..MAX_ENTRIES - remaining {
+        image
+            .add_directory(PathBuf::from(format!("histories/budget/entry-{index}")))
+            .unwrap();
+    }
+}
+
+#[test]
+fn file_ancestors_cannot_exhaust_the_complete_image_entry_budget() {
+    let (_temporary, _root, mut image, _) = fixture();
+    fill_entry_budget(&mut image, 2);
+    let path = PathBuf::from("histories/budget/nested/child/payload");
+    let error = image
+        .add_file(path.clone(), Data::Bytes(vec![1]))
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert!(!image.files.contains_key(&path));
+    assert_eq!(
+        image.files.len() + image.directories.len() + image.locator_paths.len(),
+        MAX_ENTRIES,
+    );
+}
+
+#[test]
+fn locator_ancestors_cannot_exhaust_the_complete_image_entry_budget() {
+    let (_temporary, _root, mut image, _) = fixture();
+    fill_entry_budget(&mut image, 2);
+    let path = PathBuf::from("histories/budget/nested/child/locator.json");
+    let error = image.add_locator(path.clone()).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert!(!image.locator_paths.contains(&path));
+    assert_eq!(
+        image.files.len() + image.directories.len() + image.locator_paths.len(),
+        MAX_ENTRIES,
+    );
+}
+
+#[test]
+fn nested_file_and_locator_accept_the_exact_entry_limit() {
+    let (_temporary, _root, mut image, _) = fixture();
+    fill_entry_budget(&mut image, 4);
+    image
+        .add_file(
+            PathBuf::from("histories/budget/nested/child/payload"),
+            Data::Bytes(vec![1]),
+        )
+        .unwrap();
+    image
+        .add_locator(PathBuf::from("histories/budget/nested/child/locator.json"))
+        .unwrap();
+    assert_eq!(
+        image.files.len() + image.directories.len() + image.locator_paths.len(),
+        MAX_ENTRIES,
+    );
+    let error = image
+        .add_locator(PathBuf::from("histories/budget/nested/child/extra.json"))
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+}
+
 fn fixture() -> (tempfile::TempDir, DiskRoot, Image<'static>, PathBuf) {
     let temporary = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))

@@ -247,9 +247,13 @@ impl<'a> Image<'a> {
             .metadata_bytes
             .checked_add(path.len())
             .ok_or_else(budget)?;
-        if self.metadata_bytes > MAX_BYTES
-            || self.files.len() + self.directories.len() >= MAX_ENTRIES
-        {
+        if self.metadata_bytes > MAX_BYTES {
+            return Err(budget());
+        }
+        self.require_entry()
+    }
+    fn require_entry(&self) -> Result<()> {
+        if self.files.len() + self.directories.len() >= MAX_ENTRIES {
             return Err(budget());
         }
         Ok(())
@@ -289,6 +293,8 @@ impl<'a> Image<'a> {
         {
             self.add_directory(parent.to_owned())?;
         }
+        // Ancestor creation can consume the last entry after the initial charge.
+        self.require_entry()?;
         self.files.insert(path, data);
         Ok(())
     }
@@ -308,6 +314,10 @@ impl<'a> Image<'a> {
         store::verify(root, self, stop)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/backup_entity_budget_tests.rs"]
+mod budget_tests;
 
 struct Paths {
     files: BTreeMap<(String, String), PathBuf>,

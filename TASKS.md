@@ -4,6 +4,8 @@
 
 ## 当前 CI 与失败闭环
 
+- [ ] GitHub 定向 CI 验证文件容器备份镜像的完整条目预算：预备图与普通图补父目录后不越过 100,000 项，文件与 locator 的精确上限、已有父目录及完整原生 Backup 冷重放；未本地编译或测试，见[验证范围](docs/validation/backup-entity-entry-budget.md)。
+
 - [ ] 删除后同名重建的旧分支身份拒绝仍待新可逆生命周期接线后补验；已初始化仓库的 workspace delete_tree 拒绝及原状态不变已由定向 CI 验证，不能用该禁令或普通 rename 替代身份消失场景。
 
 - [ ] 定向 CI 验证历史目录节点建分支的 Web 接线：可写目录加载节点与冻结干净审阅、原请求字节／摘要／会话与边界预算、未知结果只查原 operation ID、显式原请求重试、不自动 checkout。原生行为选择与 WASM 编译须分别取得证据，真实浏览器仍待验；新增原请求摘要／HTTP 正文边界使 web json_value +2、api_path_literal +1，显式导入替换 glob_super -1，其余指标不变。

@@ -397,9 +397,13 @@ impl<'a> Image<'a> {
             .checked_add(path.as_os_str().len())
             .and_then(|n| n.checked_add(bytes))
             .ok_or_else(budget)?;
-        if self.metadata_bytes > MAX_METADATA_BYTES
-            || self.files.len() + self.directories.len() + self.locator_paths.len() >= MAX_ENTRIES
-        {
+        if self.metadata_bytes > MAX_METADATA_BYTES {
+            return Err(budget());
+        }
+        self.require_entry()
+    }
+    fn require_entry(&self) -> Result<()> {
+        if self.files.len() + self.directories.len() + self.locator_paths.len() >= MAX_ENTRIES {
             return Err(budget());
         }
         Ok(())
@@ -438,12 +442,15 @@ impl<'a> Image<'a> {
                 .expect("invariant: entity file has a parent")
                 .to_owned(),
         )?;
+        // Missing ancestors invalidate the initial available-entry check.
+        self.require_entry()?;
         self.files.insert(path, data);
         Ok(())
     }
     fn add_locator(&mut self, path: PathBuf) -> Result<()> {
         self.charge(&path, 0)?;
         self.add_directory(path.parent().expect("invariant: locator parent").to_owned())?;
+        self.require_entry()?;
         if !self.locator_paths.insert(path) {
             return Err(invalid("ordinary Backup locator is repeated"));
         }
