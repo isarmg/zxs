@@ -18,6 +18,74 @@ class TargetedSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_working_directory_paths_select_structural_io_and_registry_consumers(self):
+        paths = [
+            'src/contract/src/working_tree.rs',
+            'src/engine/src/working_tree.rs',
+            'src/engine/src/working_tree/records.rs',
+            'src/engine/src/working_tree/admission.rs',
+            'src/engine/src/disk/working_directory.rs',
+            'src/engine/src/engine/disk_registry.rs',
+            'test/contract/unit/working_tree_tests.rs',
+            'test/engine/unit/working_tree_tests.rs',
+            'test/engine/unit/disk/working_directory_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['working-directory-prerequisite'])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 3)
+                contract = next(target for target in plan['rust_targets']
+                                if target['package'] == 'storage-contract')
+                self.assertEqual(contract['prefixes'], ['working_tree::tests::'])
+                engine = next(target for target in plan['rust_targets']
+                              if target['package'] == 'storage-engine'
+                              and target.get('mode', 'test') == 'test')
+                self.assertEqual(engine['prefixes'], [
+                    'working_tree::records::admission::tests::',
+                    'disk::owned::working_directory::tests::',
+                    'engine::disk_registry::tests::',
+                    'engine::disk_registry::published::tests::',
+                ])
+                product = next(target for target in plan['rust_targets']
+                               if target.get('mode') == 'check')
+                self.assertEqual(product['package'], 'storage-engine')
+                self.assertFalse(product['default_features'])
+
+    def test_working_directory_prerequisite_keeps_live_mapping_and_thirteen_builds(self):
+        paths = [
+            'src/contract/src/lib.rs', 'src/contract/src/working_tree.rs',
+            'src/engine/src/lib.rs', 'src/engine/src/working_tree.rs',
+            'src/engine/src/working_tree/records.rs',
+            'src/engine/src/working_tree/admission.rs',
+            'src/engine/src/engine/disk_registry.rs',
+            'src/engine/src/disk.rs', 'src/engine/src/disk/owned.rs',
+            'src/engine/src/disk/working_directory.rs', 'src/engine/src/persist/layout.rs',
+            'test/contract/unit/working_tree_tests.rs',
+            'test/engine/unit/working_tree_tests.rs',
+            'test/engine/unit/disk/working_directory_tests.rs',
+            'test/platform/unit/fs_safety/directory-retry.sh',
+            CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths)
+        self.assertEqual(plan['groups'], [
+            'checkpoint-layout', 'ci-selection', 'held-directory-layout',
+            'ordinary-conversion-name-budget', 'paged-deletion-review',
+            'projection-cache-layout', 'typed-name-consumers',
+            'working-directory-prerequisite',
+        ])
+        self.assertEqual(len(plan['rust_targets']), 13)
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(plan['python_tests']), 7)
+        central = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
+        self.assertNotIn('working-directory-prerequisite', central['groups'])
+        self.assertEqual(central['groups'], [
+            'held-directory-layout', 'ordinary-conversion-name-budget',
+            'typed-name-consumers',
+        ])
+
     def test_tooling_change_selects_only_related_python_modules(self):
         plan = CI.select_plan(self.policy, ['.github/scripts/check-targeted-ci.py'])
         self.assertEqual(plan['rust_targets'], [])

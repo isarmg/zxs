@@ -12,6 +12,13 @@ use std::{
 mod install;
 pub(crate) use install::{FileStamp, HeldRegular, InstallExchange};
 
+#[path = "working_directory.rs"]
+mod working_directory;
+pub(crate) use working_directory::{
+    DirectoryCreateOutcome, DirectoryInstallOutcome, DirectoryIoError, RepositoryLeaf,
+    WorkingDirectory, WorkingDirectoryIdentity,
+};
+
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
     path: PathBuf,

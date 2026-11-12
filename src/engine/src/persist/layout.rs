@@ -2,6 +2,25 @@
 use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
 
+/// Physical roots of the unified working-tree layout. These names do not by
+/// themselves admit a directory or authorize adoption of existing material.
+pub(crate) static COMMON_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("common-data").expect("invariant: common data root is one canonical entry")
+});
+
+pub(crate) static DELETED_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("deleted-data").expect("invariant: deleted data root is one canonical entry")
+});
+
+pub(crate) static ZXS_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("zxs-data").expect("invariant: management data root is one canonical entry")
+});
+
+/// Only an admitted repository binding can classify this entry as management data.
+pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new(".zxs").expect("invariant: snapshot repository is one canonical entry")
+});
+
 pub(crate) static DISK_IDENTITY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("disk.json").expect("invariant: disk identity uses one canonical entry")
 });

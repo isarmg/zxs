@@ -5,7 +5,6 @@
 //! registration; Config continues to describe historical storage identities.
 use super::{Engine, ValidatedConfig};
 use crate::DiskConfig;
-use data_serialization::{Deserialize, Serialize};
 
 pub(in crate::engine) mod current;
 mod namespace_snapshot;
@@ -20,16 +19,9 @@ pub use published::{
     VerifiedRegistryPublication,
 };
 
-/// Exact logical registration identity. A path is not a binding identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub struct DiskRegistrationIdentity {
-    pub pool_id: String,
-    pub disk_id: String,
-    pub slot_id: String,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub binding_generation: u64,
-}
+// The same registration tuple is shared by records and their consumers.
+// Moving its definition does not change identity or wire bytes.
+pub use storage_contract::working_tree::DiskRegistrationIdentity;
 
 /// Borrowed metadata only; neither the disk root nor any I/O capability escapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

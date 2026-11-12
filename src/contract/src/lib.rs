@@ -34,6 +34,7 @@ pub mod storage_independent_source;
 pub mod storage_independent_topology;
 pub mod storage_lifecycle;
 pub mod storage_readmission;
+pub mod working_tree;
 pub use content_hash::{ContentHash, ParseContentHashError};
 pub use counter::{Generation, GenerationExhausted, Sequence, SequenceExhausted};
 pub use id::{

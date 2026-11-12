@@ -161,6 +161,7 @@ mod publication_shape;
 mod repair;
 mod shared_file_topology;
 mod state_projection;
+pub(crate) mod working_tree;
 mod wire;
 pub use business::{
     CurrentObject, DirectoryBranchPreview, DirectoryCommitRequest, DirectoryDefaultSelection,
