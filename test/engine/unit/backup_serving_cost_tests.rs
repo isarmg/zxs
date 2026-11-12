@@ -264,6 +264,90 @@ fn measure_upstream(
 }
 
 
+
+fn measure_original_scope_components(
+    prepared: &PreparedBackupRegistry,
+    iteration: usize,
+    stop: &AtomicBool,
+) -> Result<()> {
+    use crate::engine::backup_preparation::native_control::archive;
+    use crate::engine::backup_preparation::native_control::databases::scoped;
+    use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
+
+    let roots = prepared.targets.iter().map(|target| &target.root).collect::<Vec<_>>();
+    let task = &prepared.task.installation.evidence.task.scoped;
+    let expected = &prepared.task.installation.evidence.report.scoped;
+    let native = &task.objects.native;
+    let materials = measured("original_selection_material", iteration, 0, || {
+        native.selection.verify_material(&roots, stop)
+    })?;
+    assert_eq!(materials.len(), expected.objects.native.targets.len());
+    for (material, target) in materials.iter().zip(&expected.objects.native.targets) {
+        assert_eq!(canonical_json(material)?, canonical_json(&target.material)?);
+    }
+    let binding = |stop: &AtomicBool| {
+        encoding_memo::digest(&(&prepared.task, &prepared.projection), stop)
+    };
+    for (index, (root, job)) in roots.iter().zip(native.selection.jobs()).enumerate() {
+        // No derived observer work is added to this timing. The real archive
+        // reader still verifies the full configuration binding and every prefix.
+        let (control, state) = measured("original_archive_noop", iteration, index, || {
+            archive::read_observed(
+                root,
+                job,
+                &native.archive_hash,
+                stop,
+                &mut |_, _, _, _| Ok(()),
+            )
+        })?;
+        assert_eq!(control, expected.objects.native.targets[index].control);
+        assert_eq!(control.state_hash, materials[index].state_hash);
+        assert_eq!(control.snapshot_hash, materials[index].snapshot_hash);
+        assert_eq!(control.sequence, materials[index].sequence);
+        assert_eq!(control.snapshot_hash, job.snapshot);
+        assert_eq!(control.sequence, job.request.expected_sequence);
+        assert_eq!(
+            object_hash("backup-prepared-state", state.state())?,
+            task.objects.state_hash,
+        );
+        assert_eq!(control.state_hash, prepared.source_evidence().state_hash());
+        // This includes another complete archive read, derived disk observation,
+        // encoding or memo lookup, and all SQLite readback. It is not an
+        // exclusive subtraction from original_archive_noop or a cold benchmark.
+        let scopes = measured("original_scope_capture", iteration, index, || {
+            let mut encodings =
+                encoding_memo::Transaction::new(prepared.scope_encoding.as_ref(), &binding);
+            scoped::projection::PreparedScopes::capture_with_encodings(
+                root,
+                task,
+                job,
+                stop,
+                &mut encodings,
+            )
+        })?;
+        assert_eq!(
+            canonical_json(&scoped::report(task, expected.objects.clone(), &scopes)?)?,
+            canonical_json(expected)?,
+        );
+        assert_eq!(scopes.disk_count(), expected.original_disks_per_target);
+        assert_eq!(scopes.databases().len(), expected.scoped_databases_per_target);
+        assert_eq!(scopes.total_bytes(), expected.scoped_database_bytes_per_target);
+        assert_eq!(
+            blake3::hash(&scopes.manifest()?).to_hex().to_string(),
+            expected.scope_manifest_hash,
+        );
+        // Compare the actual installed inventory, manifest and every SQLite
+        // byte with the independently reconstructed and SQL-readback-verified
+        // scopes. The capture transaction above has dropped without committing.
+        measured("original_scope_store_verify", iteration, index, || {
+            scoped::store::verify(root, &scopes, stop)
+        })?;
+        named_target(root, job)?;
+        preparation_checkpoint(stop)?;
+    }
+    prepared.recheck_names()
+}
+
 fn measure_original_verification(
     prepared: &PreparedBackupRegistry,
     iteration: usize,
@@ -445,6 +529,7 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
         measure_upstream(&prepared, &decision, &candidate, iteration, &stop)?;
+        measure_original_scope_components(&prepared, iteration, &stop)?;
         measure_original_verification(&prepared, iteration, &stop)?;
         let publication = measured("first_publication_observe", iteration, 0, || {
             first_publication::observe(&prepared, &decision, &expected, &stop)

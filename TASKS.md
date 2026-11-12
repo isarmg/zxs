@@ -12,7 +12,7 @@
 
 - [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
 
-- [ ] 闭环 Backup 原 900 秒事务超时：#1298 原事务仍超时，78 Python/7模块和 Engine 无默认产品检查通过，但 memo 测试接线错误阻断全部所选 unit，新增 8 项回归与收益均未验证；接线已在 3c534060 独立修正。保留原预备 Scoped 纯编码账户和全部真实读回/身份/锁/取消，继续在既有真实夹具分解 native→object→scopes→cutover→installation→registry 的复验成本，原 900 秒不变。见[验证范围](docs/validation/backup-scoped-encoding-memo.md)。
+- [ ] 闭环 Backup 原 900 秒事务超时：#1304 准确09b/39b基线中，备份组69项Rust（含新增8项memo回归）及Engine无默认产品检查通过，组件88.85秒；原900独立片仍超时。original native/object/scoped/registry完整验证约108/131/264–272/326–334毫秒，在原夹具新增14次有界archive/capture/store观察，继续按真实回放/派生职责定位，不将inclusive差值或单测通过当端到端收益。全部现场读取、身份/锁/取消、原900与失败聚合保留；pending/readmission恢复另片修复，三范围共同恢复仍未完成。见[验证范围](docs/validation/backup-scoped-encoding-memo.md)。
 
 - [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
 

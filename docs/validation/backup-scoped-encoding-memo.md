@@ -341,4 +341,73 @@ cutover、installation、registry projection、registry verify 的独立整体�
 工件：https://github.com/isarmg/zxs/actions/runs/43218824624/artifacts/13946226942
 ZIP SHA256：`34c4aef0d3200dcd20acbbccdabae502f32f209c218b06a34d9862ed14f7138c`。
 单测构建诊断在 `011.stdout.log`，原完整事务及外部观测在 `016.stderr.log` /
-`016.sampling.log`。新增层级测量尚未执行 GitHub 验证。
+`016.sampling.log`。新增层级测量在下述 #1304 执行。
+
+
+## #1304：69 项备份 unit 通过，完整事务仍超时
+
+准确 head 为 `09b7715f3d9aa2f85820fd8dc561cc1a800936bc`，
+完整比较基线为 `39bcae218116b2d8f925120d9a8f34cea791df5a`。
+shard 0 的当前库存和实际逐例回执证明：本备份组 69 项 Rust 全部通过，
+包括新增 3 项共享事务回归、5 项真实 original-scope 回归、原有 12 项 memo
+覆盖及完整组件测试；该组 failed/skipped/blocked 均为空。
+Engine 无默认特性产品检查也通过。这首次证明新的接线可执行、编码命中、
+坏材料/换根仍拒绝及失败/取消丢弃 pending，不证明端到端性能问题已解决。
+
+组件测试整体为 88.85 秒，日志 `501.stdout.log` / `501.stderr.log`。
+两轮新测量如下，单位为毫秒：
+
+| 独立整体入口 | 第 0 轮 | 第 1 轮 |
+| --- | ---: | ---: |
+| 原 native 完整验证 | 108.382 | 107.629 |
+| 原 object 完整验证 | 131.572 | 131.247 |
+| 原 scoped 完整验证 | 271.642 | 264.375 |
+| 原 cutover 完整验证 | 281.062 | 277.831 |
+| 原 installation 完整验证 | 311.064 | 302.215 |
+| 原 registry projection | 25.101 | 24.351 |
+| 原 registry 完整验证 | 333.575 | 326.478 |
+
+原 image capture + 实际 verify 的四次逐目标调用为 13.162–13.876 毫秒。
+范围指向 original scopes 内的真实回放/派生处理及其前置验证链；
+不能把两个独立 inclusive 数字直接相减为同一次执行的排它成本，
+也不能据此跳过任何 archive、SQL、身份、名称、决定或取消门。
+此次没有同一提交的关闭/开启端到端计时对照，不能宣称 memo 带来确定加速。
+
+独立 shard 1 原完整事务按相同 exact/max1/900 执行，仍在 900 秒超时，
+其 selected skipped/blocked 为空。首次观察到 serving/scopes/common/Current/
+aliases/盘根库/SYSTEM 约为 42/64/114/190/334/484/792 秒；
+native metadata 未报告完成。180 次有效外部观测至 895.21 秒，进程
+user/system 约 849.17/44.86 秒，主工作线程 CPU 823.70 秒、调度等待
+0.148 秒；逻辑读取约 5.12 GB、1,008 万次读调用，物理 read_bytes 为 0。
+
+整个 #1304 并未通过：shard 0 另有 31 项非本备份组失败，包含 pending 格式
+夹具重复初始化替身池，以及首 registry activation 的恢复前门过早要求完整
+Publication/seal 的真实恢复顺序问题；这些由各自修复片处理。
+不能用 69 项通过替代 pending/readmission、三范围共同恢复、后继发布或原 900。
+独立分片只改变执行调度，原完整事务和总失败聚合门均保留。
+
+备份 unit 工件：
+https://github.com/isarmg/zxs/actions/runs/43227554097/artifacts/13954370354
+ZIP SHA256：`a901144c0594c7505bcc046ec3aa9f5493d2728a80072ca0698ce6fc4ffe8dff`。
+
+原完整事务工件：
+https://github.com/isarmg/zxs/actions/runs/43227554097/artifacts/13950581200
+ZIP SHA256：`b5766ba61a4a65bbbe6db0b90ee45e006a7cff9358c7bf5fc184be66e6805cc5`。
+事务与采样日志为 `011.stderr.log` / `011.sampling.log`。
+
+
+### 下一层：真实 archive、scoped capture 与磁盘读回
+
+在同一真实组件测试的原两轮内，再各执行一次完整 selection material 校验，
+并对两个目标各观察 archive noop-reader、原 scoped capture 和 scoped store verify。
+合计 14 次新增固定调用，不增加测试条目、生产钩子、可见性、缓存或预算。
+完整 material/control report、State hash/sequence/snapshot 与冻结证据对照；
+capture 的完整 scoped report、manifest hash、数据库个数/字节数继续对照，
+store 仍实际核 inventory、manifest 和所有 SQLite 原字节。
+
+archive noop 仅表示不额外加入派生 observer，仍执行原归档全部验证。
+scoped capture 包含另一次完整 archive、派生盘观察、编码/命中与 SQL readback；
+同精确 binding 的局部事务在 capture 返回时丢弃，不提交 pending。
+原 18 次层级测量、原有其他标签/断言和末尾决定/名字/取消门全部保留。
+新增桶仍是独立 inclusive、非冷缓存，不能相加或相减替代排它 profiling。
+这 14 次观察尚未执行 GitHub 验证，原 900 秒也未因此放宽。
