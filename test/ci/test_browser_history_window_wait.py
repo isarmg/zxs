@@ -65,15 +65,23 @@ console.log(JSON.stringify(results));
                   for name, body in scenarios.items()
                   if re.search(r'graph\(browser, \d+\)', body)}
         self.assertEqual(actual, {
-            'exercise': ['0', '1', '2', '1', '2', '1'],
+            'exercise': ['0', '1', '2', '1', '2'],
+            'container_tag_draft': ['1'],
             'merge_review': ['2', '1'],
             'graph_merge_review': ['1', '2', '1'],
             'fields_and_cancellation': ['1', '2', '1', '1', '0'],
         })
         self.assertEqual(re.findall(
-            r'^    (merge_review|graph_merge_review|fields_and_cancellation)\(browser\)',
+            r'^    (container_tag_draft|merge_review|graph_merge_review|fields_and_cancellation)'
+            r'\(browser\)',
             scenarios['exercise'], re.MULTILINE),
-            ['merge_review', 'graph_merge_review', 'fields_and_cancellation'])
+            ['container_tag_draft', 'merge_review', 'graph_merge_review',
+             'fields_and_cancellation'])
+        tag_draft = scenarios['container_tag_draft']
+        self.assertEqual(re.findall(
+            r'click\(browser, "(Locate current node|Next history page|Previous history page)"'
+            r'[^\n]+\n\s+graph\(browser, (\d+)\)', tag_draft),
+            [('Previous history page', '1')])
         graph_merge = scenarios['graph_merge_review']
         self.assertEqual(re.findall(
             r'click\(browser, "(Locate current node|Next history page|Previous history page)"'
@@ -99,7 +107,23 @@ console.log(JSON.stringify(results));
         ):
             self.assertIn(contract, fields)
         self.assertIn('for _ in 0..4', source)
-        self.assertIn(".zxs-node-checkbox').click()", source)
+        for contract in (
+            'click(browser, "Reload tags", "重新读取标签")?;',
+            'phase1_files::edit_current_tags(browser)?;',
+            'read.body.file_id!==p.seed.identity.file_id',
+            'structuredClone(p.tagReads.at(-1))',
+            "panel===p.tagEditor&&panel.textContent.includes('window-proof')&&sameSnapshot",
+            "document.querySelectorAll('[data-container-tag-editor]').length===1",
+            "['Save tags','保存标签'].includes(button.textContent.trim())&&!button.disabled",
+            'file-context refresh retains the container draft but closes submission',
+            "panel?.textContent.includes('window-proof')&&p.tagWrites===0",
+            "['Save tags','保存标签'].includes(button.textContent.trim())&&button.disabled",
+            "['Cancel','取消'].includes(button.textContent.trim())).click()",
+            "return !document.querySelector('[data-container-tag-editor]')",
+            '&&window.__zxsHistoryWindows.tagWrites===0',
+        ):
+            self.assertIn(contract, tag_draft)
+        self.assertNotIn('.zxs-node-checkbox', source)
 
     def test_date_reads_open_the_current_native_card_before_each_held_request(self):
         source = (ROOT / 'test/tools/browser-smoke/runner/history_windows.rs').read_text()

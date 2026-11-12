@@ -1,5 +1,5 @@
 use super::*;
-use std::error::Error as _;
+use std::{collections::BTreeMap, error::Error as _};
 
 fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
     let mut invalid = vec![b"{".to_vec(), b"[]".to_vec(), b"{}".to_vec()];

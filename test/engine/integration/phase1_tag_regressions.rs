@@ -245,6 +245,10 @@ fn current_tags_ignore_retired_directory_identity_and_keep_root_and_history() {
             .unwrap();
         e.resume_membership_joint_decision().unwrap();
         e.activate_pending_disk_exit().unwrap();
+        // The first registry publication must reopen independently of any
+        // subsequent tag receipt. Only its real D3 may install Current.
+        drop(e);
+        let mut e = Engine::open(&temp.path().join("system")).unwrap();
         let root_before = selected_tree(&e, &repo.repository_id);
         let versions = e.state().versions.len();
         let metadata = e.state().file_metadata_nodes.len();

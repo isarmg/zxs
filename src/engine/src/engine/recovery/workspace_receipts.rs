@@ -350,6 +350,41 @@ impl Engine {
         Ok(())
     }
 
+    /// The first registry slot precedes live namespace installation. Prove only
+    /// that exact, already published activation here; ordinary and degraded
+    /// recovery continue to require an installed Current view.
+    pub(in crate::engine) fn verify_replay_namespace_candidate(
+        &self,
+        candidate: &Candidate,
+        original: &crate::history_package::AdmittedState,
+        publication: Option<&Publication>,
+        online: &[DiskConfig],
+        receipts: &[Receipt],
+    ) -> Result<()> {
+        let activation = self.config.generation().filter(|generation| {
+            self.current_namespaces.is_none()
+                && generation.registry().is_some()
+                && !generation.portable.is_backup()
+        });
+        let Some(generation) = activation else {
+            return self.verify_current_recovery_candidate(candidate, original.state());
+        };
+        if self.snapshot != generation.snapshot()
+            || self.state.as_ref() != generation.base.as_ref()
+        {
+            return Err(crate::engine::disk_registry::current::pending_publication());
+        }
+        generation.verify_activation_candidate(candidate)?;
+        let publication = publication
+            .ok_or_else(crate::engine::disk_registry::current::pending_publication)?;
+        let seal = published_barrier(self, online, receipts, candidate, publication)?;
+        self.preflight_registry_barrier(online, receipts, &seal)?;
+        self.preflight_registry_activation(candidate, original, publication, &seal)?;
+        // This is a pure proof, not live admission. Completion below must still
+        // install the exact published State and independently restore Current.
+        Ok(())
+    }
+
     pub(crate) fn verify_current_recovery_candidate(
         &self,
         candidate: &Candidate,

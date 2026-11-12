@@ -1151,7 +1151,13 @@ fn workspace_body(method: &str, path: &str) -> Value {
     } else if method == "POST" && path.ends_with("/merge-history") {
         json!({"inputs":[],"chosen_node_id":"node","name":"Historical result","confirmed":true,"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/tags") {
-        json!({"targets":[],"add":[],"remove":[],"operation_id":"op_00000000000000000000000000000000"})
+        json!({
+            "repository_id":"repo_00000000000000000000000000000000",
+            "path":"file.txt",
+            "expected_generation":"0",
+            "tags":[],
+            "operation_id":"op_00000000000000000000000000000000"
+        })
     } else if method == "POST" && path == "/api/file-manager/disks/P01/namespace" {
         json!({"kind":"mkdir","path":"folder","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path == "/api/file-manager/disks/P01/write-sessions" {
@@ -1292,7 +1298,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/api/file-manager/files/file/nodes/node"),
     ("POST", "/api/file-manager/files/file/merge"),
     ("POST", "/api/file-manager/files/file/merge-history"),
-    ("POST", "/api/file-manager/files/file/tags"),
+    (
+        "POST",
+        "/api/file-manager/files/file_00000000000000000000000000000000/tags",
+    ),
     ("POST", "/api/file-manager/disks/P01/namespace"),
     ("POST", "/api/file-manager/disks/P01/write-sessions"),
     ("GET", "/api/repositories/repo/backup-configuration"),

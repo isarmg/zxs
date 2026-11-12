@@ -129,7 +129,7 @@ def select_plan(policy, changed, *, shardable=False):
     for target in targets:
         required = {'package', 'manifest'}
         optional = {'prefixes', 'exact', 'whole', 'max_tests', 'kind', 'name', 'features',
-                    'default_features', 'mode', 'compile_target', 'timeout_seconds'}
+                    'default_features', 'mode', 'compile_target', 'timeout_seconds', 'isolate'}
         if not required <= set(target) or set(target) - required - optional:
             raise ValueError('invalid Rust target fields')
         if not re.fullmatch(r'[a-z][a-z0-9-]+', target['package']):
@@ -149,6 +149,8 @@ def select_plan(policy, changed, *, shardable=False):
             raise ValueError('invalid features')
         if type(target.get('default_features', True)) is not bool:
             raise ValueError('default_features must be boolean')
+        if type(target.get('isolate', False)) is not bool:
+            raise ValueError('isolate must be boolean')
         cross = target.get('compile_target')
         if cross not in {None, 'wasm32-unknown-unknown'} or (cross and mode != 'check'):
             raise ValueError('only compile checks may select the reviewed WASM target')
@@ -186,7 +188,7 @@ def select_plan(policy, changed, *, shardable=False):
             original = {key: value for key, value in combined.items()
                         if key != 'selection_groups'}
             combined['selections'] = [original]
-            for key in ('prefixes', 'exact', 'whole', 'max_tests', 'timeout_seconds'):
+            for key in ('prefixes', 'exact', 'whole', 'max_tests', 'timeout_seconds', 'isolate'):
                 combined.pop(key, None)
         combined['selections'].append(dict(target))
         combined['selection_groups'].append(origin)

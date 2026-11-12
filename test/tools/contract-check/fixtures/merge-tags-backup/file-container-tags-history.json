@@ -1,0 +1,218 @@
+{
+  "context": {
+    "content": {
+      "source": {
+        "kind": "owned"
+      },
+      "stored_state": "AVAILABLE",
+      "version_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    },
+    "note": ""
+  },
+  "edges": [
+    {
+      "endpoint": "in_window",
+      "node_id": "fmeta_3b69ba04d9f340c2be6e3c4cfae62f56",
+      "parent_node_id": "ver_47bb583f8f4846f1b716aecd50322098"
+    },
+    {
+      "endpoint": "in_window",
+      "node_id": "fmeta_3b69ba04d9f340c2be6e3c4cfae62f56",
+      "parent_node_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    },
+    {
+      "endpoint": "in_window",
+      "node_id": "fmeta_3b69ba04d9f340c2be6e3c4cfae62f56",
+      "parent_node_id": "ver_d64f654dac3e4cb69f363e976064fe47"
+    },
+    {
+      "endpoint": "in_window",
+      "node_id": "ver_47bb583f8f4846f1b716aecd50322098",
+      "parent_node_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    },
+    {
+      "endpoint": "in_window",
+      "node_id": "ver_d64f654dac3e4cb69f363e976064fe47",
+      "parent_node_id": "fnode_bcfc8fb040fa43b0b3f438b1a57780df"
+    },
+    {
+      "endpoint": "in_window",
+      "node_id": "fnode_bcfc8fb040fa43b0b3f438b1a57780df",
+      "parent_node_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    }
+  ],
+  "identity": {
+    "action_max_entries": "100000",
+    "collection": {
+      "kind": "nodes"
+    },
+    "context": {
+      "current_node_id": "fmeta_3b69ba04d9f340c2be6e3c4cfae62f56",
+      "history_tree_id": "history_2ec5d22b47c841d5891a9b2501435647",
+      "path": "renamed.txt",
+      "repository_id": "repo_b0c1c35e544d41a795fb6f6ca3d1cde1",
+      "selected_branch_id": "br_bd683f5a05bc4ab588eb689ad74ce9ad"
+    },
+    "file_id": "file_43a56716aa674982a117f7d56f3e7e2a",
+    "history_root": "f476c6ee5348a9471fd53c3bf08efb809eb9ea4d94afba814b2327d9f6c2f5d6",
+    "limit": 32,
+    "query_hash": "6fc84af6a42d65a26397b93fd418d023cd0c34c5914ade9fd52c4a165e0beeed"
+  },
+  "kind": "nodes",
+  "nodes": [
+    {
+      "branch_id": "br_bd683f5a05bc4ab588eb689ad74ce9ad",
+      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
+      "content_state": "AVAILABLE",
+      "current": true,
+      "download_name": "renamed.txt",
+      "fields": {
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        },
+        "message": {
+          "byte_length": "0"
+        }
+      },
+      "kind": "merge",
+      "node_id": "fmeta_3b69ba04d9f340c2be6e3c4cfae62f56",
+      "note": "",
+      "parents": {
+        "state": "complete"
+      },
+      "path": "report.txt",
+      "previous_path": null,
+      "sequence": "16",
+      "size": "9",
+      "storage_name": "v000001_20261112T124900Z_2f6b57bb.txt",
+      "version_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    },
+    {
+      "branch_id": "br_1d17f43409f14da0aa51064b9089597d",
+      "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
+      "content_state": "AVAILABLE",
+      "current": false,
+      "download_name": "renamed.txt",
+      "fields": {
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        },
+        "message": {
+          "byte_length": "18"
+        }
+      },
+      "kind": "content",
+      "node_id": "ver_47bb583f8f4846f1b716aecd50322098",
+      "note": "",
+      "parents": {
+        "state": "complete"
+      },
+      "path": "renamed.txt",
+      "previous_path": null,
+      "sequence": "15",
+      "size": "10",
+      "storage_name": "v000003_20261112T124901Z_77c5d273.txt",
+      "version_id": "ver_47bb583f8f4846f1b716aecd50322098"
+    },
+    {
+      "branch_id": null,
+      "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
+      "content_state": "AVAILABLE",
+      "current": false,
+      "download_name": "renamed.txt",
+      "fields": {
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        },
+        "message": {
+          "byte_length": "18"
+        }
+      },
+      "kind": "content",
+      "node_id": "ver_d64f654dac3e4cb69f363e976064fe47",
+      "note": "",
+      "parents": {
+        "state": "complete"
+      },
+      "path": "renamed.txt",
+      "previous_path": null,
+      "sequence": "12",
+      "size": "9",
+      "storage_name": "v000002_20261112T124901Z_49fb11d5.txt",
+      "version_id": "ver_d64f654dac3e4cb69f363e976064fe47"
+    },
+    {
+      "branch_id": "br_bd683f5a05bc4ab588eb689ad74ce9ad",
+      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
+      "content_state": "AVAILABLE",
+      "current": false,
+      "download_name": "renamed.txt",
+      "fields": {
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        },
+        "message": {
+          "byte_length": "0"
+        }
+      },
+      "kind": "rename",
+      "node_id": "fnode_bcfc8fb040fa43b0b3f438b1a57780df",
+      "note": "独立路径备注",
+      "parents": {
+        "state": "complete"
+      },
+      "path": "renamed.txt",
+      "previous_path": "report.txt",
+      "sequence": "10",
+      "size": "9",
+      "storage_name": "v000001_20261112T124900Z_2f6b57bb.txt",
+      "version_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    },
+    {
+      "branch_id": "br_309ab4e322a1481aaf0e624f0b7ead4d",
+      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
+      "content_state": "AVAILABLE",
+      "current": false,
+      "download_name": "renamed.txt",
+      "fields": {
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        },
+        "message": {
+          "byte_length": "27"
+        }
+      },
+      "kind": "content",
+      "node_id": "ver_c86071e2c50343a7bc2c1aa80d42972a",
+      "note": "",
+      "parents": {
+        "state": "complete"
+      },
+      "path": "report.txt",
+      "previous_path": null,
+      "sequence": "4",
+      "size": "9",
+      "storage_name": "v000001_20261112T124900Z_2f6b57bb.txt",
+      "version_id": "ver_c86071e2c50343a7bc2c1aa80d42972a"
+    }
+  ],
+  "page": {
+    "next_cursor": null,
+    "previous_cursor": null
+  }
+}

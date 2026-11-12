@@ -249,3 +249,130 @@ fn current_container_tags_live_cold_replay_rejects_extra_writes_and_forged_reque
         assert_eq!(snapshot.generation, storage_contract::Generation::new(1));
     }
 }
+
+#[test]
+fn registry_activation_replay_requires_exact_base_and_actual_d3_before_tags() {
+    use crate::journal::{Candidate, Publication, Receipt, RecordType, scan_configured_at};
+    use crate::publication_evidence::{verified_object_at, verified_recovery_snapshot_at};
+
+    let mut fixture = Fixture::new();
+    fixture.exit(MembershipExitAction::Deregister);
+    let engine = &mut fixture.engine;
+    let generation = engine.config.generation().unwrap().clone();
+    let online = engine
+        .config
+        .metadata_members()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut receipts = Vec::new();
+    for disk in &online {
+        let root = &engine.disk_resources.get(disk).unwrap().root;
+        let scan = scan_configured_at(root, disk, &engine.config).unwrap();
+        let (record, frame_hash) = scan
+            .records
+            .into_iter()
+            .find(|(record, _)| {
+                record.record_type == RecordType::Publication
+                    && record.sequence == generation.first_sequence().unwrap()
+            })
+            .unwrap();
+        receipts.push(Receipt {
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            frame_hash,
+            record,
+        });
+    }
+    let candidate: Candidate = verified_object_at(
+        &engine.disk_resources,
+        &online,
+        "candidate",
+        &receipts[0].record.candidate_hash,
+    )
+    .unwrap();
+    let publication: Publication = verified_object_at(
+        &engine.disk_resources,
+        &online,
+        "publication",
+        &receipts[0].record.object_hash,
+    )
+    .unwrap();
+    let snapshot = verified_recovery_snapshot_at(
+        &engine.disk_resources,
+        &online,
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    let original = snapshot.for_candidate(&candidate).unwrap();
+    let live_state = Arc::clone(&engine.state);
+    let live_snapshot = engine.snapshot.clone();
+    let live_view = engine.current_namespaces.take();
+    engine.state = Arc::clone(&generation.base);
+    engine.snapshot = generation.snapshot();
+
+    // Model the real cold prefix without admitting an arbitrary visible State.
+    // The candidate and snapshot above are read from authenticated disk objects.
+    engine
+        .verify_replay_namespace_candidate(
+            &candidate,
+            original,
+            Some(&publication),
+            &online,
+            &receipts,
+        )
+        .unwrap();
+    assert!(engine.current_namespaces.is_none());
+    assert_eq!(engine.state, generation.base);
+    assert!(
+        engine.verify_current_recovery_candidate(&candidate, original.state()).is_err()
+    );
+    assert!(
+        engine
+            .verify_replay_namespace_candidate(&candidate, original, None, &online, &receipts)
+            .is_err()
+    );
+    assert!(
+        engine
+            .verify_replay_namespace_candidate(
+                &candidate,
+                original,
+                Some(&publication),
+                &online,
+                &receipts[1..],
+            )
+            .is_err()
+    );
+    engine.snapshot = None;
+    assert!(
+        engine
+            .verify_replay_namespace_candidate(
+                &candidate,
+                original,
+                Some(&publication),
+                &online,
+                &receipts,
+            )
+            .is_err()
+    );
+    engine.snapshot = generation.snapshot();
+    engine.state = Arc::clone(&live_state);
+    assert!(
+        engine
+            .verify_replay_namespace_candidate(
+                &candidate,
+                original,
+                Some(&publication),
+                &online,
+                &receipts,
+            )
+            .is_err()
+    );
+
+    engine.state = live_state;
+    engine.snapshot = live_snapshot;
+    engine.current_namespaces = live_view;
+    drop(snapshot);
+    drop(fixture.engine);
+    let reopened = Engine::open(&fixture.temp.path().join("system")).unwrap();
+    assert!(reopened.current_namespaces.is_some());
+}

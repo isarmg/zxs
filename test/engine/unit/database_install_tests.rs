@@ -159,3 +159,124 @@ fn interrupted_unpublished_intent_is_not_exchanged_and_can_only_reuse_its_origin
             .exists()
     );
 }
+
+// Model inode reuse deterministically rather than depending on an allocator to
+// return the deleted target's number. All directory and retained-file identities
+// are real; only the historical completed target stamp is shared.
+fn retained_attempt(root: &DiskRoot, original: &Path, with_payload: bool) -> PathBuf {
+    let mut envelope: Envelope = storage_contract::decode_strict(
+        &root
+            .read_bytes(&original.join("intent.json"), MAX_ENVELOPE)
+            .unwrap(),
+    )
+    .unwrap();
+    let parent = root.private_child(original.parent().unwrap()).unwrap();
+    let path = parent.path().join(crate::new_id("req").unwrap());
+    let identity = parent.create_private_directory_synced(&path).unwrap();
+    let stage = parent.private_child_matching(&path, identity).unwrap();
+    envelope.stage_device = identity.device;
+    envelope.stage_inode = identity.inode;
+    if with_payload {
+        stage
+            .create_install_file("payload", b"new exact database")
+            .unwrap();
+        envelope.new = HeldRegular::capture(&stage, "payload", 1024)
+            .unwrap()
+            .unwrap()
+            .stamp()
+            .clone();
+    }
+    stage
+        .write_install_intent(
+            &crate::disk::encode_metadata(&envelope, MAX_ENVELOPE).unwrap(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    path
+}
+
+#[test]
+fn completed_repair_receipts_with_reused_target_stamp_preserve_all_material() {
+    let (_temp, root, history, file) = install_fixture();
+    let mut first = pending(&root, &history, &file);
+    first.stage_unpublished(&root, &mut |_| Ok(())).unwrap();
+    let original = first.resume.as_ref().unwrap().0.path().to_owned();
+    first.apply(&root, &mut |_| Ok(())).unwrap();
+    let repeated = retained_attempt(&root, &original, false);
+    let receipts = [&original, &repeated].map(|path| {
+        root.read_bytes(&path.join("intent.json"), MAX_ENVELOPE)
+            .unwrap()
+    });
+    let target = root.path().join(crate::container_storage::file_database::NAME);
+    let inode = root
+        .open_read_regular(&target)
+        .unwrap()
+        .metadata()
+        .unwrap()
+        .ino();
+    let mut recovered = pending(&root, &history, &file);
+    assert!(recovered.resume.is_none());
+    assert_eq!(recovered.completed_tails.len(), 2);
+    assert!(recovered.stage_unpublished(&root, &mut |_| Ok(())).is_err());
+    recovered.apply(&root, &mut |_| Ok(())).unwrap();
+    assert_eq!(root.read_bytes(&target, 1024).unwrap(), b"new exact database");
+    assert_eq!(
+        root.open_read_regular(&target)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino(),
+        inode
+    );
+    for (path, receipt) in [&original, &repeated].into_iter().zip(receipts) {
+        assert_eq!(
+            root.read_bytes(&path.join("intent.json"), MAX_ENVELOPE).unwrap(),
+            receipt
+        );
+        assert!(!path.join("payload").exists());
+    }
+    let captured = pending(&root, &history, &file);
+    assert_eq!(captured.completed_tails.len(), 2);
+    root.write_atomic(&repeated.join("intent.json"), b"{}", false).unwrap();
+    assert_eq!(
+        captured.apply(&root, &mut |_| Ok(())).unwrap_err().code(),
+        ErrorCode::ContainerLayoutInvalid
+    );
+    assert_eq!(root.read_bytes(&target, 1024).unwrap(), b"new exact database");
+    assert_eq!(root.read_bytes(&repeated.join("intent.json"), 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn duplicate_unpublished_pairs_still_fail_closed_without_exchanging_either() {
+    let (_temp, root, history, file) = install_fixture();
+    let mut first = pending(&root, &history, &file);
+    first.stage_unpublished(&root, &mut |_| Ok(())).unwrap();
+    let original = first.resume.as_ref().unwrap().0.path().to_owned();
+    let repeated = retained_attempt(&root, &original, true);
+    drop(first);
+    let result = PreparedInstall::capture(
+        &root,
+        root.path(),
+        (root.path(), root.directory_identity(root.path()).unwrap()),
+        (
+            Scope::file(&history, &file).unwrap(),
+            InstallAdmission::NewOperation,
+        ),
+        b"new exact database".to_vec(),
+        1024,
+        |_| Ok(()),
+    );
+    assert!(matches!(result, Err(error) if error.code() == ErrorCode::ContainerLayoutInvalid));
+    assert!(
+        !root.path()
+            .join(crate::container_storage::file_database::NAME)
+            .exists()
+    );
+    for path in [&original, &repeated] {
+        assert_eq!(
+            root.read_bytes(&path.join("payload"), 1024).unwrap(),
+            b"new exact database"
+        );
+        assert!(path.join("intent.json").is_file());
+    }
+}

@@ -18,6 +18,7 @@ macro_rules! projection_fields {
             history { histories, commits, versions, file_path_nodes, file_metadata_nodes, file_deletions, file_branch_merges, merge_links, history_boundaries, }
             repository { repositories, directory_branches, directory_git_repositories, placement_rules, protection_policies, }
             version { placements, content_states, file_node_parents, version_notes, }
+            typed_file { container_tags, }
             file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
             directory { directory_tree_selections, directory_selection_generations, }
             special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
@@ -87,13 +88,14 @@ impl HistoryChanges {
              history { $($history:ident,)* }
              repository { $($repository:ident,)* }
              version { $($version:ident,)* }
+             typed_file { $($typed_file:ident,)* }
              file { $($file:ident,)* }
              directory { $($directory:ident,)* }
              special { $($special:ident,)* }
              independent { $($independent:ident,)* }) => {{
                 let State { sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _,
                     $($branch: _,)* $($history: _,)* $($repository: _,)* $($version: _,)*
-                    $($file: _,)* $($directory: _,)* $($special: _,)* $($independent: _,)*
+                    $($typed_file: _,)* $($file: _,)* $($directory: _,)* $($special: _,)* $($independent: _,)*
                 } = after;
                 $(changes.keys(&before.$branch, &after.$branch, |out, key| {
                     for state in [before, after] {
@@ -115,6 +117,14 @@ impl HistoryChanges {
                         if let Some(version) = state.versions.get(key) { out.history(&version.history_tree_id); }
                     }
                 });)*
+                $(match after.$typed_file.changes_since(&before.$typed_file) {
+                    MapChanges::All => changes.all = true,
+                    MapChanges::Keys(keys) => {
+                        for key in keys.iter() {
+                            changes.file(&key.to_string());
+                        }
+                    }
+                })*
                 $(changes.keys(&before.$file, &after.$file, |out, key| out.file(key));)*
                 $(changes.keys(&before.$directory, &after.$directory, |out, key| out.directory(key));)*
             }};

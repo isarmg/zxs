@@ -6,7 +6,7 @@
 
 - [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的容量与真实浏览器验收：降低每页全 State 索引成本，核对阶段内取消和大来源的耗时/分配；不以分页宣称 O(page) 成本。只读删除/恢复/Import 切片已有 contract/Engine、HTTP 和 Web native/WASM 定向证据；完整改名/移动操作轴仍待实施。
 
-- [ ] 完成[容器标签新格式](docs/adr/container-tags.md)完整提交的 GitHub 定向验证：用户已明确确认整个旧池和旧备份不兼容；State/FILE/SYSTEM、复制保留、CAS、真实 HTTP/client/Web 及 active/pending/两类 archive 格式门同批闭合，不自动迁移或删除旧材料。验清缺记录/旧格式无破坏拒绝、普通与 Current 冷恢复、备份/resume、撤权/晚响应/未知结果；准确记录失败和未执行范围，不以静审代替通过。
+- [ ] 完成[容器标签新格式](docs/adr/container-tags.md)完整提交的 GitHub 定向复验：#1300 有 507 Rust、182 Python、7 编译检查通过，但整批失败。修复两处冷恢复、旧测试请求和 Engine unit 编译后，以 39bcae2 完整基线重验；真实 HTTP 捕获已取回，契约工具/Web native/WASM/浏览器驱动仍未执行。原备份 900 秒事务完整保留并隔离执行，不以其他分片通过替代其成功；验清旧格式无破坏拒绝、复制保留、CAS、普通/Current 冷开、备份/resume、撤权/晚响应/未知结果，不自动迁移或删除旧材料。
 
 - [ ] 继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部消费者的构建闭包、永久收据与用户数据，不恢复非容器功能；已完成的 HTTP 写入口退役见[说明](docs/design/directory-rename-http-retirement.md)。
 

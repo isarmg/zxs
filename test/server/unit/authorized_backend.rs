@@ -2635,8 +2635,25 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":null,"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","expected_node_id":"head"}],"chosen_node_id":"chosen","surviving_branch_id":"branch","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
         json!({"file_id":"file","inputs":[{"branch_id":"branch","source_node_id":"old","expected_node_id":"head"}],"chosen_node_id":"old","name":"History result","confirmed":true,"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
-        json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":null,"operation_id":"op_00000000000000000000000000000000"}),
-        json!({"file_id":"file","targets":[{"branch_id":"branch","expected_node_id":"head","source_node_id":"source"}],"add":["added"],"remove":["removed"],"location":{"repository_id":"repo","path":"file.txt"},"operation_id":"op_00000000000000000000000000000000"}),
+        json!({
+            "command": {
+                "file_id":"file_01010101010101010101010101010101",
+                "context": {
+                    "repository_id":"repo_02020202020202020202020202020202",
+                    "path":"file.txt"
+                },
+                "expected_generation":"7",
+                "tags":["added"]
+            },
+            "operation_id":"op_00000000000000000000000000000000"
+        }),
+        json!({
+            "file_id":"file_01010101010101010101010101010101",
+            "context": {
+                "repository_id":"repo_02020202020202020202020202020202",
+                "path":"file.txt"
+            }
+        }),
         json!({"slot_id":"P01","path":"Café/folder","key":"café/folder","operation_id":"op_00000000000000000000000000000000"}),
         json!({"slot_id":"P01","path":"Café/file.txt","key":"café/file.txt","branch_id":null}),
         json!({"slot_id":"P01","path":"Café/file.txt","key":"café/file.txt","branch_id":"br_00000000000000000000000000000000"}),

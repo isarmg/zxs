@@ -1633,6 +1633,57 @@ class TargetedShards(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.select_plan(policy, ['changed.rs'], shardable=True)
 
+    def test_isolated_target_keeps_order_and_failure_cannot_hide_behind_other_shards(self):
+        self.policy['groups']['fixture']['rust_targets'][5]['isolate'] = True
+        self.plan = CI.select_plan(self.policy, ['changed.rs'], shardable=True)
+        shards = self.shards.partition(self.plan)
+        self.assertEqual([len(shard['rust_targets']) for shard in shards], [5, 1, 11])
+        self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                         self.plan['rust_targets'])
+        self.assertEqual([module for shard in shards for module in shard['python_tests']],
+                         self.plan['python_tests'])
+        receipts = self.receipts()
+        self.assertEqual(self.verify(receipts)['status'], 'all-selected-shards-passed')
+        receipts[1]['status'] = 'failed'
+        receipts[1]['failed'] = [{'kind': 'TimeoutExpired'}]
+        with self.assertRaises(ValueError):
+            self.verify(receipts)
+        with self.assertRaises(ValueError):
+            self.verify(receipts[:1] + receipts[2:])
+
+    def test_later_isolated_selection_keeps_all_overlapping_tests_in_one_build(self):
+        self.policy['groups']['later'] = {
+            'reason': 'The overlapping selection requires independent scheduling',
+            'python_tests': [],
+            'rust_targets': [{'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+                              'exact': ['selected::b'], 'max_tests': 1,
+                              'timeout_seconds': 200, 'isolate': True}],
+        }
+        self.policy['rules'][0]['groups'].append('later')
+        self.plan = CI.select_plan(self.policy, ['changed.rs'], shardable=True)
+        shards = self.shards.partition(self.plan)
+        target = self.plan['rust_targets'][0]
+        self.assertEqual(len(self.plan['rust_targets']), 17)
+        self.assertEqual(shards[0]['rust_targets'], [target])
+        self.assertEqual(target['selection_groups'], ['fixture', 'later'])
+        self.assertNotIn('isolate', target)
+        evidence = CI.selection_evidence(['selected::a', 'selected::b'], [], target)
+        self.assertEqual(CI.test_timeouts(evidence), {'selected::a': 900, 'selected::b': 200})
+        self.assertEqual(self.verify(self.receipts())['status'], 'all-selected-shards-passed')
+
+    def test_isolation_requires_boolean_and_does_not_expand_total_shard_budget(self):
+        for value in (1, 'true', None, []):
+            policy = copy.deepcopy(self.policy)
+            policy['groups']['fixture']['rust_targets'][0]['isolate'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                CI.select_plan(policy, ['changed.rs'], shardable=True)
+        policy = copy.deepcopy(self.policy)
+        for target in policy['groups']['fixture']['rust_targets']:
+            target['isolate'] = True
+        plan = CI.select_plan(policy, ['changed.rs'], shardable=True)
+        with self.assertRaises(ValueError):
+            self.shards.partition(plan)
+
     def test_shard_identity_rejects_other_commit_base_policy_plan_and_index(self):
         original = self.shards.matrix(self.summary, self.plan)['include'][0]
         for patch in ({'head': 'd' * 40}, {'base': 'e' * 40}, {'policy_sha256': 'f' * 64},
@@ -1718,6 +1769,56 @@ class ContainerTagsSelection(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
+    def test_integer_oracle_and_expanded_file_rows_keep_one_build_with_separate_budgets(self):
+        group = self.policy['groups']['engine-integer-errors']
+        policy = {
+            'groups': {'engine-integer-errors': group},
+            'rules': [{'path': 'selected.rs', 'groups': ['engine-integer-errors']}],
+            'unexecuted': ['Other behavior remains outside this selection'],
+        }
+        plan = CI.select_plan(policy, ['selected.rs'])
+        tests = [target for target in plan['rust_targets']
+                 if target.get('mode', 'test') == 'test']
+        self.assertEqual(len(tests), 1)
+        target = tests[0]
+        self.assertEqual(target['package'], 'storage-engine')
+        retained, rows = target['selections']
+        self.assertEqual(retained['max_tests'], 45)
+        self.assertEqual(rows['max_tests'], 16)
+        self.assertEqual(rows['prefixes'], ['container_storage::file_database::tests::'])
+        self.assertNotIn(rows['prefixes'][0], retained['prefixes'])
+        self.assertEqual([part['timeout_seconds'] for part in target['selections']], [900, 900])
+        # Synthetic inventory checks scheduling and budgets, not Rust execution.
+        inventory = list(retained['exact'])
+        for prefix, count in [
+            ('engine::history_window::oracle_tests::', 21),
+            ('container_storage::file_database::tests::', 15),
+            ('historical_save::integer_tests::', 1),
+            ('history_package::manifest::integer_tests::', 1),
+        ]:
+            inventory.extend(f'{prefix}case_{index}' for index in range(count))
+        evidence = CI.selection_evidence(inventory, [], target)
+        self.assertEqual(set(CI.test_timeouts(evidence)), set(inventory))
+        self.assertEqual(len(inventory), 47)
+        extra = [f'{rows["prefixes"][0]}extra_{index}' for index in range(2)]
+        with self.assertRaises(ValueError):
+            CI.selection_evidence(inventory + extra, [], target)
+
+    def test_retained_backup_transaction_is_isolated_without_changing_its_test_or_timeout(self):
+        targets = [target for group in self.policy['groups'].values()
+                   for target in group['rust_targets']
+                   if target.get('package') == 'storage-engine'
+                   and target.get('name') == 'recursive_backup_paths']
+        self.assertTrue(targets)
+        for target in targets:
+            self.assertIs(target.get('isolate'), True)
+            self.assertEqual(target['timeout_seconds'], 900)
+            self.assertEqual(target['max_tests'], 1)
+            self.assertEqual(target['exact'], [
+                'backup_preparation::transaction_serving::'
+                'same_backup_switch_serves_and_replays_normal_successor_publications',
+            ])
+
     def test_wire_capture_destination_is_owned_by_the_exact_run_evidence_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             run = CI.Run(Path(directory))
@@ -1734,6 +1835,12 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/contract/src/model.rs', 'src/contract/src/tracked.rs',
                 'src/contract/src/file_container_tags.rs',
                 'docs/tools/contract-check/tests/fixtures/merge-tags-backup.md',
+                'test/tools/contract-check/fixtures/merge-tags-backup/'
+                'file-container-tags-history.json',
+                'test/tools/contract-check/fixtures/merge-tags-backup/'
+                'file-container-tags-snapshot.json',
+                'test/tools/contract-check/fixtures/merge-tags-backup/'
+                'file-container-tags-operation.json',
             ],
             'container-tags-storage': [
                 'src/engine/src/journal/snapshot.rs', 'src/engine/src/state_projection.rs',
@@ -1746,6 +1853,8 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/engine/src/foreign_import/identity_closure/graph/manifest.rs',
                 'src/engine/src/maintenance.rs',
                 'test/engine/integration/foreign_original_databases.rs',
+                'test/engine/unit/history_package/changes.rs',
+                'test/engine/unit/history_package/history_changes_oracle_tests.rs',
             ],
             'container-tags-engine': [
                 'src/engine/src/engine/history_window/projection.rs',
@@ -1807,6 +1916,23 @@ class ContainerTagsSelection(unittest.TestCase):
                                          if key != 'selection_groups'}]))
                                 if origin == group]
                     self.assertCountEqual(selected, self.policy['groups'][group]['rust_targets'])
+
+    def test_database_repair_source_and_fixture_select_completed_and_pending_regressions(self):
+        for path in ['src/engine/src/database_install.rs',
+                     'test/engine/unit/database_install_tests.rs']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('scoped-database-install-recovery', plan['groups'])
+                self.assertLessEqual(len(plan['rust_targets']), 16)
+                targets = self.policy['groups']['scoped-database-install-recovery']['rust_targets']
+                self.assertEqual(targets[0]['prefixes'], ['database_install::tests::'])
+                self.assertEqual(targets[0]['max_tests'], 16)
+                self.assertEqual(targets[1]['name'], 'content_matches')
+                self.assertEqual(targets[1]['exact'], [
+                    'permanent_retirement::detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_workspaces',
+                ])
+                if path.startswith('src/'):
+                    self.assertIn('held-directory-layout', plan['groups'])
 
     def test_foreign_nonempty_tag_copy_fixture_selects_its_real_integration_target(self):
         path = 'test/engine/integration/foreign_original_databases.rs'

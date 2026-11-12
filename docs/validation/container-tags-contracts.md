@@ -15,6 +15,8 @@ Web 和契约工具必须同批接通；历史节点不再携带 tags，也不�
   是旧服务实际捕获，原字节保留，现由 OpenAPI 和共享 HistoryWindowPage 严格解码明确拒绝。
   不能擦掉其旧字段、重命名种类或清空集合后冒充当前服务的真实响应。
 - 其余七份备份固定捕获继续作为原场景的正向 schema 输入，未更改其字节。
+- `file-container-tags-history.json`、`file-container-tags-snapshot.json` 与
+  `file-container-tags-operation.json` 是新格式真实 HTTP 原字节，来源见下文。
 
 ## 新合同
 
@@ -27,11 +29,38 @@ POST 提交完整替换集合、独立 expected_generation 和原 operation_id�
 结果集合/代数不一致、旧节点响应。Snapshot/PagedHistoryRoot 必需 container_tags 根，
 format 是 `container-tags-radix-map-roots`；原格式及缺根输入明确拒绝，不改原池/备份字节。
 
-## 尚未执行
+## 真实 HTTP 捕获
 
-本轮只静态编辑和审阅，未本地编译、测试、格式化或运行验证脚本。
+三份新正向输入取自 [GitHub run #1300](https://github.com/isarmg/zxs/actions/runs/43219203395)
+的 `targeted-tests-0-f3dd9403ccaf62302a93b8ae13846f1072733f33` 工件（13947791171）。
+准确 head 为 `f3dd9403ccaf62302a93b8ae13846f1072733f33`，完整基线为
+`39bcae218116b2d8f925120d9a8f34cea791df5a`。原 ZIP SHA-256 为
+`d6099dfbc5dd63a953336fac5527ae7de57505202621b4c0121400502f0260cd`。
 
-当前缺少新格式的真实正向 history/tags HTTP 捕获。完整生产候选在 GitHub 定向执行
-`http_engine` 后，应从同一 SHA 的 `capture_wire` 工件取回新历史及标签 GET/CAS 响应，
-新增或更新明确标注的新格式 fixture，再执行 OpenAPI/共享 DTO 与真实冷重开回归。
-旧捕获继续保留为拒绝证据，不作为缺新捕获时的兼容出口。静态合成向量不替代此验收。
+该工件记录 `http_engine` 的
+`file_metadata_operations::tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies`
+真实通过，包含历史、标签 GET、永久结果与冷重开断言。捕获写在冷重开之前，
+单项整体通过证明后续冷重开断言也已完成。三个 `wire/` 文件逐字复制，
+不改字段、ID、空白或编码：
+
+| 文件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| file-container-tags-history.json | 6238 | `49a2df224e2a1c3b403228c3fa1e0655d66993bc70c98f36b2286bbb5653c325` |
+| file-container-tags-snapshot.json | 232 | `f1ca3b4a75815d65b3a018c0ba3a532ffed21a785ef685723b450f7d049c41ca` |
+| file-container-tags-operation.json | 766 | `e9f706df311de4d338849c3ae8382db268c0005ccb2b5d01648ee8d48e624059` |
+
+新增正向契约断言使用对应 OpenAPI GET/POST 响应 schema、共享严格 DTO，并核对三份
+响应的 FileId、repository/path、集合和代数；历史为五节点六边，标签为容器当前集合，
+不是节点字段。该固定输入绑定只能证明这组捕获的一致性，不替代运行时原请求校验。
+旧 `file-merge-tag-history.json` 的原字节 SHA-256 仍为
+`21cf9e64a0d677cffc4398500fc965c9f7bfd59272913e3a37ad455bcd6246d6`，继续明确拒绝。
+
+## 未完成的验证
+
+#1300 整体失败，不是完整标签验收通过。原备份事务 900 秒超时后，Web 原生/WASM、
+browser Rust 和 contract-check 均列为 blocked；该 run 没有执行新固定输入的离线复验。
+上述 HTTP 单项通过不覆盖其余失败、完整恢复或真实 Chrome。
+
+新固定输入及断言仍须在后继准确 SHA 的 GitHub 定向 contract-check 中复验。
+本地未编译、测试、格式化或运行验证脚本。静态合成向量不替代真实 HTTP 证据，
+真实捕获也不替代契约工具及 Web 的执行结果。

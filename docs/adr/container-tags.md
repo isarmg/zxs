@@ -169,6 +169,41 @@ SYSTEM 增加 catalog family 39；既有永久审计主体、事件、状态的 
   回归另用真实 API 覆盖两个独立容器的写入及冷开；这些新增测试尚待本批 GitHub 执行。
 - browser-smoke 消费者已经改用真实 GET/CAS 和容器编辑器。定向组执行 Node 观察器
   夹具并编译 Rust 驱动，不运行 Chrome；合成历史分页仍明确为合成输入。
-- 新格式真实 HTTP 捕获通过本批定向 `http_engine` 的受控 wire 工件输出，成功后仍需
-  取回三份新名称的历史、标签 Snapshot 和 Operation 响应，登记为正向契约 fixture。
+- 新格式真实 HTTP 捕获已从 #1300 准确提交的受控 wire 工件逐字取回，作为独立的
+  历史、标签 Snapshot 和 Operation 正向 fixture；对应 HTTP 单项通过，离线契约消费
+  尚待后继执行。原工件、摘要与边界见[契约证据](../validation/container-tags-contracts.md)。
   旧真实节点标签捕获保留原字节作拒绝证据，不能手改它冒充新服务响应。
+
+### 7.2 首次完整定向执行与修复待验
+
+[#1300](https://github.com/isarmg/zxs/actions/runs/43219203395) 的准确 head 为
+`f3dd9403ccaf62302a93b8ae13846f1072733f33`，比较基线为
+`39bcae218116b2d8f925120d9a8f34cea791df5a`。计划选择 34 个 Cargo 构建配置、
+13 个 Python 模块，三个分片全部返回工件。#1295 与 #1297 在选择阶段失败，
+没有产品验证；#1296 是配套 CI 小范围运行，不作为本轮产品证据。
+
+| 分片 | 实际通过 | 失败及未执行 |
+| --- | --- | --- |
+| 0，工件 13947791171 | 292 Rust、76 Python、2 编译检查 | 五项 server 行为、一个 Python 断言、Engine unit 编译及原备份 900 秒超时；超时后十个配置 blocked |
+| 1，工件 13944983138 | 185 Rust、106 Python、5 编译检查 | 两项 Engine 冷开行为与 SMB 集成编译失败 |
+| 2，工件 13945945489 | 30 Rust | 本片通过，不替代其他片 |
+
+合计 507 Rust、182 Python、7 编译检查通过，但整批失败。真实标签 HTTP 成功不能
+掩盖两处冷恢复问题：首次 Current registry 发布在冷回放前缺少对应已发布证明，以及
+重复已完成 FILE 安装尾被误判为多个未完成意图。本修复批分别恢复精确 publication/
+成员 D3/基线证明，以及重持有、复验并完成既有安装尾；原拒绝边界与永久材料保留。
+
+五项 server 失败和 SMB 编译失败由旧节点标签夹具触发，改用当前 GET/CAS 请求。
+node-note 的元数据节点改由真实历史合并创建，不再要求标签写入创建节点。主机分页
+断言跟随独立容器草稿流程，保留分页、merge、字段与迟到响应覆盖。
+
+#1301 的 `3c534060ebe507e8a7419d2cf8ef3663ad579f3f` 工件 13947621528
+进一步暴露九条 Engine unit 编译诊断：缺失路径 oracle、缺失 BTreeMap 导入和两个
+State 穷尽分类遗漏。它们不是测试通过；恢复独立 oracle 与标签字段分类，不用通配
+忽略新字段。相关修复及新增回归均待后继准确 SHA 执行，本地未编译或测试。
+
+Web 原生/WASM、browser Rust、contract-check、FILE history copy 和 phase1_save_tags
+在 #1300 因备份超时后的子进程清理无法证明而 blocked，不能称已编译或通过。
+本修复批只把原备份的完整 Cargo 身份安排到独立分片，不删除其原选择或放宽 900 秒。
+后继仍以同一完整基线重跑全并集，任一失败、超时、缺失或 blocked 都使总验收失败。
+真实 Chrome、全池激活恢复与未选择目标仍不在本次证据内。

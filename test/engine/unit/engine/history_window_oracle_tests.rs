@@ -360,6 +360,48 @@ fn oracle_parents(state: &State, node: &str) -> Vec<String> {
     parents.into_iter().collect()
 }
 
+pub(super) fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
+    let mut current = node;
+    let mut seen = BTreeSet::new();
+    while seen.insert(current) {
+        if let Some(path) = state.file_path_nodes.get(current) {
+            return &path.path;
+        }
+        if let Some(version) = state.versions.get(current) {
+            return state
+                .commits
+                .values()
+                .filter(|commit| commit.history_tree_id == HISTORY)
+                .filter_map(|commit| {
+                    commit
+                        .entries
+                        .iter()
+                        .find(|entry| entry.file_id == FILE && entry.version_id == current)
+                        .map(|entry| ((commit.sequence, &commit.commit_id), entry.path()))
+                })
+                .min_by_key(|(key, _)| *key)
+                .map_or(&version.creation_name, |(_, path)| path);
+        }
+        let metadata = &state.file_metadata_nodes[current];
+        let source = state
+            .file_branch_merges
+            .values()
+            .rfind(|merge| {
+                merge.file_id == FILE
+                    && merge.history_tree_id == HISTORY
+                    && !merge.reused_node
+                    && merge.result_node_id == current
+            })
+            .map(|merge| &merge.chosen_node_id);
+        match source {
+            Some(source) => current = source,
+            None => return &state.versions[&metadata.version_id].creation_name,
+        }
+    }
+    panic!("oracle fixture source chains must be acyclic")
+}
+
+#[test]
 fn borrowed_node_facts_match_independent_complete_state_oracle() {
     let view = fixture();
     let state = view.business_projection();

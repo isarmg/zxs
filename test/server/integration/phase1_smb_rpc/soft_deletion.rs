@@ -1,5 +1,6 @@
 use super::*;
 use json_codec::{Value, json};
+use storage_contract::file_container_tags::{Context, ReadRequest};
 use storage_contract::history_window::HistoryFileId;
 
 fn unlink(client: &Client, path: &str, operation_id: OperationId) -> Value {
@@ -41,7 +42,23 @@ fn public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file
     let a = fixture.entry(&repository.main_branch_id, "A.txt");
     let b = fixture.entry(&repository.main_branch_id, "B.txt");
     branch(&fixture, &a, "review").unwrap();
-    let tagged = fixture.annotate(&repository.repository_id, &a);
+    fixture.annotate(&repository.repository_id, &a);
+    let tags_request = ReadRequest {
+        file_id: a.file_id.parse().unwrap(),
+        context: Context {
+            repository_id: repository.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse(a.path()).unwrap(),
+        },
+    };
+    let annotated = fixture
+        .backend
+        .file_container_tags(&fixture.identity(), tags_request.clone())
+        .unwrap();
+    assert_eq!(annotated.generation, storage_contract::Generation::new(1));
+    assert_eq!(
+        annotated.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+        ["source-only"]
+    );
     let (reader, _placeholder) = open(&client, "p/A.txt", false, false, false);
     assert_eq!(client.read(reader.handle, 0, &mut [0; 4]).unwrap(), 4);
     let (buffered, _placeholder) = open(&client, "p", false, false, false);
@@ -54,7 +71,7 @@ fn public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file
         .unwrap()
         .unwrap();
     assert_eq!(deleted.branch_heads.len(), 2);
-    assert!(deleted.parent_node_ids.contains(&tagged));
+    assert_eq!(deleted.parent_node_ids, [a.version_id.clone()]);
     assert_eq!(deleted.operation_id, operation);
     assert!(
         client.read(reader.handle, 0, &mut [0; 4]).is_err(),
@@ -118,11 +135,19 @@ fn public_smb_soft_delete_revokes_cached_reads_and_pages_and_restores_exact_file
         fixture.entry(&repository.main_branch_id, "A.txt").file_id,
         a.file_id
     );
+    assert_eq!(
+        fixture
+            .backend
+            .file_container_tags(&fixture.identity(), tags_request.clone())
+            .unwrap(),
+        annotated
+    );
     close(&client, reader.handle);
     close(&client, buffered.handle);
     drop(client);
     let (root, engine) = fixture.cold_open();
     assert!(engine.file_deletion(&a.file_id).is_none());
+    assert_eq!(engine.file_container_tags(&tags_request).unwrap(), annotated);
     assert_eq!(
         exported(&engine, root.path(), &a.version_id),
         b"retained same body"

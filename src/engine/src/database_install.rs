@@ -122,6 +122,7 @@ pub(crate) struct PreparedInstall {
     history: PathBuf,
     maximum: usize,
     resume: Option<(DiskRoot, Envelope)>,
+    completed_tails: Vec<(PathBuf, FileIdentity, Envelope)>,
     already_current: bool,
     recovered_displaced: bool,
     admission: InstallAdmission,
@@ -174,6 +175,7 @@ impl PreparedInstall {
             history: history.to_owned(),
             maximum,
             resume: None,
+            completed_tails: Vec::new(),
             already_current,
             recovered_displaced: false,
             admission,
@@ -216,6 +218,17 @@ impl PreparedInstall {
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<()> {
         self.prepare_stage(root, observe)?;
+        for (path, identity, envelope) in std::mem::take(&mut self.completed_tails) {
+            let stage = root.private_child_matching(&path, identity)?;
+            if stage.read_bytes(&path.join("intent.json"), MAX_ENVELOPE)?
+                != crate::disk::encode_metadata(&envelope, MAX_ENVELOPE)?
+            {
+                return Err(invalid(
+                    "completed installation intent changed before its durability tail",
+                ));
+            }
+            self.finish(stage, envelope, observe)?;
+        }
         match self.resume.take() {
             Some((stage, envelope)) => self.finish(stage, envelope, observe),
             None => Ok(()),
@@ -397,6 +410,16 @@ impl PreparedInstall {
             let payload = HeldRegular::capture(&stage, "payload", self.maximum)?;
             let payload_stamp = payload.as_ref().map(HeldRegular::stamp);
             let target_stamp = target.as_ref().map(HeldRegular::stamp);
+            if payload_stamp == envelope.old.as_ref() && target_stamp == Some(&envelope.new) {
+                // This exchange is complete, not an unpublished source candidate.
+                // Repeated current-State repairs may reuse a deleted target inode,
+                // so more than one retained completed receipt can name this stamp.
+                // Keep each identity without retaining a descriptor per receipt,
+                // then re-hold it and complete every durability tail in apply;
+                // capture remains read-only and never adopts a second pending pair.
+                self.completed_tails.push((path, identity, envelope));
+                continue;
+            }
             if payload_stamp == envelope.old.as_ref() && target_stamp != Some(&envelope.new) {
                 // This attempt no longer carries the new material. Its known
                 // displaced old file (or first-create absence) remains retained.
@@ -421,7 +444,7 @@ impl PreparedInstall {
     }
 
     fn finish(
-        self,
+        &self,
         stage: DiskRoot,
         envelope: Envelope,
         observe: &mut impl FnMut(&'static str) -> Result<()>,

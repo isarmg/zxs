@@ -914,7 +914,7 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         let response = validator(&schema).unwrap();
         if name == "file-merge-tag-history.json" {
             // Keep the captured old bytes intact as explicit rejection evidence.
-            // A new positive real capture must come from the exact GitHub run.
+            // New positive captures remain separate and come from an exact GitHub run.
             assert!(!response.is_valid(&wire), "retired node-tag capture must fail");
             let decoded: storage_contract::Result<
                 storage_contract::history_window::HistoryWindowPage,
@@ -936,6 +936,94 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
             }
         }
     }
+    assert_current_container_tag_captures(&api, &fixtures);
+}
+
+fn assert_current_container_tag_captures(api: &Value, fixtures: &Path) {
+    for (route, method, name) in [
+        (
+            "/api/file-manager/files/{file}/history",
+            "get",
+            "file-container-tags-history.json",
+        ),
+        (
+            "/api/file-manager/files/{file}/tags",
+            "get",
+            "file-container-tags-snapshot.json",
+        ),
+        (
+            "/api/file-manager/files/{file}/tags",
+            "post",
+            "file-container-tags-operation.json",
+        ),
+    ] {
+        let wire = read(&fixtures.join(name)).unwrap();
+        let mut schema = api.clone();
+        schema["allOf"] = json!([
+            api["paths"][route][method]["responses"]["200"]["content"]
+                ["application/json"]["schema"]
+        ]);
+        validator(&schema)
+            .unwrap()
+            .validate(&wire)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+    assert_captured_container_tag_identity(fixtures);
+}
+
+fn assert_captured_container_tag_identity(fixtures: &Path) {
+    use storage_contract::file_container_tags::{ReadRequest, Replacement, Snapshot};
+    use storage_contract::history_window::HistoryWindowPage;
+
+    let history_wire = read(&fixtures.join("file-container-tags-history.json")).unwrap();
+    semantics("HistoryWindowPage", &history_wire).unwrap();
+    let history: HistoryWindowPage =
+        storage_contract::decode_strict(&json_codec::to_vec(&history_wire).unwrap()).unwrap();
+    let HistoryWindowPage::Nodes {
+        identity,
+        nodes,
+        edges,
+        ..
+    } = history else {
+        panic!("captured container history must be a node page");
+    };
+    assert_eq!(nodes.len(), 5);
+    assert_eq!(edges.len(), 6);
+    let snapshot: Snapshot = storage_contract::decode_strict(
+        &fs::read(fixtures.join("file-container-tags-snapshot.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = read(&fixtures.join("file-container-tags-operation.json")).unwrap();
+    assert_eq!(
+        operation["operation_kind"],
+        storage_contract::file_container_tags::KIND
+    );
+    assert_eq!(operation["state"], "completed");
+    assert_eq!(operation["commit_state"], "PUBLISHED");
+    let replacement: Replacement = storage_contract::decode_strict(
+        &json_codec::to_vec(&operation["result"]).unwrap(),
+    )
+    .unwrap();
+    replacement.validate(&replacement.request).unwrap();
+    snapshot
+        .validate(&ReadRequest {
+            file_id: replacement.request.file_id.clone(),
+            context: replacement.request.context.clone(),
+        })
+        .unwrap();
+    assert_eq!(snapshot.file_id.to_string(), identity.file_id.as_str());
+    assert_eq!(
+        snapshot.context.repository_id.to_string(),
+        identity.context.repository_id.as_str()
+    );
+    assert_eq!(Some(&snapshot.context.path), identity.context.path.as_ref());
+    assert_eq!(snapshot.tags, replacement.tags);
+    assert_eq!(snapshot.generation, replacement.generation);
+    assert_eq!(snapshot.generation.get(), 2);
+    assert_eq!(
+        snapshot.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+        ["已审核", "归档"]
+    );
 }
 
 #[test]

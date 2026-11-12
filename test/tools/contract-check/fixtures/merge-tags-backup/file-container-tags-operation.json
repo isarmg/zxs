@@ -1,0 +1,30 @@
+{
+  "commit_state": "PUBLISHED",
+  "error": null,
+  "operation_id": "op_55ced699f79a4b9998dd39287956d95a",
+  "operation_kind": "file.container-tags.replace",
+  "protection_at_publish": "NOT_APPLICABLE",
+  "publication_sequence": "13",
+  "request_digest": "eba4f4822042726bf21ab8219d23c9d9fd5156c537605c45da30c401503d39ca",
+  "result": {
+    "changed": true,
+    "generation": "2",
+    "request": {
+      "context": {
+        "path": "renamed.txt",
+        "repository_id": "repo_b0c1c35e544d41a795fb6f6ca3d1cde1"
+      },
+      "expected_generation": "1",
+      "file_id": "file_43a56716aa674982a117f7d56f3e7e2a",
+      "tags": [
+        "已审核",
+        "归档"
+      ]
+    },
+    "tags": [
+      "已审核",
+      "归档"
+    ]
+  },
+  "state": "completed"
+}

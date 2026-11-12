@@ -16,7 +16,25 @@ def fingerprint(value):
 
 def partition(plan):
     rust, python = plan['rust_targets'], plan['python_tests']
-    count = max((len(rust) + RUST_PER_SHARD - 1) // RUST_PER_SHARD,
+    batches, pending = [], []
+    for target in rust:
+        # Scheduling is separate from Cargo identity. An isolated selection
+        # carries every overlapping selection of that build into the same job.
+        isolated = any(selection.get('isolate', False)
+                       for selection in target.get('selections', [target]))
+        if isolated:
+            if pending:
+                batches.append(pending)
+                pending = []
+            batches.append([target])
+        else:
+            pending.append(target)
+            if len(pending) == RUST_PER_SHARD:
+                batches.append(pending)
+                pending = []
+    if pending:
+        batches.append(pending)
+    count = max(len(batches),
                 (len(python) + PYTHON_PER_SHARD - 1) // PYTHON_PER_SHARD)
     if not 1 <= count <= MAX_SHARDS:
         raise ValueError('complete targeted selection exceeds reviewed shard budget')
@@ -24,7 +42,7 @@ def partition(plan):
     for index in range(count):
         modules = python[index * PYTHON_PER_SHARD:(index + 1) * PYTHON_PER_SHARD]
         shard = dict(plan)
-        shard['rust_targets'] = rust[index * RUST_PER_SHARD:(index + 1) * RUST_PER_SHARD]
+        shard['rust_targets'] = batches[index] if index < len(batches) else []
         shard['python_tests'] = modules
         shard['python_timeouts'] = {name: plan['python_timeouts'][name] for name in modules}
         shard['python_selections'] = [selection for selection in plan['python_selections']

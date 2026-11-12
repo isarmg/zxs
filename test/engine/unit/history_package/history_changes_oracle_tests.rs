@@ -697,3 +697,28 @@ fn typed_operation_map_inserts_are_history_independent_with_exact_tracking() {
         }
     });
 }
+
+#[test]
+fn typed_container_tag_dirty_keys_invalidate_each_retained_file_owner() {
+    use storage_contract::file_container_tags::{ContainerTags, Tag, TagSet};
+    let mut before = dependency_fixture();
+    let file = storage_contract::FileId::generate().unwrap();
+    for version in ["v1", "v2"] {
+        before.versions.get_mut(version).unwrap().file_id = file.to_string();
+    }
+    before.container_tags.insert(file, ContainerTags::empty());
+    before.begin_tracking();
+    let expected = BTreeSet::from(["h1".into(), "h2".into()]);
+    let mut changed = before.clone();
+    changed.container_tags.insert(
+        file,
+        ContainerTags::new(
+            TagSet::new([Tag::parse("changed".into()).unwrap()]).unwrap(),
+            storage_contract::Generation::new(1),
+        ),
+    );
+    assert_eq!(HistoryChanges::between(&before, &changed).histories, expected);
+    let mut removed = before.clone();
+    removed.container_tags.remove(&file);
+    assert_eq!(HistoryChanges::between(&before, &removed).histories, expected);
+}

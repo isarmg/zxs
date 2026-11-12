@@ -379,26 +379,32 @@ async fn node_note_fixture() -> (tempfile::TempDir, Router, String, String, [Str
         Some(json!({"branch_id":branch,"operation_id":new_id("op").unwrap()})),
     )
     .await;
-    let tagged = success(
-        &app,
-        &token,
-        "POST",
-        &format!("/api/file-manager/files/{file}/tags"),
-        Some(json!({
-            "targets":[{"branch_id":branch,"source_node_id":version,"expected_node_id":version}],
-            "add":["reviewed"],
-            "remove":[],
-            "operation_id":new_id("op").unwrap(),
-        })),
-    )
-    .await;
-    let metadata = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap().to_owned();
     manager_namespace(&app, &token, "rename", "version-note.txt", Some("node-note.txt")).await;
     let listing = success(
         &app, &token, "GET", "/api/file-manager/disks/P01/entries", None,
     )
     .await;
     let anchor = listing["entries"][0]["node_id"].as_str().unwrap().to_owned();
+    // Container labels do not create metadata nodes. A real historical merge
+    // of the retained content and its rename anchor supplies the second kind.
+    let merged = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/merge-history"),
+        Some(json!({
+            "inputs":[
+                {"branch_id":branch,"source_node_id":version,"expected_node_id":anchor},
+                {"branch_id":branch,"source_node_id":anchor,"expected_node_id":anchor}
+            ],
+            "chosen_node_id":version,
+            "name":"Node note metadata",
+            "confirmed":true,
+            "operation_id":new_id("op").unwrap()
+        })),
+    )
+    .await;
+    let metadata = merged["result"]["node_id"].as_str().unwrap().to_owned();
     assert!(anchor.starts_with("fnode_"));
     assert!(metadata.starts_with("fmeta_"));
     (root, app, token, file, [anchor, metadata])

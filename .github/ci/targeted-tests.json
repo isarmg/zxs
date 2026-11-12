@@ -48,6 +48,7 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "test",
           "name": "recursive_backup_paths",
+          "isolate": true,
           "exact": [
             "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
           ],
@@ -1571,7 +1572,6 @@
           "manifest": "src/engine/Cargo.toml",
           "prefixes": [
             "engine::history_window::oracle_tests::",
-            "container_storage::file_database::tests::",
             "historical_save::integer_tests::",
             "history_package::manifest::integer_tests::"
           ],
@@ -1587,6 +1587,15 @@
             "history_package::tests::tombstoned_storage_identity_is_validated_before_restore_decision"
           ],
           "max_tests": 45,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "container_storage::file_database::tests::"
+          ],
+          "max_tests": 16,
           "timeout_seconds": 900
         },
         {
@@ -2076,6 +2085,7 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "test",
           "name": "recursive_backup_paths",
+          "isolate": true,
           "exact": [
             "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
           ],
@@ -2283,6 +2293,7 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "test",
           "name": "recursive_backup_paths",
+          "isolate": true,
           "exact": [
             "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
           ],
@@ -2812,6 +2823,32 @@
           "kind": "bin",
           "name": "browser-smoke",
           "mode": "check",
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "scoped-database-install-recovery": {
+      "reason": "Retained completed database repair tails remain distinct from ambiguous unpublished pairs; exact current-target recovery preserves all material and durability tails",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "database_install::tests::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "content_matches",
+          "exact": [
+            "permanent_retirement::detached_file_branches_become_frozen_terminal_evidence_and_cannot_open_workspaces"
+          ],
+          "max_tests": 1,
           "timeout_seconds": 900
         }
       ]
@@ -3468,6 +3505,12 @@
     },
     {
       "path": "test/engine/unit/history_package/graph/tests.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/changes.rs",
       "groups": [
         "container-tags-storage"
       ]
@@ -7555,6 +7598,36 @@
       "path": "test/engine/unit/backup_original_scope_encoding_tests.rs",
       "groups": [
         "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/database_install.rs",
+      "groups": [
+        "scoped-database-install-recovery"
+      ]
+    },
+    {
+      "path": "test/engine/unit/database_install_tests.rs",
+      "groups": [
+        "scoped-database-install-recovery"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/merge-tags-backup/file-container-tags-history.json",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/merge-tags-backup/file-container-tags-snapshot.json",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/merge-tags-backup/file-container-tags-operation.json",
+      "groups": [
+        "container-tags-contract"
       ]
     }
   ],

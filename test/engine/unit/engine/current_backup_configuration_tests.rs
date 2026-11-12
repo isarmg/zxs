@@ -624,6 +624,19 @@ fn every_state_field_rejects_an_unplanned_change_in_live_and_cold_backup_publica
                 .message
                 .push_str(" changed");
         },
+        container_tags => {
+            let key = file.parse::<storage_contract::FileId>().unwrap();
+            let previous = state.container_tags[&key].clone();
+            state.container_tags.insert(
+                key,
+                storage_contract::file_container_tags::ContainerTags::new(
+                    storage_contract::file_container_tags::TagSet::new([
+                        storage_contract::file_container_tags::Tag::parse("unplanned".into()).unwrap(),
+                    ]).unwrap(),
+                    previous.generation().next().unwrap(),
+                ),
+            );
+        },
         versions => {
             state
                 .versions
