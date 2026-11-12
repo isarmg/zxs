@@ -10,6 +10,8 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_registry.rs',
+    'test/engine/unit/backup_committed_namespace_probe.rs',
     'test/engine/unit/backup_published_encoding_probe.rs',
     'src/engine/src/engine/backup_preparation/native_control/generation_objects.rs',
     'src/engine/src/journal/retained_encoding.rs',

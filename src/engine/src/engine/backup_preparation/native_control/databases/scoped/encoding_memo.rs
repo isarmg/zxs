@@ -59,6 +59,28 @@ impl ScopeEncodingMemo {
         }
     }
 
+    /// Reuse committed pure bytes only. This reader never acquires a pending
+    /// reservation or publishes entries before its caller's remaining checks.
+    pub(in crate::engine::backup_preparation::native_control) fn committed_metadata(
+        &self,
+        read: RawMetadataRead<'_>,
+    ) -> Result<AuthenticatedMetadataObject> {
+        if read.raw().len() > self.maximum_bytes {
+            return Ok(read.authenticate(None)?.into_object());
+        }
+        let key = Key {
+            context: [0; 32],
+            input: *blake3::hash(read.raw()).as_bytes(),
+            kind: Kind::Canonical(read.domain()),
+        };
+        let retained = self.get(&key);
+        let encoding = match &retained {
+            Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _)) | None => None,
+        };
+        Ok(read.authenticate(encoding)?.into_object())
+    }
+
     fn get(&self, key: &Key) -> Option<Bytes> {
         self.state.lock().expect("encoding memo lock poisoned").entries.get(key).cloned()
     }

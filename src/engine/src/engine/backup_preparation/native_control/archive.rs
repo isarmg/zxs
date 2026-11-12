@@ -2,7 +2,7 @@
 //! graph. This archive preserves evidence; it never creates a new disk vote.
 use super::*;
 use crate::engine::backup_preparation::native_control::databases::scoped::{
-    encoding_memo::Transaction,
+    encoding_memo::{ScopeEncodingMemo, Transaction},
 };
 use crate::disk::{DiskSeal, DiskSealFormat};
 use crate::history_package::{AdmittedState, bound_history_objects_with};
@@ -234,11 +234,16 @@ impl Source for Capture<'_> {
     }
 }
 
+enum Encodings<'a, 'memo> {
+    Pending(&'a mut Transaction<'memo>),
+    Committed(&'memo ScopeEncodingMemo),
+}
+
 struct Target<'a, 'memo> {
     root: &'a DiskRoot,
     stop: &'a AtomicBool,
     budget: Budget,
-    encodings: Option<&'a mut Transaction<'memo>>,
+    encodings: Option<Encodings<'a, 'memo>>,
 }
 impl Source for Target<'_, '_> {
     fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
@@ -249,8 +254,9 @@ impl Source for Target<'_, '_> {
         )?;
         self.budget.account(bytes.len())?;
         let read = RawMetadataRead::parse(kind, hash, &bytes)?;
-        match self.encodings.as_deref_mut() {
-            Some(encodings) => encodings.metadata(read),
+        match self.encodings.as_mut() {
+            Some(Encodings::Pending(encodings)) => encodings.metadata(read),
+            Some(Encodings::Committed(encodings)) => encodings.committed_metadata(read),
             None => Ok(read.authenticate(None)?.into_object()),
         }
     }
@@ -916,7 +922,27 @@ pub(super) fn read_observed_with_encodings(
         ExpectedArchiveDigest(&task.archive_hash),
         stop,
         observe,
-        Some(encodings),
+        Some(Encodings::Pending(encodings)),
+    )
+}
+
+pub(super) fn read_observed_with_committed_encodings(
+    root: &DiskRoot,
+    job: &Job,
+    task: &NativeTask,
+    stop: &AtomicBool,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
+    encodings: &ScopeEncodingMemo,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    read_observed_at(
+        root,
+        job,
+        ExpectedArchiveDigest(&task.archive_hash),
+        stop,
+        observe,
+        Some(Encodings::Committed(encodings)),
     )
 }
 
@@ -928,7 +954,7 @@ fn read_observed_at(
     observe: &mut impl FnMut(
         &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
     ) -> Result<()>,
-    encodings: Option<&mut Transaction<'_>>,
+    encodings: Option<Encodings<'_, '_>>,
 ) -> Result<(BackupNativeControlReport, AdmittedState)> {
     let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST)?;
     let manifest: Manifest = decode_proof(&bytes)?;

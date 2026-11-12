@@ -892,3 +892,72 @@ SYSTEM 与有效配置每盘的 current/history SQLite 字节。
 
 此接线尚待准确后继 SHA 的 GitHub 验证，pool-snapshot 独立读链仍未接入。
 不据该局部复用宣称 900 秒问题、实际改名或 SYSTEM／DISK／FILE 完整恢复已闭环。
+
+## 后继实测与 Current 的只读规范编码命中
+
+#1331 准确 f6aef8c／2fb0399 的原事务片已实际执行，仍在原 900 秒超时，
+通过数为零、selected skipped/blocked 为空。
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM
+约为 40/64/114/186/334/488/796 秒，未取得 native 完成、普通服务切换或冷重放证据。
+180 个外部样本末点约 895.219 秒，进程 user/system 为 843.29/49.37 秒，
+worker CPU 814.985 秒、调度等待 0.192 秒；
+逻辑读取 5,090,662,850 字节／10,017,900 次，物理 read_bytes 为 0。
+这仍只证明活跃计算和重复读取，不定位具体函数耗时或证明跨 runner 收益。
+工件：https://github.com/isarmg/zxs/actions/runs/43309061210/artifacts/13986936473
+ZIP SHA256：`af9d201503133d1c97cfea596d6c266b2e95ec67ad1095caa918a32ba90c8aab`。
+
+#1332 准确 f6aef8c／34bc51a 完整基线的原事务片也实际执行后 900 秒超时，
+通过数为零、selected skipped/blocked 为空，SYSTEM 首次观察约 818 秒。
+工件：https://github.com/isarmg/zxs/actions/runs/43310417757/artifacts/13986442918
+ZIP SHA256：`8ac30865964ae288116dad560d2085f33d178948173f0fc443aab1c61bd570b7`。
+该轮平台片 38 Rust、主 Engine 片 429 Rust／186 Python／1 产品检查通过，
+两片 selected failed/skipped/blocked 为空；全轮唯一失败仍是原 900 秒。
+主片工件 13988880302，ZIP SHA256：
+`1aef6bb4c06b8ad541a8363f06b2b5fcecb554d6741988dc0be8b68debed64de`。
+readmission 全截点用例在原 300 秒限额内实际 298.55 秒通过，
+这保留 #1328 的历史超时，不据此宣称成本问题得到独立修复。
+
+#1333 准确 40efc366／f6aef8c 的第 0 片已有
+86 Rust／186 Python／1 Engine 无默认特性产品检查通过，
+selected failed/skipped/blocked 为空，包含 published scopes 的真实 probe。
+同一 component 测试为 69.25 秒，不能与另一 runner 的 80.15 秒作配对 A/B。
+原 900 秒独立片已实际执行后超时，通过数为零、selected skipped/blocked 为空。
+首次观察到 serving/scopes/common/Current/aliases/盘根库/SYSTEM 约为
+32/48/88/144/256/372/606 秒，后续 native、普通切换和冷重放仍没有完成证据。
+180 个样本末点约 895.192 秒，进程 user/system 为 810.97/87.03 秒，
+worker CPU 824.034 秒、调度等待 0.163 秒；逻辑读取 6,627,295,452 字节／
+13,042,234 次，物理 read_bytes 为 0。不是函数级热点或配对加速证明。
+原事务工件 13986688309，ZIP SHA256：
+`0b09e8da2c7c387ff0e8775a48008679a42a641e5ce1c63f8a9787fa01d7cb7c`。
+单元工件：https://github.com/isarmg/zxs/actions/runs/43311334364/artifacts/13987425422
+ZIP SHA256：`6fda0184176768aebfce3d1ea1158f7d549f9c703ec4b2f8878bbb90cf9319e8`。
+
+后继 Current archive replay 只读取同一个 ScopeEncodingMemo 已提交的规范编码。
+冷 miss、pending-only 或不匹配仍按原算法编码；不 reserve、填充、retain 或 commit，
+没有第二账户。raw 摘要只是定位提示，journal 内完整 raw＋域匹配后才复用编码，
+仍检查本次 canonical 大小与 expected 摘要，保持先大小后摘要的错误顺序。
+Pending 与 Committed 由明确枚举分开，但共用唯一 Target::object 和 archive 验证器：
+checkpoint → 地址验证／真实有界读取 → Budget.account → strict parse →
+authenticate → typed 回编码／完整 State、历史和 Publication 验证，顺序不变。
+
+archive_replay 每次新建 Replay，逐 publication 观察并核控制状态和原 Snapshot；
+它返回时尚未 finish，因此这里不提交任何 pending。
+with_archive_namespaces 原 finish → action → checkpoint → named_target，
+以及外层 Current/common/native/分页/正文尾验全部保留。
+直接 serving activation 重新 capture 后 memo 为 None，冷启动独立 replay_source
+和 pool-snapshot 另一条读链不在本片覆盖内，不缓存 State、Report 或准入结果。
+
+新增三项 memo 单测比较 committed 条目、计费与预留前后不变，
+覆盖冷 miss、pending 不可见、已有 SQL pending、raw/域/expected、strict parse、
+size 先于错误摘要、容量拒绝及强制跨域候选冲突，没有新增生产观测字段。
+原三处真实 Target 测试仅包装为 Pending，原错误与预算断言保留。
+
+第二个 cfg(test) probe 使用同一已安装 serving 夹具，保存并还原原 memo。
+None／cold／显式原 registry verify 预热后比较两目标的完整 State、
+所有分支 head/entries、registry 与 Publication；该夹具没有非空 D/retirement 历史，
+完整序列化包含这些字段，但不冒称已执行非空场景。
+坏 raw/duplicate、取消、callback 错误及 callback 后取消仍拒绝；
+真实原 Snapshot 错作 published State，必须在 finish 的精确 require_state 错误拒绝，
+不能用更早错误伪绿；替换配置目录名仍拒绝且保留原持有根。
+每次错误后核目录名／文件字节不变，仅恢复测试主动改坏材料。
+原完整事务 exact/max1/900、全部旧组和限额保持；新切片仍待 GitHub 实测。

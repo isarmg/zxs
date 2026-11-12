@@ -611,3 +611,186 @@ fn original_transaction_disabled_or_declined_binding_always_encodes() {
     assert!(state.entries.is_empty());
     assert_eq!(state.reserved_entries, 0);
 }
+
+// Observe the complete account and entry identities without opening journal's
+// opaque proof fields. Canonical proof addresses remain stable during a read;
+// all nonopaque payloads and both stored/recomputed proof charges are compared.
+#[derive(PartialEq, Eq)]
+enum CommittedEntryObservation {
+    System(Vec<u8>),
+    DiskPair(Vec<u8>, Vec<u8>),
+    Canonical { address: usize, stored: usize, payload: Option<usize> },
+}
+
+#[derive(PartialEq, Eq)]
+struct CommittedAccountObservation {
+    entries: Vec<(Key, CommittedEntryObservation)>,
+    bytes: usize,
+    reserved_bytes: usize,
+    reserved_entries: usize,
+    maximum_bytes: usize,
+    maximum_entries: usize,
+}
+
+fn committed_account(memo: &ScopeEncodingMemo) -> CommittedAccountObservation {
+    let state = memo.state.lock().unwrap();
+    let entries = state.entries.iter().map(|(key, bytes)| {
+        let observed = match bytes {
+            Bytes::System(bytes) => CommittedEntryObservation::System(bytes.to_vec()),
+            Bytes::DiskPair(current, history) => {
+                CommittedEntryObservation::DiskPair(current.to_vec(), history.to_vec())
+            }
+            Bytes::Canonical { encoding, payload } => CommittedEntryObservation::Canonical {
+                address: std::ptr::from_ref(encoding) as usize,
+                stored: *payload,
+                payload: encoding.payload_bytes(),
+            },
+        };
+        (*key, observed)
+    }).collect();
+    CommittedAccountObservation {
+        entries,
+        bytes: state.bytes,
+        reserved_bytes: state.reserved_bytes,
+        reserved_entries: state.reserved_entries,
+        maximum_bytes: memo.maximum_bytes,
+        maximum_entries: memo.maximum_entries,
+    }
+}
+
+fn committed_error(error: &crate::Error) -> (ErrorCode, Vec<String>) {
+    let mut chain = Vec::new();
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(error) = source {
+        chain.push(error.to_string());
+        source = error.source();
+    }
+    (error.code(), chain)
+}
+
+#[test]
+fn committed_metadata_cold_pending_and_hit_never_change_the_shared_account() {
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let memo = ScopeEncodingMemo::new();
+    let binding = |_: &AtomicBool| Ok(None);
+    let baseline = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
+        .authenticate(None).unwrap().into_object();
+    let check = || {
+        let before = committed_account(&memo);
+        let object = memo.committed_metadata(
+            RawMetadataRead::parse("snapshot", &expected, raw).unwrap(),
+        ).unwrap();
+        assert_eq!(object.kind(), baseline.kind());
+        assert_eq!(object.hash(), baseline.hash());
+        assert_eq!(object.bytes(), baseline.bytes());
+        assert_eq!(object.value(), baseline.value());
+        assert!(committed_account(&memo) == before);
+    };
+    check();
+    assert!(memo.state.lock().unwrap().entries.is_empty());
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    transaction.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap()).unwrap();
+    assert_eq!(memo.state.lock().unwrap().reserved_entries, 1);
+    check();
+    assert!(memo.state.lock().unwrap().entries.is_empty());
+    transaction.commit();
+    let mut sql = Session::new(Some((&memo, [9; 32])));
+    sql.system([3; 32], || Ok(vec![1, 2])).unwrap();
+    sql.disk_pair(Some([4; 32]), || Ok((vec![3], vec![4]))).unwrap();
+    sql.commit();
+    check();
+    assert_eq!(memo.state.lock().unwrap().entries.len(), 3);
+    let mut pending = Session::new(Some((&memo, [8; 32])));
+    pending.system([7; 32], || Ok(vec![5])).unwrap();
+    check();
+    drop(pending);
+    check();
+}
+
+#[test]
+fn committed_metadata_rechecks_raw_domain_expected_and_size_without_mutation() {
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let memo = ScopeEncodingMemo::new();
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut transaction = Transaction::new(Some(&memo), &binding);
+    transaction.metadata(RawMetadataRead::parse("snapshot", &expected, raw).unwrap()).unwrap();
+    transaction.commit();
+    let oversized = json_codec::to_vec(&"x".repeat(crate::disk::MAX_METADATA)).unwrap();
+    for (index, (domain, digest, bytes)) in [
+        ("snapshot", "wrong", raw.as_slice()),
+        ("snapshot", expected.as_str(), br#"{"value":2}"#.as_slice()),
+        ("state-page", expected.as_str(), raw.as_slice()),
+        ("snapshot", "wrong", oversized.as_slice()),
+    ].into_iter().enumerate() {
+        let before = committed_account(&memo);
+        let reference = RawMetadataRead::parse(domain, digest, bytes).unwrap()
+            .authenticate(None).err().unwrap();
+        let error = memo.committed_metadata(
+            RawMetadataRead::parse(domain, digest, bytes).unwrap(),
+        ).err().unwrap();
+        assert_eq!(committed_error(&error), committed_error(&reference));
+        assert_eq!(error.code(), if index == 3 {
+            ErrorCode::ResourceLimit
+        } else {
+            ErrorCode::ObjectCorrupt
+        });
+        assert!(committed_account(&memo) == before);
+    }
+    let before = committed_account(&memo);
+    for invalid in [br#"{"a":1,"a":1}"#.as_slice(), b"{".as_slice()] {
+        assert!(RawMetadataRead::parse("snapshot", &expected, invalid).is_err());
+        assert!(committed_account(&memo) == before);
+    }
+    let spaced = b" { \"value\" : 1 } ";
+    let object = memo.committed_metadata(
+        RawMetadataRead::parse("snapshot", &expected, spaced).unwrap(),
+    ).unwrap();
+    assert_eq!(object.hash(), expected);
+    assert!(committed_account(&memo) == before);
+}
+
+#[test]
+fn committed_metadata_capacity_decline_and_colliding_proof_do_not_fill_or_replace() {
+    let raw = br#"{"value":1}"#;
+    let (_, expected) = storage_contract::encode_hashed_value(
+        "snapshot", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    for memo in [memo_with_limit(0, 0), memo_with_limit(MAX_BYTES, 0)] {
+        let before = committed_account(&memo);
+        assert_eq!(memo.committed_metadata(
+            RawMetadataRead::parse("snapshot", &expected, raw).unwrap(),
+        ).unwrap().hash(), expected);
+        assert!(committed_account(&memo) == before);
+    }
+    let memo = ScopeEncodingMemo::new();
+    let proof = RawMetadataRead::parse("snapshot", &expected, raw).unwrap()
+        .authenticate(None).unwrap().retain_encoding();
+    let (_, page_expected) = storage_contract::encode_hashed_value(
+        "state-page", &storage_contract::strict_json(raw).unwrap(),
+    ).unwrap();
+    let read = RawMetadataRead::parse("state-page", &page_expected, raw).unwrap();
+    let key = Key {
+        context: [0; 32],
+        input: *blake3::hash(raw).as_bytes(),
+        kind: Kind::Canonical(read.domain()),
+    };
+    let payload = proof.payload_bytes().unwrap();
+    {
+        let mut state = memo.state.lock().unwrap();
+        state.entries.insert(key, Bytes::Canonical { encoding: proof, payload });
+        state.bytes = payload + std::mem::size_of::<(Key, Bytes)>();
+    }
+    let before = committed_account(&memo);
+    assert_eq!(memo.committed_metadata(read).unwrap().hash(), page_expected);
+    assert!(committed_account(&memo) == before);
+    assert_eq!(memo.committed_metadata(
+        RawMetadataRead::parse("state-page", &expected, raw).unwrap(),
+    ).err().unwrap().code(), ErrorCode::ObjectCorrupt);
+    assert!(committed_account(&memo) == before);
+}

@@ -3,6 +3,7 @@
 //! This is a frozen namespace reader, never Current installation or writer I/O.
 use super::*;
 use crate::disk::encode_metadata;
+use crate::engine::backup_preparation::native_control::archive;
 use crate::engine::backup_preparation::native_control::databases::materials::{
     self, FileReference, Namespace, PreparedFiles,
 };
@@ -318,21 +319,19 @@ pub(super) fn archive_replay(
     named_target(&target.root, job)?;
     let mut replay =
         crate::engine::disk_registry::current::backup::BackupNamespaceReplay::new(candidate)?;
-    let (control, _) = crate::engine::backup_preparation::native_control::archive::read_observed(
-        &target.root,
-        job,
-        &prepared
-            .task
-            .installation
-            .evidence
-            .task
-            .scoped
-            .objects
-            .native
-            .archive_hash,
-        stop,
-        &mut |_, candidate, _, state| replay.observe(candidate, state),
-    )?;
+    let native = &prepared.task.installation.evidence.task.scoped.objects.native;
+    let mut observe = |_: &crate::ValidatedConfig, candidate: &crate::journal::Candidate,
+                       _: &str, state: &crate::history_package::AdmittedState| {
+        replay.observe(candidate, state)
+    };
+    let (control, _) = match prepared.scope_encoding.as_ref() {
+        Some(memo) => archive::read_observed_with_committed_encodings(
+            &target.root, job, native, stop, &mut observe, memo,
+        )?,
+        None => archive::read_observed(
+            &target.root, job, &native.archive_hash, stop, &mut observe,
+        )?,
+    };
     if control.state_hash != prepared.source_evidence().state_hash()
         || candidate.candidate().previous_snapshot.as_deref()
             != Some(control.snapshot_hash.as_str())
@@ -394,3 +393,9 @@ pub(super) fn observe(
     let plan = Plan::capture(prepared, decision, expected, stop)?;
     observe_with_plan(prepared, decision, &plan, stop)
 }
+
+#[cfg(test)]
+#[path =
+    "../../../../../../../../../../test/engine/unit/backup_committed_namespace_probe.rs"
+]
+pub(super) mod encoding_probe;

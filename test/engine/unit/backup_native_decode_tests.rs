@@ -158,7 +158,7 @@ fn real_retained_encoding_keeps_full_native_reports_and_target_local_failures() 
             root: &root,
             stop: &stop,
             budget: Budget::default(),
-            encodings: Some(&mut transaction),
+            encodings: Some(Encodings::Pending(&mut transaction)),
         };
         let before = verify_observed(
             &manifest, &manifest_bytes, task.selection.first(), &mut baseline,
@@ -221,7 +221,7 @@ fn retained_native_objects_still_charge_every_real_read_and_byte_before_authenti
         root: &root,
         stop: &stop,
         budget: Budget::default(),
-        encodings: Some(&mut first),
+        encodings: Some(Encodings::Pending(&mut first)),
     };
     source.object("candidate", hash).unwrap();
     drop(source);
@@ -234,7 +234,7 @@ fn retained_native_objects_still_charge_every_real_read_and_byte_before_authenti
             root: &root,
             stop: &stop,
             budget: Budget { reads, bytes },
-            encodings: Some(&mut transaction),
+            encodings: Some(Encodings::Pending(&mut transaction)),
         };
         let before = baseline.object("candidate", hash).err().unwrap();
         let after = retained.object("candidate", hash).err().unwrap();
