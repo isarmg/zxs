@@ -119,7 +119,14 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         ]
 
     def test_note_target_batch_rejects_more_than_sixteen_builds(self):
-        with self.assertRaises(ValueError):
+        # Keep Python-only policy paths separate so this exercises the Rust ceiling.
+        paths = [path for path in self.note_target_paths()
+                 if path not in ['.github/ci/targeted-tests.json', 'TASKS.md']]
+        with self.assertRaisesRegex(ValueError, '^target selection must be bounded and nonempty$'):
+            CI.select_plan(self.policy, paths)
+
+    def test_note_target_batch_rejects_more_than_eight_python_modules(self):
+        with self.assertRaisesRegex(ValueError, '^invalid Python modules$'):
             CI.select_plan(self.policy, self.note_target_paths())
 
     def test_note_target_split_preserves_every_path_group_and_selection(self):
@@ -132,20 +139,30 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
                 self.assertLessEqual(len(plan['rust_targets']), 16)
 
         # Shared-history adds a third server integration target to the combined batch.
+        # Version reads add a second regression module beside historical authorization;
+        # their union with the seven CI policy modules must still be rejected.
         authorization = ['test/server/unit/authorized_backend.rs']
-        notes = [path for path in paths if path not in authorization]
-        plans = [CI.select_plan(self.policy, batch) for batch in [authorization, notes]]
-        self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 7])
-        self.assertEqual([len(plan['python_tests']) for plan in plans], [1, 8])
+        policy = ['.github/ci/targeted-tests.json', 'TASKS.md']
+        notes = [path for path in paths if path not in authorization + policy]
+        with self.assertRaisesRegex(ValueError, '^invalid Python modules$'):
+            CI.select_plan(self.policy, notes + policy)
+        plans = [CI.select_plan(self.policy, batch) for batch in [authorization, notes, policy]]
+        self.assertEqual([len(plan['rust_targets']) for plan in plans], [15, 9, 0])
+        self.assertEqual([len(plan['python_tests']) for plan in plans], [1, 2, 7])
         self.assertCountEqual([path for plan in plans for path in plan['changed_paths']], paths)
         self.assertEqual(plans[0]['groups'], [
             'portable-path-consumers', 'server-authorization', 'shared-history-http-boundary',
         ])
         self.assertEqual(plans[1]['groups'], [
-            'ci-selection', 'note-http-boundary', 'note-target-consumers',
-            'paged-deletion-review', 'server-authorization',
+            'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
+            'server-authorization', 'version-metadata-read',
         ])
+        self.assertEqual(plans[2]['groups'], ['ci-selection'])
         for plan in plans:
+            self.assertCountEqual(plan['python_tests'], {
+                module for group in plan['groups']
+                for module in self.policy['groups'][group]['python_tests']
+            })
             for group in plan['groups']:
                 configurations = []
                 for target in plan['rust_targets']:
