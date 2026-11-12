@@ -531,8 +531,6 @@ impl Engine {
                 &candidate,
                 original,
                 publication.as_ref(),
-                &online,
-                &rs,
             )?;
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash

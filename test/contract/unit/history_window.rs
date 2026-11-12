@@ -729,7 +729,6 @@ fn summaries_externalize_large_scalars_and_relationships_without_parallel_input_
             "sequence",
             "size",
             "storage_name",
-            "tags",
             "version_id"
         ]
     );
@@ -740,6 +739,12 @@ fn summaries_externalize_large_scalars_and_relationships_without_parallel_input_
         u64::MAX.to_string()
     );
     assert_eq!(encoded["content_state"], "PURGED");
+    assert!(encoded.get("tags").is_none());
+    for legacy_tags in [json!([]), json!(["retired-node-tag"])] {
+        let mut malformed = encoded.clone();
+        malformed["tags"] = legacy_tags;
+        assert!(json_codec::from_value::<HistoryNodeSummary>(malformed).is_err());
+    }
     for field in [
         "message",
         "author",

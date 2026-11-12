@@ -10,10 +10,10 @@ SPEC = importlib.util.spec_from_file_location(
 CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
 
-# Compiled inventory: run 42988331435, artifact 13840114727, SHA 6b311c0d.
-# 190 selected names include three ignored tests; all 187 runnable tests remain selected.
-# Checkpoint layout adds three behaviors, so this candidate has 190 runnable tests.
-# This addition is a static source count; CI must re-enumerate the compiled inventory.
+# Compiled inventory: run 43227554097, artifact 13954370354, SHA 09b7715f3.
+# All 190 runnable names remain selected. Two first-slot repair regressions add
+# behavior, so readmission now has its own 21-case cap beside the retained 171.
+# New counts are static source evidence; CI must re-enumerate the current binary.
 # Record module sizes, not test names, so legitimate behavior renames remain possible.
 # Each tuple is (prefix, runnable count, ignored count).
 MODULE_SIZES = [
@@ -23,7 +23,7 @@ MODULE_SIZES = [
     ('disk::admission_tests::', 3, 2),
     ('journal::writer_lifecycle_tests::', 9, 0),
     ('journal::writer_tests::', 2, 0),
-    ('engine::membership_transition::readmission::', 19, 0),
+    ('engine::membership_transition::readmission::', 21, 0),
     ('engine::membership_transition::pending::terminal_resume::', 47, 1),
     ('engine::membership_transition::pending::activation::backup::startup::resume::', 4, 0),
     ('engine::backup_preparation::tests::', 7, 0),
@@ -49,7 +49,14 @@ CACHE_MODULE_SIZES = [
 class LayoutTargetedCi(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
-        self.target = self.policy['groups']['held-directory-layout']['rust_targets'][0]
+        group = self.policy['groups']['held-directory-layout']
+        selected = CI.select_plan({
+            'groups': {'held-directory-layout': group},
+            'rules': [{'path': 'layout.rs', 'groups': ['held-directory-layout']}],
+            'unexecuted': self.policy['unexecuted'],
+        }, ['layout.rs'])
+        self.target = next(target for target in selected['rust_targets']
+                           if target['package'] == 'storage-engine')
         self.runnable = [f'{prefix}behavior_{index}'
                          for prefix, count, _ in MODULE_SIZES for index in range(count)]
         self.ignored = [f'{prefix}ignored_{index}'
@@ -69,20 +76,25 @@ class LayoutTargetedCi(unittest.TestCase):
         selected = CI.selected_tests(self.runnable + self.ignored + unrelated,
                                      self.ignored, self.target)
         self.assertEqual(selected, sorted(self.runnable))
-        self.assertEqual(len(selected), 190)
-        self.assertEqual(self.target['max_tests'], 190)
+        self.assertEqual(len(selected), 192)
+        self.assertEqual([part['max_tests'] for part in self.target['selections']], [171, 21])
+        self.assertEqual(self.target['selection_groups'],
+                         ['held-directory-layout', 'held-directory-layout'])
         self.assertEqual(len(self.ignored), 3)
 
     def test_one_more_selected_test_requires_review(self):
-        names = self.runnable + ['persist::layout::tests::additional_behavior']
-        with self.assertRaises(ValueError):
-            CI.selected_tests(names, [], self.target)
+        for prefix in ['persist::layout::tests::',
+                       'engine::membership_transition::readmission::']:
+            names = self.runnable + [prefix + 'additional_behavior']
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                CI.selected_tests(names, [], self.target)
 
     def test_missing_recovery_module_cannot_pass_within_budget(self):
-        names = [name for name in self.runnable
-                 if not name.startswith('engine::recovery_checkpoint::tests::')]
-        with self.assertRaises(ValueError):
-            CI.selected_tests(names, [], self.target)
+        for prefix in ['engine::recovery_checkpoint::tests::',
+                       'engine::membership_transition::readmission::']:
+            names = [name for name in self.runnable if not name.startswith(prefix)]
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                CI.selected_tests(names, [], self.target)
 
 
 class ProjectionCacheTargetedCi(unittest.TestCase):
@@ -116,13 +128,13 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine'
                       and target.get('mode', 'test') == 'test' and not target.get('features'))
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [190, 52])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 52])
         layout = [f'{prefix}behavior_{index}'
                   for prefix, count, _ in MODULE_SIZES for index in range(count)]
         selected = CI.selected_tests(layout + self.runnable + self.ignored,
                                      self.ignored, engine)
         self.assertEqual(selected, sorted(layout + self.runnable))
-        self.assertEqual(len(selected), 242)
+        self.assertEqual(len(selected), 244)
         self.assertEqual({target['package'] for target in plan['rust_targets']},
                          {'storage-engine', 'platform-io'})
 
@@ -189,11 +201,12 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
                       if target['package'] == 'storage-engine'
                       and target.get('mode', 'test') == 'test' and not target.get('features'))
         self.assertEqual(engine['selection_groups'],
-                         ['held-directory-layout', 'ordinary-conversion-name-budget',
+                         ['held-directory-layout', 'held-directory-layout',
+                          'ordinary-conversion-name-budget',
                           'projection-cache-layout'])
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [190, 22, 52])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 22, 52])
         self.assertEqual([item.get('timeout_seconds', 300) for item in engine['selections']],
-                         [300, 900, 300])
+                         [300, 300, 900, 300])
         platform = next(target for target in plan['rust_targets']
                         if target['package'] == 'platform-io')
         self.assertEqual(platform['max_tests'], 100)

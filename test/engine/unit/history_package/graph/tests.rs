@@ -556,6 +556,9 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
     assert_eq!(new_pages.difference(&old_pages).count(), 1);
 }
 
+// Current-format bytes captured from run 43227505812, head 09b7715f3,
+// artifact 13952565718, 594.stdout.log actual canonical bundle.
+// SHA-256: 0af2b80f5e291e88bd8ca21acd72559772e7b6cdf48cc42330d7629b36f603d9.
 // Fixed codec fixture, independent of random IDs and wall-clock time. It need
 // not be a semantically valid history: this pins the logical/graph wire format.
 #[test]
@@ -588,7 +591,7 @@ fn shared_manifest_projection_preserves_canonical_golden() {
     });
     assert_eq!(
         canonical_json(&bundle).unwrap(),
-        include_bytes!("manifest-sharing-golden.json")
+        include_bytes!("manifest-sharing-container-tags-golden.json")
     );
 }
 
@@ -682,8 +685,10 @@ mod descriptor_tests;
 
 #[test]
 fn manifest_structural_equality_matches_canonical_closed_fields() {
-    let bundle: Value =
-        json_codec::from_slice(include_bytes!("manifest-sharing-golden.json")).unwrap();
+    let bundle: Value = json_codec::from_slice(include_bytes!(
+        "manifest-sharing-container-tags-golden.json"
+    ))
+    .unwrap();
     let logical: Value = json_codec::from_str(bundle["logical"].as_str().unwrap()).unwrap();
     let original: HistoryManifest = json_codec::from_value(logical.clone()).unwrap();
     assert_eq!(original, original.clone());
@@ -748,4 +753,11 @@ fn prior_history_root_format_is_rejected_without_loading_dependencies() {
     let mut root: Value = json_codec::from_slice(objects.last().unwrap().bytes()).unwrap();
     root["format"] = json!("radix-map-roots");
     assert!(resolve(root, |_, _| panic!("unsupported root must reject before dependencies")).is_err());
+}
+
+#[test]
+fn prior_manifest_sharing_golden_is_rejected_without_rewriting() {
+    let bytes = include_bytes!("manifest-sharing-golden.json");
+    let bundle: Value = json_codec::from_slice(bytes).unwrap();
+    assert!(json_codec::from_str::<HistoryManifest>(bundle["logical"].as_str().unwrap()).is_err());
 }

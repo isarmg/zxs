@@ -147,12 +147,7 @@ impl Engine {
         })?;
         generation.verify_activation_candidate(candidate)?;
         verify_publication_seal(candidate, publication, seal)?;
-        if publication.result != generation.result()? || publication.recovery.is_some() {
-            return Err(Error::new(
-                ErrorCode::PublicationInvalid,
-                "registry preflight differs from its prescribed activation result",
-            ));
-        }
+        generation.verify_activation_result(publication)?;
         let previous = self.replay_registry_source(generation)?;
         let prepared = generation
             .portable
@@ -210,5 +205,20 @@ impl Engine {
             |publication| replay.advance(publication),
         )?;
         replay.finish(generation)
+    }
+}
+
+impl Generation {
+    pub(in crate::engine) fn verify_activation_result(
+        &self,
+        publication: &Publication,
+    ) -> Result<()> {
+        if publication.result != self.result()? || publication.recovery.is_some() {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "registry preflight differs from its prescribed activation result",
+            ));
+        }
+        Ok(())
     }
 }

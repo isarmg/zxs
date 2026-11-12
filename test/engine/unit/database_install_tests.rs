@@ -237,7 +237,10 @@ fn completed_repair_receipts_with_reused_target_stamp_preserve_all_material() {
     }
     let captured = pending(&root, &history, &file);
     assert_eq!(captured.completed_tails.len(), 2);
-    root.write_atomic(&repeated.join("intent.json"), b"{}", false).unwrap();
+    // Corrupt the retained fixture after capture. The apply-time comparison,
+    // not the writer's no-clobber guard, must reject this replacement.
+    root.write_atomic(&repeated.join("intent.json"), b"{}", true)
+        .unwrap();
     assert_eq!(
         captured.apply(&root, &mut |_| Ok(())).unwrap_err().code(),
         ErrorCode::ContainerLayoutInvalid

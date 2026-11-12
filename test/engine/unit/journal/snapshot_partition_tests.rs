@@ -56,7 +56,7 @@ fn aggregate_snapshot_roots_are_fixed_schema_not_flat_page_lists() {
     let root = canonical_json(&prepared.descriptor).unwrap();
     assert!(root.len() < 8192);
     assert_eq!(prepared.descriptor.maps.len(), empty.descriptor.maps.len());
-    assert_eq!(prepared.descriptor.maps.len(), 37);
+    assert_eq!(prepared.descriptor.maps.len(), 38);
     assert_eq!(
         prepared.descriptor.maps["directory_git_repositories"],
         empty.descriptor.maps["directory_git_repositories"]
@@ -85,10 +85,11 @@ fn current_snapshot_and_candidate_reject_old_and_unknown_shapes_without_rewritin
     let disk = &config.disks[0];
     let prepared = prepare_snapshot(&State::default(), MAX_METADATA).unwrap();
     let mut value = json_codec::to_value(&prepared.descriptor).unwrap();
-    assert_eq!(value["format"], "radix-map-roots");
+    assert_eq!(value["format"], "container-tags-radix-map-roots");
     for mutation in [
         "missing_format",
         "unknown_format",
+        "prior_format",
         "unknown_field",
         "old_flat",
     ] {
@@ -98,6 +99,7 @@ fn current_snapshot_and_candidate_reject_old_and_unknown_shapes_without_rewritin
                 bad.as_object_mut().unwrap().remove("format");
             }
             "unknown_format" => bad["format"] = json_codec::json!("future"),
+            "prior_format" => bad["format"] = json_codec::json!("radix-map-roots"),
             "unknown_field" => bad["format_version"] = json_codec::json!(2),
             _ => {
                 bad = json_codec::json!({"sequence":"0","pages":{"events":[]},"scalars":{"sequence":"0","business_generation":"0","topology_generation":"0","control_auth":null}})

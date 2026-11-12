@@ -336,8 +336,12 @@ impl Fixture {
                 inherited_from: Some(id("br", 1)),
             },
         );
-        state.container_tags.insert(file.parse().unwrap(),
-            storage_contract::file_container_tags::ContainerTags::empty());
+        for owner in [&file, &other] {
+            state.container_tags.insert(
+                owner.parse().unwrap(),
+                storage_contract::file_container_tags::ContainerTags::empty(),
+            );
+        }
         let metadata = FileMetadataNode {
             node_id: id("fmeta", 1),
             history_tree_id: h1.clone(),
@@ -527,6 +531,16 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
 fn deleted_migrated_version_retains_old_only_route_without_recreating_content() {
     let fixture = Fixture::new();
     let resources = Arc::new(DiskResources::open(&fixture.config, true).unwrap());
+    // Publish the retained predecessor through the real name/owner installer.
+    // Its only C01 version is removed below, so next-State body admission cannot
+    // establish ownership for an unmarked synthetic predecessor directory.
+    let empty = State::default();
+    let initial = ProjectionTransition::new(&empty, &fixture.state, None).unwrap();
+    prepare_names(&fixture.config, &resources, &initial, MAX_METADATA)
+        .unwrap()
+        .apply()
+        .unwrap();
+    fixture.assert_bodies_unchanged();
     let mut after = fixture.state.clone();
     after.begin_tracking();
     after.versions.remove(&id("ver", 3));

@@ -6,7 +6,7 @@
 
 - [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的容量与真实浏览器验收：降低每页全 State 索引成本，核对阶段内取消和大来源的耗时/分配；不以分页宣称 O(page) 成本。只读删除/恢复/Import 切片已有 contract/Engine、HTTP 和 Web native/WASM 定向证据；完整改名/移动操作轴仍待实施。
 
-- [ ] 完成[容器标签新格式](docs/adr/container-tags.md)完整提交的 GitHub 定向复验：#1304 的两处冷恢复原失败用例、Web native/WASM 编译、543 项 Web 行为和 13 项契约工具已通过，但尚非整批成功；收齐仍执行的 HTTP/Engine 分片，复验已修的旧 Web/contract/复制夹具与 SMB 模块选择，以及流式 CAS 和固定清单。最后继续以 39bcae2 完整基线核新 head 全并集。原备份 900 秒事务仍超时，完整保留并隔离，不以其他分片通过替代其成功；验清旧格式无破坏拒绝、复制保留、CAS、普通/Current 冷开、备份/resume、撤权/晚响应/未知结果，不自动迁移或删除旧材料。真实 Chrome 和完整池恢复仍未验证。
+- [ ] 完成[容器标签新格式](docs/adr/container-tags.md)完整提交的 GitHub 定向复验：#1304 四片已取齐，1837 Rust／193 Python／11 编译检查通过，但仍有 36 项失败记录及 2 项 skipped。复验旧 Web／contract／复制／SMB 和流式 CAS 修正，闭环 31 项 Engine 失败，包括历史父边取消与首份 Current 修复准入顺序；夹具修复保留真实写入、穷尽字段、拒旧及冷开断言。以 39bcae2 完整基线核新 head 全并集。原备份 900 秒事务仍超时，完整保留并隔离，不以其他分片通过替代其成功；验清旧格式无破坏拒绝、复制保留、CAS、普通／Current 冷开、备份／resume、撤权／晚响应／未知结果，不自动迁移或删除旧材料。真实 Chrome 和完整池恢复仍未验证。
 
 - [ ] 继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部消费者的构建闭包、永久收据与用户数据，不恢复非容器功能；已完成的 HTTP 写入口退役见[说明](docs/design/directory-rename-http-retirement.md)。
 

@@ -156,23 +156,40 @@ impl Fixture {
         assert_eq!(files(&disk.root), physical);
         physical
     }
-    fn hidden_absent(&self) {
-        assert!(
-            self.engine
-                .namespace_tree(&self.repository.main_branch_id)
-                .unwrap()
-                .get("dir/gone")
-                .is_none()
-        );
-        let view = self.engine.current_namespaces.as_ref().unwrap();
+}
+
+fn assert_exit_visibility(
+    engine: &Engine,
+    repository: &Repository,
+    hidden: &Entry,
+    removed_disk: &DiskConfig,
+    detached: bool,
+) {
+    assert!(engine.disk_resources.available(removed_disk).is_none());
+    let namespace = engine.namespace_tree(&repository.main_branch_id).unwrap();
+    let view = engine.current_namespaces.as_ref().unwrap();
+    if detached {
+        assert!(namespace.get("dir/gone").is_none());
         for scope in view.branches.values().chain(view.directories.values()) {
             assert!(
                 scope
                     .entries
                     .iter()
-                    .all(|entry| entry.file_id != self.hidden.file_id)
+                    .all(|entry| entry.file_id != hidden.file_id)
             );
         }
+    } else {
+        // PlannedOffline disables I/O without detaching registered occurrences.
+        // It must retain identity, not accidentally apply the deregistration mask.
+        let retained = namespace.get("dir/gone").unwrap();
+        assert_eq!(retained.file_id, hidden.file_id);
+        assert_eq!(retained.version_id, hidden.version_id);
+        assert!(
+            view.branches[&repository.main_branch_id]
+                .entries
+                .iter()
+                .any(|entry| entry.file_id == hidden.file_id)
+        );
     }
 }
 
@@ -183,8 +200,15 @@ fn current_container_tags_live_cold_replay_rejects_extra_writes_and_forged_reque
         MembershipExitAction::PlannedOffline,
     ] {
         let mut fixture = Fixture::new();
+        let detached = action == MembershipExitAction::Deregister;
         fixture.exit(action);
-        fixture.hidden_absent();
+        assert_exit_visibility(
+            &fixture.engine,
+            &fixture.repository,
+            &fixture.hidden,
+            &fixture.config.disks[0],
+            detached,
+        );
         let request = storage_contract::file_container_tags::ReplaceCommand {
             file_id: fixture.current.file_id.parse().unwrap(),
             context: storage_contract::file_container_tags::Context {
@@ -203,6 +227,13 @@ fn current_container_tags_live_cold_replay_rejects_extra_writes_and_forged_reque
             .engine
             .replace_container_tags(&request, &"admin".parse().unwrap(), op())
             .unwrap();
+        assert_exit_visibility(
+            &fixture.engine,
+            &fixture.repository,
+            &fixture.hidden,
+            &fixture.config.disks[0],
+            detached,
+        );
         let next = cold(fixture.engine.state());
         view.verify_new_file_tags(&previous, &next, &receipt).unwrap();
         assert_eq!(previous.branches, next.branches);
@@ -239,6 +270,13 @@ fn current_container_tags_live_cold_replay_rejects_extra_writes_and_forged_reque
         }
         drop(fixture.engine);
         let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+        assert_exit_visibility(
+            &engine,
+            &fixture.repository,
+            &fixture.hidden,
+            &fixture.config.disks[0],
+            detached,
+        );
         let snapshot = engine
             .file_container_tags(&storage_contract::file_container_tags::ReadRequest {
                 file_id: request.file_id,
@@ -310,37 +348,14 @@ fn registry_activation_replay_requires_exact_base_and_actual_d3_before_tags() {
     engine.state = Arc::clone(&generation.base);
     engine.snapshot = generation.snapshot();
 
-    // Model the real cold prefix without admitting an arbitrary visible State.
-    // The candidate and snapshot above are read from authenticated disk objects.
+    // Repair admission is pure and does not authorize the first Current view.
     engine
-        .verify_replay_namespace_candidate(
-            &candidate,
-            original,
-            Some(&publication),
-            &online,
-            &receipts,
-        )
+        .verify_replay_namespace_candidate(&candidate, original, Some(&publication))
         .unwrap();
     assert!(engine.current_namespaces.is_none());
     assert_eq!(engine.state, generation.base);
     assert!(
         engine.verify_current_recovery_candidate(&candidate, original.state()).is_err()
-    );
-    assert!(
-        engine
-            .verify_replay_namespace_candidate(&candidate, original, None, &online, &receipts)
-            .is_err()
-    );
-    assert!(
-        engine
-            .verify_replay_namespace_candidate(
-                &candidate,
-                original,
-                Some(&publication),
-                &online,
-                &receipts[1..],
-            )
-            .is_err()
     );
     engine.snapshot = None;
     assert!(
@@ -349,8 +364,6 @@ fn registry_activation_replay_requires_exact_base_and_actual_d3_before_tags() {
                 &candidate,
                 original,
                 Some(&publication),
-                &online,
-                &receipts,
             )
             .is_err()
     );
@@ -362,17 +375,47 @@ fn registry_activation_replay_requires_exact_base_and_actual_d3_before_tags() {
                 &candidate,
                 original,
                 Some(&publication),
-                &online,
-                &receipts,
             )
             .is_err()
     );
 
     engine.state = live_state;
     engine.snapshot = live_snapshot;
-    engine.current_namespaces = live_view;
+    assert!(live_view.is_some());
+    assert!(engine.current_namespaces.is_none());
+    // Final Current admission must read the real publication, actual D3 journal,
+    // and full seal independently. Retaining the other two cannot replace one.
+    let disk = &online[0];
+    let paths = [
+        crate::journal::object_path(
+            disk,
+            "publication",
+            &receipts[0].record.object_hash,
+        ),
+        crate::engine::membership_transition::pending::activation::log_path(
+            &engine.config,
+            disk,
+        ),
+        crate::journal::publication_seal_path(disk, &receipts[0].record.candidate_hash),
+    ];
+    let intact = files(fixture.temp.path());
+    for (index, path) in paths.iter().enumerate() {
+        let parked = fixture.temp.path().join(format!("retained-d3-evidence-{index}"));
+        fs::rename(path, &parked).unwrap();
+        let missing = files(fixture.temp.path());
+        assert!(engine.restore_current_disk_exit().is_err());
+        assert!(engine.current_namespaces.is_none());
+        assert!(engine.is_read_only());
+        assert_eq!(files(fixture.temp.path()), missing);
+        fs::rename(parked, path).unwrap();
+        assert_eq!(files(fixture.temp.path()), intact);
+    }
+    engine.restore_current_disk_exit().unwrap();
+    assert!(engine.current_namespaces.is_some());
+    assert_eq!(files(fixture.temp.path()), intact);
     drop(snapshot);
     drop(fixture.engine);
     let reopened = Engine::open(&fixture.temp.path().join("system")).unwrap();
     assert!(reopened.current_namespaces.is_some());
+    assert!(!reopened.is_read_only());
 }

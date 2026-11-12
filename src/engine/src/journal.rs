@@ -1176,14 +1176,31 @@ pub(crate) fn verify_publication_seal(
     p: &Publication,
     seal: &PublicationSeal,
 ) -> Result<()> {
+    verify_publication_evidence(c, p, Some(seal))
+}
+
+/// Verify the candidate-bound ACCEPT and FINALIZE material before repairing an
+/// incomplete publication. This grants no D3 barrier or namespace admission.
+pub(crate) fn verify_finalized_publication(c: &Candidate, p: &Publication) -> Result<()> {
+    verify_publication_evidence(c, p, None)
+}
+
+fn verify_publication_evidence(
+    c: &Candidate,
+    p: &Publication,
+    seal: Option<&PublicationSeal>,
+) -> Result<()> {
     let candidate = object_hash("candidate", c)?;
     let publication = object_hash("publication", p)?;
     let finalize = object_hash("finalize", &p.finalize)?;
     let mut ids = c.metadata_disk_ids.clone();
     ids.sort();
     ids.dedup();
-    let mut actual = seal
-        .receipts
+    let receipts = match seal {
+        Some(seal) => seal.receipts.as_slice(),
+        None => p.finalize_receipts.as_slice(),
+    };
+    let mut actual = receipts
         .iter()
         .map(|r| r.disk_id.clone())
         .collect::<Vec<_>>();
@@ -1205,9 +1222,11 @@ pub(crate) fn verify_publication_seal(
             && (member_ids(&p.finalize.accepts) != ids || p.finalize.accepts.len() != ids.len()))
         || member_ids(&p.finalize_receipts) != ids
         || p.finalize_receipts.len() != ids.len()
-        || seal.receipts.len() != ids.len()
-        || seal.candidate_hash != candidate
-        || seal.publication_hash != publication
+        || seal.is_some_and(|seal| {
+            seal.receipts.len() != ids.len()
+                || seal.candidate_hash != candidate
+                || seal.publication_hash != publication
+        })
         || p.candidate_hash != candidate
         || p.finalize.candidate_hash != candidate
         || p.result.operation_id != c.operation_id
@@ -1226,7 +1245,7 @@ pub(crate) fn verify_publication_seal(
         recovery.verify(c, p)?;
     }
     let mut slots = std::collections::BTreeSet::new();
-    for r in &seal.receipts {
+    for r in receipts {
         let f = p
             .finalize_receipts
             .iter()
@@ -1271,7 +1290,7 @@ pub(crate) fn verify_publication_seal(
         if !slots.insert(r.slot_id.clone())
             || r.slot_id != f.slot_id
             || f.record.previous_frame_hash != predecessor
-            || r.record.previous_frame_hash != f.frame_hash
+            || (seal.is_some() && r.record.previous_frame_hash != f.frame_hash)
             || !receipt_binds(f, RecordType::Finalize, c.sequence, &candidate, &finalize)?
         {
             return Err(Error::new(
@@ -1279,13 +1298,15 @@ pub(crate) fn verify_publication_seal(
                 "member synchronized chain is invalid",
             ));
         }
-        if !receipt_binds(
-            r,
-            RecordType::Publication,
-            c.sequence,
-            &candidate,
-            &publication,
-        )? {
+        if seal.is_some()
+            && !receipt_binds(
+                r,
+                RecordType::Publication,
+                c.sequence,
+                &candidate,
+                &publication,
+            )?
+        {
             return Err(Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
                 "publication frame receipt is invalid",

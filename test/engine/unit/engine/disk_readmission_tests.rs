@@ -1483,3 +1483,186 @@ fn live_readmission_retry_before_any_candidate_keeps_activation_as_the_write_bou
         b"the exact receipt and write admission survive restart",
     );
 }
+
+#[cfg(feature = "fault-injection")]
+fn interrupted_readmission_material(
+    fixture: &Fixture,
+) -> (crate::journal::Candidate, Option<crate::journal::Publication>) {
+    let engine = &fixture.engine;
+    let members = engine.config.metadata_members().cloned().collect::<Vec<_>>();
+    let mut records = Vec::new();
+    for disk in &members {
+        let journal = crate::engine::membership_transition::pending::activation::log_path(
+            &engine.config,
+            disk,
+        );
+        match fs::symlink_metadata(&journal) {
+            Ok(metadata) => assert!(metadata.file_type().is_file()),
+            // The first ACCEPT can precede creation of another member's journal.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot inspect interrupted activation journal: {error}"),
+        }
+        let root = &engine.disk_resources.get(disk).unwrap().root;
+        let scan = crate::journal::scan_configured_at(root, disk, &engine.config).unwrap();
+        records.extend(scan.records);
+    }
+    let accepted = records
+        .iter()
+        .find(|(record, _)| record.record_type == crate::journal::RecordType::Accept)
+        .unwrap();
+    let candidate = crate::publication_evidence::verified_object_at(
+        &engine.disk_resources,
+        &members,
+        "candidate",
+        &accepted.0.candidate_hash,
+    )
+    .unwrap();
+    let publication = records
+        .iter()
+        .find(|(record, _)| record.record_type == crate::journal::RecordType::Publication)
+        .map(|(record, _)| {
+            crate::publication_evidence::verified_object_at(
+                &engine.disk_resources,
+                &members,
+                "publication",
+                &record.object_hash,
+            )
+            .unwrap()
+        });
+    (candidate, publication)
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn first_readmission_repair_admission_does_not_install_current_or_create_a_seal() {
+    for point in ["after_accept_1", "after_publication_1"] {
+        let (mut fixture, operation, archive) = live_readmission_cut(point);
+        let (candidate, publication) = interrupted_readmission_material(&fixture);
+        assert_eq!(publication.is_some(), point == "after_publication_1");
+        let members = fixture
+            .engine
+            .config
+            .metadata_members()
+            .cloned()
+            .collect::<Vec<_>>();
+        let admitted = crate::publication_evidence::verified_recovery_snapshot_at(
+            &fixture.engine.disk_resources,
+            &members,
+            &candidate.snapshot_hash,
+        )
+        .unwrap();
+        let original = admitted.for_candidate(&candidate).unwrap();
+        let before = files(fixture.temp.path());
+        let state = Arc::clone(&fixture.engine.state);
+        let snapshot = fixture.engine.snapshot.clone();
+        let hash = object_hash("candidate", &candidate).unwrap();
+        for disk in &members {
+            assert!(!crate::journal::publication_seal_path(disk, &hash).exists());
+        }
+        fixture
+            .engine
+            .verify_replay_namespace_candidate(&candidate, original, publication.as_ref())
+            .unwrap();
+        assert_eq!(files(fixture.temp.path()), before);
+        assert_eq!(fixture.engine.state.as_ref(), state.as_ref());
+        assert_eq!(fixture.engine.snapshot, snapshot);
+        assert!(fixture.engine.current_namespaces.is_none());
+        assert!(fixture.engine.is_read_only());
+        assert!(!fixture.engine.state.operations.contains_key(&operation));
+        drop(admitted);
+        let result = fixture.activate(&archive);
+        assert_eq!(result.operation_id, operation);
+        assert_eq!(fixture.engine.state.operations[&operation], result);
+        assert!(fixture.engine.current_namespaces.is_some());
+        assert!(!fixture.engine.is_read_only());
+        drop(fixture.engine);
+        let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+        assert_eq!(engine.state.operations[&operation], result);
+        assert!(engine.current_namespaces.is_some());
+        assert!(!engine.is_read_only());
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn first_readmission_repair_rejects_bad_publication_material_without_writes() {
+    let (mut fixture, operation, archive) = live_readmission_cut("after_publication_1");
+    let (candidate, publication) = interrupted_readmission_material(&fixture);
+    let publication = publication.unwrap();
+    let members = fixture
+        .engine
+        .config
+        .metadata_members()
+        .cloned()
+        .collect::<Vec<_>>();
+    let admitted = crate::publication_evidence::verified_recovery_snapshot_at(
+        &fixture.engine.disk_resources,
+        &members,
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    let original = admitted.for_candidate(&candidate).unwrap();
+    let mut invalid = Vec::new();
+    let mut value = publication.clone();
+    value.candidate_hash.clear();
+    invalid.push(value);
+    let mut value = publication.clone();
+    value.finalize.accepts.clear();
+    invalid.push(value);
+    let mut value = publication.clone();
+    value.finalize_receipts.clear();
+    invalid.push(value);
+    let mut value = publication.clone();
+    value.finalize.accepts[0].frame_hash.clear();
+    invalid.push(value);
+    let mut value = publication.clone();
+    value.finalize_receipts[0].record.previous_frame_hash.clear();
+    invalid.push(value);
+    let mut value = publication.clone();
+    value.result.kind = "different-activation".into();
+    invalid.push(value);
+    let before = files(fixture.temp.path());
+    let state = Arc::clone(&fixture.engine.state);
+    let snapshot = fixture.engine.snapshot.clone();
+    for publication in invalid {
+        let error = fixture
+            .engine
+            .verify_replay_namespace_candidate(&candidate, original, Some(&publication))
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PublicationInvalid);
+        assert_eq!(files(fixture.temp.path()), before);
+        assert_eq!(fixture.engine.state.as_ref(), state.as_ref());
+        assert_eq!(fixture.engine.snapshot, snapshot);
+        assert!(fixture.engine.current_namespaces.is_none());
+        assert!(fixture.engine.is_read_only());
+    }
+    // Even an authentic candidate cannot repair a different replay predecessor.
+    assert!(snapshot.is_some());
+    fixture.engine.snapshot = None;
+    assert_eq!(
+        fixture
+            .engine
+            .verify_replay_namespace_candidate(&candidate, original, Some(&publication))
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    fixture.engine.snapshot = snapshot;
+    let mut different_base = state.as_ref().clone();
+    different_base.topology_generation = 0;
+    fixture.engine.state = Arc::new(different_base);
+    assert_eq!(
+        fixture
+            .engine
+            .verify_replay_namespace_candidate(&candidate, original, Some(&publication))
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    fixture.engine.state = state;
+    assert_eq!(files(fixture.temp.path()), before);
+    drop(admitted);
+    let result = fixture.activate(&archive);
+    assert_eq!(result.operation_id, operation);
+    assert!(!fixture.engine.is_read_only());
+}

@@ -123,6 +123,13 @@ DIRECTORY_TESTS = (
     'rename::directory_git_rename_checks_other_branch_commits_not_only_current_head',
     'rename::directory_git_rename_same_final_path_cannot_hide_changed_repository_owner',
     'rename::directory_git_rename_new_file_at_old_committed_path_is_not_the_historical_file',
+    'historical_branch::'
+    'historical_registration_uses_exact_commit_without_checkout_and_replays_after_restart',
+    'historical_branch::'
+    'historical_registration_rejects_working_unknown_cross_directory_and_stale_sources',
+    'historical_branch::'
+    'historical_registration_preserves_old_child_pin_and_dirty_archived_child_workspace',
+    'historical_branch::historical_registration_keeps_owned_dirty_and_ownership_restage_fences',
 )
 DIRECTORY_SAFETY_TESTS = (
     'unborn_directory_replacement_rejects_fresh_commit_hot_and_cold',

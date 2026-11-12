@@ -92,7 +92,6 @@
             "disk::admission_tests::",
             "journal::writer_lifecycle_tests::",
             "journal::writer_tests::",
-            "engine::membership_transition::readmission::",
             "engine::membership_transition::pending::terminal_resume::",
             "engine::membership_transition::pending::activation::backup::startup::resume::",
             "engine::backup_preparation::tests::",
@@ -102,7 +101,15 @@
             "engine::backup_preparation::native_control::databases::scoped::cutover::registration::target_writers::store::tests::",
             "container_storage::tests::cross_directory_recovery::"
           ],
-          "max_tests": 190
+          "max_tests": 171
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::membership_transition::readmission::"
+          ],
+          "max_tests": 21
         },
         {
           "package": "platform-io",
@@ -3097,13 +3104,22 @@
     {
       "path": "src/engine/src/engine/recovery.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "held-directory-layout"
       ]
     },
     {
       "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs",
+      "groups": [
+        "container-tags-engine",
+        "held-directory-layout"
       ]
     },
     {
@@ -3516,6 +3532,18 @@
     },
     {
       "path": "test/engine/unit/history_package/graph/tests.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/graph/manifest-sharing-container-tags-golden.json",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/graph/manifest-sharing-golden.json",
       "groups": [
         "container-tags-storage"
       ]

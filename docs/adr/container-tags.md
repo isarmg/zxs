@@ -163,10 +163,13 @@ SYSTEM 增加 catalog family 39；既有永久审计主体、事件、状态的 
   这证明该基础片，不是容器标签生产行为或真实多分片 Rust 构建已通过。
 - 本批新增旧 seal、混合成员、pending/两类 archive 拒绝测试，比较受控临时根中的
   全部目录集合与文件字节。它们不覆盖权限或 mtime，pending 也不宣称完整错误码矩阵。
-  native preparation 正例是 history/native 准备后冷重开续作，不代替完整池激活恢复。
+  #1304 已通过 5 项 disk identity 与 3 项 native archive 格式测试；pending 两项
+  仍因重复初始化替身的夹具失败。native preparation 正例是 history/native 准备后
+  冷重开续作，不代替完整池激活恢复。
 - 非空标签复制回归覆盖真实 foreign prepared graph 的新 FileId、generation 0 与捕获
   后源变化隔离，未安装该目标，不能声称安装后双向写入已验证。maintenance split
-  回归另用真实 API 覆盖两个独立容器的写入及冷开；这些新增测试尚待本批 GitHub 执行。
+  回归另用真实 API 覆盖两个独立容器的写入及冷开，#1304 的 14 项所选 split 测试
+  已通过，包含非空标签的独立 generation-zero 目标及后继隔离。
 - browser-smoke 消费者已经改用真实 GET/CAS 和容器编辑器。定向组执行 Node 观察器
   夹具并编译 Rust 驱动，不运行 Chrome；合成历史分页仍明确为合成输入。
 - 新格式真实 HTTP 捕获已从 #1300 准确提交的受控 wire 工件逐字取回，作为独立的
@@ -216,14 +219,20 @@ Web 原生/WASM、browser Rust、contract-check、FILE history copy 和 phase1_s
 13 个 Python 模块，原备份 Cargo 身份独立后共四片，计划摘要为
 `cbcb938945401f756be256fa9b9141da7c7e3f55669eeb9468f23f673c19a1b7`。
 
-截至本修复片，已取得以下结果，不能合称整批通过：
+四个分片已全部返回工件，整批失败，不能把通过部分合称完整验收：
 
 | 分片 | 实际证据 | 剩余问题 |
 | --- | --- | --- |
-| 0 | live 执行已进入 Engine unit 测试，原九条编译诊断已不再阻断 | 工件尚未返回，HTTP/Engine/Python 的最终通过与失败待核 |
+| 0，工件 13954370354 | 1002 Rust、81 Python、2 编译检查通过；blocked/skipped 均为零 | 31 项 Engine 行为失败，见下文 |
 | 1，工件 13950581200 | 112 Python 通过；blocked/skipped 均为零 | 原备份唯一事务仍在 900 秒超时 |
 | 2，工件 13948639188 | 664 Rust、4 编译检查通过；blocked 为零 | 四项失败、两项 skipped，见下文 |
 | 3，工件 13948788033 | 171 Rust、5 编译检查通过 | 本片无失败、skipped 或 blocked |
+
+全批实际通过 1837 项 Rust、193 项 Python、11 项编译检查；失败记录共 36 项，
+另有 2 项 skipped、0 项 blocked。分片 0 的 ZIP SHA-256 为
+`a901144c0594c7505bcc046ec3aa9f5493d2728a80072ca0698ce6fc4ffe8dff`。
+其中 server 单元 231 项、HTTP 集成 66 项和 Engine 单元 705 项通过；原主机分页
+5 项及 phase1 文件探针 3 项也在这份完整基线上通过。覆盖聚合因分片失败明确失败。
 
 分片 2 已真实通过 Web native 与 WASM 编译、543 项 Web 行为、19 项 browser Rust
 夹具、13 项 contract-check、15 项 phase1_save_tags、两个 phase1_tag_cold_replay
@@ -241,3 +250,57 @@ browser Rust 和 Node 夹具不是实际 Chrome，foreign prepared graph 也不�
 全部九项时序测试，并将它们纳入原有界 HTTP 组。固定 phase-one 清单跟随当前测试名
 及新增生命周期/分页删除用例；只选择其 Python 合成驱动回归，不启动全套 phase-one
 Rust gate。新增选择及所有修复仍待新 head 的 GitHub 执行，不能由 #1304 推定已通过。
+
+### 7.4 Engine 行为失败的后继闭环
+
+分片 0 的 31 项 Engine 失败与同 head、较小基线的 #1303 完全一致。#1303 只用于
+提前定位，不能替代 #1304 的完整范围；它的工件 13952565718 还提供了当前格式
+canonical manifest bundle 的实际输出，新 golden 逐字取自该输出。旧 golden 原字节
+保留为拒绝输入，不手改旧数据冒充新格式。两份固定输入都由精确 CI 路径选择当前
+history graph 测试，新增拒旧用例沿原前缀和预算运行。
+
+本轮候选修复保留原断言的责任：
+
+- 历史父边扫描在交付每个结果前检查取消，不把已收集的其余父边继续交付；原完整
+  结果资源预算不变。
+- Current 夹具区分 Deregister 的隐藏投影和 PlannedOffline 的 I/O 禁用。后者保持
+  原登记身份，不误用注销的隐藏断言；两者继续验证实时和冷开精确标签写集。
+- Merge 路径夹具补实际 chosen-source provenance；FILE 迁移夹具先通过真实
+  owner 安装；增量投影夹具保留真实目录范围和独立文件分支；快照穷尽计数包含新增
+  container_tags 字段，不用通配跳过；别名恢复在真实 checkpoint 后捕获比较基线。
+- 已完成 FILE 安装尾的损坏测试在私有临时根中实际替换 intent，然后验证准入拒绝
+  且目标/原材料不变，避免在准备期就被 no-clobber 写入拒绝。
+- pending 格式拒绝测试的每次冷开使用独立临时替身，不重复初始化同一替身目录；
+  真实池拒绝前后字节及回填原新格式材料后的两次冷开断言保持。
+
+另 6 项 readmission 失败来自首份 Current 的准入时机：修复尚未完成时已要求最终
+Publication/seal，而 after-ACCEPT 或首条 Publication 截点合法地尚无这些完整材料。
+本片分离精确 candidate 的修复准入与完成后 Current 的最终证明：已有 Publication
+仍验证完整 ACCEPT/FINALIZE 链及规定结果，不用其替代 D3；完成后的实际日志、
+Publication 和 seal 仍由最终 Current 门读取。新增两项修复前准入测试，原 Current
+回归改为分别停放真实 Publication、journal、seal 后验证最终门拒绝及材料不变。
+原 held-layout 的 190 个 runnable 测试完整保留；其 19 项 readmission 与新增 2 项
+使用独立 21 项预算，其余为 171 项预算，同 Cargo 身份、原每项 300 秒不变。
+没有放宽其他目标、原备份 900 秒或失败聚合门。所有后继修复仍须新准确 head 的
+GitHub 行为验证，本地未编译、测试或运行 formatter。
+
+### 7.5 小范围消费者复验
+
+[#1305](https://github.com/isarmg/zxs/actions/runs/43234094501) 使用 head
+`6dbe341903eac90c30f9960ce43d8ddd71d9b984`、增量基线
+`09b7715f3d9aa2f85820fd8dc561cc1a800936bc`，选择 19 个 Cargo 配置与 8 个 Python
+模块、两个分片。它不是完整 `39bcae2` 基线重验。计划摘要为
+`b8cb025c4ef4bbfb9ba7129601c440c0345e09b07520cbf019b1a43120d80c41`。
+
+两片合计通过 254 项 Rust、146 项 Python、4 项编译检查，3 项失败记录，
+skipped/blocked 均为零。分片 0 工件 13953582539 的 ZIP SHA-256 为
+`f84e4a0eeb5bf4c3298168f5ce24ecfa00f2cc26b0d94e2aac7d558edf2283c5`；
+分片 1 工件 13951488067 的 ZIP SHA-256 为
+`cf7575737ed1c617e9f8a3826fc96d6ac78e6966ea1a70ba007179ba7f31fa1f`。
+
+Web native 的 43 项所选测试包含已修动作清单，全部通过；WASM release 检查通过。
+真实流式 HTTP 的 9 项撤权／取消／截断／超限测试、contract 旧枚举拒绝、复制捕获
+不改变分支头及实际 SMB 删除审阅模块均通过，13 项 contract-check 再次通过。
+仍失败的是已知 Current 夹具、历史 DTO 固定字段清单残留 `tags`，以及 phase-one
+Python 库存遗漏 4 项已接线的历史目录测试。后两项只修测试消费者与准确库存，不
+恢复旧节点标签、启动普通目录开发或放宽 whole-target 完整性检查。

@@ -69,9 +69,11 @@ impl Fixture {
         )
     }
     fn reopen(&mut self) {
+        // Repeated cold opens need a fresh spare, not reinitialization of its old pool.
+        let spare = tempfile::tempdir().unwrap();
         let placeholder = Engine::initialize(
-            &self.temp.path().join("placeholder-system"),
-            Config::development([self.temp.path().join("placeholder-disk")]).unwrap(),
+            &spare.path().join("system"),
+            Config::development([spare.path().join("disk")]).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(&mut self.engine, placeholder));

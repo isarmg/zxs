@@ -379,6 +379,7 @@ pub(super) fn visit_parents_from<'a>(
             Ok(())
         })?;
     for parent in parents {
+        cancel.checkpoint()?;
         if node(state, scope, parent).is_some() {
             visit(parent)?;
         }

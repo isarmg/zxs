@@ -186,7 +186,7 @@ fn populated_state() -> State {
     state.control_auth =
         Some(json_codec::json!({"\u{10000}": {"roles": ["读者"]}, "\u{e000}": true}));
     let encoded = json_codec::to_value(&state).unwrap();
-    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 37);
+    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 38);
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }

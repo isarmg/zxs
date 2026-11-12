@@ -100,10 +100,13 @@ class TargetedSelection(unittest.TestCase):
         self.assertEqual(plan['groups'], required)
         self.assertEqual(len(plan['rust_targets']), 13)
         self.assertEqual(plan['python_tests'], [])
-        held = self.policy['groups']['held-directory-layout']['rust_targets'][0]
-        self.assertEqual(held['max_tests'], 190)
+        held, readmission, _ = self.policy['groups']['held-directory-layout']['rust_targets']
+        self.assertEqual(held['max_tests'], 171)
         self.assertEqual(held.get('timeout_seconds', 300), 300)
-        self.assertIn('engine::membership_transition::readmission::', held['prefixes'])
+        self.assertNotIn('engine::membership_transition::readmission::', held['prefixes'])
+        self.assertEqual(readmission['prefixes'], ['engine::membership_transition::readmission::'])
+        self.assertEqual(readmission['max_tests'], 21)
+        self.assertEqual(readmission.get('timeout_seconds', 300), 300)
         full = CI.select_plan(self.policy, [
             path, 'test/engine/unit/disk/working_directory_tests.rs',
             'test/ci/test_directory_rename_targeted_ci.py',
@@ -325,7 +328,8 @@ class TargetedSelection(unittest.TestCase):
                               if target['package'] == 'storage-engine'
                               and target.get('mode', 'test') == 'test')
                 self.assertEqual(engine['selection_groups'],
-                                 ['held-directory-layout', 'working-directory-prerequisite'])
+                                 ['held-directory-layout', 'held-directory-layout',
+                                  'working-directory-prerequisite'])
                 self.assertTrue(any(
                     'disk::owned::working_directory::tests::' in selection['prefixes']
                     for selection in engine['selections']
@@ -813,10 +817,11 @@ class TargetedSelection(unittest.TestCase):
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
         self.assertEqual(engine['selection_groups'],
-                         ['held-directory-layout', 'historical-directory-runtime',
+                         ['held-directory-layout', 'held-directory-layout',
+                          'historical-directory-runtime',
                           'portable-path-consumers', 'projection-cache-layout'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [190, 6, 160, 52])
+                         [171, 21, 6, 160, 52])
 
     def test_container_unchanged_save_keeps_tests_product_check_and_overlapping_coverage(self):
         paths = ['src/engine/src/business/workspace.rs', 'test/engine/unit/tests.rs',
@@ -888,10 +893,11 @@ class TargetedSelection(unittest.TestCase):
         engine = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-engine' and target.get('kind', 'lib') == 'lib')
         self.assertEqual(engine['selection_groups'],
-                         ['held-directory-layout', 'ordinary-conversion-name-budget',
+                         ['held-directory-layout', 'held-directory-layout',
+                          'ordinary-conversion-name-budget',
                           'portable-path-consumers', 'typed-name-consumers'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [190, 22, 160, 40])
+                         [171, 21, 22, 160, 40])
         server = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-server'
                       and target.get('kind', 'lib') == 'lib'
@@ -1856,6 +1862,9 @@ class ContainerTagsSelection(unittest.TestCase):
                 'test/engine/integration/foreign_original_databases.rs',
                 'test/engine/unit/history_package/changes.rs',
                 'test/engine/unit/history_package/history_changes_oracle_tests.rs',
+                'test/engine/unit/history_package/graph/'
+                'manifest-sharing-container-tags-golden.json',
+                'test/engine/unit/history_package/graph/manifest-sharing-golden.json',
             ],
             'container-tags-engine': [
                 'src/engine/src/engine/history_window/projection.rs',
@@ -1864,6 +1873,8 @@ class ContainerTagsSelection(unittest.TestCase):
                 'src/engine/src/publication_shape.rs',
                 'src/engine/src/engine/planning.rs',
                 'src/engine/src/engine/recovery.rs',
+                'src/engine/src/engine/recovery/workspace_receipts.rs',
+                'src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs',
                 'src/engine/src/engine/disk_registry/current/file_tags/publication.rs',
             ],
             'container-tags-http': [

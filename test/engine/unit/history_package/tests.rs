@@ -1054,12 +1054,13 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         .find(|entry| entry.path.as_str() == "b/f.txt")
         .unwrap();
     crate::directory_git_fixture::checkpoint_as(&mut engine, &repo, "", "alice");
+    // The fixture helper checkpoints its source before creating the alternate.
+    let alternate = create(&mut engine, "", "whole-view-draft");
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
     let saved_tree = engine.state.directory_branches[&saved_root]
         .head_tree_id
         .clone();
     let saved_contexts = engine.state.file_contexts.clone();
-    let alternate = create(&mut engine, "", "whole-view-draft");
     engine
         .select_default_directory_branch(
             &repo.repository_id,

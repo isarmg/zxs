@@ -458,6 +458,31 @@ fn borrowed_node_facts_match_independent_complete_state_oracle() {
 fn merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body() {
     let mut view = fixture();
     let state = Arc::make_mut(&mut view.state.0);
+    // The chosen source is itself a merge, not a retired tag node. Give it
+    // its actual chosen-content provenance rather than relying on a parent
+    // fallback that only the removed metadata kind once provided.
+    let mut other_source = body(102, FILE, HISTORY);
+    other_source.source_version_ids.clear();
+    state
+        .versions
+        .insert(other_source.version_id.clone(), other_source);
+    let source_parents = vec![id("ver", 0), id("ver", 102)];
+    state
+        .file_metadata_nodes
+        .get_mut(&id("fmeta", 0))
+        .unwrap()
+        .parent_node_ids = source_parents.clone();
+    let mut source_merge = state.file_branch_merges[&id("fmerge", 0)].clone();
+    source_merge.merge_id = id("fmerge", 4);
+    source_merge.result_node_id = id("fmeta", 0);
+    source_merge.chosen_node_id = id("ver", 0);
+    source_merge.input_node_ids = source_parents.clone();
+    source_merge.input_branch_ids = vec![id("br", 0), id("br", 1)];
+    source_merge.parent_node_ids = source_parents;
+    source_merge.reused_node = false;
+    state
+        .file_branch_merges
+        .insert(source_merge.merge_id.clone(), source_merge);
     let mut metadata = state.file_metadata_nodes[&id("fmeta", 0)].clone();
     metadata.node_id = id("fmeta", 1);
     metadata.kind = FileMetadataKind::Merge;
@@ -487,6 +512,22 @@ fn merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body() {
         "目录/原稿.txt"
     );
     assert_eq!(oracle_path(state, &id("fmeta", 1)), "目录/原稿.txt");
+    let mut observed = BTreeSet::new();
+    nodes::visit_parents(
+        state,
+        scope,
+        &id("fmeta", 1),
+        &HistoryWindowCancellation::new(),
+        |id| {
+            observed.insert(id.to_owned());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        observed.into_iter().collect::<Vec<_>>(),
+        oracle_parents(state, &id("fmeta", 1)),
+    );
 }
 
 #[test]

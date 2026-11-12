@@ -350,16 +350,14 @@ impl Engine {
         Ok(())
     }
 
-    /// The first registry slot precedes live namespace installation. Prove only
-    /// that exact, already published activation here; ordinary and degraded
-    /// recovery continue to require an installed Current view.
+    /// Admit only the prescribed first candidate for repair, not for Current.
+    /// Its publication may still lack D3 receipts. Completion and live admission
+    /// independently require the full barrier before installing a namespace.
     pub(in crate::engine) fn verify_replay_namespace_candidate(
         &self,
         candidate: &Candidate,
         original: &crate::history_package::AdmittedState,
         publication: Option<&Publication>,
-        online: &[DiskConfig],
-        receipts: &[Receipt],
     ) -> Result<()> {
         let activation = self.config.generation().filter(|generation| {
             self.current_namespaces.is_none()
@@ -375,13 +373,12 @@ impl Engine {
             return Err(crate::engine::disk_registry::current::pending_publication());
         }
         generation.verify_activation_candidate(candidate)?;
-        let publication = publication
-            .ok_or_else(crate::engine::disk_registry::current::pending_publication)?;
-        let seal = published_barrier(self, online, receipts, candidate, publication)?;
-        self.preflight_registry_barrier(online, receipts, &seal)?;
-        self.preflight_registry_activation(candidate, original, publication, &seal)?;
-        // This is a pure proof, not live admission. Completion below must still
-        // install the exact published State and independently restore Current.
+        if let Some(publication) = publication {
+            crate::journal::verify_finalized_publication(candidate, publication)?;
+            generation.verify_activation_result(publication)?;
+        }
+        // No namespace or seal is created here. Normal recovery repairs the
+        // exact receipts, then restore_current_disk_exit re-reads the full D3.
         Ok(())
     }
 

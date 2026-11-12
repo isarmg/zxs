@@ -59,8 +59,8 @@ fn oversized_historical_copy_count_retains_source_and_leaves_plan_unpublished() 
     assert!(!error.is_retryable());
     assert!(error.published_result().is_none());
     assert!(matches!(error, Error::Context { .. }));
-    let cause = error.source().unwrap().downcast_ref::<Error>().unwrap();
-    assert!(matches!(cause, Error::IntegerRange(_)));
+    let cause = error.source().unwrap().downcast_ref::<Box<Error>>().unwrap();
+    assert!(matches!(cause.as_ref(), Error::IntegerRange(_)));
     let integer_cause = cause.source().unwrap();
     assert!(integer_cause.is::<std::num::TryFromIntError>());
     assert!(integer_cause.source().is_none());
