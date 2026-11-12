@@ -24,6 +24,54 @@ class TargetedSelection(unittest.TestCase):
         self.assertIn('test_targeted_ci', plan['python_tests'])
         self.assertTrue(plan['unexecuted'])
 
+    def test_snapshot_source_policy_preparation_does_not_execute_future_rust_tests(self):
+        plan = CI.select_plan(self.policy, [CI.PLAN_PATH, 'test/ci/test_targeted_ci.py'])
+        self.assertEqual(plan['groups'], ['ci-selection'])
+        self.assertEqual(plan['rust_targets'], [])
+        self.assertEqual(plan['python_tests'],
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(plan['python_tests']), 7)
+        central = CI.select_plan(self.policy, [
+            'src/engine/src/engine.rs', 'src/engine/src/lib.rs',
+            'src/server/src/lib.rs', 'src/server/src/backend_methods.rs',
+            'src/server/src/engine_backend.rs', 'src/server/src/file_manager.rs',
+            'test/server/integration/http_engine.rs',
+        ])
+        self.assertNotIn('directory-snapshot-source-preview', central['groups'])
+        self.assertIn('historical-directory-runtime', central['groups'])
+        self.assertIn('version-metadata-read', central['groups'])
+
+    def test_snapshot_source_paths_select_real_engine_and_http_preview_modules(self):
+        paths = [
+            'src/engine/src/engine/directory_snapshot_source.rs',
+            'test/engine/unit/engine/directory_snapshot_source_tests.rs',
+            'src/server/src/http_directory_snapshot_source.rs',
+            'src/server/src/backend_directory_snapshot_source.rs',
+            'src/server/src/engine_backend/directory_snapshot_source.rs',
+            'test/server/integration/http_engine/directory_snapshot_source.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['directory-snapshot-source-preview'])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 3)
+                engine = next(target for target in plan['rust_targets']
+                              if target['package'] == 'storage-engine'
+                              and target.get('mode', 'test') == 'test')
+                self.assertEqual(engine['prefixes'],
+                                 ['engine::directory_snapshot_source::tests::'])
+                http = next(target for target in plan['rust_targets']
+                            if target['package'] == 'storage-server')
+                self.assertEqual(http['kind'], 'test')
+                self.assertEqual(http['name'], 'http_engine')
+                self.assertEqual(http['features'], ['core'])
+                self.assertEqual(http['prefixes'], ['directory_snapshot_source::'])
+                product = next(target for target in plan['rust_targets']
+                               if target.get('mode') == 'check')
+                self.assertEqual(product['package'], 'storage-engine')
+                self.assertFalse(product['default_features'])
+
     def test_backup_recovery_paths_select_their_behavior_without_adjacent_actions(self):
         paths = ['src/web/src/admin/backup_transaction/recovery.rs',
                  'test/web/unit/admin/backup_transaction_recovery.rs']
