@@ -41,6 +41,12 @@ pub use directory_conversion::{
     PreparedOrdinaryDirectory,
 };
 mod disk;
+mod disk_names;
+pub use disk_names::{
+    DiskNameObservation, DiskNameObservationSource, DiskNamePreviewBlocker,
+    DiskNamePreviewExecution, DiskNamePreviewPhase, DiskSourceIdentity, DiskSourceNameError,
+    DiskSourceNamePreview, DiskSourcePath, DiskSourceRenameRoot, DiskSourceSlice,
+};
 mod persist;
 pub mod disk_authority;
 mod engine;
