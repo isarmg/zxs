@@ -138,9 +138,9 @@ fn compare<T: DeserializeOwned + Serialize>(
         budget: Budget::default(),
     };
     let expected =
-        owned::<T>(&mut before, kind, hash).and_then(|value| canonical_json(&value));
+        owned::<T>(&mut before, kind, hash).and_then(|value| Ok(canonical_json(&value)?));
     let actual =
-        typed::<T>(&mut after, kind, hash).and_then(|value| canonical_json(&value));
+        typed::<T>(&mut after, kind, hash).and_then(|value| Ok(canonical_json(&value)?));
     assert_eq!(before.budget.bytes, after.budget.bytes);
     assert_eq!(before.budget.reads, after.budget.reads);
     match (expected, actual) {
