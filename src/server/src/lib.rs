@@ -82,6 +82,7 @@ mod http_directory_history;
 mod http_directory_layout;
 mod http_directory_staging;
 mod http_file_history_source;
+mod http_file_lifecycle;
 mod http_node_retirement;
 mod http_shared_history;
 pub use backend_file_history::{

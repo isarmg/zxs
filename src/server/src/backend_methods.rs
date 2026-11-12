@@ -762,6 +762,15 @@ macro_rules! methods {
                     Err($crate::ApiError::unsupported())
                 }
 
+                fn file_lifecycle(
+                    &self,
+                    _identity: &$crate::Identity,
+                    _request: storage_contract::file_lifecycle::Request,
+                    _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+                ) -> Result<storage_contract::file_lifecycle::Page, $crate::ApiError> {
+                    Err($crate::ApiError::unsupported())
+                }
+
                 fn content_matches(
                     &self,
                     _identity: &$crate::Identity,

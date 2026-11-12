@@ -9,6 +9,7 @@ mod detail;
 mod history;
 mod history_index;
 mod inline;
+mod lifecycle;
 mod merge;
 mod mkdir;
 mod model;

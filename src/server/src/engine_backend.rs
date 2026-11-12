@@ -1686,6 +1686,23 @@ impl Backend for EngineBackend {
         engine.recheck_shared_history(&read).map_err(error)?;
         page
     }
+    fn file_lifecycle(
+        &self,
+        identity: &Identity,
+        request: storage_contract::file_lifecycle::Request,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::file_lifecycle::Page, ApiError> {
+        let read = {
+            let (engine, _) = self.lock_current(identity)?;
+            engine
+                .capture_file_lifecycle(request, cancellation)
+                .map_err(error)?
+        };
+        let page = read.page().map_err(error);
+        let (engine, _) = self.lock_current(identity)?;
+        engine.recheck_file_lifecycle(&read).map_err(error)?;
+        page
+    }
     fn content_matches(
         &self,
         identity: &Identity,

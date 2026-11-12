@@ -68,6 +68,10 @@ pub(crate) fn routes() -> Router<AppState> {
             get(history_window_http::nodes),
         )
         .route(
+            "/api/file-manager/files/{file}/history/lifecycle",
+            get(http_file_lifecycle::read),
+        )
+        .route(
             "/api/file-manager/files/{file}/history/branches",
             get(history_window_http::branches),
         )

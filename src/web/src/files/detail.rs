@@ -291,6 +291,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                     {version_tree::view(state)}
                     {super::content_matches::view(state)}
                     {super::shared_history::view(state)}
+                    {super::lifecycle::view(state)}
                     {super::node_retirement::view(state)}
                     {super::history::auxiliary_view(state)}
                     {merge::history(state)}
