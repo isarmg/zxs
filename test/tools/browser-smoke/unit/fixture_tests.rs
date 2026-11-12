@@ -42,7 +42,7 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     );
     let entries = engine.list_tree(&repository.main_branch_id).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path, FILE);
+    assert_eq!(entries[0].path.as_str(), FILE);
     let versions = engine.file_history(&entries[0].file_id).unwrap();
     assert_eq!(versions.len(), 2);
     for (version, expected) in versions.iter().zip(PAYLOADS) {
@@ -108,7 +108,7 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
     assert_ne!(naming.repository_id, repository.repository_id);
     let naming_entries = engine.list_tree(&naming.main_branch_id).unwrap();
     assert_eq!(naming_entries.len(), 1);
-    assert_eq!(naming_entries[0].path, FILE);
+    assert_eq!(naming_entries[0].path.as_str(), FILE);
     assert_ne!(naming_entries[0].file_id, entries[0].file_id);
     let mut content = engine.open_content(&naming_entries[0].version_id).unwrap();
     let mut bytes = Vec::new();
