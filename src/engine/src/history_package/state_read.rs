@@ -167,6 +167,7 @@ pub(crate) fn validate(state: &State) -> Result<()> {
     if !state.file_path_nodes.is_empty() {
         return Err(crate::persist::path_changes::invalid());
     }
+    crate::persist::path_changes::admit_ledger(state)?;
     crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.
     // Writers append increasing publication slots; recovery must establish the

@@ -346,10 +346,36 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
             }),
         }],
     };
-    fixture
+    let before_batch = Arc::clone(&fixture.engine.state);
+    let receipt = fixture
         .engine
         .directory_namespace_batch(&fixture.repo.repository_id, &request, "admin", op())
         .unwrap();
+    let published = fixture.engine.state.as_ref().clone();
+    crate::engine::disk_registry::current::verify_path_changes(
+        &before_batch, &published, None, None,
+    ).unwrap();
+    for erase_transfers in [false, true] {
+        let mut forged = published.clone();
+        let result = &mut forged.operations.get_mut(&receipt.operation_id).unwrap().result;
+        result["path_changes"] = json_codec::json!([]);
+        if erase_transfers {
+            result["transfers"] = json_codec::json!([]);
+        }
+        assert_eq!(
+            crate::engine::disk_registry::current::verify_path_changes(
+                &before_batch, &forged, None, None,
+            ).unwrap_err().code(),
+            ErrorCode::PublicationInvalid,
+        );
+        let decoded: State = json_codec::from_slice(&canonical_json(&forged).unwrap()).unwrap();
+        assert_eq!(
+            crate::engine::disk_registry::current::verify_path_changes(
+                &before_batch, &decoded, None, None,
+            ).unwrap_err().code(),
+            ErrorCode::PublicationInvalid,
+        );
+    }
     let branch = fixture
         .engine
         .create_file_branch(

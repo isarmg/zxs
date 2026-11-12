@@ -7,7 +7,7 @@ pub(in crate::engine) struct BackupNativeObjects {
     pub(in crate::engine) seals: BTreeMap<String, PublicationSeal>,
 }
 struct Collect<'a> {
-    target: Target<'a>,
+    target: Target<'a, 'a>,
     objects: BTreeMap<(String, String), Vec<u8>>,
 }
 impl Source for Collect<'_> {
@@ -57,6 +57,7 @@ pub(in crate::engine::backup_preparation::native_control) fn collect(
             root,
             stop,
             budget: Budget::default(),
+            encodings: None,
         },
         objects: BTreeMap::new(),
     };

@@ -1,8 +1,10 @@
-//! Current-authorized, path-free permanent lifecycle evidence.
+//! Current-authorized deletion evidence and local permanent path facts.
 use crate::engine::history_window::HistoryCancellationCheckpoint;
 use crate::engine::history_window::read::HistoryWindowRead;
 use crate::{Engine, Result, State};
-use storage_contract::file_lifecycle::{Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp};
+use storage_contract::file_lifecycle::{
+    Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp,
+};
 use storage_contract::history_window::HistoryWindowCancellation;
 
 pub struct FileLifecycleRead {
@@ -141,21 +143,14 @@ impl FileLifecycleRead {
     }
 
     fn append_path_events(&self, events: &mut Vec<Event>) -> Result<()> {
-        for receipt in self.source.operations.values() {
-            self.read.cancellation.checkpoint()?;
-            if !crate::persist::path_changes::is_kind(&receipt.kind) {
-                continue;
-            }
-            for fact in crate::persist::path_changes::read(receipt)? {
-                self.read.cancellation.checkpoint()?;
+        crate::persist::path_changes::visit_ledger(
+            &self.source,
+            || self.read.cancellation.checkpoint(),
+            |fact| {
                 if fact.file_id.to_string() != self.request.file_id.as_str() {
-                    continue;
+                    return Ok(());
                 }
                 if fact.history_tree_id.to_string() != self.read.context.history_tree_id.as_str()
-                    || fact.sequence.get() == 0
-                    || fact.sequence.get() > self.source.sequence
-                    || self.source.operation_principals.get(&fact.operation_id)
-                        .is_none_or(|principal| principal != fact.author.as_str())
                 {
                     return Err(crate::persist::path_changes::invalid());
                 }
@@ -172,9 +167,9 @@ impl FileLifecycleRead {
                         after: fact.after,
                     },
                 });
-            }
-        }
-        Ok(())
+                Ok(())
+            },
+        )
     }
 }
 impl Engine {

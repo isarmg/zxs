@@ -1,5 +1,7 @@
-//! Request-local pure SQLite bytes. This is never admission or a verification result.
+//! Request-local pure encodings. This is never admission or a verification result.
 use crate::{Result, history_package::preparation_checkpoint};
+use crate::journal::{AuthenticatedMetadataObject, MetadataDomain, RawMetadataRead};
+use crate::journal::RetainedMetadataEncoding;
 use data_serialization::Serialize;
 use std::{
     collections::BTreeMap,
@@ -15,6 +17,7 @@ const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 enum Kind {
     System,
     DiskPair,
+    Canonical(MetadataDomain),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,6 +31,7 @@ struct Key {
 enum Bytes {
     System(Arc<[u8]>),
     DiskPair(Arc<[u8]>, Arc<[u8]>),
+    Canonical { encoding: RetainedMetadataEncoding, payload: usize },
 }
 
 #[derive(Default)]
@@ -40,19 +44,41 @@ struct State {
 
 /// The account includes key/value storage and payload bytes. Tree/allocator
 /// overhead has a separate fixed entry bound; original Scopes output is separate.
-pub(super) struct ScopeEncodingMemo {
+pub(in crate::engine::backup_preparation::native_control) struct ScopeEncodingMemo {
     state: Mutex<State>,
     maximum_bytes: usize,
     maximum_entries: usize,
 }
 
 impl ScopeEncodingMemo {
-    pub(super) fn new() -> Self {
+    pub(in crate::engine::backup_preparation::native_control) fn new() -> Self {
         Self {
             state: Mutex::new(State::default()),
             maximum_bytes: MAX_BYTES,
             maximum_entries: MAX_ENTRIES,
         }
+    }
+
+    /// Reuse committed pure bytes only. This reader never acquires a pending
+    /// reservation or publishes entries before its caller's remaining checks.
+    pub(in crate::engine::backup_preparation::native_control) fn committed_metadata(
+        &self,
+        read: RawMetadataRead<'_>,
+    ) -> Result<AuthenticatedMetadataObject> {
+        if read.raw().len() > self.maximum_bytes {
+            return Ok(read.authenticate(None)?.into_object());
+        }
+        let key = Key {
+            context: [0; 32],
+            input: *blake3::hash(read.raw()).as_bytes(),
+            kind: Kind::Canonical(read.domain()),
+        };
+        let retained = self.get(&key);
+        let encoding = match &retained {
+            Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _)) | None => None,
+        };
+        Ok(read.authenticate(encoding)?.into_object())
     }
 
     fn get(&self, key: &Key) -> Option<Bytes> {
@@ -98,6 +124,34 @@ impl<'a> Session<'a> {
 
     pub(super) fn enabled(&self) -> bool {
         self.memo.is_some()
+    }
+
+    fn metadata(&mut self, read: RawMetadataRead<'_>) -> Result<AuthenticatedMetadataObject> {
+        let Some(memo) = self.memo.filter(|memo| read.raw().len() <= memo.maximum_bytes) else {
+            return Ok(read.authenticate(None)?.into_object());
+        };
+        let key = Key {
+            context: [0; 32],
+            input: *blake3::hash(read.raw()).as_bytes(),
+            kind: Kind::Canonical(read.domain()),
+        };
+        let retained = memo.get(&key);
+        let encoding = match &retained {
+            Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _)) | None => None,
+        };
+        // A key is only a lookup hint. Journal compares the complete newly read
+        // raw bytes and domain before reusing any canonical bytes or digest.
+        let authenticated = read.authenticate(encoding)?;
+        if let Some(payload) = authenticated.retained_payload_bytes() {
+            if self.reserve(key, payload) {
+                self.pending.insert(key, Bytes::Canonical {
+                    encoding: authenticated.retain_encoding(),
+                    payload,
+                });
+            }
+        }
+        Ok(authenticated.into_object())
     }
 
     pub(super) fn system(
@@ -171,6 +225,7 @@ impl<'a> Session<'a> {
                 let payload = match &value {
                     Bytes::System(bytes) => bytes.len(),
                     Bytes::DiskPair(current, history) => current.len() + history.len(),
+                    Bytes::Canonical { payload, .. } => *payload,
                 };
                 state.bytes += payload + std::mem::size_of::<(Key, Bytes)>();
                 state.entries.insert(key, value);
@@ -263,14 +318,15 @@ fn digest_bounded(
 
 /// Pending encodings for one complete registry verification. The binding
 /// digest is lazy: callers retain their original I/O and failure order.
-pub(super) struct Transaction<'a> {
+pub(in crate::engine::backup_preparation::native_control) struct Transaction<'a> {
     memo: Option<&'a ScopeEncodingMemo>,
     binding: &'a dyn Fn(&AtomicBool) -> Result<Option<[u8; 32]>>,
     pending: Vec<Session<'a>>,
+    canonical: Session<'a>,
 }
 
 impl<'a> Transaction<'a> {
-    pub(super) fn new(
+    pub(in crate::engine::backup_preparation::native_control) fn new(
         memo: Option<&'a ScopeEncodingMemo>,
         binding: &'a dyn Fn(&AtomicBool) -> Result<Option<[u8; 32]>>,
     ) -> Self {
@@ -278,7 +334,17 @@ impl<'a> Transaction<'a> {
             memo,
             binding,
             pending: Vec::new(),
+            canonical: Session::new(memo.map(|memo| (memo, [0; 32]))),
         }
+    }
+
+    pub(in crate::engine::backup_preparation::native_control) fn metadata(
+        &mut self,
+        read: RawMetadataRead<'_>,
+    ) -> Result<AuthenticatedMetadataObject> {
+        // Pure raw/domain encodings do not evaluate the lazy SQLite binding.
+        // All physical identities and authority checks remain at each caller.
+        self.canonical.metadata(read)
     }
 
     pub(super) fn session(
@@ -308,7 +374,8 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(super) fn commit(self) {
+    pub(in crate::engine::backup_preparation::native_control) fn commit(self) {
+        self.canonical.commit();
         for session in self.pending {
             session.commit();
         }

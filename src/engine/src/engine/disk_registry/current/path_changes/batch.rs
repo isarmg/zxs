@@ -1,7 +1,8 @@
 //! Batch facts consume the explicitly named directory compositions, not an
 //! arbitrary historical occurrence or an unrelated alias in the main namespace.
-use super::{CurrentNamespaces, Occurrence, Result, State, invalid};
-use crate::DirectoryBranch;
+use crate::{DirectoryBranch, Result, State};
+use crate::engine::CurrentNamespaces;
+use crate::engine::disk_registry::current::path_changes::{Occurrence, invalid};
 use crate::persist::path_changes::BatchTransfers;
 use std::collections::BTreeMap;
 

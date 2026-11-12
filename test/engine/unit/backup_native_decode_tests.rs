@@ -121,6 +121,129 @@ fn error_signature(error: &Error) -> (ErrorCode, Vec<String>) {
     (error.code(), chain)
 }
 
+fn target<'a>(root: &'a DiskRoot, stop: &'a AtomicBool) -> Target<'a, 'a> {
+    Target { root, stop, budget: Budget::default(), encodings: None }
+}
+
+#[test]
+fn real_retained_encoding_keeps_full_native_reports_and_target_local_failures() {
+    use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
+
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let system = DiskRoot::open(&fixture._temp.path().join("system")).unwrap();
+    let task = NativeTask::read(&system).unwrap();
+    let stop = AtomicBool::new(false);
+    let manifest_bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let manifest: Manifest = decode_proof(&manifest_bytes).unwrap();
+    let original_files = fixture_file_bytes(fixture._temp.path());
+    let expected = super::super::verify_completed(&task, &[&root], &stop).unwrap();
+    let memo = encoding_memo::ScopeEncodingMemo::new();
+    let binding = |_: &AtomicBool| -> Result<Option<[u8; 32]>> {
+        panic!("native canonical encoding must not evaluate the SQLite binding")
+    };
+    let mut first = Transaction::new(Some(&memo), &binding);
+    let actual = super::super::verify_completed_with_encodings(
+        &task, &[&root], &stop, &mut first,
+    ).unwrap();
+    assert_eq!(canonical_json(&actual).unwrap(), canonical_json(&expected).unwrap());
+    // Isolated native-reader comparison only. Production commit remains at the
+    // enclosing registry verification's original final binding/cancellation gate.
+    first.commit();
+
+    let compare = || {
+        let mut transaction = Transaction::new(Some(&memo), &binding);
+        let mut baseline = target(&root, &stop);
+        let mut retained = Target {
+            root: &root,
+            stop: &stop,
+            budget: Budget::default(),
+            encodings: Some(Encodings::Pending(&mut transaction)),
+        };
+        let before = verify_observed(
+            &manifest, &manifest_bytes, task.selection.first(), &mut baseline,
+            &mut |_, _, _, _| Ok(()),
+        );
+        let after = verify_observed(
+            &manifest, &manifest_bytes, task.selection.first(), &mut retained,
+            &mut |_, _, _, _| Ok(()),
+        );
+        assert_eq!(retained.budget.bytes, baseline.budget.bytes);
+        assert_eq!(retained.budget.reads, baseline.budget.reads);
+        match (before, after) {
+            (Ok(before), Ok(after)) => {
+                assert_eq!(before.0, after.0);
+                assert_eq!(canonical_json(before.1.state()).unwrap(),
+                    canonical_json(after.1.state()).unwrap());
+                None
+            }
+            (Err(before), Err(after)) => {
+                assert_eq!(error_signature(&after), error_signature(&before));
+                Some(after.code())
+            }
+            _ => panic!("retained encoding changed full archive admission"),
+        }
+    };
+    assert!(compare().is_none());
+    let path = object_path(root.path(), "candidate", &manifest.publications[0].candidate).unwrap();
+    let original = fs::read(&path).unwrap();
+    for bad in [b"{}".as_slice(), b"{\"x\":1,\"x\":2}", b"not json"] {
+        fs::write(&path, bad).unwrap();
+        assert!(compare().is_some());
+        assert_eq!(fs::read(&path).unwrap(), bad);
+    }
+    fs::write(&path, &original).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(compare().is_some());
+    assert!(!path.exists());
+    fs::write(&path, &original).unwrap();
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(compare(), Some(ErrorCode::OperationAborted));
+    stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(compare().is_none());
+    assert_eq!(fixture_file_bytes(fixture._temp.path()), original_files);
+}
+
+#[test]
+fn retained_native_objects_still_charge_every_real_read_and_byte_before_authentication() {
+    use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo;
+
+    let fixture = Fixture::prepared();
+    let root = DiskRoot::open(&fixture.target).unwrap();
+    let stop = AtomicBool::new(false);
+    let bytes = root.read_bytes(&manifest_path(root.path()), MAX_MANIFEST).unwrap();
+    let manifest: Manifest = decode_proof(&bytes).unwrap();
+    let hash = &manifest.publications[0].candidate;
+    let memo = encoding_memo::ScopeEncodingMemo::new();
+    let binding = |_: &AtomicBool| Ok(None);
+    let mut first = Transaction::new(Some(&memo), &binding);
+    let mut source = Target {
+        root: &root,
+        stop: &stop,
+        budget: Budget::default(),
+        encodings: Some(Encodings::Pending(&mut first)),
+    };
+    source.object("candidate", hash).unwrap();
+    drop(source);
+    first.commit();
+    for (reads, bytes) in [(MAX_READS, 0), (0, MAX_BYTES)] {
+        let mut transaction = Transaction::new(Some(&memo), &binding);
+        let mut baseline = target(&root, &stop);
+        baseline.budget = Budget { reads, bytes };
+        let mut retained = Target {
+            root: &root,
+            stop: &stop,
+            budget: Budget { reads, bytes },
+            encodings: Some(Encodings::Pending(&mut transaction)),
+        };
+        let before = baseline.object("candidate", hash).err().unwrap();
+        let after = retained.object("candidate", hash).err().unwrap();
+        assert_eq!(error_signature(&after), error_signature(&before));
+        assert_eq!(retained.budget.bytes, baseline.budget.bytes);
+        assert_eq!(retained.budget.reads, baseline.budget.reads);
+    }
+}
+
 fn compare<T: DeserializeOwned + Serialize>(
     root: &DiskRoot,
     kind: &'static str,
@@ -131,11 +254,13 @@ fn compare<T: DeserializeOwned + Serialize>(
         root,
         stop,
         budget: Budget::default(),
+        encodings: None,
     };
     let mut after = Target {
         root,
         stop,
         budget: Budget::default(),
+        encodings: None,
     };
     let expected =
         owned::<T>(&mut before, kind, hash).and_then(|value| Ok(canonical_json(&value)?));
@@ -299,7 +424,7 @@ fn real_native_objects_keep_owned_decode_results_errors_and_projection_rejection
 }
 
 struct ObservedSource<'a> {
-    target: Target<'a>,
+    target: Target<'a, 'a>,
     reads: std::time::Duration,
     parses: std::time::Duration,
     authentications: std::time::Duration,
@@ -312,7 +437,7 @@ struct ObservedSource<'a> {
 impl<'a> ObservedSource<'a> {
     fn new(root: &'a DiskRoot, stop: &'a AtomicBool) -> Self {
         Self {
-            target: Target { root, stop, budget: Budget::default() },
+            target: target(root, stop),
             reads: std::time::Duration::ZERO,
             parses: std::time::Duration::ZERO,
             authentications: std::time::Duration::ZERO,
@@ -372,7 +497,7 @@ impl Source for ObservedSource<'_> {
 
 // Whole calls are delegated unchanged; this is the no-copy comparison.
 struct DelegatedSource<'a> {
-    target: Target<'a>,
+    target: Target<'a, 'a>,
     objects: std::time::Duration,
     journals: std::time::Duration,
     object_calls: usize,
@@ -426,7 +551,7 @@ fn compare_object_failures(root: &DiskRoot, manifest: &Manifest) {
         ObjectFailure::Kind, ObjectFailure::Hash, ObjectFailure::Missing,
         ObjectFailure::Digest, ObjectFailure::Reads, ObjectFailure::Bytes,
     ] {
-        let mut production = Target { root, stop: &stop, budget: Budget::default() };
+        let mut production = target(root, &stop);
         let mut observed = ObservedSource::new(root, &stop);
         match case {
             ObjectFailure::Reads => {
@@ -522,7 +647,7 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
     );
 
     let mut delegated = DelegatedSource {
-        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        target: target(&root, &stop),
         objects: std::time::Duration::ZERO,
         journals: std::time::Duration::ZERO,
         object_calls: 0,
@@ -556,7 +681,7 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
     );
 
     let mut stage_source = DelegatedSource {
-        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        target: target(&root, &stop),
         objects: std::time::Duration::ZERO,
         journals: std::time::Duration::ZERO,
         object_calls: 0,
@@ -595,7 +720,7 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
         &mut |_, _, _, _| Ok(()),
     ).err().unwrap();
     let mut failed_source = DelegatedSource {
-        target: Target { root: &root, stop: &stop, budget: Budget::default() },
+        target: target(&root, &stop),
         objects: std::time::Duration::ZERO,
         journals: std::time::Duration::ZERO,
         object_calls: 0,
@@ -621,7 +746,7 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
             fs::write(&path, b"{").unwrap();
         }
         let stop = AtomicBool::new(cancelled);
-        let mut production = Target { root: &root, stop: &stop, budget: Budget::default() };
+        let mut production = target(&root, &stop);
         let mut observed = ObservedSource::new(&root, &stop);
         let expected = verify_observed(
             &manifest, &manifest_bytes, task.selection.first(), &mut production,
@@ -632,7 +757,7 @@ fn real_archive_observed_source_matches_production_and_reports_bounded_costs() {
             &mut |_, _, _, _| Ok(()),
         ).err().unwrap();
         let mut staged_source = DelegatedSource {
-            target: Target { root: &root, stop: &stop, budget: Budget::default() },
+            target: target(&root, &stop),
             objects: std::time::Duration::ZERO,
             journals: std::time::Duration::ZERO,
             object_calls: 0,
@@ -831,7 +956,7 @@ fn real_finalize_structural_equality_preserves_payload_rejection_and_bytes() {
         &root, task.selection.first(), &task.archive_hash, &stop,
         &mut |_, _, _, _| Ok(()),
     ).unwrap();
-    let mut source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let mut source = target(&root, &stop);
     let mut exercised = false;
     let original_files = fixture_file_bytes(fixture._temp.path());
     for published in &manifest.publications {
@@ -861,8 +986,8 @@ fn real_finalize_structural_equality_preserves_payload_rejection_and_bytes() {
         let mut changed_publication = publication.clone();
         changed_publication.payload_receipts[0].proof_hash = changed_hash;
         for selected in [&publication, &changed_publication] {
-            let mut old = Target { root: &root, stop: &stop, budget: Budget::default() };
-            let mut new = Target { root: &root, stop: &stop, budget: Budget::default() };
+            let mut old = target(&root, &stop);
+            let mut new = target(&root, &stop);
             let expected = encoded_reference_verify_payloads(
                 &manifest.config, &candidate, selected, &mut old,
             );
@@ -1178,7 +1303,7 @@ fn real_finalize_digest_reuse_preserves_archive_failures_and_read_budgets() {
     )
     .unwrap();
     let original_files = fixture_file_bytes(fixture._temp.path());
-    let mut source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let mut source = target(&root, &stop);
     let publication: Publication =
         typed(&mut source, "publication", &manifest.publications[0].publication).unwrap();
     let finalize_hash = object_hash("finalize", &publication.finalize).unwrap();
@@ -1189,9 +1314,9 @@ fn real_finalize_digest_reuse_preserves_archive_failures_and_read_budgets() {
 
     let compare = |succeeds: bool| {
         let files = fixture_file_bytes(fixture._temp.path());
-        let mut actual_source = Target { root: &root, stop: &stop, budget: Budget::default() };
+        let mut actual_source = target(&root, &stop);
         let mut reference_source = DelegatedSource {
-            target: Target { root: &root, stop: &stop, budget: Budget::default() },
+            target: target(&root, &stop),
             objects: std::time::Duration::ZERO,
             journals: std::time::Duration::ZERO,
             object_calls: 0,
@@ -1262,7 +1387,7 @@ fn real_finalize_digest_reuse_preserves_archive_failures_and_read_budgets() {
     assert_ne!(record.candidate_hash, published.candidate);
     fs::write(&finalize_path, b"invalid standalone FINALIZE").unwrap();
     let gate_files = fixture_file_bytes(fixture._temp.path());
-    let mut gate_source = Target { root: &root, stop: &stop, budget: Budget::default() };
+    let mut gate_source = target(&root, &stop);
     let actual = verify_journal_receipts(
         &candidate, &publication, &seal, published, &manifest.members, &changed_journals,
     )

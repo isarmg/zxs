@@ -147,7 +147,7 @@ fn file_database_has_retained_nodes_branches_tags_and_no_exterior_path_records()
         .unwrap()
         .branch_id
         .unwrap();
-    fixture
+    let path_receipt = fixture
         .engine
         .file_namespace(
             &fixture.repo.repository_id,
@@ -184,13 +184,21 @@ fn file_database_has_retained_nodes_branches_tags_and_no_exterior_path_records()
     let data = decoded(&fixture.bytes());
     assert_eq!(data.keys().filter(|(kind, _)| kind == "version").count(), 2);
     assert_eq!(data.keys().filter(|(kind, _)| kind == "branch").count(), 2);
-    assert!(
-        !data
-            .keys()
-            .filter(|(kind, _)| kind == "anchor")
-            .collect::<Vec<_>>()
-            .is_empty()
+    let facts = crate::persist::path_changes::read(&path_receipt).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert!(!data.keys().any(|(kind, _)| kind == "anchor"));
+    let path = &data[&("path_change".into(), facts[0].event_id.to_string())];
+    assert_eq!(path["source_file_id"], fixture.file.file_id);
+    assert_eq!(path["source_history_tree_id"], fixture.repo.history_tree_id);
+    assert_eq!(path["file_id"], fixture.file.file_id);
+    assert_eq!(path["operation_id"], path_receipt.operation_id.to_string());
+    assert_eq!(path["sequence"], path_receipt.sequence.to_string());
+    assert_eq!(
+        path["occurred_at"],
+        json_codec::to_value(facts[0].occurred_at).unwrap(),
     );
+    assert_eq!(path["before_version_id"], fixture.file.version_id);
+    assert_eq!(path["after_version_id"], fixture.file.version_id);
     assert_eq!(
         data[&("branch".into(), branch.clone())]["head_node_id"],
         fixture.engine.file_branch_head(&branch).unwrap()
@@ -219,6 +227,81 @@ fn file_database_has_retained_nodes_branches_tags_and_no_exterior_path_records()
             );
         }
     }
+}
+
+#[test]
+fn file_database_rejects_old_path_nodes_without_rewriting_state_or_archive_material() {
+    use crate::container_storage::object_database::{
+        ObjectDatabaseMaterial, ObjectDatabaseRecord, ObjectDatabaseScope,
+    };
+
+    let fixture = Fixture::new();
+    let original_database = fixture.bytes();
+    let mut state = fixture.engine.state().clone();
+    let branch = state.file_contexts.values().find(|context| {
+        state.branches[&context.branch_id].file_id.as_deref()
+            == Some(fixture.file.file_id.as_str())
+    }).unwrap().branch_id.clone();
+    let node = FilePathNode {
+        node_id: new_id("fnode").unwrap(),
+        history_tree_id: fixture.repo.history_tree_id.clone(),
+        file_id: fixture.file.file_id.clone(),
+        version_id: fixture.file.version_id.clone(),
+        parent_node_ids: vec![fixture.file.version_id.clone()],
+        branch_id: branch,
+        path: fixture.file.path().into(),
+        previous_path: "old/location.txt".into(),
+        operation_id: op(),
+        author: "admin".into(),
+        sequence: state.sequence,
+        created_at: 1,
+    };
+    state.file_path_nodes.insert(node.node_id.clone(), node.clone());
+    let old_bytes = canonical_json(&state).unwrap();
+    assert_eq!(
+        crate::history_package::validate_prepared_state(&state).unwrap_err().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    assert_eq!(
+        crate::history_package::HistoryManifest::from_state(&state, &fixture.repo.history_tree_id)
+            .err().unwrap().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    let projection = crate::state_projection::ProjectionSnapshot::new(&state);
+    assert_eq!(
+        projection::records(projection.view(), &fixture.file.file_id).err().unwrap().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    assert_eq!(canonical_json(&state).unwrap(), old_bytes);
+    let mut anchor = json_codec::to_value(&node).unwrap();
+    let anchor_fields = anchor.as_object_mut().unwrap();
+    anchor_fields.remove("path");
+    anchor_fields.remove("previous_path");
+    anchor_fields.insert("note".into(), json_codec::Value::Null);
+    let material = ObjectDatabaseMaterial::new(
+        ObjectDatabaseScope::File {
+            file_id: fixture.file.file_id.clone(),
+            history_tree_id: fixture.repo.history_tree_id.clone(),
+        },
+        state.sequence,
+        "0".repeat(64),
+        vec![ObjectDatabaseRecord::new(
+            "anchor",
+            node.node_id.clone(),
+            json_codec::to_string(&anchor).unwrap(),
+        )],
+    );
+    let material_bytes = canonical_json(&material).unwrap();
+    assert_eq!(
+        material::reconstruct_material(
+            &material,
+            &fixture.file.file_id,
+            &fixture.repo.history_tree_id,
+        ).unwrap_err().code(),
+        ErrorCode::ContainerLayoutInvalid,
+    );
+    assert_eq!(canonical_json(&material).unwrap(), material_bytes);
+    assert_eq!(fixture.bytes(), original_database);
 }
 #[test]
 fn file_database_retains_undone_deletions_and_exact_frontier_through_cold_open() {
@@ -309,7 +392,7 @@ fn rewrite(bytes: &[u8], edit: impl FnOnce(&mut Vec<Record>)) -> Vec<u8> {
                     "file" => "file",
                     "version" => "version",
                     "branch" => "branch",
-                    "anchor" => "anchor",
+                    "path_change" => "path_change",
                     "metadata" => "metadata",
                     "deletion" => "deletion",
                     "lifecycle" => "lifecycle",

@@ -11,6 +11,9 @@ use storage_contract::{
 const MAX_FACTS: usize = 65_536;
 const MAX_BYTES: usize = 12 * 1024 * 1024;
 
+mod ledger;
+pub(crate) use ledger::{admit as admit_ledger, visit as visit_ledger};
+
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct BatchTransfer {
@@ -192,13 +195,21 @@ pub(crate) fn read(receipt: &OperationResult) -> Result<Vec<PathChanged>> {
         return Err(Error::PathChange(PathChangeError::Limit));
     }
     let facts: Vec<PathChanged> = json_codec::from_value(value.clone()).map_err(codec)?;
-    validate(&facts)?;
-    for fact in &facts {
+    validate_receipt_facts(receipt, &facts)?;
+    Ok(facts)
+}
+
+pub(super) fn validate_receipt_facts(
+    receipt: &OperationResult,
+    facts: &[PathChanged],
+) -> Result<()> {
+    validate(facts)?;
+    for fact in facts {
         if fact.operation_id != receipt.operation_id || fact.sequence.get() != receipt.sequence {
             return Err(invalid());
         }
     }
-    Ok(facts)
+    Ok(())
 }
 
 pub(crate) fn attach(mut result: Value, mut facts: Vec<PathChanged>) -> Result<Value> {

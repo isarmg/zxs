@@ -3,6 +3,10 @@ use super::*;
 use crate::engine::disk_catalog::PreparedDiskScopes;
 use crate::engine::index::preparation::SystemEncodingInput;
 use super::encoding_memo;
+use crate::engine::backup_preparation::native_control::archive;
+use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo::{
+    Transaction,
+};
 
 const MAX_DATABASES: usize = 81; // SYSTEM plus current/history for 32 + 8 bindings.
 pub(super) const MAX_BYTES: usize = 128 * 1024 * 1024;
@@ -83,11 +87,15 @@ impl Scopes {
         let published = registry.state_at(&prepared.targets[index], stop)?;
         let task = &prepared.task.installation.evidence.task.scoped;
         let mut disks = None;
+        let unbound = |_: &AtomicBool| Ok(None);
+        let mut canonical = Transaction::new(
+            prepared.scope_encoding.as_ref(), &unbound,
+        );
         let (control, source) =
-            crate::engine::backup_preparation::native_control::archive::read_observed(
+            archive::read_observed_with_encodings(
                 root,
                 job,
-                &task.objects.native.archive_hash,
+                &task.objects.native,
                 stop,
                 &mut |config, candidate, hash, state| {
                     if disks.is_none() {
@@ -98,6 +106,7 @@ impl Scopes {
                         .expect("invariant: admitted prefix initialized disk scopes")
                         .observe(candidate, hash, state, stop)
                 },
+                &mut canonical,
             )?;
         if control.state_hash != prepared.source_evidence().state_hash()
             || registry
@@ -131,7 +140,7 @@ impl Scopes {
             manifest: Vec::new(),
         };
         // Every call above still verifies this target's registry, archive and
-        // authenticated disk history. A memo stores only deterministic SQL bytes.
+        // authenticated disk history. The shared memo stores only pure encodings.
         let configuration = registry.configuration();
         let publication = &configuration.publication.publication;
         let memo_context = if prepared.scope_encoding.is_some() {
@@ -204,6 +213,7 @@ impl Scopes {
         named_target(root, job)?;
         preparation_checkpoint(stop)?;
         encodings.commit();
+        canonical.commit();
         Ok(scopes)
     }
     fn add(&mut self, scope: Scope, bytes: Vec<u8>) -> Result<()> {
@@ -294,3 +304,9 @@ pub(super) fn budget() -> Error {
         "published scopes exceed 81 SQLite databases / 128 MiB or their manifest bound",
     )
 }
+
+#[cfg(test)]
+#[path =
+    "../../../../../../../../../../../test/engine/unit/backup_published_encoding_probe.rs"
+]
+pub(in super::super) mod encoding_probe;

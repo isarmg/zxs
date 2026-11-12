@@ -10,6 +10,14 @@ from test_targeted_ci import CI
 
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
+    'src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/published_registry.rs',
+    'test/engine/unit/backup_committed_namespace_probe.rs',
+    'test/engine/unit/backup_published_encoding_probe.rs',
+    'src/engine/src/engine/backup_preparation/native_control/generation_objects.rs',
+    'src/engine/src/journal/retained_encoding.rs',
+    'test/engine/unit/journal/retained_encoding_tests.rs',
+    'src/engine/src/engine/backup_preparation/native_control.rs',
+    'src/engine/src/engine/backup_preparation/native_control/databases.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/encoding_memo.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped.rs',
     'src/engine/src/engine/backup_preparation/native_control/databases/scoped/projection.rs',
@@ -86,6 +94,7 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         group = self.policy['groups']['backup-scoped-encoding-memo']
         unit, product, transaction = group['rust_targets']
         self.assertIn('engine::index::preparation::tests::', unit['prefixes'])
+        self.assertIn('journal::retained_encoding::tests::', unit['prefixes'])
         self.assertIn('engine::disk_catalog::history::preparation::encoding_tests::',
                       unit['prefixes'])
         self.assertIn('container_storage::backup_original_objects::tests::',

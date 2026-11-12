@@ -440,6 +440,7 @@ fn measure_original_verification(
     prepared.recheck_names()
 }
 
+
 #[test]
 fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Result<()> {
     let (_temp, mut engine, request) = fixture();
@@ -525,6 +526,12 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let installed = install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;
     assert_eq!(installed.targets.len(), 2);
+    published_scopes::projection::encoding_probe::verify_published_encoding_reuse(
+        _temp.path(), &mut prepared, &decision, &expected, &stop,
+    )?;
+    published_registry::encoding_probe::verify_committed_namespace_encodings(
+        _temp.path(), &mut prepared, &decision, &expected, &stop,
+    )?;
     let mut previous_completion = None;
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
