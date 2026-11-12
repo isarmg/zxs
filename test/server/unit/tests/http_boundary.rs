@@ -1366,11 +1366,6 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ),
         ("GET", "/api/repositories/repository/default-branch", None),
         (
-            "PATCH",
-            "/api/repositories/repository/directory-branches/directory",
-            Some(json!({"name":"renamed","operation_id":"op_00000000000000000000000000000000"})),
-        ),
-        (
             "GET",
             "/api/repositories/repository/directory-branches",
             None,

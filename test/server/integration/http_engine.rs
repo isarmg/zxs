@@ -3442,27 +3442,24 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     .await;
 
     let rename_api = format!("/api/repositories/{repository}/directory-branches/{frozen}");
-    let renamed = success(
-        &app,
-        &session,
-        "PATCH",
-        &rename_api,
-        Some(json!({
-            "name":"saved view","operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
-    assert_eq!(renamed["result"]["directory_branch_id"], frozen);
+    for name in ["saved view".to_owned(), "x".repeat(129)] {
+        let (status, error) = send(
+            &app,
+            Some(&session),
+            "PATCH",
+            &rename_api,
+            Some(json!({"name":name,"operation_id":new_id("op").unwrap()})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["error"]["code"], "NOT_FOUND");
+    }
     assert_eq!(
         success(&app, &session, "GET", &api, None).await["name"],
-        "saved view"
+        "frozen"
     );
     let audit = success(&app, &session, "GET", "/api/file-manager/history", None).await;
-    for action in [
-        "directory.git.branch-create",
-        "directory.git.checkout",
-        "directory.branch.rename",
-    ] {
+    for action in ["directory.git.branch-create", "directory.git.checkout"] {
         assert!(
             audit["events"].as_array().unwrap().iter().any(|event| {
                 event["action"] == action
@@ -3481,17 +3478,13 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         }),
         "a real save appends an immutable subtree to the existing directory branch"
     );
-    let overlong = send(
-        &app,
-        Some(&session),
-        "PATCH",
-        &rename_api,
-        Some(json!({
-            "name":"x".repeat(129),"operation_id":new_id("op").unwrap()
-        })),
-    )
-    .await;
-    assert_eq!(overlong.0, StatusCode::BAD_REQUEST);
+    assert!(
+        !audit["events"].as_array().unwrap().iter().any(|event| {
+            event["action"] == "directory.branch.rename"
+                && event["directory_branch_id"] == frozen
+        }),
+        "the retired HTTP route must not publish a directory rename"
+    );
     assert_eq!(listing["default_branch_scope"], true);
     assert_eq!(nested["default_branch_scope"], false);
 
@@ -3542,7 +3535,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     assert_eq!(recovered.state().directory_selections[&repository], frozen);
     assert_eq!(
         recovered.state().directory_branches[&frozen].name,
-        "saved view"
+        "frozen"
     );
     let visible = recovered
         .list_tree(&namespace)

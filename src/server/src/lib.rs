@@ -255,7 +255,7 @@ use http_routing::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::Response,
-    routing::{get, patch, post, put},
+    routing::{get, post, put},
 };
 use json_codec::{Value, json};
 use std::{
@@ -1112,10 +1112,6 @@ fn router_shared(
         .route(
             "/api/repositories/{repo}/directory-branches/{id}/commits",
             post(http_directory_staging::commit),
-        )
-        .route(
-            "/api/repositories/{repo}/directory-branches/{id}",
-            patch(http_default_directory::rename),
         )
         .route(
             "/api/repositories/{repo}/branches",

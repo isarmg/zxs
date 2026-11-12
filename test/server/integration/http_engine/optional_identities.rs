@@ -1907,7 +1907,7 @@ async fn typed_directory_selection_preserves_bounded_facts_and_current_tree_conf
 }
 
 #[tokio::test]
-async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority() {
+async fn retired_directory_rename_route_cannot_publish_or_change_current_reads() {
     let (_root, app, namespace, _, _) = fixture();
     let token = login(&app, "admin", "integration-test-password").await;
     let branch = success(
@@ -1933,99 +1933,42 @@ async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority
         &token,
         "POST",
         &format!("/api/repositories/{repo}/directory-git/initialize"),
-        Some(json!({"path":"","expected_namespace_head":branch["head_commit_id"],"operation_id":storage_contract::OperationId::generate().unwrap()})),
+        Some(json!({
+            "path":"",
+            "expected_namespace_head":branch["head_commit_id"],
+            "operation_id":storage_contract::OperationId::generate().unwrap()
+        })),
     )
     .await;
     let directory = initialized["result"]["directory_branch_id"]
         .as_str()
         .unwrap();
     let uri = format!("/api/repositories/{repo}/directory-branches/{directory}");
+    let read_route = format!("/api/repositories/{repo}/default-branch");
+    let before = success(&app, &token, "GET", &read_route, None).await;
     let operation = storage_contract::OperationId::generate().unwrap();
-    let body = json!({"name":"Café","operation_id":operation});
-    let result = success(&app, &token, "PATCH", &uri, Some(body.clone())).await;
-    assert_eq!(result["operation_kind"], "directory.branch.rename");
-    assert_eq!(result["result"]["name"], "Café");
-    let replay = success(&app, &token, "PATCH", &uri, Some(body.clone())).await;
-    for key in [
-        "operation_id",
-        "operation_kind",
-        "request_digest",
-        "result",
-        "publication_sequence",
-        "commit_state",
-    ] {
-        assert_eq!(replay[key], result[key], "{key}");
-    }
-    let changed = send(
-        &app,
-        Some(&token),
-        "PATCH",
-        &uri,
-        Some(json!({"name":"Other","operation_id":operation})),
-    )
-    .await;
-    assert_eq!(changed.0, StatusCode::CONFLICT);
-    assert_eq!(changed.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
-    let invalid = send(
-        &app,
-        Some(&token),
-        "PATCH",
-        &uri,
-        Some(json!({"name":"bad/name","operation_id":"bad-id"})),
-    )
-    .await;
-    assert_eq!(invalid.1["error"]["code"], "INVALID_ID");
-    for (name, code) in [
-        ("bad/name".into(), "NAME_INVALID_CHARACTER"),
-        ("Cafe\u{301}".into(), "NAME_NOT_NORMALIZED"),
-        ("CON.txt".into(), "NAME_RESERVED"),
-        ("x".repeat(129), "METADATA_TOO_LONG"),
-    ] {
-        let invalid = send(
+    for authorization in [Some(token.as_str()), None] {
+        let (status, error) = send(
             &app,
-            Some(&token),
+            authorization,
             "PATCH",
             &uri,
-            Some(json!({"name":name,"operation_id":operation})),
+            Some(json!({"name":"Café","operation_id":operation})),
         )
         .await;
-        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
-        assert_eq!(invalid.1["error"]["code"], code);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["error"]["code"], "NOT_FOUND");
     }
-    for key in ["repository_id", "directory_branch_id"] {
-        let mut mismatch = body.clone();
-        mismatch[key] = json!("other");
-        assert_eq!(
-            send(&app, Some(&token), "PATCH", &uri, Some(mismatch))
-                .await
-                .0,
-            StatusCode::BAD_REQUEST
-        );
-    }
-    assert_eq!(
-        send(
-            &app,
-            Some(&token),
-            "PATCH",
-            &format!("/api/repositories/{repo}/directory-branches/missing"),
-            Some(json!({"name":"Valid","operation_id":storage_contract::OperationId::generate().unwrap()}))
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        send(
-            &app,
-            None,
-            "PATCH",
-            &uri,
-            Some(json!({"name":"bad/name","operation_id":"bad-id"}))
-        )
-        .await
-        .0,
-        StatusCode::UNAUTHORIZED
-    );
+    assert_eq!(success(&app, &token, "GET", &read_route, None).await, before);
+    let (status, _) = send(
+        &app,
+        Some(&token),
+        "GET",
+        &format!("/api/operations/{operation}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

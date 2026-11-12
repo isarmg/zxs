@@ -356,14 +356,11 @@ Web batch/actions.rs 的 POST directory-branches 现传入私有已验证 ReadDi
 回归覆盖边界预算与静态错误、严格HTTP、NFD与10k alias事实、来源顺序/请求排序、当前tree冲突/未知repo/撤权次序、真实只读状态不变、捕获后修改分支不影响回复、锁外序列化与owner释放、公开panic/取消容量及真实排队撤权矩阵。永久幂等、磁盘格式和写入发布阶段未变。
 
 
-## 目录分支重命名的已验证名称
+## 目录分支标签写入口与保留读取
 
-Web files/actions/mutation.rs 的 PATCH directory-branches/{id} 绑定repository/branch路径后，HTTP解析 RenameDirectoryBranch 并调用 required rename_directory_branch，删除同名action/JSON arm。portable BranchName私有保存通过原128 UTF-8字节/PortableName/NFC政策的展示文本及固定Unicode碰撞key，不承担serde/磁盘编码。核心rename直接接受&BranchName，不再次校验或在每个候选中重复fold同一新名称；原公开validate_branch_name仍由manifest及其他真实原始边界消费，委托同一contract校验规则，不为保留API制造未使用wrapper。该规则自身仍可能为保留名stem分配，不宣称校验零分配；公开模型名字String与持久化格式未在此批全面重构。
+目录分支 PATCH 的路由和专用 HTTP 解码／处理已删除；文件分支改名不受影响。默认目录元数据、目录作用域和历史读取继续返回现存标签，永久 `directory.branch.rename` 收据仍经原操作查询返回。退役请求走统一 `404 / NOT_FOUND`，不会转换成文件改名或创建新操作。
 
-HTTP保留精确静态优先级：缺失/空name字段先拒绝；非空name先读OperationId、再验证name政策，所以bad operation赢过非法名称，已存在operation遇非法名称仍先报告NAME*/METADATA_TOO_LONG。错误保留contract source及原public code/400，不被invalid_source降成INVALID_REQUEST。静态边界失败先于排队后的Backend current/repository复核；合法命令仍同锁current→repository→原mutate/receipt→动态branch/碰撞。canonical directory.branch.rename的kind/principal/body仍绑定原NFC展示字符串，不使用折叠key替代摘要输入，永久receipt/replay/冲突次序不变。
-
-已同candidate解析branch后没有移除操作，后续get_mut必存在，改明确内部不变量而不伪造StateInvalid外部错误。回归覆盖名称边界/固定Unicode key、UTF-8上限、NFD/保留名、HTTP错误优先级/双路径绑定、独立canonical摘要/核心直接replay、同名fold碰撞、缺repo/branch与撤权、完整公开panic/取消/排队矩阵。没有更改Commit.kind开放string、发布阶段、授权范围或增加旧格式迁移。
-
+`RenameDirectoryBranch`、Backend 必选方法和 EngineBackend 转发暂时保留，供后续独立切片同步删除所有 trait 实现；它们不再拥有 HTTP 路由。底层 Engine 名称、NFC 摘要、碰撞政策、永久收据与恢复材料保持原样，没有变更磁盘格式。共享 `BranchName` 继续由文件分支、manifest 及其他真实边界消费。当前范围与验证见[目录分支标签 HTTP 写入口退役](../design/directory-rename-http-retirement.md)。
 
 ## 显式归档与原始操作收据
 

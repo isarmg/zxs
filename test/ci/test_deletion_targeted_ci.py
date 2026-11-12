@@ -17,7 +17,18 @@ class DeletionTargetedCi(unittest.TestCase):
     def test_server_entrypoint_selects_registered_deletion_scope(self):
         plan = CI.select_plan(self.policy, ['src/server/src/lib.rs'])
         self.assertIn('paged-deletion-review', plan['groups'])
-        self.assertEqual(len(plan['rust_targets']), 5)
+        self.assertEqual(len(plan['rust_targets']), 8)
+        group = self.policy['groups']['paged-deletion-review']
+        retained = []
+        for target in plan['rust_targets']:
+            if 'selections' in target:
+                retained.extend(selection for name, selection in
+                                zip(target['selection_groups'], target['selections'])
+                                if name == 'paged-deletion-review')
+            elif target['selection_groups'] == ['paged-deletion-review']:
+                retained.append({key: value for key, value in target.items()
+                                 if key != 'selection_groups'})
+        self.assertCountEqual(retained, group['rust_targets'])
 
     def test_specialized_regression_change_runs_product_and_policy_checks(self):
         plan = CI.select_plan(self.policy, ['test/ci/test_deletion_targeted_ci.py'])

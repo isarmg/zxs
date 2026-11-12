@@ -71,43 +71,6 @@ pub(crate) async fn select(
         .map(Json)
 }
 
-fn parse_rename(mut body: Map<String, Value>) -> Result<crate::RenameDirectoryBranch, ApiError> {
-    if let Some(key) = body.keys().find(|key| {
-        ![
-            "repository_id",
-            "directory_branch_id",
-            "name",
-            "operation_id",
-        ]
-        .contains(&key.as_str())
-    }) {
-        return Err(ApiError::invalid(format!("unknown field {key}")));
-    }
-    let repository_id = match body.remove("repository_id") {
-        Some(Value::String(id)) => id,
-        _ => unreachable!("invariant: with_id binds the repository path"),
-    };
-    let directory_branch_id = match body.remove("directory_branch_id") {
-        Some(Value::String(id)) => id,
-        _ => unreachable!("invariant: with_id binds the directory branch path"),
-    };
-    let mut field = |key: &str| match body.remove(key) {
-        Some(Value::String(value)) if !value.is_empty() => Ok(value),
-        _ => Err(ApiError::invalid(format!("missing string field {key}"))),
-    };
-    let name = field("name")?;
-    // The original boundary decoded operation identity before core name validation.
-    let operation_id = field("operation_id")?
-        .parse::<storage_contract::OperationId>()
-        .map_err(contract_input)?;
-    let name = storage_contract::BranchName::parse(&name).map_err(contract_input)?;
-    Ok(crate::RenameDirectoryBranch {
-        repository_id,
-        directory_branch_id,
-        name,
-        operation_id,
-    })
-}
 fn contract_input(source: storage_contract::Error) -> ApiError {
     ApiError::new(
         http::StatusCode::BAD_REQUEST,
@@ -115,31 +78,6 @@ fn contract_input(source: storage_contract::Error) -> ApiError {
         source.message().into_owned(),
     )
     .with_source(source)
-}
-pub(crate) async fn rename(
-    State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
-    ApiPath((repository_id, directory_branch_id)): ApiPath<(String, String)>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    let body = crate::with_id(
-        crate::json_body(request).await?,
-        "repository_id",
-        repository_id,
-    )?;
-    let body = crate::with_id(body, "directory_branch_id", directory_branch_id)?;
-    let Value::Object(body) = body else {
-        unreachable!("invariant: with_id binds an object body")
-    };
-    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
-        .run(move |backend| {
-            let command = parse_rename(body)?;
-            backend
-                .rename_directory_branch(&identity, command)
-                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
-        })
-        .await
-        .map(Json)
 }
 
 #[cfg(test)]

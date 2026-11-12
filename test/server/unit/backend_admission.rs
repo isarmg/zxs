@@ -1195,8 +1195,8 @@ fn workspace_body(method: &str, path: &str) -> Value {
     } else if path.ends_with("/archive") {
         json!({"operation_id":"op_00000000000000000000000000000000"})
     } else if method == "PATCH"
-        && (path.contains("/directory-branches/")
-            || (path.starts_with("/api/file-manager/files/") && path.contains("/branches/")))
+        && path.starts_with("/api/file-manager/files/")
+        && path.contains("/branches/")
     {
         json!({"name":"renamed","operation_id":"op_00000000000000000000000000000000"})
     } else if method == "POST" && path.ends_with("/directory-branches") {
@@ -1337,10 +1337,6 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/repositories/repository/default-branch"),
     ("GET", "/api/repositories/repository/directory-branches"),
     ("POST", "/api/repositories/repository/directory-branches"),
-    (
-        "PATCH",
-        "/api/repositories/repository/directory-branches/directory",
-    ),
     (
         "GET",
         "/api/repositories/repository/directory-branches?summary=true&path=",

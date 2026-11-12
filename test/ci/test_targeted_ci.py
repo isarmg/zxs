@@ -64,9 +64,8 @@ class TargetedSelection(unittest.TestCase):
         ])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']
-                                + ['test_directory_rename_targeted_ci']))
-        self.assertEqual(len(plan['python_tests']), 8)
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(plan['python_tests']), 7)
         group = self.policy['groups']['legacy-directory-branch-web-retirement']
         self.assertEqual(group['rust_targets'][0]['prefixes'], [
             'files::mkdir::storage::tests::', 'files::branch::tests::',
@@ -110,9 +109,8 @@ class TargetedSelection(unittest.TestCase):
                          sorted(required + ['ci-selection', 'directory-rename-recovery']))
         self.assertEqual(len(full['rust_targets']), 13)
         self.assertEqual(full['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']
-                                + ['test_directory_rename_targeted_ci']))
-        self.assertEqual(len(full['python_tests']), 8)
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(full['python_tests']), 7)
 
     def test_publication_location_refactor_keeps_proof_and_live_layout_selections(self):
         paths = [
@@ -210,9 +208,8 @@ class TargetedSelection(unittest.TestCase):
         ])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
-                         sorted(self.policy['groups']['ci-selection']['python_tests']
-                                + ['test_directory_rename_targeted_ci']))
-        self.assertEqual(len(plan['python_tests']), 8)
+                         sorted(self.policy['groups']['ci-selection']['python_tests']))
+        self.assertEqual(len(plan['python_tests']), 7)
         self.assertNotIn('working-directory-prerequisite', plan['groups'])
         browser = next(target for target in plan['rust_targets']
                        if target['package'] == 'browser-smoke'
@@ -1280,6 +1277,131 @@ finally:
                 self.run.execute('run')
         self.assertEqual(self.persisted()['status'], 'failed')
         self.assertEqual(self.calls, [])
+
+
+DIRECTORY_RENAME_PATHS = [
+    'src/web/src/files/actions/mutation.rs',
+    'src/web/src/files/mkdir.rs',
+    'src/web/src/files/mkdir/storage.rs',
+    'src/web/src/files/mkdir/storage/directory.rs',
+    'src/web/src/files/mkdir/view.rs',
+    'test/web/unit/files/directory_branch_recovery_tests.rs',
+    'test/web/unit/files/directory_rename_recovery_tests.rs',
+]
+
+
+class DirectoryRenameTargetedCi(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    def test_all_changed_consumers_select_rename_recovery(self):
+        for path in DIRECTORY_RENAME_PATHS + ['test/ci/test_directory_rename_targeted_ci.py']:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('directory-rename-recovery', plan['groups'])
+                self.assertIn('test_targeted_ci', plan['python_tests'])
+                self.assertLessEqual(len(plan['rust_targets']), 16)
+
+    def test_complete_candidate_retains_existing_independent_selection_budgets(self):
+        plan = CI.select_plan(self.policy, DIRECTORY_RENAME_PATHS + [
+            '.github/ci/targeted-tests.json',
+            'test/ci/test_directory_rename_targeted_ci.py',
+            'docs/validation/directory-rename-recovery.md',
+        ])
+        self.assertIn('historical-directory-web', plan['groups'])
+        self.assertIn('web-recovery-principals', plan['groups'])
+        self.assertEqual(len(plan['rust_targets']), 6)
+        browser_targets = [target for target in plan['rust_targets']
+                           if target['package'] == 'browser-smoke']
+        self.assertCountEqual([
+            (target['manifest'], target['kind'], target['name'], target.get('mode', 'test'))
+            for target in browser_targets
+        ], [
+            ('tools/browser-smoke/Cargo.toml', 'bin', 'browser-smoke', 'test'),
+            ('tools/browser-smoke/Cargo.toml', 'bin', 'browser-smoke', 'check'),
+        ])
+        self.assertLessEqual(len(plan['python_tests']), 8)
+        native = next(target for target in plan['rust_targets']
+                      if target['package'] == 'web-app'
+                      and target.get('mode', 'test') == 'test')
+        selections = dict(zip(native['selection_groups'], native['selections']))
+        self.assertEqual(selections['historical-directory-web']['max_tests'], 56)
+        self.assertEqual(selections['web-recovery-principals']['max_tests'], 131)
+        self.assertEqual(selections['directory-rename-recovery']['max_tests'], 72)
+        self.assertIn('files::mkdir::storage::tests::',
+                      selections['historical-directory-web']['prefixes'])
+        self.assertIn('files::mkdir::storage::tests::',
+                      selections['web-recovery-principals']['prefixes'])
+
+    def test_product_compilation_is_separate_from_native_behavior_and_browser_acceptance(self):
+        group = self.policy['groups']['directory-rename-recovery']
+        native, product, wasm, server = group['rust_targets']
+        self.assertEqual(native['package'], 'web-app')
+        self.assertNotIn('files::mkdir::storage::rename_tests::', native['prefixes'])
+        self.assertIn('files::mkdir::storage::tests::', native['prefixes'])
+        self.assertIn('files::actions::mutation::tests::', native['prefixes'])
+        self.assertIn('files::actions::operation::tests::', native['prefixes'])
+        self.assertIn('files::inline::tests::', native['prefixes'])
+        self.assertEqual(product['mode'], 'check')
+        self.assertNotIn('compile_target', product)
+        self.assertEqual(wasm['mode'], 'check')
+        self.assertEqual(wasm['compile_target'], 'wasm32-unknown-unknown')
+        for target in (product, wasm):
+            self.assertNotIn('max_tests', target)
+            self.assertNotIn('prefixes', target)
+            self.assertNotIn('--no-run', CI.cargo_command(target, '/build'))
+        self.assertEqual(server['features'], ['core'])
+        self.assertEqual(server['max_tests'], 2)
+        self.assertEqual(server['exact'], [
+            'http_default_directory::tests::'
+            'selection_ingress_binds_path_and_parses_operation_once',
+            'engine_backend::read_projection::tests::default_directory_tests::'
+            'typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_policy',
+        ])
+
+    def test_http_retirement_has_closed_routes_and_retained_behavior_within_budget(self):
+        paths = [
+            'src/server/src/lib.rs',
+            'src/server/src/http_default_directory.rs',
+            'test/server/unit/http_default_directory.rs',
+            'test/server/unit/backend_admission.rs',
+            'test/server/unit/tests/http_boundary.rs',
+            'test/server/integration/http_engine/optional_identities.rs',
+            'test/server/integration/http_engine.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('directory-rename-http-retirement', plan['groups'])
+        plan = CI.select_plan(self.policy, paths + [
+            '.github/ci/targeted-tests.json',
+            'test/ci/test_directory_rename_targeted_ci.py',
+            'docs/15-api-and-errors.md',
+            'docs/contracts/openapi.json',
+            'docs/design/directory-rename-http-retirement.md',
+        ])
+        self.assertEqual(len(plan['rust_targets']), 14)
+        self.assertEqual(len(plan['python_tests']), 8)
+        group = self.policy['groups']['directory-rename-http-retirement']
+        native, http, product, no_core = group['rust_targets']
+        self.assertEqual(native['max_tests'], 5)
+        self.assertIn(
+            'engine_backend::read_projection::tests::default_directory_tests::'
+            'typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_policy',
+            native['exact'])
+        self.assertEqual(http['kind'], 'test')
+        self.assertEqual(http['name'], 'http_engine')
+        self.assertEqual(http['exact'], [
+            'optional_identities::'
+            'retired_directory_rename_route_cannot_publish_or_change_current_reads',
+            'public_file_branch_label_patch_preserves_content_and_directory_nodes',
+            'default_directory_branch_is_shared_authorized_and_persistent',
+        ])
+        self.assertEqual(http['max_tests'], 3)
+        self.assertEqual(product['mode'], 'check')
+        self.assertEqual(product['features'], ['core'])
+        self.assertEqual(no_core['mode'], 'check')
+        self.assertFalse(no_core['default_features'])
 
 
 if __name__ == '__main__':

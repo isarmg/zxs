@@ -83,7 +83,6 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/repositories/{repo}/directory-branches?path={path}` | 只读查询冻结分支和条目；省略 path 返回所有作用域，不切换默认分支 |
 | `POST /api/repositories/{repo}/directory-branches` | 只读查询捕获分支及已选直接子项的精确身份/路径事实；不创建操作，不修改状态 |
 | `GET/PUT /api/repositories/{repo}/default-branch` | 查询默认根目录分支；PUT 以 expected_tree_id/expected_head 显式发布根目录或子目录默认组合 |
-| `PATCH /api/repositories/{repo}/directory-branches/{id}` | 修改分支标签，身份、子树和内容不变 |
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |
 | `GET /api/repositories/{repo}/directory-git?path={path}` | 只读准确目录仓库、所属祖先、工作树、HEAD、index 代数和直接独立子仓库状态，不隐式初始化 |
 | `POST /api/repositories/{repo}/directory-git/initialize` | `{path,expected_namespace_head,operation_id}`：显式初始化此目录仓库，不递归初始化、不自动提交 |

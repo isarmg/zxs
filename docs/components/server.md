@@ -152,7 +152,7 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 | `/api/file-manager/disks/{slot}/write-sessions`、`/namespace` | POST 当前文件上传会话、仅创建目录（重命名/删除使用带身份和子树前置条件的 namespace-batch） |
 | `/api/file-manager/disks/{slot}/directory-branches` | POST 登记当前显式目录仓库的完整冻结子树；选择走带稳定 ID 和 CAS 的仓库 `default-branch` 接口 |
 | `/api/file-manager/disks/{slot}/namespace-batch` | POST 显式源/目标目录分支映射，原子移动、复制、删除、重命名 |
-| `/api/repositories/{repo}/directory-branches`、`/directory-branches/{id}` | GET 全部或指定路径作用域与冻结条目；PATCH 分支标签 |
+| `/api/repositories/{repo}/directory-branches` | GET 全部或指定路径作用域与冻结条目；目录分支标签 PATCH 已退役，历史标签和操作查询保留 |
 | `/api/repositories/{repo}/default-branch` | GET/PUT Web/SMB 共用默认根目录分支 |
 | `/api/file-manager/files/{file}/nodes/{node}` | PATCH 文件路径节点独立备注，最多128 UTF-8字节 |
 | `/api/file-manager/files/{file}/branches/{branch}` | PATCH 公共文件分支标签，元数据修改，不生成版本或目录子树 |
