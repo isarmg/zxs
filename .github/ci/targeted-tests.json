@@ -2333,6 +2333,121 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "container-lifecycle-contract": {
+      "reason": "Bind read-only retained deletion/restoration pages to exact file, current root, resolved context, observation sequence and strictly advancing operation cursors; unknown event times stay nullable.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "file_lifecycle::tests::"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "container-lifecycle-engine": {
+      "reason": "Project only authenticated permanent D/undo/import facts; preserve original FILE database audit consumers, complete source admission, cold reopen, retained-copy evidence, cancellation and no-fabrication failures.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::history_window::read::lifecycle::tests::",
+            "container_storage::file_database::tests::",
+            "file_deletion::batch::undo::tests::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "file_history_copy",
+          "prefixes": [
+            "lifecycle_page::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "container-lifecycle-http": {
+      "reason": "Exercise the real authenticated bounded lifecycle route, strict request decoding, stale roots, logout, delete/undo pagination and cold reopen without changing historical content nodes.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "file_lifecycle::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "mode": "check",
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "container-lifecycle-web": {
+      "reason": "Connect verified lifecycle facts to the real file detail page with independent operation anchors, bounded replacing pages, read-only controls, exact entry/session/root fences and original errors.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::lifecycle::tests::",
+            "files::detail::detail_tests::"
+          ],
+          "max_tests": 72,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown",
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -5783,7 +5898,98 @@
       "groups": [
         "backup-scoped-encoding-memo"
       ]
+    },
+    {
+      "path": "src/contract/src/file_lifecycle.rs",
+      "groups": [
+        "container-lifecycle-contract"
+      ]
+    },
+    {
+      "path": "src/contract/src/error.rs",
+      "groups": [
+        "container-lifecycle-contract"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_lifecycle.rs",
+      "groups": [
+        "container-lifecycle-contract"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window/read/lifecycle.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_window.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/file_deletion/retained.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/file_lifecycle_tests.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/lifecycle_page.rs",
+      "groups": [
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_lifecycle.rs",
+      "groups": [
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags.rs",
+      "groups": [
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/file_lifecycle.rs",
+      "groups": [
+        "container-lifecycle-http"
+      ]
+    },
+    {
+      "path": "src/web/src/files/lifecycle.rs",
+      "groups": [
+        "container-lifecycle-web"
+      ]
+    },
+    {
+      "path": "test/web/unit/files/lifecycle_tests.rs",
+      "groups": [
+        "container-lifecycle-web"
+      ]
+    },
+    {
+      "path": "docs/design/container-lifecycle-read.md",
+      "groups": [
+        "container-lifecycle-http",
+        "container-lifecycle-web"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted. Directory rename recovery selects native request/receipt/editor behavior plus product native and WASM library compilation and existing server rename regressions. Live browser storage failures, refresh/cross-tab behavior and cold engine replay are not verified by those Web tests. Directory-history Web retirement compiles the migrated unsolicited-preview probe but does not execute a live browser. The node-card palette/Node host probe and history-title-row Python modules are not selected in this retirement change; shared file-node behavior is covered by the selected native modules, not by a claimed browser or palette pass. Directory snapshot source preview rules activate only for the new source and test paths. The policy preparation change alone executes existing CI selection regressions and no absent Rust tests. A later implementation selection covers only the named Engine and protected HTTP preview tests and product compilation; ordinary-filesystem capture, .zxs initialization, snapshot publication, restore/removal, live SMB clients and complete backup/layout integration remain unexecuted. Working-directory prerequisites do not activate the new storage format, attach a live mixed work tree, initialize .zxs or implement FILE/Backup migration. Structural catalog validation is not complete logical inventory authority. The independent bind-mount test and initialization-ledger, mixed snapshot, cold FILE-installation and Backup integration scenarios remain unexecuted. The selected ordinary working-directory fault parent invokes the existing isolated directory-retry script. Its exact ignored children are checked by the script and recorded in raw output, not counted as additional directly selected Rust tests; other ignored tests remain outside this selection. Legacy directory staging retirement removes only Web initialization/staging/commit writers and dedicated browser flows. Existing server and Engine operations remain for subsequent slices. File-container branches, tags, nodes, ordinary path handling, directory-layout repair and current branch read contexts remain. Browser assertions are compiled and native fixture/guard tests run; a live browser interaction is not executed by this group. Version-publication location extraction preserves the current active disk layout and does not activate a unified DISK/FILE proof source. Selected new proof and metadata-context tests and existing read/scrub/tombstone tests do not establish new-format startup, mixed repository initialization or FILE installation recovery. These require later integrated changes and their own targeted evidence. Legacy directory branch Web retirement removes only the old client write and exclusive recovery chains. File-container branch/default/node behavior, ordinary namespace recovery and current directory read context remain. The browser probe JavaScript and live browser flows are not executed by this selection; native fixture/guard tests and product/native/WASM compilation are selected. Server/Engine old branch operations and new .zxs branches require later changes. Backup image entry-budget tests exercise the real planning limit without installing 100,000 filesystem entries. Existing ordinary storage fixtures and one selected native Backup transaction cover their original small temporary layouts; full multi-level rename, common-data/deleted-data/zxs-data migration and complete three-scope recovery remain unexecuted. Backup database snapshot checks compare complete object-local SQLite bytes and reuse original object storage and one native Backup transaction regression. They do not establish independent SYSTEM/DISK/FILE authority, historical format migration, new physical layout or disk-name/UUID rename publication. The retained native Backup transaction timed out in run #1268; bounded direct-stderr phase/progress diagnostics preserve its original assertions and 900-second limit, without claiming a root cause or successful recovery. Disk source-name preview checks are read-only geometry and held-root observations. Configured basenames are not authenticated name records, before/after are prospective paths rather than current locators, and the result is always preview_only. HTTP/Web integration, persistent name reservation, actual directory rename, three-directory layout publication and cross-disk recovery remain unimplemented and unexecuted. Directory-label HTTP retirement removes only PATCH routing and HTTP decoding/execution. Backend types/adapters, Engine operations and persisted data remain. Selected HTTP and queue/panic regressions do not establish complete backend retirement, cold recovery, Chrome or live SMB behavior. Container-history DAG admission verifies only the visible bounded response graph, not complete cross-page or retained history; native editor/error completion tests and product compilation do not execute a live browser or establish operation timelines/container-level labels."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted. Directory rename recovery selects native request/receipt/editor behavior plus product native and WASM library compilation and existing server rename regressions. Live browser storage failures, refresh/cross-tab behavior and cold engine replay are not verified by those Web tests. Directory-history Web retirement compiles the migrated unsolicited-preview probe but does not execute a live browser. The node-card palette/Node host probe and history-title-row Python modules are not selected in this retirement change; shared file-node behavior is covered by the selected native modules, not by a claimed browser or palette pass. Directory snapshot source preview rules activate only for the new source and test paths. The policy preparation change alone executes existing CI selection regressions and no absent Rust tests. A later implementation selection covers only the named Engine and protected HTTP preview tests and product compilation; ordinary-filesystem capture, .zxs initialization, snapshot publication, restore/removal, live SMB clients and complete backup/layout integration remain unexecuted. Working-directory prerequisites do not activate the new storage format, attach a live mixed work tree, initialize .zxs or implement FILE/Backup migration. Structural catalog validation is not complete logical inventory authority. The independent bind-mount test and initialization-ledger, mixed snapshot, cold FILE-installation and Backup integration scenarios remain unexecuted. The selected ordinary working-directory fault parent invokes the existing isolated directory-retry script. Its exact ignored children are checked by the script and recorded in raw output, not counted as additional directly selected Rust tests; other ignored tests remain outside this selection. Legacy directory staging retirement removes only Web initialization/staging/commit writers and dedicated browser flows. Existing server and Engine operations remain for subsequent slices. File-container branches, tags, nodes, ordinary path handling, directory-layout repair and current branch read contexts remain. Browser assertions are compiled and native fixture/guard tests run; a live browser interaction is not executed by this group. Version-publication location extraction preserves the current active disk layout and does not activate a unified DISK/FILE proof source. Selected new proof and metadata-context tests and existing read/scrub/tombstone tests do not establish new-format startup, mixed repository initialization or FILE installation recovery. These require later integrated changes and their own targeted evidence. Legacy directory branch Web retirement removes only the old client write and exclusive recovery chains. File-container branch/default/node behavior, ordinary namespace recovery and current directory read context remain. The browser probe JavaScript and live browser flows are not executed by this selection; native fixture/guard tests and product/native/WASM compilation are selected. Server/Engine old branch operations and new .zxs branches require later changes. Backup image entry-budget tests exercise the real planning limit without installing 100,000 filesystem entries. Existing ordinary storage fixtures and one selected native Backup transaction cover their original small temporary layouts; full multi-level rename, common-data/deleted-data/zxs-data migration and complete three-scope recovery remain unexecuted. Backup database snapshot checks compare complete object-local SQLite bytes and reuse original object storage and one native Backup transaction regression. They do not establish independent SYSTEM/DISK/FILE authority, historical format migration, new physical layout or disk-name/UUID rename publication. The retained native Backup transaction timed out in run #1268; bounded direct-stderr phase/progress diagnostics preserve its original assertions and 900-second limit, without claiming a root cause or successful recovery. Disk source-name preview checks are read-only geometry and held-root observations. Configured basenames are not authenticated name records, before/after are prospective paths rather than current locators, and the result is always preview_only. HTTP/Web integration, persistent name reservation, actual directory rename, three-directory layout publication and cross-disk recovery remain unimplemented and unexecuted. Directory-label HTTP retirement removes only PATCH routing and HTTP decoding/execution. Backend types/adapters, Engine operations and persisted data remain. Selected HTTP and queue/panic regressions do not establish complete backend retirement, cold recovery, Chrome or live SMB behavior. Container-history DAG admission verifies only the visible bounded response graph, not complete cross-page or retained history; native editor/error completion tests and product compilation do not execute a live browser or establish operation timelines/container-level labels. Lifecycle mapping is prepared before its implementation paths are published; policy-only changes do not execute absent tests. Contract/Engine and HTTP/Web are separate coherent publication batches because their existing overlapping consumers exceed the single-plan budget when combined. TASKS and documentation updates run in a separate batch because their ci-selection mapping would exceed the HTTP/Web Python budget. Each original selection and budget remains. Lifecycle pages expose only verified D/undo/already-deleted import evidence, not complete move/rename/tag operation history. Pagination bounds output, not full-source admission work; live Chrome, large-source timing/allocation measurements, and new persistent lifecycle formats remain unexecuted."
 }

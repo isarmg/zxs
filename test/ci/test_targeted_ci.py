@@ -442,6 +442,59 @@ class TargetedSelection(unittest.TestCase):
         self.assertIn('web-directory-history-retirement',
                       CI.select_plan(self.policy, [paths[1]])['groups'])
 
+    def test_container_lifecycle_batches_keep_all_existing_consumers_within_scope(self):
+        engine_paths = [
+            'src/contract/src/lib.rs', 'src/contract/src/error.rs',
+            'src/contract/src/file_lifecycle.rs', 'test/contract/unit/file_lifecycle.rs',
+            'src/engine/src/lib.rs', 'src/engine/src/engine.rs',
+            'src/engine/src/engine/history_window.rs',
+            'src/engine/src/engine/history_window/read.rs',
+            'src/engine/src/engine/history_window/read/lifecycle.rs',
+            'src/engine/src/file_deletion/retained.rs',
+            'test/engine/unit/engine/file_lifecycle_tests.rs',
+            'test/engine/integration/file_history_copy.rs',
+            'test/engine/integration/file_history_copy/lifecycle_page.rs',
+        ]
+        ui_paths = [
+            'src/server/src/backend_methods.rs', 'src/server/src/engine_backend.rs',
+            'src/server/src/file_manager.rs', 'src/server/src/lib.rs',
+            'src/server/src/http_file_lifecycle.rs',
+            'test/server/integration/phase1_save_tags.rs',
+            'test/server/integration/phase1_save_tags/file_lifecycle.rs',
+            'src/web/src/files/mod.rs', 'src/web/src/files/detail.rs',
+            'src/web/src/files/lifecycle.rs', 'test/web/unit/files/lifecycle_tests.rs',
+        ]
+        for paths, required in [
+            (engine_paths, {'container-lifecycle-contract', 'container-lifecycle-engine',
+                            'held-directory-layout', 'historical-directory-runtime',
+                            'history-visible-context', 'typed-name-consumers',
+                            'ordinary-conversion-name-budget', 'paged-deletion-review'}),
+            (ui_paths, {'container-lifecycle-http', 'container-lifecycle-web',
+                        'paged-deletion-review', 'note-http-boundary',
+                        'version-metadata-read', 'historical-directory-runtime',
+                        'directory-rename-http-retirement', 'web-directory-history-retirement',
+                        'legacy-directory-staging-web-retirement'}),
+        ]:
+            with self.subTest(paths=paths):
+                plan = CI.select_plan(self.policy, paths)
+                self.assertTrue(required <= set(plan['groups']))
+                self.assertLessEqual(len(plan['rust_targets']), 16)
+                self.assertLessEqual(len(plan['python_tests']), 8)
+        for oversized in [engine_paths + ui_paths,
+                          ui_paths + ['TASKS.md'],
+                          ui_paths + ['docs/design/container-lifecycle-read.md']]:
+            with self.subTest(paths=oversized), self.assertRaises(ValueError):
+                CI.select_plan(self.policy, oversized)
+        policy_only = CI.select_plan(self.policy, [CI.PLAN_PATH, 'test/ci/test_targeted_ci.py'])
+        self.assertEqual(policy_only['groups'], ['ci-selection'])
+        self.assertEqual(policy_only['rust_targets'], [])
+        engine = self.policy['groups']['container-lifecycle-engine']['rust_targets'][0]
+        self.assertIn('container_storage::file_database::tests::', engine['prefixes'])
+        self.assertIn('file_deletion::batch::undo::tests::', engine['prefixes'])
+        http = self.policy['groups']['container-lifecycle-http']['rust_targets'][0]
+        self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
+                         ('storage-server', 'test', 'phase1_save_tags', ['core']))
+
     def test_unknown_and_empty_changes_need_target_selection(self):
         for changed in ([], ['__unmapped_fixture__/unknown.rs']):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
