@@ -4,7 +4,7 @@ use crate::engine::CurrentNamespaces;
 use crate::persist::path_changes::{self, PathChanged};
 use crate::{Entry, NamespaceEntryKind, Result, State};
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{EntryId, FileId, RepositoryId};
+use storage_contract::{BranchId, EntryId, FileId, RepositoryId};
 
 fn invalid() -> crate::Error {
     path_changes::invalid()
@@ -13,7 +13,7 @@ fn invalid() -> crate::Error {
 struct Occurrence {
     repository: RepositoryId,
     entry: Entry,
-    branch_id: Option<String>,
+    branch_id: Option<BranchId>,
 }
 
 mod batch;
@@ -48,7 +48,8 @@ fn occurrences(
                 result.push(Occurrence {
                     repository,
                     entry: entry.clone(),
-                    branch_id: state.file_contexts.get(&key).map(|context| context.branch_id.clone()),
+                    branch_id: state.file_contexts.get(&key)
+                        .map(|context| context.branch_id.parse()).transpose()?,
                 });
             }
         }
@@ -56,12 +57,25 @@ fn occurrences(
     Ok(result)
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq)]
 struct LocationKey {
     repository: RepositoryId,
     entry: EntryId,
     file: FileId,
     path: name_policy::PortablePath,
+}
+
+impl Ord for LocationKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.repository, self.entry, self.file, self.path.as_str())
+            .cmp(&(other.repository, other.entry, other.file, other.path.as_str()))
+    }
+}
+
+impl PartialOrd for LocationKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl LocationKey {
@@ -124,7 +138,7 @@ fn verify_facts(
                 && (after.locations.contains_key(&source) || before.locations.contains_key(&target))
             || old.entry.version_id != fact.before_version_id.to_string()
             || new.entry.version_id != fact.after_version_id.to_string()
-            || new.branch_id.as_deref() != Some(fact.branch_id.to_string().as_str())
+            || new.branch_id != Some(fact.branch_id)
         {
             return Err(invalid());
         }
@@ -134,6 +148,14 @@ fn verify_facts(
         let version = next.versions.get(&new.entry.version_id).ok_or_else(invalid)?;
         if branch.file_id.as_deref() != Some(new.entry.file_id.as_str())
             || branch.history_tree_id != fact.history_tree_id.to_string()
+        {
+            return Err(invalid());
+        }
+        if fact.before_version_id == fact.after_version_id
+            && let Some(original) = previous.branches.get(&branch.branch_id)
+            && (original.head_commit_id != branch.head_commit_id
+                || original.file_node_id != branch.file_node_id
+                || original.generation != branch.generation)
         {
             return Err(invalid());
         }
@@ -199,15 +221,17 @@ pub(in crate::engine) fn verify(
     };
     let facts = path_changes::read(receipt)?;
     let principal = next.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
+    let principal = storage_contract::Principal::new(principal.clone())
+        .map_err(|source| crate::Error::PathChange(crate::PathChangeError::Principal(source)))?;
     if receipt.sequence != next.sequence || next.sequence <= previous.sequence {
         return Err(invalid());
     }
     for fact in &facts {
-        if fact.author.as_str() != principal {
+        if fact.author != principal {
             return Err(invalid());
         }
     }
-    if let Some(transfers) = path_changes::batch_transfers(receipt, principal)? {
+    if let Some(transfers) = path_changes::batch_transfers(receipt, &principal)? {
         let (old, new) = batch::occurrences(previous, next, before, after, &transfers)?;
         verify_facts(previous, next, &old, &new, &facts, false)
     } else {

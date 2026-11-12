@@ -16,10 +16,10 @@ const MAX_BYTES: usize = 12 * 1024 * 1024;
 pub(crate) struct BatchTransfer {
     pub(crate) source: storage_contract::DirectoryNamespaceSource,
     pub(crate) target: Option<storage_contract::DirectoryNamespaceTarget>,
-    pub(crate) file_id: String,
-    pub(crate) version_id: String,
+    pub(crate) file_id: Option<FileId>,
+    pub(crate) version_id: Option<VersionId>,
     #[serialization(rename = "physical_path")]
-    _physical_path: Option<String>,
+    _physical_path: Option<name_policy::PortablePath>,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +37,7 @@ pub(crate) struct BatchTransfers {
 
 pub(crate) fn batch_transfers(
     receipt: &OperationResult,
-    principal: &str,
+    principal: &Principal,
 ) -> Result<Option<BatchTransfers>> {
     if !matches!(
         receipt.kind.as_str(),
@@ -54,12 +54,14 @@ pub(crate) fn batch_transfers(
         return Err(Error::PathChange(PathChangeError::Limit));
     }
     for row in rows {
-        if row.get("target").is_none() || row.get("physical_path").is_none() {
+        if ["target", "physical_path", "file_id", "version_id"]
+            .iter().any(|field| row.get(*field).is_none())
+        {
             return Err(invalid());
         }
     }
     let input = receipt.result.get("namespace_request").ok_or_else(invalid)?;
-    if crate::Engine::native_request_digest(&receipt.kind, principal, input)?
+    if crate::Engine::native_request_digest(&receipt.kind, principal.as_str(), input)?
         != receipt.request_digest
     {
         return Err(invalid());
@@ -68,12 +70,14 @@ pub(crate) fn batch_transfers(
     let action: storage_contract::DirectoryBatchKind = json_codec::from_value(
         receipt.result.get("action").ok_or_else(invalid)?.clone(),
     ).map_err(codec)?;
-    let count = receipt.result.get("count").and_then(Value::as_str)
-        .ok_or_else(invalid)?.parse::<usize>().map_err(|_| invalid())?;
+    let count: Sequence = json_codec::from_value(
+        receipt.result.get("count").ok_or_else(invalid)?.clone(),
+    )
+    .map_err(codec)?;
     let transfers: Vec<BatchTransfer> = json_codec::from_value(raw.clone()).map_err(codec)?;
     if transfers.is_empty()
         || transfers.len() != request.request.items.len()
-        || count != transfers.len()
+        || count.get() != transfers.len() as u64
         || action != request.request.kind
         || action == storage_contract::DirectoryBatchKind::Delete
     {

@@ -450,10 +450,28 @@ impl CurrentNamespaces {
         &self,
         previous: &State,
         next: &State,
-        branch: &str,
+        workspace: &Workspace,
         entries: &[Entry],
     ) -> Result<()> {
-        let scope = self.branches.get(branch).ok_or_else(stale)?;
+        let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
+        let mut projected;
+        let scope = if previous.branches.get(&workspace.branch_id)
+            .is_some_and(|branch| branch.file_id.is_some())
+            && let Some(file) = workspace.files.values().next()
+        {
+            let source = crate::business::workspace_file_entries(
+                previous,
+                Some(self),
+                workspace,
+                &scope.entries,
+                &file.path,
+            )?;
+            projected = scope.as_ref().clone();
+            projected.entries = Arc::new(source.into_owned());
+            &projected
+        } else {
+            scope.as_ref()
+        };
         let changes = VerifiedEntryChanges::between_states(&scope.entries, entries, previous, next);
         self.validate_entry_changes(Some(scope), entries, &changes)
     }

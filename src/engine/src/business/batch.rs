@@ -1207,9 +1207,18 @@ fn apply(
     let mut affected = touched;
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
-    let transfers=request.items.iter().zip(&paths).map(|(item,(source_path,_))| {
-        let source=originals[&item.source.directory_branch_id].branch();let e=namespace::find_unordered_key(&source.entries,source_path.key()).expect("source checked");
-        json!({"source":item.source,"target":item.target,"file_id":e.file_id,"version_id":e.version_id,"physical_path":state.file_locations.get(&e.file_id)})
+    let transfers = request.items.iter().zip(&paths).map(|(item, (source_path, _))| {
+        let source = originals[&item.source.directory_branch_id].branch();
+        let entry = namespace::find_unordered_key(&source.entries, source_path.key())
+            .expect("invariant: each source was admitted before drafts were built");
+        let file = entry.kind == NamespaceEntryKind::File;
+        json!({
+            "source": item.source,
+            "target": item.target,
+            "file_id": file.then_some(&entry.file_id),
+            "version_id": file.then_some(&entry.version_id),
+            "physical_path": state.file_locations.get(&entry.file_id),
+        })
     }).collect::<Vec<_>>();
     crate::persist::path_changes::attach(
         json!({"commit_id":commit_id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"action":request.kind,"count":request.items.len().to_string(),"directory_branch_ids":affected,"changes":changes,"transfers":transfers,"copies":copy_receipts}),

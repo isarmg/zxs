@@ -3,6 +3,7 @@
 use super::{CurrentNamespaces, Occurrence, Result, State, invalid};
 use crate::DirectoryBranch;
 use crate::persist::path_changes::BatchTransfers;
+use std::collections::BTreeMap;
 
 fn scope(
     state: &State,
@@ -33,13 +34,25 @@ pub(super) fn occurrences(
             return Err(invalid());
         }
         let source = scope(previous, before, &transfer.source.directory_branch_id)?;
+        let source_path = name_policy::PortablePath::parse(&transfer.source.path)?;
         let selected = source.entries.iter()
-            .find(|entry| entry.path() == transfer.source.path).ok_or_else(invalid)?;
-        if selected.entry_id != transfer.source.entry_id
-            || selected.file_id != transfer.file_id
-            || selected.version_id != transfer.version_id
-        {
+            .find(|entry| entry.lookup_key() == source_path.key()).ok_or_else(invalid)?;
+        if selected.entry_id != transfer.source.entry_id {
             return Err(invalid());
+        }
+        match selected.kind {
+            crate::NamespaceEntryKind::File => {
+                if transfer.file_id != Some(selected.file_id.parse()?)
+                    || transfer.version_id != Some(selected.version_id.parse()?)
+                {
+                    return Err(invalid());
+                }
+            }
+            crate::NamespaceEntryKind::Directory => {
+                if transfer.file_id.is_some() || transfer.version_id.is_some() {
+                    return Err(invalid());
+                }
+            }
         }
         let target = transfer.target.as_ref().ok_or_else(invalid)?;
         let initial_target = previous.directory_branches
@@ -50,6 +63,12 @@ pub(super) fn occurrences(
             return Err(invalid());
         }
         let destination = scope(next, after, &target.directory_branch_id)?;
+        if destination.repository_id != source.repository_id {
+            return Err(invalid());
+        }
+        let destinations: BTreeMap<_, _> = destination.entries.iter()
+            .map(|entry| (entry.path(), entry)).collect();
+        let target_path = name_policy::PortablePath::parse(&target.path)?;
         let repository = source.repository_id.parse()?;
         let prefix = format!("{}/", selected.path());
         for entry in &source.entries {
@@ -64,9 +83,9 @@ pub(super) fn occurrences(
                 continue;
             };
             let path = if suffix.is_empty() {
-                target.path.clone()
+                target_path.as_str().to_owned()
             } else {
-                format!("{}/{suffix}", target.path)
+                format!("{}/{suffix}", target_path.as_str())
             };
             if matches!(
                 transfers.kind,
@@ -76,22 +95,21 @@ pub(super) fn occurrences(
                 // retained source proof, not a same-container path fact.
                 continue;
             }
-            let moved = destination.entries.iter().find(|candidate| {
-                candidate.path() == path
-                    && candidate.entry_id == entry.entry_id
+            let moved = destinations.get(path.as_str()).copied().filter(|candidate| {
+                candidate.entry_id == entry.entry_id
                     && candidate.file_id == entry.file_id
             }).ok_or_else(invalid)?;
             old.push(Occurrence {
                 repository,
                 entry: entry.clone(),
                 branch_id: source.file_contexts.get(entry.lookup_key())
-                    .map(|context| context.branch_id.clone()),
+                    .map(|context| context.branch_id.parse()).transpose()?,
             });
             new.push(Occurrence {
                 repository,
                 entry: moved.clone(),
                 branch_id: destination.file_contexts.get(moved.lookup_key())
-                    .map(|context| context.branch_id.clone()),
+                    .map(|context| context.branch_id.parse()).transpose()?,
             });
         }
     }
