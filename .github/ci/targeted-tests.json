@@ -3273,6 +3273,12 @@
       ]
     },
     {
+      "path": "test/server/unit/engine_backend/read_projection/directory_scopes_tests.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
       "path": "test/server/unit/smb_rpc/directory_tests.rs",
       "groups": [
         "portable-path-consumers"

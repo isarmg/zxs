@@ -266,8 +266,8 @@ fn all_scope_ids(
 }
 
 #[test]
-fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_root_choices() {
-    let (_root, mut engine, repo, identity) = fixture();
+fn rejected_initialized_directory_deletion_preserves_current_scopes_data_and_authorization() {
+    let (root, mut engine, repo, _) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "dir/file", b"original");
     for path in [None, Some(name_policy::LookupPath::parse("dir").unwrap())] {
         checkpoint(
@@ -300,11 +300,11 @@ fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_r
         .find(|branch| branch.directory_id == old_id && branch.name == "frozen")
         .unwrap()
         .clone();
-    let root_branches: BTreeMap<_, _> = engine
+    let expected_scopes: BTreeMap<_, _> = engine
         .state()
         .directory_branches
         .values()
-        .filter(|branch| branch.directory_id == repo.repository_id)
+        .filter(|branch| branch.repository_id == repo.repository_id)
         .map(|branch| {
             (
                 branch.directory_branch_id.clone(),
@@ -312,8 +312,23 @@ fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_r
             )
         })
         .collect();
-    assert_eq!(root_branches.len(), 2);
-    engine
+    assert_eq!(expected_scopes.len(), 4);
+    assert_eq!(
+        expected_scopes
+            .values()
+            .filter(|id| *id == &repo.repository_id)
+            .count(),
+        2
+    );
+    let original = engine
+        .namespace_tree(&repo.main_branch_id)
+        .unwrap()
+        .get("dir/file")
+        .unwrap()
+        .clone();
+    let before = storage_contract::canonical_json(engine.state()).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let error = engine
         .file_namespace(
             &repo.repository_id,
             storage_engine::NamespaceOperation::parse(
@@ -323,81 +338,90 @@ fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_r
             )
             .unwrap(),
             "owner",
-            storage_contract::OperationId::generate().unwrap(),
+            operation,
         )
-        .unwrap();
-    let backend = EngineBackend::new(engine);
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        storage_contract::ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(
+        storage_contract::canonical_json(engine.state()).unwrap(),
+        before
+    );
+    assert!(!engine.state().operations.contains_key(&operation));
+
+    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     for projection in [
         DirectoryBranchProjection::Full,
         DirectoryBranchProjection::Summary,
     ] {
         assert_eq!(
             all_scope_ids(&backend, &identity, &repo.repository_id, projection),
-            root_branches
+            expected_scopes
         );
     }
-    {
-        let mut engine = backend.engine.lock().unwrap();
-        save_projection_file(&mut engine, &repo.main_branch_id, "dir/new", b"replacement");
-        checkpoint(&mut engine, &repo, "dir", "owner");
-        engine
-            .create_directory_branches(
-                &repo.repository_id,
-                Some(&name_policy::LookupPath::parse("dir").unwrap()),
-                &storage_contract::BranchName::parse("new-frozen").unwrap(),
-                "owner",
-                storage_contract::OperationId::generate().unwrap(),
-            )
-            .unwrap();
-    }
-    let new_id = {
-        let engine = backend.engine.lock().unwrap();
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .unwrap()
-            .get("dir")
-            .unwrap()
-            .entry_id
-            .clone()
+    let history_request = || {
+        storage_contract::directory_history::DirectoryHistoryRequest::parse(
+            &repo.repository_id,
+            &old_id,
+            storage_contract::directory_history::DirectoryHistoryCollection::Branches,
+            BTreeMap::new(),
+        )
+        .unwrap()
     };
-    assert_ne!(old_id, new_id);
+    let history = backend
+        .directory_history(
+            &identity,
+            history_request(),
+            storage_contract::history_window::HistoryWindowCancellation::new(),
+        )
+        .unwrap();
+    assert!(history
+        .branches
+        .iter()
+        .any(|branch| branch.directory_branch_id == historical.directory_branch_id));
+    auth.logout(&token).unwrap();
     for projection in [
         DirectoryBranchProjection::Full,
         DirectoryBranchProjection::Summary,
     ] {
-        let rows = all_scope_ids(&backend, &identity, &repo.repository_id, projection);
-        assert_eq!(rows.len(), 4);
-        assert!(
-            rows.values()
-                .all(|id| id == &repo.repository_id || id == &new_id)
-        );
-        assert_eq!(rows.values().filter(|id| *id == &new_id).count(), 2);
-        assert!(root_branches.keys().all(|branch| rows.contains_key(branch)));
-        assert!(!rows.contains_key(&historical.directory_branch_id));
+        let error = backend
+            .directory_scopes(
+                &identity,
+                ReadDirectoryScopes {
+                    repository_id: &repo.repository_id,
+                    filter: &DirectoryBranchFilter::All,
+                    projection,
+                },
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
     }
-    // Removed identities remain available through the explicit history API.
-    let history = backend
+    let error = backend
         .directory_history(
             &identity,
-            storage_contract::directory_history::DirectoryHistoryRequest::parse(
-                &repo.repository_id,
-                &old_id,
-                storage_contract::directory_history::DirectoryHistoryCollection::Branches,
-                BTreeMap::new(),
-            )
-            .unwrap(),
+            history_request(),
             storage_contract::history_window::HistoryWindowCancellation::new(),
         )
+        .err()
         .unwrap();
-    assert!(
-        history
-            .branches
-            .iter()
-            .any(|branch| branch.directory_branch_id == historical.directory_branch_id)
-    );
-    let engine = backend.engine.lock().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    drop(auth);
+    drop(backend);
+
+    let engine = Engine::open(&root.path().join("system")).unwrap();
+    let namespace = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    assert_eq!(namespace.get("dir").unwrap().entry_id, old_id);
+    assert_eq!(namespace.get("dir/file").unwrap(), &original);
     assert_eq!(
         engine.state().directory_branches[&historical.directory_branch_id],
         historical
     );
+    assert!(!engine.state().operations.contains_key(&operation));
+    let mut content = engine.open_content(&original.version_id).unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut content.file, &mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
 }

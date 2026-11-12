@@ -313,11 +313,23 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
             .is_empty()
     );
     let count = e.state().versions.len();
-    let written = save(&mut e, &r.main_branch_id, "a.txt", b"source");
+    let unchanged = save(&mut e, &r.main_branch_id, "a.txt", b"source");
+    assert_eq!(unchanged.version_id, file.version_id);
+    assert_eq!(e.state().versions.len(), count);
+    assert_eq!(e.file_branch_head(&pending).unwrap(), tagged);
+    assert_eq!(
+        e.pending_file_source(&pending, &file.file_id),
+        Some(file.version_id.as_str())
+    );
+    assert_eq!(
+        e.file_node_tags(&file.file_id, &tagged).unwrap(),
+        BTreeSet::from(["review".into()])
+    );
+    let written = save(&mut e, &r.main_branch_id, "a.txt", b"edited source");
     assert_eq!(
         e.state().versions.len(),
         count + 1,
-        "tag metadata must not complete the pending first body write"
+        "only changed content completes the pending first body write"
     );
     assert_ne!(written.version_id, file.version_id);
     assert_eq!(

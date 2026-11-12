@@ -114,8 +114,14 @@ fn directory_registration_reuses_nodes_and_lazy_first_write_forks_one_public_fil
     assert_eq!(body(&e, &entries(&e, &r)["a/one.txt"].version_id), b"one");
     let main = e.state().file_selections[&before["a/one.txt"].file_id].clone();
     let parent_head = e.state().branches[&main].head_commit_id.clone();
-    // Identical first save is still a genuine first branch-owned node.
+    // Only changed content materializes the inherited container branch.
     save(&mut e, &r, "a/one.txt", b"one");
+    assert_eq!(entries(&e, &r), before);
+    assert_eq!(e.state().branches.len(), branches);
+    assert_eq!(e.state().versions.len(), versions);
+    assert_eq!(e.state().file_selections[&before["a/one.txt"].file_id], main);
+    assert_eq!(e.state().directory_branches[&draft].head_tree_id, parent);
+    save(&mut e, &r, "a/one.txt", b"edited one");
     let after = entries(&e, &r);
     let fork = e.state().file_selections[&after["a/one.txt"].file_id].clone();
     assert_ne!(fork, main);
@@ -130,6 +136,8 @@ fn directory_registration_reuses_nodes_and_lazy_first_write_forks_one_public_fil
         before["a/two.txt"].version_id
     );
     assert_eq!(e.state().versions.len(), versions + 1);
+    assert_eq!(body(&e, &after["a/one.txt"].version_id), b"edited one");
+    assert_eq!(body(&e, &before["a/one.txt"].version_id), b"one");
     assert_eq!(
         e.state().directory_branches[&draft].directory_branch_id,
         draft

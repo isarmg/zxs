@@ -202,13 +202,24 @@ fn pending_unchanged_save_still_rejects_a_changed_selection() {
     let (_root, mut engine, repo) = fixture();
     save(&mut engine, &repo.main_branch_id, b"same bytes");
     let source = file(&engine, &repo.main_branch_id);
-    let original = engine.state().file_selections[&source.file_id].clone();
     select_pending(&mut engine, &source);
+    let other = engine
+        .create_file_branch(
+            &source.file_id,
+            &source.version_id,
+            &storage_contract::BranchName::parse("other selection").unwrap(),
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    assert_eq!(file(&engine, &other).version_id, source.version_id);
     let request = unchanged_request(&mut engine, &repo.main_branch_id, b"same bytes");
     engine
         .select_file_branch(
             &source.file_id,
-            &original,
+            &other,
             "admin",
             storage_contract::OperationId::generate().unwrap(),
         )
