@@ -407,6 +407,7 @@ impl Engine {
                 .get(&candidate.operation_id)
                 .is_some_and(|receipt| {
                     receipt.kind == storage_contract::file_container_tags::KIND
+                        || crate::persist::path_changes::is_kind(&receipt.kind)
                 })
             {
                 verify_current_candidate_receipt(candidate, next)?;

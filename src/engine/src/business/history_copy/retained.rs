@@ -359,7 +359,7 @@ pub(crate) fn path_changes(
             return Err(crate::persist::path_changes::invalid());
         }
         for fact in crate::persist::path_changes::read(receipt)? {
-            if fact.author.as_str() != principal {
+            if fact.author.as_str() != principal.as_str() {
                 return Err(crate::persist::path_changes::invalid());
             }
             if fact.file_id.to_string() == file.as_str() {

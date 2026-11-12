@@ -97,7 +97,7 @@ Delete 与 PathChanged 使用确实记录的时间；Undo／Import 仍为明确 
 都不保留可执行兼容分支。旧 seal、混合成员、旧 archive 外壳、当前外壳加旧内层、
 旧无 seal staging 的拒绝覆盖要保留；错误必须保留来源与清晰的不支持格式诊断。
 
-沿用 [容器标签 ADR](container-tags.md#61-入口与首写边界清单) 已定位的入口逐项复核。
+沿用 [容器标签 ADR](container-tags.md) 已定位的入口逐项复核。
 DiskSeal 只覆盖其实际消费者，不能冒称替代 history import、FILE rescue 或所有恢复门。
 拒绝证明比较受控目录集合及文件原字节，不据此声称 mtime、权限或控制锁绝无变化。
 

@@ -76,7 +76,10 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
         replace: false,
         target_entry_id: None,
     };
-    pool.engine
+    let content_branches = inside.each_ref().map(|(_, context)| {
+        pool.engine.state().branches[&context.branch_id].clone()
+    });
+    let receipt = pool.engine
         .move_object(
             &request,
             "admin",
@@ -110,15 +113,19 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
         assert_eq!(moved.file_id, original.file_id);
         assert_eq!(moved.version_id, original.version_id);
         assert_eq!(contexts[index].branch_id, original_context.branch_id);
-        let node_id = contexts[index].node_id.as_ref().unwrap();
-        let node = &pool.engine.state().file_path_nodes[node_id];
-        assert_eq!(node.path, moved.path());
-        assert_eq!(node.previous_path, original.path());
-        assert_eq!(node.version_id, original.version_id);
-        assert_eq!(node.branch_id, original_context.branch_id);
+        assert_eq!(contexts[index].node_id, original_context.node_id);
+        assert_eq!(
+            pool.engine.state().branches[&contexts[index].branch_id], content_branches[index],
+        );
+        unchanged_body_path_fact(
+            &receipt, &pool.repo.repository_id, original, original.path(), moved.path(),
+        );
         assert_eq!(pool.bytes(&moved.version_id), contents[index]);
     }
-    assert_ne!(contexts[0].node_id, contexts[1].node_id);
+    let facts = receipt.result["path_changes"].as_array().unwrap();
+    assert_eq!(facts.len(), 2);
+    assert_ne!(facts[0]["event_id"], facts[1]["event_id"]);
+    assert!(pool.engine.state().file_path_nodes.is_empty());
     let namespace = pool
         .engine
         .namespace_tree(&pool.repo.main_branch_id)
@@ -127,6 +134,15 @@ fn moving_one_directory_preserves_outside_alias_and_each_inside_context() {
     assert!(namespace.get("a/report.txt").is_none());
     assert!(namespace.get("a/second.txt").is_none());
     assert!(pool.engine.file_deletion(&original.file_id).is_none());
+    let repository = pool.repo.repository_id.clone();
+    pool.reopen(|engine| {
+        for (index, path) in ["moved/report.txt", "moved/second.txt"].into_iter().enumerate() {
+            assert_eq!(engine.file_context(&repository, path).unwrap(), contexts[index]);
+            assert_eq!(engine.state().branches[&contexts[index].branch_id], content_branches[index]);
+        }
+        assert_eq!(engine.state().operations[&receipt.operation_id].result, receipt.result);
+        assert!(engine.state().file_path_nodes.is_empty());
+    });
 }
 
 #[test]

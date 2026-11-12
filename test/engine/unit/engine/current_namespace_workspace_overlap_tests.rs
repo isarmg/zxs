@@ -66,15 +66,18 @@ fn membership_registry_workspace_overlap_write_rename_keeps_new_body_node_and_re
             .engine
             .file_context(&fixture.repo.repository_id, "Moved/b")
             .unwrap();
-        let node = &fixture.engine.state.file_path_nodes[context.node_id.as_ref().unwrap()];
-        assert_eq!(node.version_id, current.version_id);
-        assert_eq!(node.parent_node_ids, vec![current.version_id.clone()]);
-        assert_eq!(node.previous_path, "dir/b");
+        assert!(fixture.engine.state.file_path_nodes.is_empty());
+        assert!(context.node_id.is_none());
+        assert!(fixture.engine.state.branches[&context.branch_id].file_node_id.is_none());
+        let facts = crate::persist::path_changes::read(&result).unwrap();
+        let fact = facts.iter().find(|fact| fact.file_id.to_string() == current.file_id).unwrap();
+        assert_eq!(fact.before_version_id.to_string(), original.version_id);
+        assert_eq!(fact.after_version_id.to_string(), current.version_id);
+        assert_eq!(fact.before.path.as_str(), "dir/b");
+        assert_eq!(fact.after.path.as_str(), "Moved/b");
         assert_eq!(
-            fixture.engine.state.branches[&context.branch_id]
-                .file_node_id
-                .as_deref(),
-            Some(node.node_id.as_str())
+            fixture.engine.state.versions[&current.version_id].source_version_ids,
+            vec![original.version_id.clone()],
         );
         assert!(
             fixture.engine.state.branches[&context.branch_id]

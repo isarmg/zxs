@@ -1315,3 +1315,50 @@ fn inherited_first_write_truncates_a_multibyte_collision_label_and_reopens() {
             .unwrap();
     });
 }
+
+#[test]
+fn shared_file_branch_workspace_uses_explicit_alias_and_refuses_second_destination() {
+    let mut pool = Pool::new();
+    let (_, _, original) = selected_aliases(&mut pool);
+    let branch = pool.engine.file_context(&pool.repo.repository_id, "b/report.txt")
+        .unwrap().branch_id;
+    pool.engine.select_file_branch_at(
+        &pool.repo.repository_id,
+        &name_policy::PortablePath::parse("a/report.txt").unwrap(),
+        &original.file_id,
+        &branch,
+        "admin",
+        storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let a = pool.current_entry("a/report.txt");
+    let b = pool.current_entry("b/report.txt");
+    assert_eq!(pool.engine.file_context(&pool.repo.repository_id, a.path()).unwrap().branch_id, branch);
+    assert_eq!(pool.engine.file_context(&pool.repo.repository_id, b.path()).unwrap().branch_id, branch);
+    let workspace = pool.engine.create_workspace(&branch, "admin").unwrap();
+    pool.engine.stage_bytes(&workspace.workspace_id, b.path(), b"explicit alias body").unwrap();
+    let staged = pool.engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(staged.files.len(), 1);
+    assert_eq!(
+        pool.engine.stage_bytes(&workspace.workspace_id, a.path(), b"wrong second alias")
+            .unwrap_err().code(),
+        storage_contract::ErrorCode::FileBranchConflict,
+    );
+    let after_rejection = pool.engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(after_rejection.files.len(), 1);
+    assert_eq!(
+        storage_engine::canonical_json(&after_rejection.files).unwrap(),
+        storage_engine::canonical_json(&staged.files).unwrap(),
+    );
+    pool.commit(workspace);
+    let updated = pool.current_entry(b.path());
+    assert_ne!(updated.version_id, b.version_id);
+    assert_eq!(pool.current_entry(a.path()), a);
+    assert_eq!(pool.bytes(&updated.version_id), b"explicit alias body");
+    assert!(pool.engine.state().file_path_nodes.is_empty());
+    let repository = pool.repo.clone();
+    pool.reopen(|engine| {
+        let tree = engine.namespace_tree(&repository.main_branch_id).unwrap();
+        assert_eq!(tree.get(b.path()).unwrap(), &updated);
+        assert_eq!(tree.get(a.path()).unwrap(), &a);
+    });
+}

@@ -652,3 +652,58 @@ fn new_path_helper_requires_exact_final_occurrence_and_every_parent_before_writi
     assert_eq!(changed.fact.before_version_id, changed.fact.after_version_id);
     assert!(state.file_path_nodes.is_empty());
 }
+
+#[test]
+fn renamed_file_workspace_binds_explicit_path_and_keeps_unchanged_content_head() {
+    let (temporary, mut engine, repository) = setup();
+    save(&mut engine, &repository, "a.txt", b"body");
+    rename(&mut engine, &repository, "a.txt", "b.txt");
+    let context = engine.file_context(&repository.repository_id, "b.txt").unwrap();
+    let old_head = engine.state().branches[&context.branch_id].clone();
+    let stale = engine.create_workspace(&context.branch_id, "admin").unwrap();
+    rename(&mut engine, &repository, "b.txt", "c.txt");
+    let before = canonical_json(engine.state()).unwrap();
+    assert_eq!(
+        engine.stage_bytes(&stale.workspace_id, "c.txt", b"wrong target").unwrap_err().code(),
+        storage_contract::ErrorCode::FileBranchConflict,
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(engine.workspace(&stale.workspace_id).unwrap().files.is_empty());
+    engine.abort_workspace(&stale.workspace_id, "admin").unwrap();
+    let workspace = engine.create_workspace(&context.branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "c.txt", b"body").unwrap();
+    let unchanged = engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "unchanged at renamed occurrence".into(),
+        request_digest: None,
+    }).unwrap();
+    assert_eq!(unchanged.result["no_change"], true);
+    assert_eq!(engine.state().branches[&context.branch_id], old_head);
+    let workspace = engine.create_workspace(&context.branch_id, "admin").unwrap();
+    engine.stage_range(
+        &workspace.workspace_id, &new_id("entry").unwrap(), "c.txt", 0, b"B", None,
+    ).unwrap();
+    let saved = engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "real content at renamed occurrence".into(),
+        request_digest: None,
+    }).unwrap();
+    assert!(crate::persist::path_changes::read(&saved).unwrap().is_empty());
+    let entry = entries(&engine, &repository)["c.txt"].clone();
+    assert_eq!(engine.file_branch_head(&context.branch_id).unwrap(), entry.version_id);
+    assert!(engine.state().file_path_nodes.is_empty());
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let mut bytes = Vec::new();
+    engine.open_content(&entry.version_id).unwrap().file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"Body");
+    assert_eq!(entries(&engine, &repository)["c.txt"], entry);
+}

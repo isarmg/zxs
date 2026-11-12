@@ -486,6 +486,8 @@ impl ContainerTagsError {
 /// Failures at the permanent namespace-fact publication boundary.
 #[derive(Debug, error_definition::Error)]
 pub enum PathChangeError {
+    #[error("file workspace occurrence changed; staged bytes are preserved")]
+    WorkspaceLocation,
     #[error("path change does not match its permanent publication")]
     Publication,
     #[error("path change publication exceeds its fact or byte limit")]
@@ -500,6 +502,7 @@ impl PathChangeError {
     fn code(&self) -> ErrorCode {
         match self {
             Self::Limit => ErrorCode::ResourceLimit,
+            Self::WorkspaceLocation => ErrorCode::FileBranchConflict,
             Self::Publication | Self::Encoding(_) | Self::Principal(_) => ErrorCode::PublicationInvalid,
         }
     }

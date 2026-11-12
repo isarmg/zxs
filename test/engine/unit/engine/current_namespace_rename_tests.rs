@@ -188,17 +188,23 @@ fn membership_registry_current_rename_updates_the_exact_independent_file_context
         .file_context(&fixture.repo.repository_id, "dir/b")
         .unwrap();
     fixture.project(false);
-    rename(&mut fixture, "dir/b", "elsewhere/renamed");
+    let before_branch = fixture.engine.state.branches[&context.branch_id].clone();
+    let receipt = rename(&mut fixture, "dir/b", "elsewhere/renamed");
     let moved = current(&fixture, "elsewhere/renamed");
     let after = fixture
         .engine
         .file_context(&fixture.repo.repository_id, "elsewhere/renamed")
         .unwrap();
     assert_eq!(after.branch_id, context.branch_id);
-    let node = &fixture.engine.state.file_path_nodes[after.node_id.as_ref().unwrap()];
-    assert_eq!(node.previous_path, "dir/b");
-    assert_eq!(node.path, "elsewhere/renamed");
-    assert_eq!(node.version_id, moved.version_id);
+    assert_eq!(after.node_id, context.node_id);
+    assert_eq!(fixture.engine.state.branches[&after.branch_id], before_branch);
+    assert!(fixture.engine.state.file_path_nodes.is_empty());
+    let facts = crate::persist::path_changes::read(&receipt).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].before.path.as_str(), "dir/b");
+    assert_eq!(facts[0].after.path.as_str(), "elsewhere/renamed");
+    assert_eq!(facts[0].after_version_id.to_string(), moved.version_id);
+    assert_eq!(facts[0].before_version_id, facts[0].after_version_id);
     assert!(
         fixture
             .engine
@@ -210,8 +216,9 @@ fn membership_registry_current_rename_updates_the_exact_independent_file_context
             .engine
             .namespace_tree(&after.branch_id)
             .unwrap()
-            .get("elsewhere/renamed"),
-        Some(&moved)
+            .get("dir/b")
+            .map(|entry| &entry.version_id),
+        Some(&moved.version_id)
     );
     let workspace = fixture
         .engine
@@ -707,7 +714,7 @@ fn membership_registry_new_rename_helper_recovery_requires_exact_path_lineage() 
     fixture.project(false);
     let previous = Arc::clone(&fixture.engine.state);
     let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
-    rename(&mut fixture, "dir/b", "dir/a");
+    let receipt = rename(&mut fixture, "dir/b", "dir/a");
     let context = fixture
         .engine
         .file_context(&fixture.repo.repository_id, "dir/a")
@@ -716,23 +723,30 @@ fn membership_registry_new_rename_helper_recovery_requires_exact_path_lineage() 
     let published: State =
         json_codec::from_slice(&canonical_json(fixture.engine.state()).unwrap()).unwrap();
     view.advance(&previous, &published).unwrap();
-    let node_id = context.node_id.unwrap();
+    assert!(context.node_id.is_none());
+    assert!(published.file_path_nodes.is_empty());
     for forgery in ["hidden source", "wrong parent", "unselected snapshot"] {
         let mut forged = published.clone();
         match forgery {
             "hidden source" => {
-                forged
-                    .file_path_nodes
-                    .get_mut(&node_id)
-                    .unwrap()
-                    .previous_path = "dir/a".into();
+                let mut facts = crate::persist::path_changes::read(&receipt).unwrap();
+                facts[0].before.path = name_policy::PortablePath::parse("dir/a").unwrap();
+                facts[0].event_id = crate::persist::path_changes::identity(
+                    facts[0].operation_id,
+                    facts[0].file_id,
+                    facts[0].entry_id,
+                    &facts[0].before,
+                    &facts[0].after,
+                )
+                .unwrap();
+                forged.operations.get_mut(&receipt.operation_id).unwrap()
+                    .result["path_changes"] = json_codec::to_value(facts).unwrap();
             }
             "wrong parent" => {
-                forged
-                    .file_path_nodes
-                    .get_mut(&node_id)
-                    .unwrap()
-                    .parent_node_ids = vec![fixture.removed.version_id.clone()];
+                let mut facts = crate::persist::path_changes::read(&receipt).unwrap();
+                facts[0].before_version_id = fixture.removed.version_id.parse().unwrap();
+                forged.operations.get_mut(&receipt.operation_id).unwrap()
+                    .result["path_changes"] = json_codec::to_value(facts).unwrap();
             }
             "unselected snapshot" => {
                 let head = forged.branches[&context.branch_id].head_commit_id.clone();
@@ -768,4 +782,43 @@ fn membership_registry_new_rename_helper_recovery_requires_exact_path_lineage() 
             .iter()
             .all(|entry| entry.entry_id != fixture.removed.entry_id)
     );
+}
+
+#[test]
+fn membership_registry_path_fact_rejects_another_valid_branch_of_the_same_file() {
+    let mut fixture = Fixture::new(true);
+    let file = current(&fixture, "dir/b");
+    fixture.engine.create_file_branch(
+        &file.file_id,
+        &file.version_id,
+        &storage_contract::BranchName::parse("path-proof-other").unwrap(),
+        "admin",
+        op(),
+    ).unwrap();
+    fixture.project(false);
+    let previous = Arc::clone(&fixture.engine.state);
+    let view = Arc::clone(fixture.engine.current_namespaces.as_ref().unwrap());
+    let receipt = rename(&mut fixture, "dir/b", "moved/b");
+    let mut facts = crate::persist::path_changes::read(&receipt).unwrap();
+    let selected = facts[0].branch_id.to_string();
+    let other = previous.branches.values().find(|branch| {
+        branch.file_id.as_deref() == Some(file.file_id.as_str())
+            && branch.branch_id != selected
+    }).unwrap();
+    let published = fixture.engine.state.as_ref().clone();
+    view.advance(&previous, &published).unwrap();
+    facts[0].branch_id = other.branch_id.parse().unwrap();
+    let mut forged = published.clone();
+    forged.operations.get_mut(&receipt.operation_id).unwrap().result["path_changes"] =
+        json_codec::to_value(facts).unwrap();
+    assert_eq!(
+        view.advance(&previous, &forged).err().unwrap().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    let reopened: State = json_codec::from_slice(&canonical_json(&forged).unwrap()).unwrap();
+    assert_eq!(
+        view.advance(&previous, &reopened).err().unwrap().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    assert_eq!(fixture.engine.state.operations[&receipt.operation_id], receipt);
 }

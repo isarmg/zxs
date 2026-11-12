@@ -509,7 +509,8 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 `path_changed` 时另有 `event_id`（`fpath_`）、`before` 与 `after`，两个位置都严格包含
 `repository_id` 和规范 `path`。路径事实展示真实前后位置，不由名字猜测改名或移动类型。
 Delete 与 PathChanged 携带记录中的 Unix 整秒时间；Undo／Import 必须为显式 `null`，
-不借用删除时间、序号或浏览器时钟。来源复制的事件不自动成为目标容器的新操作。
+不借用删除时间、序号或浏览器时钟。路径项仅枚举本容器直接发生的事实；复制保留的原路径来源
+在 SYSTEM／FILE 审计中保存，但不在此页展示，更不自动成为目标容器的新操作。
 
 成员身份为 `(operation_id,source_id)`；一个操作可有多条路径事实。
 顺序为 `(sequence,operation_id,source_id)`，不是跨来源的时钟顺序。

@@ -418,14 +418,15 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <p class="zxs-row">
                 {t(
                     concat!(
-                        "只显示已验证的删除、恢复、已删除状态导入及路径变更记录，",
-                        "复制保留的来源不冒充本容器新操作。",
+                        "只显示已验证的删除、恢复、已删除状态导入及本容器路径变更。",
+                        "复制保留的原路径来源不在此展示，也不冒充本容器新操作。",
                         "操作有独立身份，不是内容版本或可写节点。",
                     ),
                     concat!(
                         "Shows verified deletion, restoration, already-deleted import ",
-                        "and path records. ",
-                        "Retained source events are not new operations on this container. ",
+                        "and this container's path changes. ",
+                        "Copied path sources remain audit evidence, not records displayed here ",
+                        "or new operations on this container. ",
                         "Record identities are not content versions or writable nodes.",
                     ),
                 )}

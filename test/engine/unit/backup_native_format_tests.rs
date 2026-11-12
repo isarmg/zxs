@@ -194,7 +194,8 @@ fn old_original_seal_is_rejected_inside_current_rehashed_archive_without_writes(
         let mut manifest = fixture.manifest();
         assert_eq!(manifest.format, "zxs-container-path-facts-backup-native-control");
         let member = &mut manifest.members[0];
-        let original = object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
+        let original =
+            object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
         let mut seal = storage_contract::strict_json(&fs::read(original).unwrap()).unwrap();
         assert_eq!(seal["format"], "container-path-facts-managed-directory");
         seal["format"] = json_codec::Value::String(format.into());

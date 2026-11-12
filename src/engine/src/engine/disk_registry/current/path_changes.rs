@@ -3,21 +3,25 @@
 use crate::engine::CurrentNamespaces;
 use crate::persist::path_changes::{self, PathChanged};
 use crate::{Entry, NamespaceEntryKind, Result, State};
-use storage_contract::RepositoryId;
+use std::collections::{BTreeMap, BTreeSet};
+use storage_contract::{EntryId, FileId, RepositoryId};
 
 fn invalid() -> crate::Error {
     path_changes::invalid()
 }
 
-struct Occurrence<'a> {
+struct Occurrence {
     repository: RepositoryId,
-    entry: &'a Entry,
+    entry: Entry,
+    branch_id: Option<String>,
 }
 
-fn occurrences<'a>(
-    state: &'a State,
-    current: Option<&'a CurrentNamespaces>,
-) -> Result<Vec<Occurrence<'a>>> {
+mod batch;
+
+fn occurrences(
+    state: &State,
+    current: Option<&CurrentNamespaces>,
+) -> Result<Vec<Occurrence>> {
     let mut result = Vec::new();
     for repository in state.repositories.values() {
         let entries = match current {
@@ -37,53 +41,95 @@ fn occurrences<'a>(
             if entry.kind == NamespaceEntryKind::File
                 && !state.file_deletions.contains_key(&entry.file_id)
             {
-                result.push(Occurrence { repository, entry });
+                let key = crate::business::context_key_from_key(
+                    &repository.to_string(),
+                    entry.lookup_key(),
+                );
+                result.push(Occurrence {
+                    repository,
+                    entry: entry.clone(),
+                    branch_id: state.file_contexts.get(&key).map(|context| context.branch_id.clone()),
+                });
             }
         }
     }
     Ok(result)
 }
 
-fn same_identity(left: &Occurrence<'_>, right: &Occurrence<'_>) -> bool {
-    left.entry.entry_id == right.entry.entry_id && left.entry.file_id == right.entry.file_id
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LocationKey {
+    repository: RepositoryId,
+    entry: EntryId,
+    file: FileId,
+    path: name_policy::PortablePath,
 }
 
-fn same_location(left: &Occurrence<'_>, right: &Occurrence<'_>) -> bool {
-    left.repository == right.repository && left.entry.path() == right.entry.path()
+impl LocationKey {
+    fn fact(fact: &PathChanged, location: &storage_contract::file_lifecycle::PathLocation) -> Self {
+        Self {
+            repository: location.repository_id,
+            entry: fact.entry_id,
+            file: fact.file_id,
+            path: location.path.clone(),
+        }
+    }
 }
 
-fn matches_before(fact: &PathChanged, occurrence: &Occurrence<'_>) -> bool {
-    fact.before.repository_id == occurrence.repository
-        && fact.before.path.as_str() == occurrence.entry.path()
-        && fact.file_id.to_string() == occurrence.entry.file_id
-        && fact.entry_id.to_string() == occurrence.entry.entry_id
-        && fact.before_version_id.to_string() == occurrence.entry.version_id
+struct Index<'a> {
+    locations: BTreeMap<LocationKey, &'a Occurrence>,
+    identities: BTreeSet<(EntryId, FileId)>,
 }
 
-fn matches_after(fact: &PathChanged, occurrence: &Occurrence<'_>) -> bool {
-    fact.after.repository_id == occurrence.repository
-        && fact.after.path.as_str() == occurrence.entry.path()
-        && fact.file_id.to_string() == occurrence.entry.file_id
-        && fact.entry_id.to_string() == occurrence.entry.entry_id
-        && fact.after_version_id.to_string() == occurrence.entry.version_id
+impl<'a> Index<'a> {
+    fn new(occurrences: &'a [Occurrence]) -> Result<Self> {
+        let mut locations = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for occurrence in occurrences {
+            let key = LocationKey {
+                repository: occurrence.repository,
+                entry: occurrence.entry.entry_id.parse()?,
+                file: occurrence.entry.file_id.parse()?,
+                path: occurrence.entry.location().clone(),
+            };
+            identities.insert((key.entry, key.file));
+            if let Some(old) = locations.insert(key, occurrence)
+                && (old.entry != occurrence.entry || old.branch_id != occurrence.branch_id)
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(Self { locations, identities })
+    }
 }
 
 fn verify_facts(
     previous: &State,
     next: &State,
-    before: &[Occurrence<'_>],
-    after: &[Occurrence<'_>],
+    before: &[Occurrence],
+    after: &[Occurrence],
     facts: &[PathChanged],
+    require_vacated: bool,
 ) -> Result<()> {
+    let before = Index::new(before)?;
+    let after = Index::new(after)?;
+    let mut consumed = BTreeMap::<LocationKey, usize>::new();
+    let mut produced = BTreeMap::<LocationKey, usize>::new();
     for fact in facts {
-        let old = before.iter().find(|entry| matches_before(fact, entry)).ok_or_else(invalid)?;
-        let new = after.iter().find(|entry| matches_after(fact, entry)).ok_or_else(invalid)?;
-        if same_location(old, new)
-            || after.iter().any(|entry| same_identity(old, entry) && same_location(old, entry))
-            || before.iter().any(|entry| same_identity(new, entry) && same_location(new, entry))
+        let source = LocationKey::fact(fact, &fact.before);
+        let target = LocationKey::fact(fact, &fact.after);
+        let old = before.locations.get(&source).ok_or_else(invalid)?;
+        let new = after.locations.get(&target).ok_or_else(invalid)?;
+        if source == target
+            || require_vacated
+                && (after.locations.contains_key(&source) || before.locations.contains_key(&target))
+            || old.entry.version_id != fact.before_version_id.to_string()
+            || new.entry.version_id != fact.after_version_id.to_string()
+            || new.branch_id.as_deref() != Some(fact.branch_id.to_string().as_str())
         {
             return Err(invalid());
         }
+        *consumed.entry(source).or_default() += 1;
+        *produced.entry(target).or_default() += 1;
         let branch = next.branches.get(&fact.branch_id.to_string()).ok_or_else(invalid)?;
         let version = next.versions.get(&new.entry.version_id).ok_or_else(invalid)?;
         if branch.file_id.as_deref() != Some(new.entry.file_id.as_str())
@@ -114,18 +160,18 @@ fn verify_facts(
     // A retained alias is not evidence that a different occurrence was moved.
     // Reserve unchanged locations first and require one fact for each consumed
     // source and destination. One operation may legitimately move many aliases.
-    for old in before {
-        if after.iter().any(|new| same_identity(old, new))
-            && !after.iter().any(|new| same_identity(old, new) && same_location(old, new))
-            && facts.iter().filter(|fact| matches_before(fact, old)).count() != 1
+    for key in before.locations.keys() {
+        if after.identities.contains(&(key.entry, key.file))
+            && !after.locations.contains_key(key)
+            && consumed.get(key) != Some(&1)
         {
             return Err(invalid());
         }
     }
-    for new in after {
-        if before.iter().any(|old| same_identity(old, new))
-            && !before.iter().any(|old| same_identity(old, new) && same_location(old, new))
-            && facts.iter().filter(|fact| matches_after(fact, new)).count() != 1
+    for key in after.locations.keys() {
+        if before.identities.contains(&(key.entry, key.file))
+            && !before.locations.contains_key(key)
+            && produced.get(key) != Some(&1)
         {
             return Err(invalid());
         }
@@ -161,7 +207,12 @@ pub(in crate::engine) fn verify(
             return Err(invalid());
         }
     }
-    let old = occurrences(previous, before)?;
-    let new = occurrences(next, after)?;
-    verify_facts(previous, next, &old, &new, &facts)
+    if let Some(transfers) = path_changes::batch_transfers(receipt, principal)? {
+        let (old, new) = batch::occurrences(previous, next, before, after, &transfers)?;
+        verify_facts(previous, next, &old, &new, &facts, false)
+    } else {
+        let old = occurrences(previous, before)?;
+        let new = occurrences(next, after)?;
+        verify_facts(previous, next, &old, &new, &facts, true)
+    }
 }

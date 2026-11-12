@@ -1,15 +1,25 @@
 //! Real Engine/D3 node-note consumers and exact ordinary-publication replay.
 //! These temporary roots are not physical-media or power-loss acceptance.
-use super::*;
-use crate::*;
+use crate::engine::disk_registry::current::path_notes::KIND;
+use crate::{
+    Branch, BranchName, BranchState, CommitRequest, Config, Engine, Entry, ErrorCode,
+    FileBranchMergeRequest, FileContext, FileHistoryMergeInput, FileHistoryMergeRequest,
+    FileMergeInput, FilePathNode, HistoryWindowCancellation, MembershipExitAction,
+    NamespaceOperation, NamespaceOperationKind, OperationId, ProtectionPolicyUpdate,
+    Repository, State, canonical_json, new_id,
+};
+use json_codec::json;
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use storage_contract::history_window::{
     HistoryCollection, HistoryFileId, HistoryPageLimit, HistoryWindowPage, HistoryWindowRequest,
 };
+use storage_contract::{MapChanges, Note};
 
 fn op() -> OperationId {
     OperationId::generate().unwrap()
@@ -38,6 +48,132 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
+fn save_body(engine: &mut Engine, repository: &Repository, body: &[u8]) -> Entry {
+    let workspace = engine
+        .create_workspace(&repository.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "original.txt", body)
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: op(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "note source".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    engine
+        .namespace_tree(&repository.main_branch_id)
+        .unwrap()
+        .get("original.txt")
+        .unwrap()
+        .clone()
+}
+
+fn merge_history(
+    engine: &mut Engine,
+    entry: &Entry,
+    branch: &str,
+    sources: [&str; 2],
+    name: &str,
+) -> (String, String) {
+    let head = engine.file_branch_head(branch).unwrap();
+    let inputs = sources.map(|source| FileHistoryMergeInput {
+        branch_id: branch.into(),
+        source_node_id: source.into(),
+        expected_node_id: head.clone(),
+    });
+    let receipt = engine
+        .merge_file_history(FileHistoryMergeRequest {
+            file_id: &entry.file_id,
+            inputs: &inputs,
+            chosen_node_id: &entry.version_id,
+            name: &BranchName::parse(name).unwrap(),
+            location: None,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    let node = receipt.result["node_id"].as_str().unwrap().to_owned();
+    let branch = receipt.result["branch_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        engine.state.file_metadata_nodes[&node].version_id,
+        entry.version_id
+    );
+    (node, branch)
+}
+
+fn rename_path(
+    engine: &mut Engine,
+    repository: &Repository,
+    before: &str,
+    after: &str,
+) -> String {
+    let content_branches = engine.state.branches.values()
+        .filter(|branch| branch.file_id.is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    let receipt = engine
+        .file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(NamespaceOperationKind::Rename, before, Some(after)).unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap();
+    let facts = crate::persist::path_changes::read(&receipt).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].before.path.as_str(), before);
+    assert_eq!(facts[0].after.path.as_str(), after);
+    assert_eq!(facts[0].before_version_id, facts[0].after_version_id);
+    assert_eq!(
+        engine.state.branches.values()
+            .filter(|branch| branch.file_id.is_some())
+            .cloned()
+            .collect::<Vec<_>>(),
+        content_branches
+    );
+    facts[0].event_id.to_string()
+}
+
+fn consume_alias(engine: &mut Engine, entry: &Entry, node: &str, survivor: &str) -> Branch {
+    let alias_id = engine
+        .create_file_branch_from_node(
+            &entry.file_id,
+            &entry.version_id,
+            node,
+            &BranchName::parse("unchanged alias").unwrap(),
+            "admin",
+            op(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    let inputs = [survivor, alias_id.as_str()].map(|branch| FileMergeInput {
+        branch_id: branch.into(),
+        expected_node_id: node.into(),
+    });
+    engine
+        .merge_file_branches(FileBranchMergeRequest {
+            file_id: &entry.file_id,
+            inputs: &inputs,
+            chosen_node_id: node,
+            surviving_branch_id: survivor,
+            location: None,
+            principal: "admin",
+            operation_id: op(),
+        })
+        .unwrap();
+    let alias = engine.state.branches[&alias_id].clone();
+    assert_eq!(alias.state, BranchState::Merged);
+    assert_eq!(engine.state.file_branch_aliases[&alias_id], survivor);
+    alias
+}
+
 struct Fixture {
     temp: tempfile::TempDir,
     engine: Engine,
@@ -45,7 +181,8 @@ struct Fixture {
     repository: Repository,
     file: String,
     version: String,
-    path_node: String,
+    merge_node: String,
+    path_event: String,
     metadata_node: String,
     other_node: String,
     alias: Branch,
@@ -71,115 +208,40 @@ impl Fixture {
                 })
                 .unwrap();
         }
-        let workspace = engine
-            .create_workspace(&repository.main_branch_id, "admin")
-            .unwrap();
-        engine
-            .stage_bytes(
-                &workspace.workspace_id,
-                "original.txt",
-                b"immutable note body",
-            )
-            .unwrap();
-        engine
-            .commit_workspace(CommitRequest {
-                workspace_id: workspace.workspace_id,
-                operation_id: op(),
-                principal: "admin".into(),
-                expected_head: workspace.base_head,
-                fencing_token: workspace.fencing_token,
-                message: "note source".into(),
-                request_digest: None,
-            })
-            .unwrap();
-        let entry = engine
-            .namespace_tree(&repository.main_branch_id)
-            .unwrap()
-            .get("original.txt")
-            .unwrap()
-            .clone();
+        let entry = save_body(&mut engine, &repository, b"immutable note body");
+        let changed = save_body(&mut engine, &repository, b"distinct content merge source");
+        assert_eq!(changed.file_id, entry.file_id);
+        assert_ne!(changed.version_id, entry.version_id);
         let context = engine
             .file_context(&repository.repository_id, "original.txt")
             .unwrap();
-        for (from, to) in [("original.txt", "merge-input.txt"),
-            ("merge-input.txt", "original.txt")]
-        {
-            engine.file_namespace(
-                &repository.repository_id,
-                NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to))
-                    .unwrap(),
-                "admin",
-                op(),
-            ).unwrap();
-        }
-        let head = engine.file_branch_head(&context.branch_id).unwrap();
-        let inputs = [&entry.version_id, &head].map(|source| FileHistoryMergeInput {
-            branch_id: context.branch_id.clone(),
-            source_node_id: source.clone(),
-            expected_node_id: head.clone(),
-        });
-        let metadata_node = engine.merge_file_history(FileHistoryMergeRequest {
-            file_id: &entry.file_id,
-            inputs: &inputs,
-            chosen_node_id: &entry.version_id,
-            name: &BranchName::parse("note metadata merge").unwrap(),
-            location: None,
-            principal: "admin",
-            operation_id: op(),
-        }).unwrap().result["node_id"].as_str().unwrap().to_owned();
-        let rename = |engine: &mut Engine, from: &str, to: &str| {
-            engine
-                .file_namespace(
-                    &repository.repository_id,
-                    NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to))
-                        .unwrap(),
-                    "admin",
-                    op(),
-                )
-                .unwrap()
-                .result["file_node_ids"][0]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        let path_node = rename(&mut engine, "original.txt", "past.txt");
-        // This history already has independent file branches. Build a real
-        // consumed file alias rather than using the forbidden full-tree API.
-        let survivor = engine
-            .file_context(&repository.repository_id, "past.txt")
-            .unwrap()
-            .branch_id;
-        let alias_id = engine
-            .create_file_branch_from_node(
-                &entry.file_id,
-                &entry.version_id,
-                &path_node,
-                &BranchName::parse("unchanged alias").unwrap(),
-                "admin",
-                op(),
-            )
-            .unwrap()
-            .branch_id
-            .unwrap();
-        let inputs = [&survivor, &alias_id].map(|branch| FileMergeInput {
-            branch_id: branch.clone(),
-            expected_node_id: path_node.clone(),
-        });
-        engine
-            .merge_file_branches(FileBranchMergeRequest {
-                file_id: &entry.file_id,
-                inputs: &inputs,
-                chosen_node_id: &path_node,
-                surviving_branch_id: &survivor,
-                location: None,
-                principal: "admin",
-                operation_id: op(),
-            })
-            .unwrap();
-        let alias = engine.state.branches[&alias_id].clone();
-        assert_eq!(alias.state, BranchState::Merged);
-        assert_eq!(engine.state.file_branch_aliases[&alias_id], survivor);
-        let other_node = rename(&mut engine, "past.txt", "current.txt");
+        // Real content ancestry supplies two distinct inputs. Renaming no
+        // longer manufactures a node that can stand in for changed content.
+        let (metadata_node, metadata_branch) = merge_history(
+            &mut engine,
+            &entry,
+            &context.branch_id,
+            [&entry.version_id, &changed.version_id],
+            "note metadata merge",
+        );
+        let (merge_node, survivor) = merge_history(
+            &mut engine,
+            &entry,
+            &metadata_branch,
+            [&entry.version_id, &metadata_node],
+            "historical note target",
+        );
+        rename_path(&mut engine, &repository, "original.txt", "past.txt");
+        let alias = consume_alias(&mut engine, &entry, &merge_node, &survivor);
+        let path_event = rename_path(&mut engine, &repository, "past.txt", "current.txt");
+        let (other_node, _) = merge_history(
+            &mut engine,
+            &entry,
+            &survivor,
+            [&entry.version_id, &merge_node],
+            "unrelated note target",
+        );
+        assert!(engine.state.file_path_nodes.is_empty());
         engine
             .set_file_node_note(
                 &entry.file_id,
@@ -196,7 +258,8 @@ impl Fixture {
             repository,
             file: entry.file_id,
             version: entry.version_id,
-            path_node,
+            merge_node,
+            path_event,
             metadata_node,
             other_node,
             alias,
@@ -298,7 +361,7 @@ fn membership_registry_current_path_note_real_d3_preserves_history_aliases_and_s
             assert_eq!(current.len(), usize::from(visible));
             assert_eq!(alias.len(), usize::from(visible));
             let mut receipts = Vec::new();
-            for node in [&fixture.path_node, &fixture.metadata_node] {
+            for node in [&fixture.merge_node, &fixture.metadata_node] {
                 let operation = op();
                 let receipt = fixture
                     .engine
@@ -357,7 +420,7 @@ fn membership_registry_current_path_note_real_d3_preserves_history_aliases_and_s
                 "leave this note"
             );
             let notes = history_notes(&fixture.engine, &fixture.file);
-            assert_eq!(notes[&fixture.path_node], "historical note");
+            assert_eq!(notes[&fixture.merge_node], "historical note");
             assert_eq!(notes[&fixture.metadata_node], "historical note");
             assert_eq!(
                 fixture
@@ -447,7 +510,7 @@ fn membership_registry_current_path_note_real_d3_preserves_history_aliases_and_s
             drop(reopened);
             let reopened = Engine::open(&system).unwrap();
             let notes = history_notes(&reopened, &fixture.file);
-            assert_eq!(notes[&fixture.path_node], "");
+            assert_eq!(notes[&fixture.merge_node], "");
             assert_eq!(notes[&fixture.metadata_node], "");
             assert_eq!(notes[&fixture.other_node], "leave this note");
             assert_eq!(
@@ -476,7 +539,7 @@ fn membership_registry_current_path_note_retains_target_actor_and_idempotency_bo
         .engine
         .set_file_node_note(
             &fixture.file,
-            &fixture.path_node,
+            &fixture.merge_node,
             &note("accepted"),
             "admin",
             operation,
@@ -486,7 +549,7 @@ fn membership_registry_current_path_note_retains_target_actor_and_idempotency_bo
     for (file, node, actor, expected) in [
         (
             "file_00000000000000000000000000000000",
-            fixture.path_node.as_str(),
+            fixture.merge_node.as_str(),
             "admin",
             ErrorCode::FileNodeNotFound,
         ),
@@ -498,13 +561,19 @@ fn membership_registry_current_path_note_retains_target_actor_and_idempotency_bo
         ),
         (
             fixture.file.as_str(),
+            fixture.path_event.as_str(),
+            "admin",
+            ErrorCode::FileNodeNotFound,
+        ),
+        (
+            fixture.file.as_str(),
             "fnode_00000000000000000000000000000000",
             "admin",
             ErrorCode::FileNodeNotFound,
         ),
         (
             fixture.file.as_str(),
-            fixture.path_node.as_str(),
+            fixture.merge_node.as_str(),
             "",
             ErrorCode::Unauthenticated,
         ),
@@ -525,7 +594,7 @@ fn membership_registry_current_path_note_retains_target_actor_and_idempotency_bo
                 .engine
                 .set_file_node_note(
                     &fixture.file,
-                    &fixture.path_node,
+                    &fixture.merge_node,
                     &note(value),
                     actor,
                     operation
@@ -540,7 +609,7 @@ fn membership_registry_current_path_note_retains_target_actor_and_idempotency_bo
             .engine
             .set_file_node_note(
                 &fixture.file,
-                &fixture.path_node,
+                &fixture.merge_node,
                 &note("accepted"),
                 "admin",
                 operation
@@ -562,7 +631,7 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
         .engine
         .set_file_node_note(
             &fixture.file,
-            &fixture.path_node,
+            &fixture.merge_node,
             &note("accepted"),
             "admin",
             operation,
@@ -585,15 +654,16 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
         match corruption {
             0 => {
                 changed
-                    .file_path_nodes
-                    .get_mut(&fixture.path_node)
+                    .file_metadata_nodes
+                    .get_mut(&fixture.merge_node)
                     .unwrap()
-                    .path = "injected.txt".into()
+                    .parent_node_ids
+                    .clear()
             }
             1 => {
                 changed
-                    .file_path_nodes
-                    .get_mut(&fixture.path_node)
+                    .file_metadata_nodes
+                    .get_mut(&fixture.merge_node)
                     .unwrap()
                     .file_id = "different-file".into()
             }
@@ -624,7 +694,7 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
                     format!("{}/current.txt", fixture.repository.repository_id),
                     FileContext {
                         branch_id: fixture.alias.branch_id.clone(),
-                        node_id: Some(fixture.path_node.clone()),
+                        node_id: Some(fixture.merge_node.clone()),
                         selection_generation: u64::MAX,
                         inherited_from: None,
                     },
@@ -710,11 +780,11 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
                     .insert(fixture.file.clone(), "injected.txt".into());
             }
             20 => {
-                let id = new_id("fnode").unwrap();
-                let mut forged = changed.file_path_nodes[&fixture.path_node].clone();
+                let id = new_id("fmeta").unwrap();
+                let mut forged = changed.file_metadata_nodes[&fixture.merge_node].clone();
                 forged.node_id = id.clone();
-                changed.file_path_nodes.insert(id.clone(), forged);
-                changed.file_path_notes.remove(&fixture.path_node);
+                changed.file_metadata_nodes.insert(id.clone(), forged);
+                changed.file_path_notes.remove(&fixture.merge_node);
                 changed
                     .file_path_notes
                     .insert(id.clone(), "accepted".into());
@@ -734,7 +804,7 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
                 receipt.request_digest = Engine::native_request_digest(
                     KIND,
                     "admin",
-                    &json!({"file_id":file,"node_id":fixture.path_node,"note":"accepted"}),
+                    &json!({"file_id":file,"node_id":fixture.merge_node,"note":"accepted"}),
                 )
                 .unwrap();
             }
@@ -773,7 +843,7 @@ fn membership_registry_current_path_note_replay_checks_exact_writes_before_uncha
 fn membership_registry_current_path_note_target_requires_unique_node_and_exact_body_history() {
     let fixture = Fixture::new(1);
     let previous = fixture.engine.state();
-    for target in [&fixture.path_node, &fixture.metadata_node] {
+    for target in [&fixture.merge_node, &fixture.metadata_node] {
         assert_eq!(
             Engine::file_node_note_history(previous, &fixture.file, target).unwrap(),
             fixture.repository.history_tree_id
@@ -784,11 +854,11 @@ fn membership_registry_current_path_note_target_requires_unique_node_and_exact_b
         let target = match corruption {
             0 => {
                 changed
-                    .file_path_nodes
-                    .get_mut(&fixture.path_node)
+                    .file_metadata_nodes
+                    .get_mut(&fixture.merge_node)
                     .unwrap()
-                    .node_id = new_id("fnode").unwrap();
-                &fixture.path_node
+                    .node_id = new_id("fmeta").unwrap();
+                &fixture.merge_node
             }
             1 => {
                 changed
@@ -799,12 +869,27 @@ fn membership_registry_current_path_note_target_requires_unique_node_and_exact_b
                 &fixture.metadata_node
             }
             2 => {
-                let mut duplicate = changed.file_metadata_nodes[&fixture.metadata_node].clone();
-                duplicate.node_id = fixture.path_node.clone();
+                let source = &changed.file_metadata_nodes[&fixture.merge_node];
+                // A deliberately forged cross-table collision is rejected.
+                // It is not a supported source of a positive path-node fixture.
+                let duplicate = FilePathNode {
+                    node_id: source.node_id.clone(),
+                    history_tree_id: source.history_tree_id.clone(),
+                    file_id: source.file_id.clone(),
+                    version_id: source.version_id.clone(),
+                    parent_node_ids: source.parent_node_ids.clone(),
+                    branch_id: source.branch_id.clone(),
+                    path: "current.txt".into(),
+                    previous_path: "past.txt".into(),
+                    operation_id: source.operation_id,
+                    author: source.author.clone(),
+                    sequence: source.sequence,
+                    created_at: source.created_at,
+                };
                 changed
-                    .file_metadata_nodes
-                    .insert(fixture.path_node.clone(), duplicate);
-                &fixture.path_node
+                    .file_path_nodes
+                    .insert(fixture.merge_node.clone(), duplicate);
+                &fixture.merge_node
             }
             3 => {
                 changed
@@ -812,7 +897,7 @@ fn membership_registry_current_path_note_target_requires_unique_node_and_exact_b
                     .get_mut(&fixture.version)
                     .unwrap()
                     .version_id = new_id("ver").unwrap();
-                &fixture.path_node
+                &fixture.merge_node
             }
             4 => {
                 changed.versions.get_mut(&fixture.version).unwrap().file_id =
@@ -825,7 +910,7 @@ fn membership_registry_current_path_note_target_requires_unique_node_and_exact_b
                     .get_mut(&fixture.version)
                     .unwrap()
                     .history_tree_id = new_id("history").unwrap();
-                &fixture.path_node
+                &fixture.merge_node
             }
             6 => {
                 changed
@@ -837,11 +922,11 @@ fn membership_registry_current_path_note_target_requires_unique_node_and_exact_b
             }
             7 => {
                 changed
-                    .file_path_nodes
-                    .get_mut(&fixture.path_node)
+                    .file_metadata_nodes
+                    .get_mut(&fixture.merge_node)
                     .unwrap()
                     .file_id = new_id("file").unwrap();
-                &fixture.path_node
+                &fixture.merge_node
             }
             _ => unreachable!(),
         };

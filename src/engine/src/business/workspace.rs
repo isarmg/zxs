@@ -1,4 +1,5 @@
 //! Full upload generations, working files and atomic content publication.
+pub(super) mod file_location;
 use super::*;
 use crate::{
     disk::*,
@@ -314,6 +315,16 @@ impl Engine {
     ) -> Result<()> {
         let key = path.key();
         validate_directory_selection_key(&self.state, workspace, key)?;
+        if self.state.branches.get(&workspace.branch_id).is_some_and(|branch| branch.file_id.is_some()) {
+            let projected = file_location::project(
+                self.state(), self.admitted_current_namespaces()?, workspace,
+                self.workspace_namespace_entries(workspace)?, path,
+            )?;
+            let entry = projected.binary_search_by(|entry| entry.lookup_key().cmp(key))
+                .ok().map(|index| &projected[index])
+                .ok_or(Error::PathChange(crate::PathChangeError::WorkspaceLocation))?;
+            return validate_file_context(&self.state, workspace, &entry.file_id, key);
+        }
         let mut entry = self.workspace_namespace(workspace)?.get_key(key);
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
@@ -391,6 +402,25 @@ impl Engine {
             ));
         }
         let head_entries = self.list_tree_ref(branch_id)?;
+        let context_repository = self.repository_for_branch(branch_id)?;
+        let context_entries = if branch.file_id.is_some() {
+            self.list_tree_ref(&context_repository.main_branch_id)?
+        } else {
+            head_entries
+        };
+        let selected_contexts = context_entries.iter()
+            .filter(|_| branch.file_id.is_some() || context_repository.main_branch_id == branch_id)
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .filter_map(|entry| {
+                self.file_context_for_current_entry(&context_repository.repository_id, entry)
+                    .filter(|context| branch.file_id.is_none() || context.branch_id == branch_id)
+                    .map(|context| (
+                        directory::context_key_from_key(
+                            &context_repository.repository_id, entry.lookup_key(),
+                        ),
+                        context.into_owned(),
+                    ))
+            }).collect();
         let w = Workspace {
             workspace_id: new_id("ws")?,
             purpose: WorkspacePurpose::Normal,
@@ -399,26 +429,7 @@ impl Engine {
             base_head: branch.head_commit_id.clone(),
             fencing_token: self.next_slot,
             files: BTreeMap::new(),
-            selected_file_contexts: repository::main_for_branch(&self.state, branch_id)
-                .map(|r| {
-                    head_entries
-                        .iter()
-                        .filter(|e| e.kind == NamespaceEntryKind::File)
-                        .filter_map(|e| {
-                            self.file_context_for_current_entry(&r.repository_id, e)
-                                .map(|c| {
-                                    (
-                                        directory::context_key_from_key(
-                                            &r.repository_id,
-                                            e.lookup_key(),
-                                        ),
-                                        c.into_owned(),
-                                    )
-                                })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            selected_file_contexts: selected_contexts,
             selected_directory_branches: (*self.state.directory_selections).clone(),
             directory_selection_generations: (*self.state.directory_selection_generations).clone(),
             file_selection_generations: (*self.state.file_selection_generations).clone(),
@@ -540,11 +551,15 @@ impl Engine {
         // Reject invalid targets before publishing an immutable generation.
         // Otherwise an IS_DIRECTORY failure leaves {item}-{generation}.full
         // behind and a subsequent valid retry collides with those orphan bytes.
-        let base = self.workspace_namespace(&w)?;
+        let base = file_location::project(
+            self.state(), self.admitted_current_namespaces()?, &w,
+            self.workspace_namespace_entries(&w)?, path,
+        )?;
         if let Some(view) = &self.current_namespaces {
-            view.validate_upload_identity(base.entries(), key, item)?;
+            view.validate_upload_identity(&base, key, item)?;
         }
-        let base_entry = base.get_key(key).cloned();
+        let base_entry = base.binary_search_by(|entry| entry.lookup_key().cmp(key))
+            .ok().map(|index| base[index].clone());
         if w.purpose == WorkspacePurpose::Normal
             && let Some(entry) = base_entry
                 .as_ref()
@@ -567,7 +582,7 @@ impl Engine {
             .get(&w.branch_id)
             .and_then(|b| b.file_id.as_deref())
         {
-            let current = base.entries().iter().find(|e| e.file_id == file_id);
+            let current = base.iter().find(|e| e.file_id == file_id);
             if current.is_none_or(|entry| entry.lookup_key() != key) {
                 return Err(Error::new(
                     storage_contract::ErrorCode::FileBranchScope,
@@ -831,15 +846,23 @@ impl Engine {
                 "range exceeds file budget",
             ));
         }
-        let base = self.workspace_namespace(&w)?;
-        if w.purpose == WorkspacePurpose::Normal
-            && let Some(entry) = base.get_key(parsed.key())
-        {
+        let base = file_location::project(
+            self.state(), self.admitted_current_namespaces()?, &w,
+            self.workspace_namespace_entries(&w)?, &parsed,
+        )?;
+        let base_entry = base.binary_search_by(|entry| entry.lookup_key().cmp(parsed.key()))
+            .ok().map(|index| &base[index]);
+        if w.purpose == WorkspacePurpose::Normal && let Some(entry) = base_entry {
             validate_file_context(&self.state, &w, &entry.file_id, parsed.key())?;
-            let current = self
-                .namespace_tree(&w.branch_id)?
-                .get_key(entry.lookup_key());
-            if current.is_none_or(|current| current.version_id != entry.version_id) {
+            let snapshot = self.namespace_snapshot(&w.branch_id)?;
+            let current = file_location::project(
+                self.state(), self.admitted_current_namespaces()?, &w,
+                snapshot.entries(), &parsed,
+            )?;
+            let selected = current.binary_search_by(|current| {
+                current.lookup_key().cmp(entry.lookup_key())
+            }).ok().map(|index| &current[index]);
+            if selected.is_none_or(|current| current.version_id != entry.version_id) {
                 return Err(Error::new(
                     storage_contract::ErrorCode::FileVersionConflict,
                     "file changed before range staging; no source bytes were copied",
@@ -858,7 +881,7 @@ impl Engine {
                 &mut temporary,
             )?;
             Some((previous.size, previous.content_hash))
-        } else if let Some(entry) = base.get_key(parsed.key()) {
+        } else if let Some(entry) = base_entry {
             let mut source = self.open_content(&entry.version_id)?;
             std::io::copy(
                 &mut (&mut source.file).take(source.size.saturating_add(1)),
@@ -1364,6 +1387,21 @@ impl crate::engine::PlanningContext<'_> {
                     Some(view) => view.validate_workspace(engine.state, &w, engine.workspace_namespace_baselines.get(&w.workspace_id))?,
                     None => base.entries.as_slice(),
                 };
+                let projected_current;
+                let projected_base;
+                let (current_entries, base_entries) = if let Some(file) = w.files.values().next() {
+                    projected_current = file_location::project(
+                        state, engine.current_namespaces.map(std::sync::Arc::as_ref),
+                        &w, current_entries, &file.path,
+                    )?;
+                    projected_base = file_location::project(
+                        state, engine.current_namespaces.map(std::sync::Arc::as_ref),
+                        &w, base_entries, &file.path,
+                    )?;
+                    (projected_current.as_ref(), projected_base.as_ref())
+                } else {
+                    (current_entries, base_entries)
+                };
                 let mut draft = namespace::NamespaceDraft::new(current_entries.to_vec());
                 if let Some(view) = engine.current_namespaces {
                     view.remove_hidden_contexts(state, &repo.repository_id, &w.branch_id);
@@ -1474,8 +1512,8 @@ impl crate::engine::PlanningContext<'_> {
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
                 let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
-                if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w.branch_id, &entries)?; }
-                if entries == current.entries && deleted.is_empty() {
+                if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w, &entries)?; }
+                if entries.as_slice() == current_entries && deleted.is_empty() {
                     return crate::persist::path_changes::attach(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}), path_changes);
                 }
                 let live_files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)

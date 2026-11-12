@@ -1307,9 +1307,7 @@ impl Engine {
                 let mut result = apply(
                     engine, state, pending, repository, request, principal, operation,
                 )?;
-                if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) {
-                    result["namespace_request"] = input;
-                }
+                result["namespace_request"] = input;
                 Ok(result)
             },
         )

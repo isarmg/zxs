@@ -6,10 +6,17 @@ use storage_contract::history_window::{
 };
 
 fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
+    actual_with_disks(1)
+}
+
+fn actual_with_disks(disks: usize) -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        crate::Config::development([temp.path().join("disk")]).unwrap(),
+        crate::Config::development(
+            (0..disks).map(|index| temp.path().join(format!("disk-{index}"))),
+        )
+        .unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -255,6 +262,97 @@ fn assert_lifecycle_sources_agree(state: &crate::State, file: &HistoryFileId) {
     )
     .unwrap();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn file_lifecycle_rename_uses_permanent_fact_without_changing_content_graph() {
+    let (temporary, mut engine, file, version) = actual();
+    initialize_file_branch_owner(&mut engine, &version);
+    let history = engine.state.versions[version.as_str()].history_tree_id.clone();
+    let repository = engine.state.histories[&history].repository_id.clone();
+    let context = engine.file_context(&repository, "file.txt").unwrap();
+    let branch = engine.state.branches[&context.branch_id].clone();
+    let versions = engine.state.versions.clone();
+    let metadata = engine.state.file_metadata_nodes.clone();
+    let operation = OperationId::generate().unwrap();
+    let receipt = engine.file_namespace(
+        &repository,
+        crate::NamespaceOperation::parse(
+            crate::NamespaceOperationKind::Rename,
+            "file.txt",
+            Some("renamed.txt"),
+        )
+        .unwrap(),
+        "admin",
+        operation,
+    )
+    .unwrap();
+    let facts = crate::persist::path_changes::read(&receipt).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(engine.state.versions, versions);
+    assert_eq!(engine.state.file_metadata_nodes, metadata);
+    assert!(engine.state.file_path_nodes.is_empty());
+    assert_eq!(engine.state.branches[&context.branch_id], branch);
+    let request = request_for(&engine, &file, 64);
+    let page = engine.capture_file_lifecycle(request.clone(), HistoryWindowCancellation::new())
+        .unwrap().page().unwrap();
+    page.validate(&request).unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].operation_id, operation);
+    assert_eq!(page.events[0].sequence, receipt.sequence);
+    assert_eq!(page.events[0].occurred_at, Some(facts[0].occurred_at));
+    assert_eq!(page.events[0].detail, Detail::PathChanged {
+        event_id: facts[0].event_id,
+        before: facts[0].before.clone(),
+        after: facts[0].after.clone(),
+    });
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("state")).unwrap();
+    let reopened = engine.capture_file_lifecycle(
+        request_for(&engine, &file, 64), HistoryWindowCancellation::new(),
+    ).unwrap().page().unwrap();
+    assert_eq!(reopened.events, page.events);
+}
+
+#[test]
+fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source() {
+    let (_temporary, mut engine, file, version) = actual_with_disks(4);
+    initialize_file_branch_owner(&mut engine, &version);
+    let history = engine.state.versions[version.as_str()].history_tree_id.clone();
+    let source = engine.state.repositories[
+        &engine.state.histories[&history].repository_id
+    ].clone();
+    let target = engine.create_disk_root("D04", "admin", OperationId::generate().unwrap())
+        .unwrap();
+    let operation = OperationId::generate().unwrap();
+    let receipt = engine.copy_file_history(
+        &crate::FileHistoryCopyRequest {
+            source_repository_id: source.repository_id.clone(),
+            source_path: "file.txt".into(),
+            expected_source_head: engine.state.branches[&source.main_branch_id]
+                .head_commit_id.clone(),
+            target_repository_id: target.repository_id.clone(),
+            target_name: "copied.txt".into(),
+            expected_target_head: engine.state.branches[&target.main_branch_id]
+                .head_commit_id.clone(),
+        },
+        "admin",
+        operation,
+    ).unwrap();
+    assert!(receipt.result.get("retained_lifecycle").is_some());
+    let copied = engine.list_tree(&target.main_branch_id).unwrap().into_iter()
+        .find(|entry| entry.path() == "copied.txt").unwrap();
+    let copied_file = HistoryFileId::parse(&copied.file_id).unwrap();
+    let mut read = engine.capture_file_lifecycle(
+        request_for(&engine, &copied_file, 64), HistoryWindowCancellation::new(),
+    ).unwrap();
+    assert!(read.page().unwrap().events.is_empty());
+    read.source.operations.get_mut(&operation).unwrap().result.as_object_mut().unwrap()
+        .remove("retained_lifecycle");
+    let bytes = storage_contract::canonical_json(&read.source).unwrap();
+    assert_eq!(read.page().unwrap_err().code(), storage_contract::ErrorCode::PublicationInvalid);
+    assert_eq!(storage_contract::canonical_json(&read.source).unwrap(), bytes);
+    assert_eq!(engine.state.operations[&operation], receipt);
 }
 
 #[test]
