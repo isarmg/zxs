@@ -29,27 +29,52 @@ fn target() -> Target {
     }
 }
 
-fn event(number: u64, action: Action) -> Event {
+fn deletion(number: u64) -> Event {
+    event(
+        number,
+        Detail::Delete {
+            deletion_id: id("fdel", 1).parse().unwrap(),
+        },
+    )
+}
+
+fn event(number: u64, detail: Detail) -> Event {
+    let occurred_at = matches!(&detail, Detail::Delete { .. } | Detail::PathChanged { .. })
+        .then_some(Timestamp::from_unix_seconds(123));
     Event {
         operation_id: id("op", number).parse().unwrap(),
-        action,
         sequence: number,
-        // Repeated delete/undo operations may refer to the same deletion.
-        deletion_id: id("fdel", 1).parse().unwrap(),
-        occurred_at: (action == Action::Delete).then_some(Timestamp::from_unix_seconds(123)),
+        detail,
+        occurred_at,
     }
+}
+
+fn path_event(number: u64, source: u64) -> Event {
+    event(
+        number,
+        Detail::PathChanged {
+            event_id: id("fpath", source).parse().unwrap(),
+            before: PathLocation {
+                repository_id: id("repo", 1).parse().unwrap(),
+                path: name_policy::PortablePath::parse("old/a.txt").unwrap(),
+            },
+            after: PathLocation {
+                repository_id: id("repo", 2).parse().unwrap(),
+                path: name_policy::PortablePath::parse("new/b.txt").unwrap(),
+            },
+        },
+    )
 }
 
 fn page(target: &Target, first: u64, count: u64, more: bool) -> Page {
     let request = target.request(None).unwrap();
-    let events = (first..first + count)
-        .map(|number| event(number, Action::Delete))
-        .collect::<Vec<_>>();
+    let events = (first..first + count).map(deletion).collect::<Vec<_>>();
     let observation_sequence = 100;
     let next_cursor = more.then(|| Cursor {
         binding: request.binding(&target.context, observation_sequence),
         after_operation_id: events.last().unwrap().operation_id,
         after_sequence: events.last().unwrap().sequence,
+        after_source_id: events.last().unwrap().source_id(),
     });
     Page {
         file_id: target.file.clone(),
@@ -243,15 +268,16 @@ fn lifecycle_capture_requires_an_active_matching_history_and_navigation_generati
 
 #[test]
 fn lifecycle_operation_identity_and_unknown_times_are_not_deletion_or_node_aliases() {
-    let deleted = event(1, Action::Delete);
-    let restored = event(2, Action::Undo);
-    let imported = event(3, Action::Import);
-    assert_eq!(deleted.deletion_id, restored.deletion_id);
+    let deleted = deletion(1);
+    let deletion_id = id("fdel", 1).parse().unwrap();
+    let restored = event(2, Detail::Undo { deletion_id });
+    let imported = event(3, Detail::Import { deletion_id });
+    assert_eq!(deleted.source_id(), restored.source_id());
     assert_ne!(deleted.operation_id, restored.operation_id);
     assert_eq!(event_time(&deleted), "1970-01-01T00:02:03Z");
     assert_eq!(event_time(&restored), t("时间未记录", "Time not recorded"));
     assert_eq!(event_time(&imported), t("时间未记录", "Time not recorded"));
-    assert_ne!(action_label(imported.action), action_label(deleted.action));
+    assert_ne!(action_label(&imported.detail), action_label(&deleted.detail));
     let mut beyond_calendar = deleted;
     beyond_calendar.occurred_at = Some(Timestamp::from_unix_seconds(u64::MAX));
     assert!(event_time(&beyond_calendar).ends_with(&u64::MAX.to_string()));
@@ -271,6 +297,136 @@ fn lifecycle_incomplete_source_is_an_error_not_an_empty_or_final_page() {
     error.message = "retained lifecycle evidence is incomplete".into();
     model.complete(&target, generation, Err(error));
     assert!(model.page.is_none());
-    assert_eq!(model.error.as_ref().unwrap().code, storage_contract::ErrorCode::PublicationInvalid);
+    assert_eq!(
+        model.error.as_ref().unwrap().code,
+        storage_contract::ErrorCode::PublicationInvalid,
+    );
     assert!(model.request(true).unwrap().is_none());
+}
+
+#[test]
+fn lifecycle_path_members_share_an_operation_without_sharing_cards_or_cursors() {
+    let target = target();
+    let request = target.request(None).unwrap();
+    let first = path_event(10, 1);
+    let second = path_event(10, 2);
+    assert_eq!(first.operation_id, second.operation_id);
+    assert_ne!(event_identity(&first), event_identity(&second));
+    assert_ne!(
+        event_anchor(&target.file, &first),
+        event_anchor(&target.file, &second),
+    );
+    assert_eq!(action_label(&first.detail), t("路径变更", "Path changed"));
+    assert_eq!(event_time(&first), "1970-01-01T00:02:03Z");
+    let Detail::PathChanged { before, after, .. } = &first.detail else {
+        panic!("fixture is a path record");
+    };
+    assert_eq!(location_label(before), format!("{} / old/a.txt", id("repo", 1)));
+    assert_eq!(location_label(after), format!("{} / new/b.txt", id("repo", 2)));
+
+    let mut first_page = page(&target, 1, 1, false);
+    first_page.events = vec![first.clone()];
+    first_page.next_cursor = Some(Cursor {
+        binding: request.binding(&target.context, first_page.observation_sequence),
+        after_operation_id: first.operation_id,
+        after_sequence: first.sequence,
+        after_source_id: first.source_id(),
+    });
+    // A short nonempty page may continue at another member of the same operation.
+    let admitted = decode(
+        json_codec::to_value(&first_page).unwrap(),
+        &request,
+        &target.context,
+    )
+    .unwrap();
+    assert_eq!(
+        page_status(&admitted),
+        t("后面还有保留记录。", "More retained records are available."),
+    );
+    let mut model = Model::default();
+    model.set_target(Some(target.clone()));
+    let generation = model.begin();
+    model.complete(&target, generation, Ok(admitted));
+    let next = model.request(true).unwrap().unwrap();
+    assert_eq!(next.cursor, first_page.next_cursor);
+    assert!(endpoint(&next).contains(&format!("%3A{}", first.source_id())));
+    let mut last_page = page(&target, 1, 1, false);
+    last_page.events = vec![second.clone()];
+    let admitted = decode(
+        json_codec::to_value(&last_page).unwrap(),
+        &next,
+        &target.context,
+    )
+    .unwrap();
+    let generation = model.begin();
+    model.complete(&target, generation, Ok(admitted));
+    assert_eq!(model.page.as_ref().unwrap().events, vec![second]);
+    assert!(model.request(true).unwrap().is_none());
+
+    let mut repeated = last_page;
+    repeated.events = vec![first];
+    assert!(decode(
+        json_codec::to_value(&repeated).unwrap(),
+        &next,
+        &target.context,
+    )
+    .is_err());
+    repeated.events[0].sequence += 1;
+    assert!(decode(json_codec::to_value(repeated).unwrap(), &next, &target.context).is_err());
+    let mut wrong_source = first_page;
+    wrong_source.next_cursor.as_mut().unwrap().after_source_id =
+        SourceId::PathChange(id("fpath", 3).parse().unwrap());
+    assert!(decode(
+        json_codec::to_value(wrong_source).unwrap(),
+        &request,
+        &target.context,
+    )
+    .is_err());
+}
+
+#[test]
+fn lifecycle_path_evidence_rejects_old_wire_and_forged_times_or_locations() {
+    let target = target();
+    let request = target.request(None).unwrap();
+    let mut response = page(&target, 1, 1, false);
+    response.events = vec![path_event(1, 1)];
+    let wire = json_codec::to_value(&response).unwrap();
+    assert!(decode(wire.clone(), &request, &target.context).is_ok());
+    for bad_detail in [
+        json!({
+            "action":"path_changed", "event_id":id("fmeta", 1),
+            "before":{"repository_id":id("repo", 1),"path":"a.txt"},
+            "after":{"repository_id":id("repo", 1),"path":"b.txt"},
+        }),
+        json!({
+            "action":"path_changed", "event_id":id("fpath", 1),
+            "before":{"repository_id":id("repo", 1),"path":"a.txt"},
+            "after":{"repository_id":id("repo", 1),"path":"a.txt"},
+        }),
+        json!({
+            "action":"path_changed", "event_id":id("fpath", 1),
+            "before":{"repository_id":id("repo", 1),"path":"../a.txt"},
+            "after":{"repository_id":id("repo", 1),"path":"b.txt"},
+        }),
+        json!({"action":"undo", "deletion_id":id("fdel", 1)}),
+        json!({"action":"import", "deletion_id":id("fdel", 1)}),
+    ] {
+        let mut invalid = wire.clone();
+        invalid["events"][0]["detail"] = bad_detail;
+        assert!(decode(invalid, &request, &target.context).is_err());
+    }
+    let mut no_time = wire.clone();
+    no_time["events"][0]["occurred_at"] = json_codec::Value::Null;
+    assert!(decode(no_time, &request, &target.context).is_err());
+    let mut unknown = wire.clone();
+    unknown["events"][0]["detail"]["rename"] = true.into();
+    assert!(decode(unknown, &request, &target.context).is_err());
+    let mut prior_wire = wire;
+    prior_wire["events"][0] = json!({
+        "operation_id":id("op", 1), "sequence":"1", "occurred_at":"123",
+        "action":"delete", "deletion_id":id("fdel", 1),
+    });
+    assert!(decode(prior_wire, &request, &target.context).is_err());
+    let prior_cursor = format!("{}:{}:1", "a".repeat(64), id("op", 1));
+    assert!(target.request(Some(&prior_cursor)).is_err());
 }

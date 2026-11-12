@@ -2,7 +2,7 @@
 use crate::engine::history_window::HistoryCancellationCheckpoint;
 use crate::engine::history_window::read::HistoryWindowRead;
 use crate::{Engine, Result, State};
-use storage_contract::file_lifecycle::{Action, Cursor, Event, LifecycleError, Page, Request, Timestamp};
+use storage_contract::file_lifecycle::{Cursor, Detail, Event, LifecycleError, Page, Request, Timestamp};
 use storage_contract::history_window::HistoryWindowCancellation;
 
 pub struct FileLifecycleRead {
@@ -37,18 +37,7 @@ impl FileLifecycleRead {
             || self.read.cancellation.checkpoint(),
         )?;
         self.read.cancellation.checkpoint()?;
-        if let Some(copies) = source.view().copies() {
-            for operation in copies.keys() {
-                self.read.cancellation.checkpoint()?;
-                // Graph-only copies predate retained audit evidence. The FILE
-                // projection supports them, but this endpoint must not report
-                // their unknown lifecycle prefix as an empty proven prefix.
-                if self.source.operations[operation].kind == crate::business::history_copy::KIND {
-                    return Err(LifecycleError::SourceIncomplete.into_error().into());
-                }
-            }
-        }
-        let events = crate::file_deletion::retained::events_from_source(
+        let mut events = crate::file_deletion::retained::events_from_source(
             source.view(),
             || self.read.cancellation.checkpoint(),
             |event| {
@@ -59,18 +48,25 @@ impl FileLifecycleRead {
                 {
                     return Err(LifecycleError::Response.into_error().into());
                 }
-                let action = match event.action {
-                    crate::file_deletion::retained::DeletionAction::Delete => Action::Delete,
-                    crate::file_deletion::retained::DeletionAction::Undo => Action::Undo,
-                    crate::file_deletion::retained::DeletionAction::Import => Action::Import,
+                let deletion_id = event.node.node_id.parse()?;
+                let detail = match event.action {
+                    crate::file_deletion::retained::DeletionAction::Delete => {
+                        Detail::Delete { deletion_id }
+                    }
+                    crate::file_deletion::retained::DeletionAction::Undo => {
+                        Detail::Undo { deletion_id }
+                    }
+                    crate::file_deletion::retained::DeletionAction::Import => {
+                        Detail::Import { deletion_id }
+                    }
                 };
+                let occurred_at = matches!(detail, Detail::Delete { .. })
+                    .then_some(Timestamp::from_unix_seconds(event.node.created_at));
                 Ok(Event {
                     operation_id: event.operation_id,
-                    action,
                     sequence: event.sequence,
-                    deletion_id: event.node.node_id.parse()?,
-                    occurred_at: (action == Action::Delete)
-                        .then_some(Timestamp::from_unix_seconds(event.node.created_at)),
+                    detail,
+                    occurred_at,
                 })
             },
         )?;
@@ -78,10 +74,12 @@ impl FileLifecycleRead {
         if let Some(current) = self.source.file_deletions.get(self.request.file_id.as_str())
             && !events
                 .iter()
-                .any(|event| event.deletion_id.to_string() == current.node_id)
+                .any(|event| event.source_id().to_string() == current.node_id)
         {
             return Err(LifecycleError::SourceIncomplete.into_error().into());
         }
+        self.append_path_events(&mut events)?;
+        events.sort_by_key(Event::order_key);
         let mut found_cursor = self.request.cursor.is_none();
         let mut selected = Vec::with_capacity(self.request.limit());
         let mut more = false;
@@ -92,16 +90,7 @@ impl FileLifecycleRead {
                     .request
                     .cursor
                     .as_ref()
-                    .is_some_and(|cursor| cursor.after_operation_id == event.operation_id);
-                if found_cursor
-                    && self
-                        .request
-                        .cursor
-                        .as_ref()
-                        .is_some_and(|cursor| cursor.after_sequence != event.sequence)
-                {
-                    return Err(LifecycleError::Cursor.into_error().into());
-                }
+                    .is_some_and(|cursor| cursor.after_key() == event.order_key());
                 continue;
             }
             if selected.len() == self.request.limit() {
@@ -119,11 +108,12 @@ impl FileLifecycleRead {
                 binding,
                 after_operation_id: event.operation_id,
                 after_sequence: event.sequence,
+                after_source_id: event.source_id(),
             })
         } else {
             None
         };
-        let page = Page {
+        let mut page = Page {
             file_id: self.request.file_id.clone(),
             history_root: self.request.history_root,
             context: self.read.context.clone(),
@@ -131,8 +121,60 @@ impl FileLifecycleRead {
             events: selected,
             next_cursor,
         };
+        while json_codec::to_vec(&page)?.len()
+            > storage_contract::file_lifecycle::MAX_RESPONSE_BYTES
+        {
+            self.read.cancellation.checkpoint()?;
+            if page.events.len() <= 1 {
+                return Err(LifecycleError::Bytes.into_error().into());
+            }
+            page.events.pop();
+            page.next_cursor = page.events.last().map(|event| Cursor {
+                binding,
+                after_operation_id: event.operation_id,
+                after_sequence: event.sequence,
+                after_source_id: event.source_id(),
+            });
+        }
         page.validate(&self.request)?;
         Ok(page)
+    }
+
+    fn append_path_events(&self, events: &mut Vec<Event>) -> Result<()> {
+        for receipt in self.source.operations.values() {
+            self.read.cancellation.checkpoint()?;
+            if !crate::persist::path_changes::is_kind(&receipt.kind) {
+                continue;
+            }
+            for fact in crate::persist::path_changes::read(receipt)? {
+                self.read.cancellation.checkpoint()?;
+                if fact.file_id.to_string() != self.request.file_id.as_str() {
+                    continue;
+                }
+                if fact.history_tree_id.to_string() != self.read.context.history_tree_id.as_str()
+                    || fact.sequence.get() == 0
+                    || fact.sequence.get() > self.source.sequence
+                    || self.source.operation_principals.get(&fact.operation_id)
+                        .is_none_or(|principal| principal != fact.author.as_str())
+                {
+                    return Err(crate::persist::path_changes::invalid());
+                }
+                if events.len() == 65_536 {
+                    return Err(LifecycleError::Bytes.into_error().into());
+                }
+                events.push(Event {
+                    operation_id: fact.operation_id,
+                    sequence: fact.sequence.get(),
+                    occurred_at: Some(fact.occurred_at),
+                    detail: Detail::PathChanged {
+                        event_id: fact.event_id,
+                        before: fact.before,
+                        after: fact.after,
+                    },
+                });
+            }
+        }
+        Ok(())
     }
 }
 impl Engine {

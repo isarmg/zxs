@@ -24,6 +24,30 @@ mod object_move_scenarios;
 #[path = "branch_alias_operations/directory_history_scenarios.rs"]
 mod directory_history_scenarios;
 
+fn unchanged_body_path_fact(
+    receipt: &OperationResult,
+    repository: &str,
+    entry: &Entry,
+    before: &str,
+    after: &str,
+) -> storage_contract::FilePathEventId {
+    let facts = receipt.result["path_changes"].as_array().unwrap();
+    let matching = facts.iter().filter(|fact| {
+        fact["before"]["path"] == before && fact["after"]["path"] == after
+    }).collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    let fact = matching[0];
+    assert_eq!(fact["operation_id"], receipt.operation_id.to_string());
+    assert_eq!(fact["sequence"], receipt.sequence.to_string());
+    assert_eq!(fact["file_id"], entry.file_id);
+    assert_eq!(fact["entry_id"], entry.entry_id);
+    assert_eq!(fact["before_version_id"], entry.version_id);
+    assert_eq!(fact["after_version_id"], entry.version_id);
+    assert_eq!(fact["before"]["repository_id"], repository);
+    assert_eq!(fact["after"]["repository_id"], repository);
+    fact["event_id"].as_str().unwrap().parse().unwrap()
+}
+
 struct Pool {
     _temporary: tempfile::TempDir,
     root: PathBuf,
@@ -538,7 +562,11 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
             )
             .unwrap();
     }
-    p.commit(workspace);
+    let content_branches = p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>();
+    let receipt = p.commit(workspace);
+    assert_eq!(p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>(), content_branches);
     let renamed_a = p
         .engine
         .file_context(&p.repo.repository_id, "a/renamed.txt")
@@ -554,23 +582,13 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
         assert_eq!(renamed.branch_id, before.branch_id);
         assert_eq!(renamed.inherited_from, before.inherited_from);
         assert_eq!(renamed.selection_generation, before.selection_generation);
-        let node = &p.engine.state().file_path_nodes[renamed
-            .node_id
-            .as_deref()
-            .expect("rename creates a file path node")];
-        assert_eq!(node.version_id, original.version_id);
-        assert_eq!(node.path, path);
-        assert_eq!(node.previous_path, old_path);
-        assert_eq!(
-            node.parent_node_ids,
-            vec![
-                before
-                    .node_id
-                    .clone()
-                    .unwrap_or_else(|| original.version_id.clone())
-            ]
-        );
+        assert_eq!(renamed.node_id, before.node_id);
+        unchanged_body_path_fact(&receipt, &p.repo.repository_id, &original, old_path, path);
     }
+    let facts = receipt.result["path_changes"].as_array().unwrap();
+    assert_eq!(facts.len(), 2);
+    assert_ne!(facts[0]["event_id"], facts[1]["event_id"]);
+    assert!(p.engine.state().file_path_nodes.is_empty());
     assert_eq!(p.current_entry("a/renamed.txt").file_id, original.file_id);
     assert_eq!(p.current_entry("b/renamed.txt").file_id, original.file_id);
     assert_eq!(p.branch(&n).head_tree_id, a_head);
@@ -845,7 +863,11 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
             )
             .unwrap();
     }
-    p.commit(workspace);
+    let content_branches = p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>();
+    let receipt = p.commit(workspace);
+    assert_eq!(p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>(), content_branches);
     let renamed = p.current_entry("final/child/report.txt");
     assert_eq!(renamed.entry_id, original.entry_id);
     let updated = p
@@ -859,7 +881,12 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
         renamed.path()
     );
     assert_eq!(p.branch(&draft).path, "final");
-    assert!(updated.node_id.is_some());
+    assert_eq!(updated.node_id, context.node_id);
+    unchanged_body_path_fact(
+        &receipt, &p.repo.repository_id, &original, "a/child/report.txt", "final/child/report.txt",
+    );
+    assert_eq!(receipt.result["path_changes"].as_array().unwrap().len(), 1);
+    assert!(p.engine.state().file_path_nodes.is_empty());
     assert_eq!(p.bytes(&original.version_id), b"original");
     let repo = p.repo.repository_id.clone();
     p.reopen(|engine| {
@@ -909,7 +936,11 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
             )
             .unwrap();
     }
-    p.commit(workspace);
+    let content_branches = p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>();
+    let receipt = p.commit(workspace);
+    assert_eq!(p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>(), content_branches);
     for (original, context, path) in [(a, ca, "b.txt"), (b, cb, "a.txt")] {
         let current = p.current_entry(path);
         assert_eq!(current.file_id, original.file_id);
@@ -917,10 +948,13 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
         assert_eq!(updated.branch_id, context.branch_id);
         assert_eq!(updated.inherited_from, context.inherited_from);
         assert_eq!(p.engine.state().file_locations[&original.file_id], path);
-        let node = &p.engine.state().file_path_nodes[updated.node_id.as_ref().unwrap()];
-        assert_eq!(node.file_id, original.file_id);
-        assert_eq!(node.path, path);
+        assert_eq!(updated.node_id, context.node_id);
+        unchanged_body_path_fact(
+            &receipt, &p.repo.repository_id, &original, original.path(), path,
+        );
     }
+    assert_eq!(receipt.result["path_changes"].as_array().unwrap().len(), 2);
+    assert!(p.engine.state().file_path_nodes.is_empty());
     p.reopen(|_| {});
 }
 
@@ -1020,21 +1054,28 @@ fn chained_alias_renames_preserve_distinct_contexts_and_one_physical_owner() {
             )
             .unwrap();
     }
-    p.commit(workspace);
+    let content_branches = p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>();
+    let receipt = p.commit(workspace);
+    assert_eq!(p.engine.state().branches.values()
+        .filter(|branch| branch.file_id.is_some()).cloned().collect::<Vec<_>>(), content_branches);
     for (path, before) in ["a/final.txt", "b/final.txt"].into_iter().zip(contexts) {
         let context = p.engine.file_context(&p.repo.repository_id, path).unwrap();
         assert_eq!(context.branch_id, before.branch_id);
         assert_eq!(context.inherited_from, before.inherited_from);
         assert_eq!(p.current_entry(path).file_id, original.file_id);
-        assert_eq!(
-            p.engine.state().file_path_nodes[context.node_id.as_ref().unwrap()].path,
-            path
-        );
+        assert_eq!(context.node_id, before.node_id);
+        let old_path = if path.starts_with("a/") { "a/report.txt" } else { "b/report.txt" };
+        unchanged_body_path_fact(&receipt, &p.repo.repository_id, &original, old_path, path);
     }
     assert_eq!(
         p.engine.state().file_locations[&original.file_id],
         "b/final.txt"
     );
+    let facts = receipt.result["path_changes"].as_array().unwrap();
+    assert_eq!(facts.len(), 2);
+    assert_ne!(facts[0]["event_id"], facts[1]["event_id"]);
+    assert!(p.engine.state().file_path_nodes.is_empty());
     assert!(p.payload(&original.file_id, &original.version_id).is_file());
     assert_eq!(p.bytes(&original.version_id), b"original");
     p.reopen(|engine| {

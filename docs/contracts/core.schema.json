@@ -11253,6 +11253,194 @@
         "operation_id"
       ],
       "additionalProperties": false
+    },
+    "FilePathEventId": {
+      "type": "string",
+      "pattern": "^fpath_[0-9a-f]{32}(?![\\s\\S])"
+    },
+    "FileLifecyclePathLocation": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-maxDepth": 32,
+          "x-namePolicy": "PortablePath"
+        }
+      },
+      "required": [
+        "repository_id",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "FileLifecycleDetail": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "const": "delete"
+            },
+            "deletion_id": {
+              "type": "string",
+              "pattern": "^fdel_[0-9a-f]{32}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "action",
+            "deletion_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "const": "undo"
+            },
+            "deletion_id": {
+              "type": "string",
+              "pattern": "^fdel_[0-9a-f]{32}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "action",
+            "deletion_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "const": "import"
+            },
+            "deletion_id": {
+              "type": "string",
+              "pattern": "^fdel_[0-9a-f]{32}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "action",
+            "deletion_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "const": "path_changed"
+            },
+            "event_id": {
+              "$ref": "#/$defs/FilePathEventId"
+            },
+            "before": {
+              "$ref": "#/$defs/FileLifecyclePathLocation"
+            },
+            "after": {
+              "$ref": "#/$defs/FileLifecyclePathLocation"
+            }
+          },
+          "required": [
+            "action",
+            "event_id",
+            "before",
+            "after"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FileLifecycleEvent": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "detail": {
+          "$ref": "#/$defs/FileLifecycleDetail"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UInt64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "sequence",
+        "detail",
+        "occurred_at"
+      ],
+      "additionalProperties": false,
+      "description": "Verified retained fact. Delete and path_changed require a recorded Unix-seconds timestamp; undo and import require null. Path before/after must differ. The event is not a content node; its operation and typed source identity identify one member."
+    },
+    "FileLifecycleCursor": {
+      "type": "string",
+      "minLength": 140,
+      "maxLength": 160,
+      "pattern": "^[0-9a-f]{64}:op_[0-9a-f]{32}:[1-9][0-9]{0,19}:(?:fdel|fpath)_[0-9a-f]{32}(?![\\s\\S])",
+      "description": "Opaque binding:operation:sequence:source continuation; sequence is a canonical nonzero UInt64. The complete member, not only its operation, anchors the next page."
+    },
+    "FileLifecyclePage": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "context": {
+          "$ref": "#/$defs/HistoryResolvedContext"
+        },
+        "observation_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/FileLifecycleEvent"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileLifecycleCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "history_root",
+        "context",
+        "observation_sequence",
+        "events",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "At most 64 facts and 64 KiB encoded JSON. Order is (sequence, operation_id, source_id), not wall-clock order. A short nonempty page can continue; next_cursor must bind its exact last member and the original request. Missing evidence is an error, not an empty or final page. No complete-timeline or O(page) cost guarantee."
     }
   }
 }

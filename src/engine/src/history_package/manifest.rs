@@ -861,6 +861,9 @@ impl HistoryManifest {
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        if !self.file_path_nodes.is_empty() {
+            return Err(crate::persist::path_changes::invalid());
+        }
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;

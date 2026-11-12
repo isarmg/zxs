@@ -64,6 +64,7 @@ impl FileVersions {
 pub(crate) struct FileRows {
     pub(crate) deletion_operations: super::lifecycles::DeletionOperations,
     pub(crate) history_copies: super::lifecycles::DeletionOperations,
+    pub(crate) path_operations: super::lifecycles::DeletionOperations,
     pub(crate) branches: SharedRecords<()>,
     pub(crate) merge_links: SharedRecords<()>,
     pub(crate) pending_branches: SharedRecords<()>,
@@ -104,6 +105,7 @@ impl FileRows {
         let Self {
             deletion_operations,
             history_copies,
+            path_operations,
             branches,
             merge_links,
             pending_branches,
@@ -115,6 +117,7 @@ impl FileRows {
         } = self;
         deletion_operations.is_empty()
             && history_copies.is_empty()
+            && path_operations.is_empty()
             && branches.is_empty()
             && merge_links.is_empty()
             && pending_branches.is_empty()

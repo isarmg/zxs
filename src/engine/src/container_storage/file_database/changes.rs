@@ -92,6 +92,11 @@ pub(crate) fn affected(previous: &State, next: &State) -> BTreeSet<String> {
             .into_iter()
             .chain(next.operations.get(&id))
         {
+            if let crate::state_projection::lifecycles::PathOwner::Files(owners) =
+                crate::state_projection::lifecycles::path_owner(receipt)
+            {
+                files.extend(owners.into_iter().map(|file| file.to_string()));
+            }
             match crate::state_projection::lifecycles::owner(receipt) {
                 crate::state_projection::lifecycles::DeletionOwner::File(file) => {
                     files.insert(file.to_owned());

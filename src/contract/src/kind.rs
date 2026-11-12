@@ -30,5 +30,6 @@ kinds! {
     FileAnchor => "fnode",
     FileMetadata => "fmeta",
     FileDeletion => "fdel",
+    FilePathEvent => "fpath",
     FileMerge => "fmerge",
 }

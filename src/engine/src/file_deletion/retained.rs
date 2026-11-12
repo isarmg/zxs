@@ -191,8 +191,7 @@ fn collect_events<T>(
             for event in &movement.retained(file)?.events {
                 insert(event.clone())?;
             }
-        } else if receipt.kind == crate::business::history_copy::RETAINED_KIND
-            || receipt.kind == crate::business::history_copy::DIRECTORY_EXPORT_KIND
+        } else if crate::business::history_copy::is_kind(&receipt.kind)
             || receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         {
             let copied = crate::business::history_copy::retained::read(receipt, file)?;

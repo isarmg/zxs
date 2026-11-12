@@ -36,7 +36,6 @@ pub(in crate::business) struct GraphInput<'a> {
     pub context: &'a FileContext,
     pub target_path: &'a name_policy::PortablePath,
     pub route: &'a CopyRoute,
-    pub principal: &'a str,
     pub scope: IdentityScope<'a>,
     /// Aggregate moves project shared namespace/commit ancestry once.
     pub aggregate_ids: Option<&'a BTreeMap<String, String>>,
@@ -47,6 +46,9 @@ pub(in crate::business) fn project(
     next: &mut State,
     input: GraphInput<'_>,
 ) -> Result<CopiedGraph> {
+    if !previous.file_path_nodes.is_empty() {
+        return Err(crate::persist::path_changes::invalid());
+    }
     let GraphInput {
         source_repo,
         target,
@@ -55,11 +57,9 @@ pub(in crate::business) fn project(
         context,
         target_path,
         route,
-        principal,
         scope,
         aggregate_ids,
     } = input;
-    let operation = scope.operation;
     let commits = if aggregate_ids.is_none() {
         previous
             .commits
@@ -90,13 +90,6 @@ pub(in crate::business) fn project(
         }
         for id in &source.branches {
             add(id)?;
-        }
-        for node in previous
-            .file_path_nodes
-            .values()
-            .filter(|node| node.file_id == source.file)
-        {
-            add(&node.node_id)?;
         }
         for node in previous
             .file_metadata_nodes
@@ -206,20 +199,6 @@ pub(in crate::business) fn project(
         }
     }
     for original in previous
-        .file_path_nodes
-        .values()
-        .filter(|node| node.file_id == source.file)
-    {
-        let mut node = original.clone();
-        node.node_id = mapped(&node.node_id)?;
-        node.file_id = file.clone();
-        node.history_tree_id = target.history_tree_id.clone();
-        node.version_id = mapped(&node.version_id)?;
-        node.branch_id = mapped(&node.branch_id)?;
-        node.parent_node_ids = mapped_list(&node.parent_node_ids)?;
-        next.file_path_nodes.insert(node.node_id.clone(), node);
-    }
-    for original in previous
         .file_metadata_nodes
         .values()
         .filter(|node| node.file_id == source.file)
@@ -264,13 +243,6 @@ pub(in crate::business) fn project(
     let node_ids = source
         .versions
         .iter()
-        .chain(
-            previous
-                .file_path_nodes
-                .values()
-                .filter(|node| node.file_id == source.file)
-                .map(|node| &node.node_id),
-        )
         .chain(
             previous
                 .file_metadata_nodes
@@ -347,33 +319,6 @@ pub(in crate::business) fn project(
         .and_then(|id| ids.get(id))
         .filter(|id| id.starts_with("dbr_"))
         .cloned();
-    // The current occurrence has a new destination path. Historic paths remain
-    // immutable, with an explicit new path node continuing the copied head.
-    if aggregate_ids.is_none() && old_entry.path() != target_path.as_str() {
-        let node_id = scope.generated("fnode", "arrival")?;
-        let parent = copied_context
-            .node_id
-            .clone()
-            .unwrap_or_else(|| entry.version_id.clone());
-        next.file_path_nodes.insert(
-            node_id.clone(),
-            FilePathNode {
-                node_id: node_id.clone(),
-                history_tree_id: target.history_tree_id.clone(),
-                file_id: file.clone(),
-                version_id: entry.version_id.clone(),
-                parent_node_ids: vec![parent],
-                branch_id: selected.clone(),
-                path: target_path.as_str().to_owned(),
-                previous_path: old_entry.path().into(),
-                operation_id: operation,
-                author: principal.into(),
-                sequence: next.sequence,
-                created_at: route.created_at,
-            },
-        );
-        copied_context.node_id = Some(node_id);
-    }
     if aggregate_ids.is_none() {
         next.file_contexts.insert(
             directory::context_key_from_key(&target.repository_id, entry.lookup_key()),

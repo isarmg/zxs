@@ -41,8 +41,8 @@ pub use content_hash::{ContentHash, ParseContentHashError};
 pub use counter::{Generation, GenerationExhausted, Sequence, SequenceExhausted};
 pub use id::{
     BranchId, CommitId, DirectoryBranchId, DirectoryTreeId, DiskId, EntryId, FileAnchorId,
-    FileDeletionId, FileId, FileMergeId, FileMetadataId, FileNodeId, HistoryTreeId, Id, IdKind,
-    PoolId, RepositoryId, RuleId, TreeId, VersionId,
+    FileDeletionId, FileId, FileMergeId, FileMetadataId, FileNodeId, FilePathEventId, HistoryTreeId, Id,
+    IdKind, PoolId, RepositoryId, RuleId, TreeId, VersionId,
 };
 mod operation_id;
 mod operation_outcome;

@@ -3,7 +3,7 @@ use crate::history_window::{
     HistoryCollection, HistoryFileId, HistoryLocation, HistoryPageLimit, HistoryQueryHash,
     HistoryRepositoryId, HistoryResolvedContext, HistoryRoot, HistoryWindowRequest,
 };
-use crate::{Error, ErrorCode, FileDeletionId, OperationId, Result};
+use crate::{Error, ErrorCode, FileDeletionId, FilePathEventId, OperationId, RepositoryId, Result};
 pub use crate::Timestamp;
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, fmt};
@@ -21,6 +21,8 @@ pub enum LifecycleError {
     Cursor,
     #[error("lifecycle response differs from its request or event evidence")]
     Response,
+    #[error("one lifecycle event exceeds the response byte limit")]
+    Bytes,
     #[error("lifecycle source has no complete retained audit evidence")]
     SourceIncomplete,
     #[error("lifecycle source changed; reload the first page")]
@@ -31,6 +33,7 @@ impl LifecycleError {
         match self {
             Self::Changed => ErrorCode::HistoryChanged,
             Self::SourceIncomplete => ErrorCode::PublicationInvalid,
+            Self::Bytes => ErrorCode::ResourceLimit,
             Self::Limit | Self::Location | Self::Cursor | Self::Response => ErrorCode::InvalidRequest,
         }
     }
@@ -112,7 +115,7 @@ impl Request {
     }
     pub fn binding(&self, context: &HistoryResolvedContext, sequence: u64) -> HistoryQueryHash {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"file-lifecycle-retained-v1\0");
+        hasher.update(b"file-lifecycle-path-facts\0");
         let context_hash = self.history_request().query_hash(context, None);
         hasher.update(context_hash.to_string().as_bytes());
         hasher.update(self.history_root.to_string().as_bytes());
@@ -128,16 +131,20 @@ pub struct Cursor {
     pub binding: HistoryQueryHash,
     pub after_operation_id: OperationId,
     pub after_sequence: u64,
+    pub after_source_id: SourceId,
 }
 impl Cursor {
     pub fn parse(text: &str) -> Result<Self> {
-        if !(102..=121).contains(&text.len()) {
+        if !(140..=160).contains(&text.len()) {
             return Err(LifecycleError::Cursor.into_error());
         }
         let (binding, operation) = text
             .split_once(':')
             .ok_or_else(|| LifecycleError::Cursor.into_error())?;
         let (operation, sequence) = operation
+            .split_once(':')
+            .ok_or_else(|| LifecycleError::Cursor.into_error())?;
+        let (sequence, source) = sequence
             .split_once(':')
             .ok_or_else(|| LifecycleError::Cursor.into_error())?;
         let after_sequence = crate::parse_u64_decimal(sequence)?;
@@ -148,17 +155,22 @@ impl Cursor {
             binding: HistoryQueryHash::parse(binding)?,
             after_operation_id: operation.parse()?,
             after_sequence,
+            after_source_id: SourceId::parse(source)?,
         })
+    }
+    pub fn after_key(&self) -> (u64, OperationId, SourceId) {
+        (self.after_sequence, self.after_operation_id, self.after_source_id)
     }
 }
 impl fmt::Display for Cursor {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}:{}:{}",
+            "{}:{}:{}:{}",
             self.binding,
             self.after_operation_id,
             self.after_sequence,
+            self.after_source_id,
         )
     }
 }
@@ -173,24 +185,89 @@ impl<'de> Deserialize<'de> for Cursor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum Action {
-    Delete,
-    Undo,
-    Import,
+/// The actual retained record identity, never a position in a projected page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SourceId {
+    Deletion(FileDeletionId),
+    PathChange(FilePathEventId),
+}
+impl SourceId {
+    pub fn parse(text: &str) -> Result<Self> {
+        if text.starts_with("fdel_") {
+            text.parse().map(Self::Deletion)
+        } else if text.starts_with("fpath_") {
+            text.parse().map(Self::PathChange)
+        } else {
+            Err(LifecycleError::Cursor.into_error())
+        }
+    }
+}
+impl fmt::Display for SourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deletion(id) => fmt::Display::fmt(id, formatter),
+            Self::PathChange(id) => fmt::Display::fmt(id, formatter),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct PathLocation {
+    pub repository_id: RepositoryId,
+    pub path: name_policy::PortablePath,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Detail {
+    Delete {
+        deletion_id: FileDeletionId,
+    },
+    Undo {
+        deletion_id: FileDeletionId,
+    },
+    Import {
+        deletion_id: FileDeletionId,
+    },
+    PathChanged {
+        event_id: FilePathEventId,
+        before: PathLocation,
+        after: PathLocation,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Event {
     pub operation_id: OperationId,
-    pub action: Action,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
-    pub deletion_id: FileDeletionId,
+    pub detail: Detail,
     #[serialization(deserialize_with = "crate::encoding::required_nullable")]
     pub occurred_at: Option<Timestamp>,
+}
+impl Event {
+    pub fn source_id(&self) -> SourceId {
+        match &self.detail {
+            Detail::Delete { deletion_id }
+            | Detail::Undo { deletion_id }
+            | Detail::Import { deletion_id } => SourceId::Deletion(*deletion_id),
+            Detail::PathChanged { event_id, .. } => SourceId::PathChange(*event_id),
+        }
+    }
+    pub fn order_key(&self) -> (u64, OperationId, SourceId) {
+        (self.sequence, self.operation_id, self.source_id())
+    }
+    fn has_valid_evidence_shape(&self) -> bool {
+        match &self.detail {
+            Detail::Delete { .. } => self.occurred_at.is_some(),
+            Detail::Undo { .. } | Detail::Import { .. } => self.occurred_at.is_none(),
+            Detail::PathChanged { before, after, .. } => {
+                self.occurred_at.is_some() && before != after
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,31 +301,27 @@ impl Page {
         {
             return Err(LifecycleError::Response.into_error());
         }
-        let mut previous = request
-            .cursor
-            .as_ref()
-            .map_or(0, |cursor| cursor.after_sequence);
-        let mut operations = std::collections::BTreeSet::new();
+        let mut previous = request.cursor.as_ref().map(Cursor::after_key);
+        let mut members = std::collections::BTreeSet::new();
         for event in &self.events {
-            if event.sequence <= previous
+            let key = event.order_key();
+            if event.sequence == 0
+                || previous.is_some_and(|previous| key <= previous)
                 || event.sequence > self.observation_sequence
-                || !operations.insert(event.operation_id)
-                || (event.action == Action::Delete) != event.occurred_at.is_some()
-                || request
-                    .cursor
-                    .as_ref()
-                    .is_some_and(|cursor| cursor.after_operation_id == event.operation_id)
+                || !members.insert((event.operation_id, event.source_id()))
+                || request.cursor.as_ref().is_some_and(|cursor| {
+                    cursor.after_operation_id == event.operation_id
+                        && cursor.after_source_id == event.source_id()
+                })
+                || !event.has_valid_evidence_shape()
             {
                 return Err(LifecycleError::Response.into_error());
             }
-            previous = event.sequence;
+            previous = Some(key);
         }
         if let Some(cursor) = &self.next_cursor
             && (cursor.binding != binding
-                || self.events.len() != request.limit()
-                || self.events.last().map(|event| event.operation_id)
-                    != Some(cursor.after_operation_id)
-                || self.events.last().map(|event| event.sequence) != Some(cursor.after_sequence))
+                || self.events.last().map(Event::order_key) != Some(cursor.after_key()))
         {
             return Err(LifecycleError::Response.into_error());
         }

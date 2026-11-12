@@ -1,5 +1,5 @@
 use crate::{Engine, OperationId};
-use storage_contract::file_lifecycle::{Action, Request, Timestamp};
+use storage_contract::file_lifecycle::{Detail, Request, Timestamp};
 use storage_contract::history_window::{
     HistoryCollection, HistoryFileId, HistoryPageLimit, HistoryVersionId, HistoryWindowCancellation,
     HistoryWindowRequest,
@@ -181,10 +181,10 @@ fn file_lifecycle_real_delete_undo_paginate_reopen_and_reject_changed_source() {
     let second = read.page().unwrap();
     second.validate(&request).unwrap();
     assert_eq!(second.events[0].operation_id, undo);
-    assert_eq!(second.events[0].action, Action::Undo);
+    assert!(matches!(second.events[0].detail, Detail::Undo { .. }));
     assert!(second.events[0].occurred_at.is_none());
     assert!(second.next_cursor.is_none());
-    assert_eq!(first.events[0].deletion_id, second.events[0].deletion_id);
+    assert_eq!(first.events[0].source_id(), second.events[0].source_id());
     let mut wrong_sequence = request.clone();
     wrong_sequence.cursor.as_mut().unwrap().after_sequence = second.events[0].sequence;
     assert!(
@@ -315,15 +315,12 @@ fn file_lifecycle_scoped_source_rejects_unrelated_malformed_ownership() {
         graph_only.kind = crate::business::history_copy::KIND.to_owned();
         graph_only.result = json_codec::json!({"file_id": file.as_str()});
         read.source.operations.insert(graph_only.operation_id, graph_only);
-        // This injected graph-only ownership and malformed unrelated receipt
-        // must retain the endpoint's existing SourceIncomplete precedence.
-        assert!(matches!(
-            read.page().unwrap_err(),
-            crate::Error::Contract(storage_contract::Error::FileLifecycle {
-                source: storage_contract::file_lifecycle::LifecycleError::SourceIncomplete,
-                ..
-            })
-        ));
+        // New-format copies require their complete audit envelope. Neither a
+        // graph-only stub nor unrelated corruption may become an empty prefix.
+        assert_eq!(
+            read.page().unwrap_err().code(),
+            storage_contract::ErrorCode::PublicationInvalid,
+        );
     }
 }
 

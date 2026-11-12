@@ -72,6 +72,7 @@ fn single_prefix_domains_preserve_text_and_map_iteration_order() {
     assert_single_prefix::<kind::FileAnchor>("fnode");
     assert_single_prefix::<kind::FileMetadata>("fmeta");
     assert_single_prefix::<kind::FileDeletion>("fdel");
+    assert_single_prefix::<kind::FilePathEvent>("fpath");
     assert_single_prefix::<kind::FileMerge>("fmerge");
 }
 

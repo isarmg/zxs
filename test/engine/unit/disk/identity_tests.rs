@@ -20,8 +20,12 @@ fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
     invalid.push(canonical_json(&legacy).unwrap());
     for format in [
         json_codec::json!("managed-directory"),
+        json_codec::json!("container-tags-managed-directory"),
         json_codec::json!({
             "membership-generation": {"authority_hash": "1".repeat(64)}
+        }),
+        json_codec::json!({
+            "container-tags-membership-generation": {"authority_hash": "1".repeat(64)}
         }),
     ] {
         let mut previous_format = seal.clone();
@@ -32,7 +36,7 @@ fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
     wrong_format["format"] = json_codec::json!("unsupported-identity");
     invalid.push(canonical_json(&wrong_format).unwrap());
     let mut incomplete_pending = seal.clone();
-    incomplete_pending["format"] = json_codec::json!("container-tags-membership-pending");
+    incomplete_pending["format"] = json_codec::json!("container-path-facts-membership-pending");
     invalid.push(canonical_json(&incomplete_pending).unwrap());
     for field in ["physical_device", "filesystem_uuid"] {
         let mut old_field = seal.clone();
@@ -295,8 +299,12 @@ fn old_pool_and_mixed_seals_reject_without_rewriting_members() {
         .collect();
     for format in [
         json_codec::json!("managed-directory"),
+        json_codec::json!("container-tags-managed-directory"),
         json_codec::json!({
             "membership-generation": {"authority_hash": "2".repeat(64)}
+        }),
+        json_codec::json!({
+            "container-tags-membership-generation": {"authority_hash": "2".repeat(64)}
         }),
     ] {
         for changed_members in [1, 3] {

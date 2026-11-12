@@ -142,8 +142,49 @@ pub(crate) fn history_copy_owner(receipt: &OperationResult) -> DeletionOwner<'_>
 enum Membership {
     Deletion,
     HistoryCopy,
+    PathChange,
 }
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum PathOwner {
+    Other,
+    Files(std::collections::BTreeSet<storage_contract::FileId>),
+    Malformed,
+}
+
+pub(crate) fn path_owner(receipt: &OperationResult) -> PathOwner {
+    if !crate::persist::path_changes::is_kind(&receipt.kind) {
+        return PathOwner::Other;
+    }
+    match crate::persist::path_changes::read(receipt) {
+        Ok(facts) => PathOwner::Files(facts.into_iter().map(|fact| fact.file_id).collect()),
+        Err(_) => PathOwner::Malformed,
+    }
+}
+
 impl DerivedOwners {
+    pub(crate) fn malformed_path_operations(&self) -> impl Iterator<Item = &OperationId> {
+        self.unscoped_path_changes.keys()
+    }
+
+    fn path_member(&mut self, id: OperationId, owner: &PathOwner, add: bool) {
+        match owner {
+            PathOwner::Other => {}
+            PathOwner::Malformed => {
+                self.receipt_member(id, &DeletionOwner::Malformed, Membership::PathChange, add);
+            }
+            PathOwner::Files(files) => {
+                for file in files {
+                    self.receipt_member(
+                        id,
+                        &DeletionOwner::File(&file.to_string()),
+                        Membership::PathChange,
+                        add,
+                    );
+                }
+            }
+        }
+    }
     pub(crate) fn malformed_deletion_receipts(&self) -> bool {
         !self.unscoped_deletions.is_empty()
     }
@@ -168,6 +209,7 @@ impl DerivedOwners {
             DeletionOwner::Malformed => match membership {
                 Membership::Deletion => &mut self.unscoped_deletions,
                 Membership::HistoryCopy => &mut self.unscoped_history_copies,
+                Membership::PathChange => &mut self.unscoped_path_changes,
             },
             DeletionOwner::File(file) => {
                 if add && !self.file_rows.contains_key(*file) {
@@ -181,6 +223,7 @@ impl DerivedOwners {
                 match membership {
                     Membership::Deletion => &mut rows.deletion_operations,
                     Membership::HistoryCopy => &mut rows.history_copies,
+                    Membership::PathChange => &mut rows.path_operations,
                 }
             }
         };
@@ -207,6 +250,7 @@ impl DerivedOwners {
     }
     pub(super) fn build_deletion_rows(&mut self, state: &State) {
         for (id, receipt) in state.operations.iter() {
+            self.path_member(*id, &path_owner(receipt), true);
             self.receipt_member(*id, &owner(receipt), Membership::Deletion, true);
             self.receipt_member(
                 *id,
@@ -218,6 +262,12 @@ impl DerivedOwners {
     }
     pub(super) fn update_deletion_rows(&mut self, before: &State, after: &State, writes: &Writes) {
         for id in &writes.operations {
+            let previous_paths = before.operations.get(id).map_or(PathOwner::Other, path_owner);
+            let next_paths = after.operations.get(id).map_or(PathOwner::Other, path_owner);
+            if previous_paths != next_paths {
+                self.path_member(*id, &previous_paths, false);
+                self.path_member(*id, &next_paths, true);
+            }
             let previous = before
                 .operations
                 .get(id)
@@ -274,9 +324,9 @@ impl<'a> LifecycleSource<'a> {
         };
         for (id, receipt) in state.operations.iter() {
             checkpoint()?;
-            for (membership, owner) in [
-                (Membership::Deletion, owner(receipt)),
-                (Membership::HistoryCopy, history_copy_owner(receipt)),
+            for (members, owner) in [
+                (&mut source.deletions, owner(receipt)),
+                (&mut source.copies, history_copy_owner(receipt)),
             ] {
                 let included = match owner {
                     DeletionOwner::Other => false,
@@ -288,10 +338,7 @@ impl<'a> LifecycleSource<'a> {
                     DeletionOwner::Files(owners) => owners.contains(&file.as_str()),
                 };
                 if included {
-                    match membership {
-                        Membership::Deletion => source.deletions.insert(*id, ()),
-                        Membership::HistoryCopy => source.copies.insert(*id, ()),
-                    };
+                    members.insert(*id, ());
                 }
             }
         }

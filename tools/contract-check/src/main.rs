@@ -2,6 +2,7 @@
 mod document_links;
 mod document_scan;
 mod history_window;
+mod lifecycle;
 use data_serialization::Serialize;
 use json_codec::{Value, json};
 use std::{
@@ -325,6 +326,7 @@ fn semantics(name: &str, value: &Value) -> Result {
             // Local consistency only. Consumers also bind the frozen real request.
             result.validate(&result.request)?;
         }
+        "FileLifecyclePage" | "FileLifecycleCursor" => lifecycle::validate(name, value)?,
         "SharedHistoryGraph" => {
             use storage_contract::shared_history::{SharedHistoryGraph, SharedHistoryRequest};
             let graph: SharedHistoryGraph = json_codec::from_value(value.clone())?;
@@ -1050,3 +1052,7 @@ mod content_matches_tests;
 #[cfg(test)]
 #[path = "../../../test/tools/contract-check/unit/shared_history_tests.rs"]
 mod shared_history_tests;
+
+#[cfg(test)]
+#[path = "../../../test/tools/contract-check/unit/lifecycle_tests.rs"]
+mod lifecycle_tests;

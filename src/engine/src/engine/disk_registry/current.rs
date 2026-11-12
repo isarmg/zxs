@@ -29,6 +29,8 @@ mod history_move;
 mod merge_links;
 mod new_scope;
 mod path_notes;
+mod path_changes;
+pub(in crate::engine) use path_changes::verify as verify_path_changes;
 mod plan_cancellation;
 mod publication_delta;
 mod recursive_follow;
@@ -546,6 +548,12 @@ impl CurrentNamespaces {
     }
 
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        let published = self.advance_namespaces(previous, next)?;
+        path_changes::verify(previous, next, Some(self), Some(&published))?;
+        Ok(published)
+    }
+
+    fn advance_namespaces(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
         if let Some(view) = self.advance_history_move(previous, next)? {

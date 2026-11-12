@@ -418,6 +418,7 @@ fn apply(
     principal: &str,
     operation: OperationId,
 ) -> Result<Value> {
+    let mut path_changes = Vec::new();
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::RepositoryNotFound,
@@ -971,15 +972,31 @@ fn apply(
             } else if moved.kind == NamespaceEntryKind::File {
                 let context = file_context(source_scope, &member)?;
                 let context = if member.path() != moved.path() {
-                    file_paths::rename_node(
+                    let mut helper_entries = Vec::new();
+                    if !state.branches.get(&context.branch_id).is_some_and(|branch| {
+                        branch.file_id.as_deref() == Some(member.file_id.as_str())
+                    }) {
+                        helper_entries = target_draft.entries.clone();
+                        helper_entries.push(moved.clone());
+                        ensure_parents_for_scope(
+                            state, target_draft, &mut helper_entries, current_parents,
+                        )?;
+                        validate_entries(&mut helper_entries, engine.config.max_entries)?;
+                    }
+                    let changed = file_paths::record_change(
                         state,
                         repository,
-                        &member,
-                        &moved,
-                        Some(context),
+                        file_paths::PathChange {
+                            old: &member,
+                            new: &moved,
+                            after_entries: &helper_entries,
+                            context: Some(context),
+                        },
                         principal,
                         operation,
-                    )?
+                    )?;
+                    path_changes.push(changed.fact);
+                    changed.context
                 } else {
                     context
                 };
@@ -1119,21 +1136,6 @@ fn apply(
     }
     validate_entries(&mut entries, engine.config.max_entries)?;
     validate_identities(&entries)?;
-    if engine.admitted_current_namespaces()?.is_some() {
-        let by_path = entries
-            .iter()
-            .map(|entry| (entry.lookup_key(), entry))
-            .collect::<BTreeMap<_, _>>();
-        for entry in entries
-            .iter()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        {
-            if let Some(context) = directory::context_at_key(state, repository, entry.lookup_key())
-            {
-                file::relocate_namespace_file_branch(state, &context, &by_path, entry, operation)?;
-            }
-        }
-    }
     let active_deleted = active_deleted
         .into_iter()
         .map(|(scope, mut deleted)| {
@@ -1209,8 +1211,9 @@ fn apply(
         let source=originals[&item.source.directory_branch_id].branch();let e=namespace::find_unordered_key(&source.entries,source_path.key()).expect("source checked");
         json!({"source":item.source,"target":item.target,"file_id":e.file_id,"version_id":e.version_id,"physical_path":state.file_locations.get(&e.file_id)})
     }).collect::<Vec<_>>();
-    Ok(
-        json!({"commit_id":commit_id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"action":request.kind,"count":request.items.len().to_string(),"directory_branch_ids":affected,"changes":changes,"transfers":transfers,"copies":copy_receipts,"file_node_ids":file_paths::operation_nodes(state,operation)}),
+    crate::persist::path_changes::attach(
+        json!({"commit_id":commit_id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"action":request.kind,"count":request.items.len().to_string(),"directory_branch_ids":affected,"changes":changes,"transfers":transfers,"copies":copy_receipts}),
+        path_changes,
     )
 }
 fn ensure_parents_for_scope(

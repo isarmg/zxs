@@ -62,8 +62,7 @@ impl CopyKind {
 
     pub(crate) fn transform(self) -> CopyTransform {
         match self {
-            Self::Graph => apply,
-            Self::Retained => retained::apply,
+            Self::Graph | Self::Retained => retained::apply,
             Self::DirectoryExport => directory_git::export::apply,
         }
     }
@@ -441,29 +440,7 @@ fn sources_for(
     })
 }
 
-/// Closed metadata projection. Original branch names, timestamps, version
-/// sequences, tags, ancestry, merge facts and notes are retained under new IDs.
-/// Directory history is projected only to this file, never imported as authority.
-pub(crate) fn apply(
-    previous: &State,
-    next: &mut State,
-    view: Option<&crate::engine::CurrentNamespaces>,
-    request: &FileHistoryCopyRequest,
-    route: &CopyRoute,
-    principal: &str,
-    operation: OperationId,
-) -> Result<Value> {
-    apply_scoped(
-        previous,
-        next,
-        view,
-        Destination::EmptyRepository(request),
-        route,
-        principal,
-        operation,
-    )
-}
-
+/// Closed content graph projection; callers attach the complete typed audit.
 pub(in crate::business) fn apply_scoped(
     previous: &State,
     next: &mut State,
@@ -495,7 +472,6 @@ pub(in crate::business) fn apply_scoped(
             context,
             target_path: &name_policy::PortablePath::parse(&request.target_name)?,
             route,
-            principal,
             scope: graph::IdentityScope {
                 operation,
                 member: None,

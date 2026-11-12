@@ -36,24 +36,50 @@ pub(super) struct BranchRow {
     pub pending_version_id: Option<String>,
     pub alias_of: Option<String>,
 }
-/// Preserve graph identity and ancestry without the exterior path-change data.
-/// The disk/system scopes own path and previous_path, never this internal DB.
+/// Original audit identity and mapped ownership, never exterior locations.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub(super) struct AnchorRow {
-    pub node_id: String,
-    pub history_tree_id: String,
-    pub file_id: String,
-    pub version_id: String,
-    pub parent_node_ids: Vec<String>,
-    pub branch_id: String,
-    pub note: Option<String>,
+pub(super) struct PathChangeRow {
+    pub event_id: storage_contract::FilePathEventId,
+    pub source_file_id: storage_contract::FileId,
+    pub source_history_tree_id: storage_contract::HistoryTreeId,
+    pub source_branch_id: storage_contract::BranchId,
+    pub source_entry_id: storage_contract::EntryId,
+    pub source_before_version_id: storage_contract::VersionId,
+    pub source_after_version_id: storage_contract::VersionId,
     pub operation_id: OperationId,
-    pub author: String,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub sequence: u64,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub created_at: u64,
+    pub author: storage_contract::Principal,
+    pub sequence: storage_contract::Sequence,
+    pub occurred_at: storage_contract::Timestamp,
+    pub file_id: storage_contract::FileId,
+    pub history_tree_id: storage_contract::HistoryTreeId,
+    pub branch_id: storage_contract::BranchId,
+    pub before_version_id: storage_contract::VersionId,
+    pub after_version_id: storage_contract::VersionId,
+}
+
+impl From<&crate::business::history_copy::retained::RetainedPathChange> for PathChangeRow {
+    fn from(value: &crate::business::history_copy::retained::RetainedPathChange) -> Self {
+        let source = &value.source;
+        Self {
+            event_id: source.event_id,
+            source_file_id: source.file_id,
+            source_history_tree_id: source.history_tree_id,
+            source_branch_id: source.branch_id,
+            source_entry_id: source.entry_id,
+            source_before_version_id: source.before_version_id,
+            source_after_version_id: source.after_version_id,
+            operation_id: source.operation_id,
+            author: source.author.clone(),
+            sequence: source.sequence,
+            occurred_at: source.occurred_at,
+            file_id: value.file_id,
+            history_tree_id: value.history_tree_id,
+            branch_id: value.branch_id,
+            before_version_id: value.before_version_id,
+            after_version_id: value.after_version_id,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -126,7 +152,7 @@ impl<'a> Validation<'a> {
             "file" => "file",
             "version" => "ver",
             "branch" => "br",
-            "anchor" => "fnode",
+            "path_change" => "fpath",
             "metadata" => "fmeta",
             "deletion" => "fdel",
             "lifecycle" => "op",
@@ -165,10 +191,14 @@ impl<'a> Validation<'a> {
                 self.branches.insert(row.branch_id.clone(), row);
                 identity
             }
-            "anchor" => {
-                let row: AnchorRow = decode_local(body.as_bytes())?;
-                self.node(&row.node_id, &row.history_tree_id, row.sequence)?;
-                (row.file_id, row.node_id)
+            "path_change" => {
+                let row: PathChangeRow = decode_local(body.as_bytes())?;
+                self.scope(&row.history_tree_id.to_string())?;
+                self.sequence(row.sequence.get())?;
+                // Audit endpoints are not graph nodes. A historical pending
+                // version may belong to its original source file; the complete
+                // authoritative projection verifies that provenance separately.
+                (row.file_id.to_string(), row.event_id.to_string())
             }
             "metadata" => {
                 let row: MetadataRow = decode_local(body.as_bytes())?;

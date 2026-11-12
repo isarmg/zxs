@@ -1472,11 +1472,11 @@ impl crate::engine::PlanningContext<'_> {
                 let mut entries = draft.into_entries();
                 let deleted = apply_workspace_namespace(&mut entries, current_entries, &w.namespace_operations)?;
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
-                super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
+                let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w.branch_id, &entries)?; }
                 if entries == current.entries && deleted.is_empty() {
-                    return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
+                    return crate::persist::path_changes::attach(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}), path_changes);
                 }
                 let live_files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)
                     .map(|entry| entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
@@ -1506,7 +1506,7 @@ impl crate::engine::PlanningContext<'_> {
                         .collect::<Vec<_>>();
                     super::directory::record_projected_directory_edits(state, &repo.repository_id, &changed_paths, None, engine.current_namespaces.map(std::sync::Arc::as_ref))?;
                 }
-                Ok(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id,"file_node_ids":file_paths::operation_nodes(state,request.operation_id)}))
+                crate::persist::path_changes::attach(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id}), path_changes)
             },
         )?;
         Ok(WorkspaceMutation {

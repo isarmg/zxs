@@ -374,7 +374,6 @@ pub(super) fn copy(
     unit: &MoveUnit,
     target: &Repository,
     route: &CopyRoute,
-    principal: &str,
     operation: OperationId,
 ) -> Result<Graph> {
     let mut graph = identities(previous, unit, target, operation)?;
@@ -398,7 +397,6 @@ pub(super) fn copy(
                 context: &context,
                 target_path: &target_path,
                 route,
-                principal,
                 scope: IdentityScope {
                     operation,
                     member: Some(file),
