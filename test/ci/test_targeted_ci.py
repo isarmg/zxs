@@ -2126,7 +2126,7 @@ class ContainerTagsSelection(unittest.TestCase):
         self.assertEqual(target['package'], 'storage-engine')
         retained, rows = target['selections']
         self.assertEqual(retained['max_tests'], 45)
-        self.assertEqual(rows['max_tests'], 16)
+        self.assertEqual(rows['max_tests'], 17)
         self.assertEqual(rows['prefixes'], ['container_storage::file_database::tests::'])
         self.assertNotIn(rows['prefixes'][0], retained['prefixes'])
         self.assertEqual([part['timeout_seconds'] for part in target['selections']], [900, 900])
@@ -2134,17 +2134,28 @@ class ContainerTagsSelection(unittest.TestCase):
         inventory = list(retained['exact'])
         for prefix, count in [
             ('engine::history_window::oracle_tests::', 21),
-            ('container_storage::file_database::tests::', 15),
+            ('container_storage::file_database::tests::', 17),
             ('historical_save::integer_tests::', 1),
             ('history_package::manifest::integer_tests::', 1),
         ]:
             inventory.extend(f'{prefix}case_{index}' for index in range(count))
         evidence = CI.selection_evidence(inventory, [], target)
         self.assertEqual(set(CI.test_timeouts(evidence)), set(inventory))
-        self.assertEqual(len(inventory), 47)
-        extra = [f'{rows["prefixes"][0]}extra_{index}' for index in range(2)]
+        self.assertEqual(len(inventory), 49)
+        extra = [f'{rows["prefixes"][0]}extra']
         with self.assertRaises(ValueError):
             CI.selection_evidence(inventory + extra, [], target)
+
+    def test_date_projection_budget_matches_reviewed_github_inventory(self):
+        # d963db118's GitHub binary lists 17 tests in this unchanged selection.
+        target = self.policy['groups']['engine-date-errors']['rust_targets'][0]
+        self.assertEqual(target['max_tests'], 17)
+        inventory = list(target['exact'])
+        for prefix, count in zip(target['prefixes'], [5, 6, 1]):
+            inventory.extend(f'{prefix}case_{index}' for index in range(count))
+        self.assertEqual(len(CI.selected_tests(inventory, [], target)), 17)
+        with self.assertRaises(ValueError):
+            CI.selected_tests(inventory + [target['prefixes'][0] + 'extra'], [], target)
 
     def test_retained_backup_transaction_is_isolated_without_changing_its_test_or_timeout(self):
         targets = [target for group in self.policy['groups'].values()

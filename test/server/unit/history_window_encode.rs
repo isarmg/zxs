@@ -575,3 +575,56 @@ fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
     value.storage_name = format!("000000000000001-{}", value.download_name);
     assert!(encode(&nodes_page(vec![value], Vec::new(), 1)).is_err());
 }
+
+#[test]
+fn invalid_installed_names_preserve_typed_sources_and_state_invalid_status() {
+    use std::error::Error as _;
+    use storage_contract::InvalidInstalledVersionName;
+
+    let cases = [
+        ("v000001_report.txt", InvalidInstalledVersionName::Separator),
+        (
+            "00000000000000A-report.txt",
+            InvalidInstalledVersionName::Identity(storage_contract::InvalidVersionStorageId),
+        ),
+        (
+            "000000000000001-a/b",
+            InvalidInstalledVersionName::Name(name_policy::validate_name("a/b").unwrap_err()),
+        ),
+        (
+            "000000000000001-old.txt",
+            InvalidInstalledVersionName::CurrentName,
+        ),
+    ];
+    for (stored, expected) in cases {
+        let mut value = summary(1);
+        value.storage_name = stored.into();
+        let error = encode(&nodes_page(vec![value], Vec::new(), 1)).unwrap_err();
+        assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, ErrorCode::StateInvalid);
+        let boundary = error.source().unwrap();
+        assert!(boundary.is::<crate::http_boundary::ApiErrorSource>());
+        let cause = boundary.source().unwrap();
+        let installed = cause.downcast_ref::<InvalidInstalledVersionName>().unwrap();
+        assert_eq!(
+            std::mem::discriminant(installed),
+            std::mem::discriminant(&expected),
+        );
+        match installed {
+            InvalidInstalledVersionName::Identity(_) => {
+                assert!(
+                    cause.source().unwrap().is::<storage_contract::InvalidVersionStorageId>()
+                );
+            }
+            InvalidInstalledVersionName::Name(_) => {
+                assert!(cause.source().unwrap().is::<name_policy::Error>());
+            }
+            InvalidInstalledVersionName::Separator | InvalidInstalledVersionName::CurrentName => {
+                assert!(cause.source().is_none());
+            }
+        }
+        let wire = json_codec::to_value(&error).unwrap();
+        assert_eq!(wire["code"], "STATE_INVALID");
+        assert!(wire.get("source").is_none());
+    }
+}

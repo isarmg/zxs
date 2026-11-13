@@ -381,7 +381,8 @@ fn captured_window_does_not_retain_namespace_placement_or_policy_tables() {
     assert!(state.directory_branches.is_empty());
     assert!(state.directory_trees.is_empty());
     assert!(state.directory_tree_selections.is_empty());
-    assert!(state.file_locations.is_empty());
+    assert!(!state.file_locations.is_empty());
+    assert!(state.file_locations.shares_storage_with(&engine.state.file_locations));
     assert!(state.file_selections.is_empty());
     assert!(state.file_backup_paths.is_empty());
     assert!(state.file_backup_policies.is_empty());
@@ -409,6 +410,76 @@ fn captured_window_does_not_retain_namespace_placement_or_policy_tables() {
         .unwrap();
     assert_eq!(page, reference);
     engine.recheck_history_window(&read).unwrap();
+}
+
+#[test]
+fn captured_window_names_follow_current_location_without_rewriting_frozen_sources() {
+    let (_temp, mut engine, file, version) = actual();
+    let original_commits = engine.state.commits.clone();
+    let original_versions = engine.state.versions.clone();
+    let nodes_request = visible_request(&file);
+    let mut versions_request = nodes_request.clone();
+    versions_request.collection = HistoryCollection::Versions;
+    let capture = |engine: &Engine, request: HistoryWindowRequest| {
+        engine
+            .capture_history_window(request, HistoryWindowCancellation::new())
+            .unwrap()
+    };
+    let assert_name = |read: &HistoryWindowRead, expected: &str| {
+        match read.page().unwrap() {
+            HistoryWindowPage::Nodes { nodes, .. } => {
+                assert_eq!(nodes.len(), 1);
+                assert_eq!(nodes[0].version_id, version);
+                assert_eq!(nodes[0].download_name, expected);
+            }
+            HistoryWindowPage::Versions { versions, .. } => {
+                assert_eq!(versions.len(), 1);
+                assert_eq!(versions[0].version_id, version);
+                assert_eq!(versions[0].download_name, expected);
+            }
+            _ => panic!("requested a node or version page"),
+        }
+    };
+    assert_name(&capture(&engine, nodes_request.clone()), "file.txt");
+    assert_name(&capture(&engine, versions_request.clone()), "file.txt");
+    // Leave these pages pending until after publication: the captured authority
+    // must remain frozen even when a later read uses the renamed container.
+    let old_nodes = capture(&engine, nodes_request.clone());
+    let old_versions = capture(&engine, versions_request.clone());
+    let repository = old_nodes.context().repository_id.to_string();
+    engine
+        .file_namespace(
+            &repository,
+            crate::NamespaceOperation::parse(
+                crate::NamespaceOperationKind::Rename,
+                "file.txt",
+                Some("renamed.txt"),
+            )
+            .unwrap(),
+            "admin",
+            crate::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let current_nodes = capture(&engine, nodes_request);
+    let current_versions = capture(&engine, versions_request);
+    assert_name(&current_nodes, "renamed.txt");
+    assert_name(&current_versions, "renamed.txt");
+    engine.recheck_history_window(&current_nodes).unwrap();
+    engine.recheck_history_window(&current_versions).unwrap();
+    assert_name(&old_nodes, "file.txt");
+    assert_name(&old_versions, "file.txt");
+    assert_eq!(
+        engine.recheck_history_window(&old_nodes).unwrap_err().code(),
+        storage_contract::ErrorCode::HistoryChanged
+    );
+    assert_eq!(
+        engine.recheck_history_window(&old_versions).unwrap_err().code(),
+        storage_contract::ErrorCode::HistoryChanged
+    );
+    assert_eq!(engine.state.versions, original_versions);
+    for (id, commit) in original_commits.iter() {
+        assert_eq!(engine.state.commits.get(id), Some(commit));
+    }
 }
 
 #[test]

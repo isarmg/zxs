@@ -855,9 +855,12 @@
           "kind": "lib",
           "features": [],
           "exact": [
-            "engine::history_window::read::tests::soft_deleted_history_keeps_retained_nodes_without_current_context_across_reopen_and_undo"
+            "engine::history_window::read::tests::soft_deleted_history_keeps_retained_nodes_without_current_context_across_reopen_and_undo",
+            "engine::history_window::read::tests::captured_window_does_not_retain_namespace_placement_or_policy_tables",
+            "engine::history_window::read::tests::captured_window_names_follow_current_location_without_rewriting_frozen_sources",
+            "engine::history_window::read::tests::narrow_window_fields_preserve_all_collection_projections"
           ],
-          "max_tests": 1,
+          "max_tests": 4,
           "timeout_seconds": 900
         },
         {
@@ -1579,7 +1582,7 @@
             "history_package::tests::namespace_deletion_facts_validate_without_snapshot_or_content_dependencies",
             "history_package::tests::namespace_deletions_survive_export_restore_and_replay_without_operation_records"
           ],
-          "max_tests": 16,
+          "max_tests": 17,
           "timeout_seconds": 900
         },
         {
@@ -1667,7 +1670,7 @@
           "prefixes": [
             "container_storage::file_database::tests::"
           ],
-          "max_tests": 16,
+          "max_tests": 17,
           "timeout_seconds": 900
         },
         {
@@ -3843,7 +3846,8 @@
     {
       "path": "src/engine/src/engine/metadata_projection.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "history-visible-context"
       ]
     },
     {
@@ -3996,6 +4000,7 @@
     {
       "path": "src/server/src/history_window_encode.rs",
       "groups": [
+        "container-current-name",
         "container-tags-http"
       ]
     },
@@ -4398,6 +4403,7 @@
     {
       "path": "test/server/unit/history_window_encode.rs",
       "groups": [
+        "container-current-name",
         "container-tags-http"
       ]
     },
@@ -6124,6 +6130,7 @@
     {
       "path": "src/server/src/http_boundary.rs",
       "groups": [
+        "container-current-name",
         "note-http-boundary"
       ]
     },
@@ -8255,6 +8262,7 @@
     {
       "path": "src/server/src/http_boundary.rs",
       "groups": [
+        "container-current-name",
         "container-tags-http"
       ]
     },

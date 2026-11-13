@@ -27,6 +27,8 @@ pub(crate) enum ApiErrorSource {
     #[error("{0}")]
     ContentHash(#[from] storage_contract::ParseContentHashError),
     #[error("{0}")]
+    InstalledVersionName(#[source] storage_contract::InvalidInstalledVersionName),
+    #[error("{0}")]
     IndependentObservation(
         #[from] storage_contract::storage_independent_source::InvalidObservation,
     ),
