@@ -167,6 +167,14 @@ pub(crate) fn validate(state: &State) -> Result<()> {
     if !state.file_path_nodes.is_empty() {
         return Err(crate::persist::path_changes::invalid());
     }
+    let mut storage_ids = std::collections::BTreeSet::new();
+    for version in state.versions.values() {
+        if !storage_ids.insert((&version.file_id, version.storage_id)) {
+            return Err(crate::Error::VersionNames(
+                crate::container_storage::VersionNameError::Collision,
+            ));
+        }
+    }
     crate::persist::path_changes::admit_ledger(state)?;
     crate::file_deletion::publication::admit_current(state)?;
     // Event polling seeks by sequence while preserving ordinal array order.

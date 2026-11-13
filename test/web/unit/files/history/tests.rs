@@ -413,7 +413,7 @@ fn admitted_node_page(note: &str) -> HistoryWindowPage {
             content_hash: "c".repeat(64).parse().unwrap(),
             content_state: None,
             download_name: "file.txt".into(),
-            storage_name: "v000002_fixture.txt".into(),
+            storage_name: "000000000000002-file.txt".into(),
             parents: HistoryParentSet::Complete,
             fields: HistoryNodeFields {
                 message: HistoryFieldInfo { byte_length: 0 },

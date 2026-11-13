@@ -130,7 +130,7 @@ impl Fixture {
 #[test]
 fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
     let mut fixture = Fixture::prepared();
-    assert_eq!(FORMAT, "zxs-container-path-facts-backup-native-control");
+    assert_eq!(FORMAT, "zxs-container-current-name-backup-native-control");
     let task = fixture.task();
     let report = fixture.read(&task.archive_hash).unwrap();
     assert_eq!(report.original_members, 3);
@@ -141,7 +141,7 @@ fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
         let path = object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
         let bytes = fs::read(path).unwrap();
         let value = storage_contract::strict_json(&bytes).unwrap();
-        assert_eq!(value["format"], "container-path-facts-managed-directory");
+        assert_eq!(value["format"], "container-current-name-managed-directory");
         let seal: DiskSeal = decode_proof(&bytes).unwrap();
         assert_eq!(seal.format, DiskSealFormat::ManagedDirectory);
     }
@@ -192,12 +192,12 @@ fn old_original_seal_is_rejected_inside_current_rehashed_archive_without_writes(
     for format in ["managed-directory", "container-tags-managed-directory"] {
         let fixture = Fixture::prepared();
         let mut manifest = fixture.manifest();
-        assert_eq!(manifest.format, "zxs-container-path-facts-backup-native-control");
+        assert_eq!(manifest.format, "zxs-container-current-name-backup-native-control");
         let member = &mut manifest.members[0];
         let original =
             object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
         let mut seal = storage_contract::strict_json(&fs::read(original).unwrap()).unwrap();
-        assert_eq!(seal["format"], "container-path-facts-managed-directory");
+        assert_eq!(seal["format"], "container-current-name-managed-directory");
         seal["format"] = json_codec::Value::String(format.into());
         let hash = storage_contract::object_hash_value("backup-original-seal", &seal).unwrap();
         let bytes = canonical_json(&seal).unwrap();

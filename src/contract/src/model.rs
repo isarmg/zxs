@@ -626,7 +626,7 @@ pub struct FileVersion {
     pub checksum_chunk_bytes: u32,
     pub checksum_manifest_hash: String,
     pub creation_name: String,
-    pub storage_name: String,
+    pub storage_id: crate::VersionStorageId,
     pub created_at: String,
     pub source_version_ids: Vec<String>,
     pub created_as_full_checkpoint: bool,

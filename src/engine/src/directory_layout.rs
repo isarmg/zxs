@@ -100,6 +100,8 @@ impl<'a> LayoutPlan<'a> {
 
 #[derive(Debug, error_definition::Error)]
 pub enum LayoutError {
+    #[error("installed version name is invalid: {0}")]
+    VersionName(#[source] Box<crate::Error>),
     #[error("repository {repository_id} does not exist")]
     RepositoryMissing { repository_id: String },
     #[error("repository {repository_id} current namespace {branch_id}/{commit_id:?} is unproven")]
@@ -1090,11 +1092,20 @@ pub(crate) fn plan_root<'a>(
         let full = joined(layout.root.as_ref(), path.as_str(), &mut budget)?;
         joined(Some(&full), "container.json", &mut budget)?;
         for version in &versions {
-            joined(
-                Some(&full),
-                &format!("versions/{}", version.storage_name),
-                &mut budget,
-            )?;
+            let leaf = crate::container_storage::installed_version_name(
+                version.storage_id,
+                &name_policy::Name::parse(path.file_name())
+                    .map_err(LayoutError::ExtraDirectoryName)?,
+            ).map_err(|source| LayoutError::VersionName(Box::new(source)))?;
+            // User names were admitted separately. The internal prefix does
+            // not consume the user's portable-name allowance a second time.
+            let relative = format!("{}/versions/{leaf}", full.as_str());
+            budget.charge(relative.len())?;
+            if relative.len() > 4096 || relative.split('/').count() > 64 {
+                return Err(LayoutError::ResourceLimit);
+            }
+            platform_io::fs_safety::RelativePath::new(std::path::Path::new(&relative))
+                .map_err(|source| LayoutError::VersionName(Box::new(crate::Error::Filesystem(source))))?;
         }
         files.insert(
             key,

@@ -33,12 +33,8 @@ fn body_version(number: u64, history: &str, file: &str, bytes: &[u8]) -> FileVer
         checksum_chunk_bytes: 262_144,
         checksum_manifest_hash: blake3::hash(&checksums).to_hex().to_string(),
         creation_name: "seed.txt".into(),
-        // Deliberately reverse sequence order relative to version-ID order.
-        storage_name: format!(
-            "v{:06}_20261027T000000Z_{}.txt",
-            100 - number,
-            &hash.to_hex()[..8]
-        ),
+        // Deliberately reverse local identity order relative to version-ID order.
+        storage_id: format!("{:015}", 100 - number).parse().unwrap(),
         created_at: "2026-10-27T00:00:00Z".into(),
         source_version_ids: Vec::new(),
         created_as_full_checkpoint: true,
@@ -86,7 +82,8 @@ fn full_descriptor(
         .map(|version| json!({
             "version_id":version.version_id,
             "parent_node_ids":crate::business::file_nodes::node_parents(state, &version.version_id),
-            "storage_name":version.storage_name, "created_at":version.created_at,
+            "storage_name":format!("{}-{}", version.storage_id,
+                current_container_name(state, file).unwrap()), "created_at":version.created_at,
             "size":version.logical_size.to_string(), "content_hash":version.content_hash,
             "note":state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
             "content_state":state.content_states.get(&version.version_id)
@@ -583,7 +580,7 @@ fn empty_history_descriptor_preserves_file_global_relations_without_local_rows()
             .values()
             .filter(|event| event.file_id == fixture.file),
     );
-    let actual = description.encode_history(&history, state, &mut nodes);
+    let actual = description.encode_history(&history, state, &mut nodes).unwrap();
     let expected: Value = json_codec::from_slice(&full_descriptor(
         state,
         &fixture.file,

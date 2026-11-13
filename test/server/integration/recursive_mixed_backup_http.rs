@@ -104,7 +104,7 @@ async fn mixed_http_publishes_files_and_empty_directories_together_and_cold_retr
                     .join("namespace")
                     .join(prefix)
                     .join("report/versions")
-                    .join(&version.storage_name)
+                    .join(format!("{}-report", version.storage_id))
             )
             .unwrap(),
             b"mixed HTTP body"

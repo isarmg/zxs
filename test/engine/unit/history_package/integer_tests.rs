@@ -1,10 +1,9 @@
 use crate::history_package::HistoryManifest;
-use crate::{CommitRequest, Config, Engine, Error};
-use std::error::Error as _;
-use storage_contract::{ErrorCode, OperationId, RepositoryName, encoding::canonical_json};
+use crate::{CommitRequest, Config, Engine};
+use storage_contract::{OperationId, RepositoryName, encoding::canonical_json};
 
 #[test]
-fn manifest_storage_integer_admission_preserves_cause_order_and_bytes() {
+fn manifest_storage_identity_admission_rejects_invalid_wire_without_rewriting_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let mut engine = Engine::initialize(
@@ -43,47 +42,17 @@ fn manifest_storage_integer_admission_preserves_cause_order_and_bytes() {
     manifest.validate().unwrap();
     let original = canonical_json(&manifest).unwrap();
     let version_id = manifest.versions.keys().next().unwrap().clone();
-    for corrupt_calendar in [false, true] {
-        let mut invalid = manifest.clone();
-        let version = invalid.versions.get_mut(&version_id).unwrap();
-        let (_, suffix) = version.storage_name.split_once('_').unwrap();
-        version.storage_name = format!("v18446744073709551616_{suffix}");
-        if corrupt_calendar {
-            version.created_at = "2023-02-29T00:00:00Z".into();
-        }
-        let before = canonical_json(&invalid).unwrap();
-        let error = invalid.validate().unwrap_err();
-        let mut current = &error;
-        for code in [
-            ErrorCode::HistoryPackageInvalid,
-            ErrorCode::ContainerLayoutInvalid,
-        ] {
-            assert_eq!(current.code(), code);
-            assert!(!current.is_retryable());
-            assert!(current.published_result().is_none());
-            let Error::Context { source, .. } = current else {
-                panic!("manifest admission must retain both context layers: {current:?}");
-            };
-            current = source;
-        }
-        assert!(matches!(current, Error::Integer(_)));
-        assert_eq!(current.code(), ErrorCode::ContainerLayoutInvalid);
-        assert!(!current.is_retryable());
-        assert!(current.published_result().is_none());
-        let cause = current
-            .source()
-            .unwrap()
-            .downcast_ref::<std::num::ParseIntError>()
-            .unwrap();
-        assert_eq!(cause.kind(), &std::num::IntErrorKind::PosOverflow);
-        assert!(cause.source().is_none());
-        assert_eq!(canonical_json(&invalid).unwrap(), before);
+    for malformed in ["", "invalid.txt", "00000000000000", "0000000000000000", "ABC000000000000"] {
+        let mut wire = json_codec::to_value(&manifest).unwrap();
+        wire["versions"][&version_id]["storage_id"] = json_codec::json!(malformed);
+        let before = canonical_json(&wire).unwrap();
+        assert!(json_codec::from_slice::<HistoryManifest>(&before).is_err());
+        assert_eq!(canonical_json(&wire).unwrap(), before);
     }
-    // A retained maximum storage sequence is valid until a new one is requested.
+    // All admitted identity characters survive the package wire round-trip.
     let mut maximum = manifest.clone();
-    let version = maximum.versions.get_mut(&version_id).unwrap();
-    let (_, suffix) = version.storage_name.split_once('_').unwrap();
-    version.storage_name = format!("v{}_{suffix}", u64::MAX);
+    maximum.versions.get_mut(&version_id).unwrap().storage_id =
+        "zzzzzzzzzzzzzzz".parse().unwrap();
     let before = canonical_json(&maximum).unwrap();
     maximum.validate().unwrap();
     let decoded: HistoryManifest = json_codec::from_slice(&before).unwrap();

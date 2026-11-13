@@ -103,6 +103,8 @@ pub(super) fn unified_history(
     current_node: Option<&str>,
 ) -> Result<Vec<HistoryNode>, ApiError> {
     let state = view.business_projection();
+    let download_name = view.current_container_name(file.parse().map_err(|source: storage_contract::Error| error(source.into()))?)
+        .map_err(error)?;
     let mut paths = NodePaths {
         state,
         commits: first_commits,
@@ -114,10 +116,6 @@ pub(super) fn unified_history(
             .collect(),
         cache: BTreeMap::new(),
     };
-    let version_metadata = versions
-        .iter()
-        .map(|version| (version.data.version_id.as_str(), version))
-        .collect::<BTreeMap<_, _>>();
     let path_nodes = state
         .file_path_nodes
         .values()
@@ -206,7 +204,6 @@ pub(super) fn unified_history(
         .collect::<Vec<_>>();
     for path in path_nodes {
         let body = &state.versions[&path.version_id];
-        let metadata = version_metadata.get(path.version_id.as_str()).copied();
         let summary = take_summary(&mut summaries, &path.node_id);
         nodes.push((
             path.sequence,
@@ -235,12 +232,8 @@ pub(super) fn unified_history(
                 size: body.logical_size,
                 content_hash: body.content_hash,
                 content_state: state.content_states.get(&path.version_id).copied(),
-                download_name: metadata
-                    .map_or(body.creation_name.as_str(), |version| {
-                        version.data.download_name.as_str()
-                    })
-                    .into(),
-                storage_name: body.storage_name.clone(),
+                download_name: download_name.as_str().into(),
+                storage_name: view.installed_version_name(body).map_err(error)?,
                 operation_id: path.operation_id,
                 author: path.author.clone(),
                 message: String::new(),
@@ -254,7 +247,6 @@ pub(super) fn unified_history(
                 != Some(&storage_contract::ContentState::Retired)
     }) {
         let body = &state.versions[&revision.version_id];
-        let metadata = version_metadata.get(revision.version_id.as_str()).copied();
         let path = paths.get(&revision.node_id);
         let summary = take_summary(&mut summaries, &revision.node_id);
         nodes.push((
@@ -284,12 +276,8 @@ pub(super) fn unified_history(
                 size: body.logical_size,
                 content_hash: body.content_hash,
                 content_state: state.content_states.get(&revision.version_id).copied(),
-                download_name: metadata
-                    .map_or(body.creation_name.as_str(), |version| {
-                        version.data.download_name.as_str()
-                    })
-                    .into(),
-                storage_name: body.storage_name.clone(),
+                download_name: download_name.as_str().into(),
+                storage_name: view.installed_version_name(body).map_err(error)?,
                 operation_id: revision.operation_id,
                 author: revision.author.clone(),
                 message: String::new(),

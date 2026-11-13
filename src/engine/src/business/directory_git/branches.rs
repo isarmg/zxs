@@ -498,6 +498,13 @@ pub(super) fn checkout(
             continue;
         }
         if target.kind == NamespaceEntryKind::File {
+            // A frozen tree chooses identity/content, never the current container name.
+            let names = namespace::container_name::current_names(
+                state, std::slice::from_ref(&target),
+            )?;
+            namespace::container_name::apply_file_names(
+                std::slice::from_mut(&mut target), &names,
+            )?;
             let context = source.file_contexts[entry.lookup_key()].clone();
             if state.branches[&context.branch_id].state != BranchState::Active {
                 return Err(Error::new(

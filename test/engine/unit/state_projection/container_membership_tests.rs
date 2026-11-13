@@ -184,7 +184,7 @@ fn version(id: &str, file: &str, history: &str) -> FileVersion {
         "history_tree_id":history, "version_id":id, "file_id":file,
         "creation_primary_slot_id":"P01", "logical_size":"0", "version_sequence":"1",
         "content_hash":"a".repeat(64), "checksum_chunk_bytes":65536,
-        "checksum_manifest_hash":"hash", "creation_name":"file", "storage_name":"file",
+        "checksum_manifest_hash":"hash", "creation_name":"file", "storage_id":"000000000000001",
         "created_at":"now", "source_version_ids":[], "created_as_full_checkpoint":true
     }))
 }

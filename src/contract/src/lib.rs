@@ -82,6 +82,11 @@ mod tracked_events;
 pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedFiles, TrackedOperations, TrackedRecords};
 pub use tracked_events::{SequenceChanges, TrackedEvents};
 pub mod text;
+mod version_storage_id;
+pub use version_storage_id::{
+    InvalidInstalledVersionName, InvalidVersionStorageId, VersionStorageId,
+    validate_installed_version_name,
+};
 mod timestamp;
 pub use timestamp::{Timestamp, TimestampError};
 mod workspace_capacity;

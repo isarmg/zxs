@@ -232,7 +232,7 @@ async fn recursive_http_writes_each_tier_reads_its_tree_and_retries_after_cold_o
             .join(parent)
             .join("report")
             .join("versions")
-            .join(&version.storage_name);
+            .join(format!("{}-report", version.storage_id));
         assert_eq!(std::fs::read(target).unwrap(), b"recursive HTTP body");
     }
     assert_eq!(

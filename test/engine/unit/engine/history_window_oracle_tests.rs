@@ -38,7 +38,7 @@ fn body(n: usize, file: &str, history: &str) -> FileVersion {
         checksum_chunk_bytes: 262144,
         checksum_manifest_hash: "0".repeat(64),
         creation_name: "原稿.txt".into(),
-        storage_name: format!("v{n:06}_20261030T000000Z_00000000.txt"),
+        storage_id: format!("{n:015x}").parse().unwrap(),
         created_at: "2026-10-30T00:00:00Z".into(),
         source_version_ids: (0..n).map(|index| id("ver", index)).collect(),
         created_as_full_checkpoint: true,
@@ -49,6 +49,10 @@ fn body(n: usize, file: &str, history: &str) -> FileVersion {
 // Actual publication and cold-recovery admission have separate real-I/O tests.
 pub(super) fn fixture() -> MetadataView {
     let mut state = State::default();
+    state.file_locations.insert(FILE.into(), "目录/原稿.txt".into());
+    state.file_names.insert(FILE.into(), "原稿.txt".into());
+    state.file_locations.insert(FOREIGN_FILE.into(), "外部/原稿.txt".into());
+    state.file_names.insert(FOREIGN_FILE.into(), "原稿.txt".into());
     state.histories.insert(
         HISTORY.into(),
         HistoryTree {
@@ -1529,7 +1533,7 @@ fn summaries_keep_original_source_counts_merge_provenance_and_external_field_len
             version.fields.created_at.byte_length,
             body.created_at.len() as u64
         );
-        assert_eq!(version.storage_name, body.storage_name);
+        assert_eq!(version.storage_name, format!("{}-原稿.txt", body.storage_id));
         assert_eq!(
             version.note,
             state

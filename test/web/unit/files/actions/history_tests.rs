@@ -65,7 +65,7 @@ fn response(
         "node_id":visible,"version_id":visible,"kind":"content","sequence":"1",
         "current":visible==current,"branch_id":null,"path":"a.txt","previous_path":null,
         "note":"visible node","size":"0","content_hash":"0".repeat(64),
-        "content_state":"AVAILABLE","download_name":"a.txt","storage_name":"a.txt",
+        "content_state":"AVAILABLE","download_name":"a.txt","storage_name":"000000000000001-a.txt",
         "parents":{"state":"complete"},"fields":{"message":{"byte_length":"0"},
         "author":{"byte_length":"0"},"created_at":{"byte_length":"20"}}
     }))

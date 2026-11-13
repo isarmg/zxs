@@ -158,7 +158,11 @@ impl Fixture {
                 .join("namespace")
                 .join(&expected)
                 .join("versions")
-                .join(&version.storage_name);
+                .join(format!(
+                    "{}-{}",
+                    version.storage_id,
+                    std::path::Path::new(&expected).file_name().unwrap().to_str().unwrap(),
+                ));
             assert_eq!(fs::read(body_path).unwrap(), body);
         }
     }
@@ -372,7 +376,11 @@ fn assert_independent_route(
             .join("namespace")
             .join(relative)
             .join("versions")
-            .join(&version.storage_name);
+            .join(format!(
+                    "{}-{}",
+                    version.storage_id,
+                    std::path::Path::new(relative).file_name().unwrap().to_str().unwrap(),
+                ));
         assert_eq!(fs::read(actual).unwrap(), body);
     }
 }

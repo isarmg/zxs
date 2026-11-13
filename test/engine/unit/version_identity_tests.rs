@@ -1,20 +1,8 @@
-//! Per-file numbering consumes admitted records and transaction-local builders.
+//! Local identities survive publication, replay, split, and package restoration.
 use super::*;
 
-fn number(version: &FileVersion) -> u64 {
-    version
-        .storage_name
-        .split('_')
-        .next()
-        .unwrap()
-        .strip_prefix('v')
-        .unwrap()
-        .parse()
-        .unwrap()
-}
-
 #[test]
-fn version_builds_advance_inside_one_candidate_and_discard_with_that_candidate() {
+fn version_builds_allocate_distinct_local_identities_without_changing_the_live_base() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
     let repo = repository(&mut engine, 1);
@@ -46,24 +34,26 @@ fn version_builds_advance_inside_one_candidate_and_discard_with_that_candidate()
     };
     let first = build(&mut next, &mut prepared);
     let second = build(&mut next, &mut prepared);
-    assert_eq!((number(&first), number(&second)), (1, 2));
+    assert_ne!(first.storage_id, second.storage_id);
     assert_ne!(first.version_id, second.version_id);
     crate::container_storage::validate_version(&first).unwrap();
     crate::container_storage::validate_version(&second).unwrap();
     assert_eq!(next.versions.len(), 2);
     assert_eq!(engine.state(), &baseline);
 
-    // A discarded unpublished candidate cannot reserve numbers in the live base.
+    // Discarding a candidate leaves the live version set unchanged.
     drop(next);
     drop(prepared);
     let mut retry = engine.state().clone();
     retry.begin_tracking();
-    assert_eq!(number(&build(&mut retry, &mut Vec::new())), 1);
+    let rebuilt = build(&mut retry, &mut Vec::new());
+    assert_ne!(rebuilt.storage_id, first.storage_id);
+    assert_ne!(rebuilt.storage_id, second.storage_id);
     assert_eq!(engine.state(), &baseline);
 }
 
 #[test]
-fn purged_versions_remain_numbered_after_reopen_and_replay() {
+fn purged_versions_retain_local_identity_after_reopen_and_replay() {
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
     let repo = repository(&mut engine, 3);
@@ -71,7 +61,7 @@ fn purged_versions_remain_numbered_after_reopen_and_replay() {
     let first = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
     save(&mut engine, &repo.main_branch_id, "file.txt", b"second");
     let second = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
-    assert_eq!(number(&engine.state.versions[&second.version_id]), 2);
+    let second_id = engine.state.versions[&second.version_id].storage_id;
     let purge = engine
         .create_purge_plan(
             &repo.history_tree_id,
@@ -114,7 +104,8 @@ fn purged_versions_remain_numbered_after_reopen_and_replay() {
     };
     let published = engine.commit_workspace(request.clone()).unwrap();
     let third = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
-    assert_eq!(number(&engine.state.versions[&third.version_id]), 3);
+    assert_ne!(engine.state.versions[&third.version_id].storage_id, second_id);
+    let third_id = engine.state.versions[&third.version_id].storage_id;
     let count = engine.state.versions.len();
     assert_eq!(engine.commit_workspace(request.clone()).unwrap(), published);
     assert_eq!(engine.state.versions.len(), count);
@@ -122,11 +113,11 @@ fn purged_versions_remain_numbered_after_reopen_and_replay() {
     let mut engine = Engine::open(&fixture.root).unwrap();
     assert_eq!(engine.commit_workspace(request).unwrap(), published);
     assert_eq!(engine.state.versions.len(), count);
-    assert_eq!(number(&engine.state.versions[&third.version_id]), 3);
+    assert_eq!(engine.state.versions[&third.version_id].storage_id, third_id);
 }
 
 #[test]
-fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
+fn mixed_split_and_package_restore_preserve_local_storage_identities() {
     use std::os::unix::fs::PermissionsExt;
 
     let source = Fixture::new();
@@ -169,15 +160,18 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
         .main_branch_id
         .clone()
         .unwrap();
-    let mut split_numbers = engine
+    let mut split_ids = engine
         .state
         .versions
         .values()
         .filter(|version| version.history_tree_id == history)
-        .map(number)
+        .map(|version| version.storage_id)
         .collect::<Vec<_>>();
-    split_numbers.sort();
-    assert_eq!(split_numbers, [1, 2, 3]);
+    split_ids.sort();
+    let mut original_ids = old_versions.values().map(|version| version.storage_id)
+        .collect::<Vec<_>>();
+    original_ids.sort();
+    assert_eq!(split_ids, original_ids);
     for (id, version) in old_versions.iter() {
         assert_eq!(&engine.state.versions[id], version);
     }
@@ -185,7 +179,10 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
         .state
         .versions
         .values()
-        .find(|version| version.history_tree_id == history && number(version) == 2)
+        .find(|version| {
+            version.history_tree_id == history
+                && version.storage_id == old_versions[&second.version_id].storage_id
+        })
         .unwrap()
         .clone();
     assert_eq!(
@@ -193,8 +190,8 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
         ContentState::Purged
     );
     assert_eq!(
-        tombstone.storage_name,
-        old_versions[&second.version_id].storage_name
+        tombstone.storage_id,
+        old_versions[&second.version_id].storage_id
     );
     assert_eq!(
         tombstone.created_at,
@@ -202,7 +199,7 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
     );
     save(&mut engine, &branch, "file.txt", b"fourth");
     let latest = engine.list_tree(&branch).unwrap()[0].clone();
-    assert_eq!(number(&engine.state.versions[&latest.version_id]), 4);
+    assert!(!split_ids.contains(&engine.state.versions[&latest.version_id].storage_id));
 
     let package = source.temp.path().join("package");
     engine.export_history_package(&history, &package).unwrap();
@@ -229,11 +226,14 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
     }
     save(&mut restored, &branch, "file.txt", b"fifth");
     let fifth = restored.list_tree(&branch).unwrap()[0].clone();
-    assert_eq!(number(&restored.state.versions[&fifth.version_id]), 5);
+    let fifth_id = restored.state.versions[&fifth.version_id].storage_id;
+    assert!(imported.values().all(|version| version.storage_id != fifth_id));
     drop(restored);
     let mut reopened = Engine::open(&target.root).unwrap();
     assert_eq!(reopened.state.versions[&tombstone.version_id], tombstone);
     save(&mut reopened, &branch, "file.txt", b"sixth");
     let sixth = reopened.list_tree(&branch).unwrap()[0].clone();
-    assert_eq!(number(&reopened.state.versions[&sixth.version_id]), 6);
+    let sixth_id = reopened.state.versions[&sixth.version_id].storage_id;
+    assert_ne!(sixth_id, fifth_id);
+    assert!(imported.values().all(|version| version.storage_id != sixth_id));
 }

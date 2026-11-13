@@ -41,8 +41,8 @@ struct Position {
 }
 
 impl store::Target {
-    fn final_body(&self, version: &FileVersion) -> PathBuf {
-        self.named.join("versions").join(&version.storage_name)
+    fn final_body(&self, version: &FileVersion) -> Result<PathBuf> {
+        crate::container_storage::installed_version_path(&self.named, version)
     }
     fn origin(&self, version: &FileVersion) -> Result<Origin> {
         let stage = self.stage()?;
@@ -80,7 +80,7 @@ impl store::Target {
             ));
         }
         let source = directory.join("content").join(&version.creation_name);
-        let target = self.final_body(version);
+        let target = self.final_body(version)?;
         let (body, installed_body) = match (exists(root, &source)?, exists(root, &target)?) {
             (true, false) => (source, false),
             (false, true) if installed_directory => (target, true),
@@ -164,7 +164,7 @@ impl store::Target {
         }
         if exists(root, &self.staged_version(version))?
             || exists(root, &self.version_directory(version))?
-            || exists(root, &self.final_body(version))?
+            || exists(root, &self.final_body(version)?)?
         {
             return Err(invalid(
                 "partial ordinary copy lacks its original inode record; all bytes retained",
@@ -262,13 +262,13 @@ impl store::Target {
         if !position.installed_body {
             root.rename_noreplace_destination_first_synced(
                 &position.body,
-                &self.final_body(version),
+                &self.final_body(version)?,
             )?;
         }
         self.verify_version(version, cancellation)?;
         // Retry completes both barriers even after a prior rename returned an
         // uncertain error. Original source and original target stage never move.
-        root.open_read_regular(&self.final_body(version))?
+        root.open_read_regular(&self.final_body(version)?)?
             .sync_all()?;
         root.sync_dir(&self.version_directory(version).join("content"))?;
         root.sync_dir(&self.version_directory(version))?;

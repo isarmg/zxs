@@ -177,7 +177,7 @@ fn accounting_snapshot_preserves_slot_keys_and_saturating_totals() {
                 checksum_chunk_bytes: 65_536,
                 checksum_manifest_hash: String::new(),
                 creation_name: String::new(),
-                storage_name: String::new(),
+                storage_id: "000000000000001".parse().unwrap(),
                 created_at: String::new(),
                 source_version_ids: vec![],
                 created_as_full_checkpoint: true,

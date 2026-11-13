@@ -3,6 +3,7 @@ use super::*;
 use std::collections::BTreeMap;
 mod draft;
 mod query;
+pub(crate) mod container_name;
 pub(crate) use draft::NamespaceDraft;
 pub use query::{CurrentObject, NamespaceTree};
 
@@ -317,16 +318,17 @@ pub(crate) fn apply_namespace(
             ..
         } => {
             let to_key = target.key();
-            let depth = find_unordered_key(entries, key)
+            let source = find_unordered_key(entries, key)
                 .ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::EntryNotFound,
                         "rename source missing",
                     )
-                })?
-                .path()
-                .split('/')
-                .count();
+                })?;
+            let renamed_file = (source.kind == NamespaceEntryKind::File)
+                .then(|| source.file_id.parse::<storage_contract::FileId>())
+                .transpose()?;
+            let depth = source.path().split('/').count();
             if is_descendant(to_key, key) {
                 return Err(Error::new(
                     storage_contract::ErrorCode::InvalidMove,
@@ -352,6 +354,10 @@ pub(crate) fn apply_namespace(
                     continue;
                 };
                 relocate_entry(entry, path);
+            }
+            if let Some(file) = renamed_file {
+                let name = name_policy::Name::parse(target.file_name())?;
+                container_name::apply_file_names(entries, &BTreeMap::from([(file, name)]))?;
             }
         }
     }

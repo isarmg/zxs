@@ -1328,7 +1328,13 @@ impl HistoryManifest {
         {
             return Err(invalid("version state or placement coverage differs"));
         }
+        let mut storage_identities = BTreeSet::new();
         for (id, version) in &self.versions {
+            if !storage_identities.insert((&version.file_id, version.storage_id)) {
+                return Err(crate::Error::VersionNames(
+                    crate::container_storage::VersionNameError::Collision,
+                ));
+            }
             // Tombstones retain identity even without a payload to trigger
             // content_path validation. Reject malformed retained records before
             // import can reach a decision or post-decision name projection.
@@ -1339,7 +1345,10 @@ impl HistoryManifest {
             validate_id(id, "ver")?;
             validate_id(&version.file_id, "file")?;
             name_policy::validate_name(&version.creation_name)?;
-            name_policy::validate_name(&version.storage_name)?;
+            let name = self.file_names.get(&version.file_id)
+                .ok_or_else(|| invalid("version has no current container name"))?;
+            let name = name_policy::Name::parse(name)?;
+            crate::container_storage::installed_version_leaf(version.storage_id, &name)?;
             let placement = self
                 .placements
                 .get(id)

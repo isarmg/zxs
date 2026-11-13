@@ -27,10 +27,12 @@ fn disk_root_preserves_private_admission_errors() {
 
 fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -> FileVersion {
     let hash = blake3::hash(bytes);
-    let (storage_name, created_at) = version_identity(state, file, name, &hash).unwrap();
+    let version_id = storage_contract::VersionId::generate().unwrap();
+    let storage_id = allocate_version_storage_id(state, file, version_id).unwrap();
+    let created_at = version_created_at().unwrap();
     FileVersion {
         history_tree_id: history.into(),
-        version_id: new_id("ver").unwrap(),
+        version_id: version_id.to_string(),
         file_id: file.into(),
         creation_primary_slot_id: "P01".into(),
         logical_size: bytes.len() as u64,
@@ -52,7 +54,7 @@ fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -
         .to_hex()
         .to_string(),
         creation_name: name.into(),
-        storage_name,
+        storage_id,
         created_at,
         source_version_ids: Vec::new(),
         created_as_full_checkpoint: true,
@@ -135,6 +137,9 @@ fn with_version(version: &FileVersion) -> State {
         .file_names
         .insert(version.file_id.clone(), version.creation_name.clone());
     state
+        .file_locations
+        .insert(version.file_id.clone(), version.creation_name.clone());
+    state
 }
 
 #[test]
@@ -205,18 +210,15 @@ fn version_calendar_admission_preserves_causes_bytes_and_storage_error_order() {
     );
     assert_eq!(canonical_json(&item).unwrap(), before);
 
-    item.storage_name = "invalid".into();
-    let before = canonical_json(&item).unwrap();
-    let error = validate_version(&item).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
-    assert!(matches!(error, Error::Contract(_)));
-    assert_eq!(canonical_json(&item).unwrap(), before);
+    let mut wire = json_codec::to_value(&item).unwrap();
+    wire["storage_id"] = json_codec::json!("invalid");
+    let before = canonical_json(&wire).unwrap();
+    assert!(json_codec::from_slice::<FileVersion>(&before).is_err());
+    assert_eq!(canonical_json(&wire).unwrap(), before);
 }
 
 #[test]
-fn version_sequence_admission_retains_overflow_before_digest_and_calendar_errors() {
-    use std::{error::Error as _, num::IntErrorKind};
-
+fn version_storage_identity_admission_rejects_bad_wire_before_calendar_validation() {
     let mut item = version(
         &State::default(),
         &new_id("history").unwrap(),
@@ -224,39 +226,18 @@ fn version_sequence_admission_retains_overflow_before_digest_and_calendar_errors
         "file.txt",
         b"body",
     );
-    let suffix = item.storage_name.split_once('_').unwrap().1.to_owned();
-    for number in [1, 999_999, 1_000_000, u64::MAX] {
-        item.storage_name = format!("v{number:06}_{suffix}");
-        let before = canonical_json(&item).unwrap();
-        validate_version(&item).unwrap();
-        assert_eq!(canonical_json(&item).unwrap(), before);
-    }
-
-    item.storage_name = "v18446744073709551616_20261111T000000Z_00000000.txt".into();
     item.created_at = "2026-02-30T00:00:00Z".into();
-    let state = with_version(&item);
-    let before = canonical_json(&state).unwrap();
-    let error = validate_version(&state.versions[&item.version_id]).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
-    assert!(!error.is_retryable());
-    assert!(error.published_result().is_none());
-    let Error::Context { source, .. } = &error else {
-        panic!("sequence overflow must retain its storage context: {error}");
-    };
-    assert!(matches!(source.as_ref(), Error::Integer(_)));
-    let cause = error
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<std::num::ParseIntError>()
-        .unwrap();
-    assert_eq!(cause.kind(), &IntErrorKind::PosOverflow);
-    assert_eq!(canonical_json(&state).unwrap(), before);
+    for invalid in ["", "00000000000000", "0000000000000000", "00000000000000A", "../invalid.txt"] {
+        let mut wire = json_codec::to_value(&item).unwrap();
+        wire["storage_id"] = json_codec::json!(invalid);
+        let before = canonical_json(&wire).unwrap();
+        assert!(json_codec::from_slice::<FileVersion>(&before).is_err());
+        assert_eq!(canonical_json(&wire).unwrap(), before);
+    }
 }
 
 #[test]
-fn current_version_requires_storage_name_and_creation_time() {
+fn current_version_requires_storage_id_and_creation_time() {
     let item = version(
         &State::default(),
         &new_id("history").unwrap(),
@@ -264,7 +245,7 @@ fn current_version_requires_storage_name_and_creation_time() {
         "file.txt",
         b"body",
     );
-    for field in ["storage_name", "created_at"] {
+    for field in ["storage_id", "created_at"] {
         let mut missing = json_codec::to_value(&item).unwrap();
         missing.as_object_mut().unwrap().remove(field);
         let error = json_codec::from_value::<FileVersion>(missing).unwrap_err();
@@ -613,112 +594,51 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
 }
 
 #[test]
-fn identity_counts_each_file_independently_with_required_numbered_names() {
-    let mut state = State::default();
+fn identity_is_independent_of_current_name_and_global_sequence() {
     let file = new_id("file").unwrap();
     let history = new_id("history").unwrap();
-    let old = version(&state, &history, &file, "报告.txt", b"first");
-    state.versions.insert(old.version_id.clone(), old);
+    let old = version(&State::default(), &history, &file, "报告.txt", b"first");
+    let mut state = with_version(&old);
+    state.sequence = u64::MAX;
+    state.file_locations.insert(file.clone(), "改名.md".into());
+    state.file_names.insert(file.clone(), "改名.md".into());
     let next = version(&state, &history, &file, "报告.txt", b"next");
-    assert_eq!(sequence(&next.storage_name).unwrap(), 2);
-    assert!(
-        next.storage_name
-            .ends_with(&format!("_{}.txt", &blake3::hash(b"next").to_hex()[..8]))
-    );
+    assert_ne!(next.storage_id, old.storage_id);
+    assert_eq!(next.storage_id.as_str().len(), 15);
     assert!(next.created_at.ends_with('Z'));
     assert_eq!(next.created_at.len(), 20);
-    state.versions.insert(next.version_id.clone(), next);
-    state.file_names.insert(file.clone(), "改名.md".into());
-    assert!(
-        version(&state, &history, &file, "报告.txt", b"new extension")
-            .storage_name
-            .ends_with(".md")
-    );
+    let name = current_container_name(&state, &file).unwrap();
     assert_eq!(
-        sequence(
-            version(&state, &history, &file, "renamed.md", b"third")
-                .storage_name
-                .as_str()
-        )
-        .unwrap(),
-        3
+        installed_version_name(old.storage_id, &name).unwrap(),
+        format!("{}-改名.md", old.storage_id),
     );
-    assert_eq!(
-        sequence(
-            version(
-                &state,
-                &history,
-                &new_id("file").unwrap(),
-                "other.txt",
-                b"other"
-            )
-            .storage_name
-            .as_str()
-        )
-        .unwrap(),
-        1
-    );
-    assert!(
-        version_identity(
-            &state,
-            "invalid-file-id",
-            "valid.txt",
-            &blake3::hash(b"body")
-        )
-        .is_err()
-    );
+    assert_eq!(state.versions[&old.version_id], old);
 }
 
 #[test]
-fn identity_preserves_number_width_and_exhaustion_without_global_sequence_coupling() {
+fn identity_allocation_rejects_retained_collision_only_in_its_container() {
     let history = new_id("history").unwrap();
     let file = new_id("file").unwrap();
-    let original = version(&State::default(), &history, &file, "file.txt", b"old");
-    let digest = original.content_hash.digest().to_hex();
-    for (number, expected) in [
-        ("000001", 2),
-        ("0000001", 2),
-        ("1000000", 1_000_001),
-        ("18446744073709551614", u64::MAX),
-    ] {
-        let mut retained = original.clone();
-        // The storage stamp has its existing shape-only contract; it need not
-        // equal the independently validated RFC3339 creation time.
-        retained.storage_name = format!("v{number}_20269999T999999Z_{}.txt", &digest[..8]);
-        validate_version(&retained).unwrap();
-        let mut state = with_version(&retained);
-        state.sequence = u64::MAX;
-        let before = state.versions.clone();
-        let generated = version(&state, &history, &file, "file.txt", b"new");
-        assert_eq!(sequence(&generated.storage_name).unwrap(), expected);
-        assert_eq!(state.versions, before);
-    }
-
-    let mut last = original;
-    last.storage_name = format!("v{}_20261018T133000Z_{}.txt", u64::MAX, &digest[..8]);
-    validate_version(&last).unwrap();
-    let state = with_version(&last);
-    let error = version_identity(&state, &file, "file.txt", &blake3::hash(b"next")).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    assert_eq!(error.message(), "file version sequence exhausted");
-    let other = version(
-        &state,
-        &history,
-        &new_id("file").unwrap(),
-        "other.txt",
-        b"other",
+    let retained = version(&State::default(), &history, &file, "file.txt", b"old");
+    let state = with_version(&retained);
+    let before = canonical_json(&state).unwrap();
+    let version_id = retained.version_id.parse().unwrap();
+    let error = allocate_version_storage_id(&state, &file, version_id).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::NameCollision);
+    assert_eq!(canonical_json(&state).unwrap(), before);
+    let other = new_id("file").unwrap();
+    assert_eq!(
+        allocate_version_storage_id(&state, &other, version_id).unwrap(),
+        retained.storage_id,
     );
-    assert_eq!(sequence(&other.storage_name).unwrap(), 1);
 }
 
 #[test]
-fn raw_storage_sequence_parser_retains_format_errors() {
-    for number in ["000000", "00001", "18446744073709551616", "-00001"] {
-        let name = format!("v{number}_20261018T133000Z_01234567.txt");
-        assert_eq!(
-            sequence(&name).unwrap_err().code(),
-            ErrorCode::ContainerLayoutInvalid
-        );
+fn raw_storage_identity_parser_retains_format_errors() {
+    for identity in [
+        "", "00000000000000", "0000000000000000", "00000000000000A", "../invalid.txt",
+    ] {
+        assert!(identity.parse::<storage_contract::VersionStorageId>().is_err());
     }
 }
 
@@ -980,17 +900,12 @@ fn capture_names_only_inserts_missing_fields_and_keeps_first_alias() {
 }
 
 #[test]
-fn identity_preserves_generated_storage_name_limit() {
-    let name = format!("x.{}", "字".repeat(75));
-    name_policy::validate_path(&name).unwrap();
-    let error = version_identity(
-        &State::default(),
-        &new_id("file").unwrap(),
-        &name,
-        &blake3::hash(b"body"),
-    )
-    .unwrap_err();
-    assert_eq!(error.code(), storage_contract::ErrorCode::NameTooLong);
+fn installed_identity_prefix_does_not_reduce_user_name_policy_budget() {
+    let name = name_policy::Name::parse(&format!("x.{}", "字".repeat(75))).unwrap();
+    let id = storage_contract::VersionStorageId::from_version(
+        storage_contract::VersionId::generate().unwrap(),
+    );
+    assert_eq!(installed_version_name(id, &name).unwrap(), format!("{id}-{name}"));
 }
 
 #[test]
@@ -1149,7 +1064,7 @@ fn rooted_container_lookup_keeps_nested_markers_and_body_on_the_held_disk() {
         "body",
     )
     .unwrap();
-    let body = named.join("versions").join(&item.storage_name);
+    let body = installed_version_path(&named, &item).unwrap();
     let before = fs::metadata(&body).unwrap();
     let moved = disk.root.with_extension("held");
     fs::rename(&disk.root, &moved).unwrap();
@@ -1272,7 +1187,7 @@ fn rooted_container_lookup_preserves_missing_metadata_parent_classification() {
             .join(&item.file_id)
             .join(&item.creation_name)
             .join("versions")
-            .join(&item.storage_name);
+            .join(format!("{}-{}", item.storage_id, item.creation_name));
         assert_eq!(
             content_path_at(&root, &directory, &item, &mut |_| Ok(())).unwrap(),
             expected

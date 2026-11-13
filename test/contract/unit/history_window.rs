@@ -105,7 +105,7 @@ fn summary() -> HistoryNodeSummary {
         content_hash: ContentHash::from_digest(blake3::hash(b"body")),
         content_state: Some(ContentState::Purged),
         download_name: "Café.txt".into(),
-        storage_name: "v000001_20261030T000000Z_fixture.txt".into(),
+        storage_name: "000000000000001-Café.txt".into(),
         parents: HistoryParentSet::Complete,
         fields: fields(),
     }
@@ -120,7 +120,7 @@ fn version_summary() -> HistoryVersionSummary {
         content_state: Some(ContentState::Migrated),
         note: String::new(),
         download_name: "body.txt".into(),
-        storage_name: "stored.txt".into(),
+        storage_name: "000000000000001-body.txt".into(),
         source_count: u64::MAX,
         fields: fields(),
     }

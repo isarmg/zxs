@@ -620,7 +620,7 @@ fn decided_move_with_corrupted_ordinary_full_does_not_hide_source_or_recreate_fr
         .join("file-containers")
         .join(&version.file_id)
         .join("namespace/moved.txt/versions")
-        .join(&version.storage_name);
+        .join(format!("{}-moved.txt", version.storage_id));
     let original = fs::read(&body).unwrap();
     let metadata = fs::metadata(&body).unwrap();
     let permissions = metadata.permissions();

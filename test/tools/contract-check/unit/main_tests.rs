@@ -963,6 +963,12 @@ fn assert_current_container_tag_captures(api: &Value, fixtures: &Path) {
             api["paths"][route][method]["responses"]["200"]["content"]
                 ["application/json"]["schema"]
         ]);
+        if name == "file-container-tags-history.json" {
+            // Preserve this exact capture's old version leaf names. Current-name
+            // positive DTOs are synthetic fixtures until a new CI capture exists.
+            assert!(!validator(&schema).unwrap().is_valid(&wire));
+            continue;
+        }
         validator(&schema)
             .unwrap()
             .validate(&wire)
@@ -976,6 +982,8 @@ fn assert_captured_container_tag_identity(fixtures: &Path) {
     use storage_contract::history_window::HistoryWindowPage;
 
     let history_wire = read(&fixtures.join("file-container-tags-history.json")).unwrap();
+    // These checks retain the captured tag identity and graph evidence only;
+    // they do not certify its old physical names against the current schema.
     semantics("HistoryWindowPage", &history_wire).unwrap();
     let history: HistoryWindowPage =
         storage_contract::decode_strict(&json_codec::to_vec(&history_wire).unwrap()).unwrap();

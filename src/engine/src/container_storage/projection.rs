@@ -24,22 +24,26 @@ pub(super) struct EncodedHistory {
 }
 
 impl HistoryRows<'_> {
-    fn encode(&mut self, state: &State, nodes: &mut NodeProjection<'_>) -> EncodedHistory {
+    fn encode(&mut self, state: &State, nodes: &mut NodeProjection<'_>) -> crate::Result<EncodedHistory> {
         self.versions.sort_by(|left, right| {
-            left.storage_name
-                .cmp(&right.storage_name)
+            left.storage_id
+                .cmp(&right.storage_id)
                 .then_with(|| left.version_id.cmp(&right.version_id))
         });
-        let versions = self.versions.iter().map(|version| json!({
+        let versions = self.versions.iter().map(|version| {
+            let name = crate::container_storage::current_container_name(state, &version.file_id)?;
+            let installed = crate::container_storage::installed_version_name(version.storage_id, &name)?;
+            Ok(json!({
             "version_id": version.version_id,
             "parent_node_ids": nodes.parents(&version.version_id),
-            "storage_name": version.storage_name,
+            "storage_name": installed,
             "created_at": version.created_at,
             "size": version.logical_size.to_string(),
             "content_hash": version.content_hash,
             "note": state.version_notes.get(&version.version_id).map(String::as_str).unwrap_or(""),
             "content_state": state.content_states.get(&version.version_id),
-        })).collect();
+        }))
+        }).collect::<crate::Result<Vec<_>>>()?;
         let inherited = self
             .pending
             .iter()
@@ -70,13 +74,13 @@ impl HistoryRows<'_> {
             "node": node,
             "note": state.file_path_notes.get(&node.node_id).map(String::as_str).unwrap_or(""),
         })).collect();
-        EncodedHistory {
+        Ok(EncodedHistory {
             versions,
             inherited,
             paths,
             metadata,
             merges: json!(self.merges),
-        }
+        })
     }
 }
 
@@ -167,7 +171,7 @@ impl<'a> FileDescription<'a> {
         history: &str,
         state: &State,
         nodes: &mut NodeProjection<'_>,
-    ) -> EncodedHistory {
+    ) -> crate::Result<EncodedHistory> {
         match self.histories.get_mut(history) {
             Some(rows) => rows.encode(state, nodes),
             None => HistoryRows::default().encode(state, nodes),

@@ -25,7 +25,7 @@ mod database_install;
 mod sqlite_connection;
 mod sqlite_integrity;
 pub use container_storage::{
-    DirectoryLayoutReceipt, MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial,
+    DirectoryLayoutReceipt, VersionNameError, MAX_OBJECT_DATABASE_ARCHIVE_BYTES, ObjectDatabaseMaterial,
     ObjectDatabaseReconstruction, ObjectDatabaseRecord, ObjectDatabaseScope,
     inspect_object_database_material, reconstruct_object_database_material,
 };
@@ -238,3 +238,5 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/support/directory_git_fixture.rs"]
 mod directory_git_fixture;
+
+pub use business::namespace::container_name::RenameError as ContainerNameError;

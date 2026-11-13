@@ -74,19 +74,16 @@ fn fixture_payload(
     let version: storage_contract::FileVersion =
         json_codec::from_slice(&std::fs::read(version_directory.join("version.json")).unwrap())
             .unwrap();
-    let storage_name = version.storage_name;
+    let location = &state.file_locations[&version.file_id];
+    let name = location.rsplit('/').next().unwrap();
+    assert_eq!(state.file_names[&version.file_id], name);
+    let storage_name = format!("{}-{name}", version.storage_id);
     let history = version_directory.parent().unwrap().parent().unwrap();
-    let stable = history.join("file-containers").join(&version.file_id);
-    let named = if let Some(location) = state.file_locations.get(&version.file_id) {
-        stable.join("namespace").join(location)
-    } else {
-        stable.join(
-            state
-                .file_names
-                .get(&version.file_id)
-                .unwrap_or(&version.creation_name),
-        )
-    };
+    let named = history
+        .join("file-containers")
+        .join(&version.file_id)
+        .join("namespace")
+        .join(location);
     named.join("versions").join(storage_name)
 }
 
@@ -879,12 +876,10 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
     let versions = history_versions(&app, &session, file, &history, None).await;
     assert_eq!(history["context"]["note"], "container note, second line");
     assert_eq!(versions["versions"][0]["note"], "historical note");
-    assert!(
-        versions["versions"][0]["storage_name"]
-            .as_str()
-            .unwrap()
-            .starts_with("v000001_")
-    );
+    let installed = versions["versions"][0]["storage_name"].as_str().unwrap();
+    let (storage_id, name) = installed.split_once('-').unwrap();
+    assert!(storage_id.parse::<storage_contract::VersionStorageId>().is_ok());
+    assert_eq!(name, "改名后的文件.txt");
     assert!(versions["versions"][0].get("legacy").is_none());
     assert_eq!(versions["versions"][0]["download_name"], "改名后的文件.txt");
     let response = app
@@ -973,6 +968,64 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
     assert_eq!(history["context"]["note"], "container note, second line");
     let versions = history_versions(&app, &token, file, &history, None).await;
     assert_eq!(versions["versions"][0]["note"], "historical note");
+}
+
+#[tokio::test]
+async fn historical_selection_keeps_current_download_and_installed_names() {
+    let root = tempfile::tempdir().unwrap();
+    let app = application(root.path());
+    let token = login(&app, "admin", "integration-test-password").await;
+    manager_upload(&app, &token, "before.txt", b"original content").await;
+    let listing = success(
+        &app,
+        &token,
+        "GET",
+        "/api/file-manager/disks/P01/entries",
+        None,
+    )
+    .await;
+    let entry = listing["entries"].as_array().unwrap().iter()
+        .find(|entry| entry["name"] == "before.txt").unwrap();
+    let file = entry["file_id"].as_str().unwrap();
+    let original = entry["version_id"].as_str().unwrap();
+    let endpoint = format!("/api/file-manager/files/{file}/history");
+    let before = success(&app, &token, "GET", &endpoint, None).await;
+    let branch = success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/branches"),
+        Some(json!({"source_version_id":original,"name":"original","operation_id":new_id("op").unwrap()})),
+    )
+    .await;
+    manager_upload(&app, &token, "before.txt", b"later content").await;
+    manager_namespace(&app, &token, "rename", "before.txt", Some("最新.txt")).await;
+    success(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/select"),
+        Some(json!({"branch_id":branch["result"]["branch_id"],"operation_id":new_id("op").unwrap()})),
+    )
+    .await;
+    let after = success(&app, &token, "GET", &endpoint, None).await;
+    assert_eq!(after["context"]["content"]["version_id"], original);
+    let versions = history_versions(&app, &token, file, &after, None).await;
+    for row in after["nodes"].as_array().unwrap().iter()
+        .chain(versions["versions"].as_array().unwrap())
+    {
+        assert_eq!(row["download_name"], "最新.txt");
+        let (id, name) = row["storage_name"].as_str().unwrap().split_once('-').unwrap();
+        assert!(id.parse::<storage_contract::VersionStorageId>().is_ok());
+        assert_eq!(name, "最新.txt");
+    }
+    for original_node in before["nodes"].as_array().unwrap() {
+        let selected = after["nodes"].as_array().unwrap().iter()
+            .find(|node| node["node_id"] == original_node["node_id"]).unwrap();
+        assert_eq!(selected["path"], original_node["path"]);
+        assert_eq!(selected["previous_path"], original_node["previous_path"]);
+        assert_eq!(selected["version_id"], original_node["version_id"]);
+    }
 }
 
 #[tokio::test]

@@ -138,9 +138,9 @@ fn note(value: &str) -> Result<(), ApiError> {
         .map_err(|source| invalid("history summary has an invalid note").with_source(source))
 }
 
-fn name(value: &str) -> Result<(), ApiError> {
-    name_policy::validate_name(value)
-        .map_err(|source| invalid("history summary has an invalid name").with_source(source))
+fn installed_name(stored: &str, download: &str) -> Result<(), ApiError> {
+    storage_contract::validate_installed_version_name(stored, download)
+        .map_err(|source| invalid("history summary has an invalid installed name").with_source(source))
 }
 
 fn node(node: &HistoryNodeSummary, identity: &HistoryPageIdentity) -> Result<(), ApiError> {
@@ -151,8 +151,7 @@ fn node(node: &HistoryNodeSummary, identity: &HistoryPageIdentity) -> Result<(),
             invalid("history node has an invalid previous path").with_source(source)
         })?;
     }
-    name(&node.download_name)?;
-    name(&node.storage_name)?;
+    installed_name(&node.storage_name, &node.download_name)?;
     note(&node.note)?;
     if let HistoryParentSet::More { cursor } = &node.parents {
         scoped_cursor(cursor, identity)?;
@@ -267,8 +266,7 @@ fn validate(page: &HistoryWindowPage) -> Result<(), ApiError> {
             cursors(page, identity)?;
             for value in versions {
                 note(&value.note)?;
-                name(&value.download_name)?;
-                name(&value.storage_name)?;
+                installed_name(&value.storage_name, &value.download_name)?;
             }
         }
         HistoryWindowPage::Branches {

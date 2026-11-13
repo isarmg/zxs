@@ -57,13 +57,14 @@ fn ordinary_body(fixture: &Fixture, projection: &FileHistoryMoveProjection) -> P
     let root = target(&fixture.engine);
     let id = projection.version_mapping().values().next().unwrap();
     let version = stored_version(&root, &fixture.target.history_tree_id, id);
-    named(
-        &root,
-        &fixture.target.history_tree_id,
-        projection.target_file_id().as_str(),
+    installed_body(
+        &named(
+            &root,
+            &fixture.target.history_tree_id,
+            projection.target_file_id().as_str(),
+        ),
+        &version,
     )
-    .join("versions")
-    .join(version.storage_name)
 }
 fn assert_source(engine: &Engine, before: &State, source: &Repository, target: &Repository) {
     assert_eq!(engine.state(), before);

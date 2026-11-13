@@ -558,6 +558,8 @@ impl FileHistoryRead {
         use crate::backend_file_history::{HistoryBranch, HistoryVersion, HistoryVersionData};
         let state = self.view.business_projection();
         let file = self.request.file_id();
+        let download_name = self.view.current_container_name(file.parse().map_err(|source: storage_contract::Error| error(source.into()))?)
+            .map_err(error)?;
         let current = self.current.as_ref();
         let current_node = &self.current_node;
         let selected = &self.selected;
@@ -626,12 +628,7 @@ impl FileHistoryRead {
                     .cloned()
                     .collect();
                 let commit = first_commits.get(version.version_id.as_str()).copied();
-                let download_name = current
-                    .as_ref()
-                    .map(|entry| entry.name())
-                    .or_else(|| state.file_names.get(file).map(String::as_str))
-                    .unwrap_or(&version.creation_name);
-                HistoryVersion {
+                Ok(HistoryVersion {
                     sequence: version.version_sequence,
                     current: current
                         .as_ref()
@@ -653,12 +650,12 @@ impl FileHistoryRead {
                             .get(&version.version_id)
                             .cloned()
                             .unwrap_or_default(),
-                        download_name: download_name.into(),
-                        storage_name: version.storage_name.clone(),
+                        download_name: download_name.as_str().into(),
+                        storage_name: self.view.installed_version_name(version).map_err(error)?,
                     }),
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, ApiError>>()?;
         versions.reverse();
         let nodes = history_nodes::unified_history(
             &self.view,

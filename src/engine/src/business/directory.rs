@@ -876,6 +876,7 @@ pub(crate) fn namespace_locations(
     let mut physical_outcomes = BTreeMap::<String, String>::new();
     let mut contexts = BTreeMap::new();
     let mut path_changes = Vec::new();
+    let operation_files = namespace::container_name::operation_files(before, changes)?;
     for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
         // Replay each entry's path independently. Looking only at the first
         // rename loses chained moves; matching by file ID alone confuses aliases.
@@ -888,7 +889,7 @@ pub(crate) fn namespace_locations(
             .cloned()
             .unwrap_or_else(|| old.path().to_owned());
         let original_physical_path = physical_path.clone();
-        for change in changes {
+        for (change, renamed_file) in changes.iter().zip(&operation_files) {
             let source = change.key();
             if (change.kind() == NamespaceOperationKind::Delete && moved.lookup_key() == source)
                 || (change.kind() == NamespaceOperationKind::DeleteTree
@@ -898,31 +899,31 @@ pub(crate) fn namespace_locations(
                 deleted = true;
                 break;
             }
-            let NamespaceOperation::Rename { destination, .. } = change else {
+            let NamespaceOperation::Rename { source: from, destination } = change else {
                 continue;
             };
-            let path = if moved.lookup_key() == source {
-                destination.clone()
-            } else if namespace::is_descendant(moved.lookup_key(), source) {
-                moved
-                    .location()
-                    .rebase(change.path().split('/').count(), destination)?
-            } else {
+            let direct = moved.lookup_key() == source
+                || namespace::is_descendant(moved.lookup_key(), source);
+            let Some(path) = namespace::container_name::renamed_path(
+                &moved, from, destination, *renamed_file,
+            )? else {
                 continue;
             };
             if path.as_str() == moved.path() {
                 continue;
             }
-            physical_path = namespace_location(
-                physical_path,
-                &moved,
-                change.path(),
-                destination.as_str(),
-                DirectoryBatchKind::Rename,
-                moved.lookup_key() != source,
-            );
+            if direct {
+                physical_path = namespace_location(
+                    physical_path,
+                    &moved,
+                    change.path(),
+                    destination.as_str(),
+                    DirectoryBatchKind::Rename,
+                    moved.lookup_key() != source,
+                );
+                renamed = true;
+            }
             moved.relocate(path);
-            renamed = true;
         }
         if !deleted
             && let Some(current) = after_by_path.get(moved.lookup_key()).filter(|e| {

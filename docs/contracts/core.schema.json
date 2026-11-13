@@ -117,12 +117,11 @@
         "created_as_full_checkpoint": {
           "type": "boolean"
         },
-        "storage_name": {
-          "type": "string",
-          "pattern": "^v[0-9]{6,}_[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}(\\..+)?$"
-        },
         "created_at": {
           "$ref": "#/$defs/UtcTimestamp"
+        },
+        "storage_id": {
+          "$ref": "#/$defs/VersionStorageId"
         }
       },
       "required": [
@@ -138,11 +137,11 @@
         "creation_name",
         "source_version_ids",
         "created_as_full_checkpoint",
-        "storage_name",
+        "storage_id",
         "created_at"
       ],
       "additionalProperties": false,
-      "description": "字段草案；完整 PortableName、实体关系及物理证据需另行验证。"
+      "description": "版本持久记录只保存稳定storage_id。实际版本叶名为storage_id、连字符和容器当前名称，改名不改变版本身份或历史内容证据。完整名称预算、实体关系与物理发布另行准入。"
     },
     "PlacementRequest": {
       "type": "object",
@@ -4095,10 +4094,12 @@
         },
         "storage_name": {
           "type": "string",
-          "maxLength": 768,
-          "x-maxUtf8Bytes": 768,
-          "x-maxUtf16Units": 200,
-          "x-namePolicy": "PortableName"
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256,
+          "x-maxUtf16Units": 256,
+          "x-namePolicy": "VersionStorageId-CurrentContainerName",
+          "pattern": "^[a-z0-9]{15}-.+$",
+          "description": "只读派生的实际版本叶名：稳定15位storage_id加连字符和容器当前名称；不是可独立修改的权威名称。"
         },
         "parents": {
           "$ref": "#/$defs/HistoryParentSet"
@@ -4237,10 +4238,12 @@
         },
         "storage_name": {
           "type": "string",
-          "maxLength": 768,
-          "x-maxUtf8Bytes": 768,
-          "x-maxUtf16Units": 200,
-          "x-namePolicy": "PortableName"
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256,
+          "x-maxUtf16Units": 256,
+          "x-namePolicy": "VersionStorageId-CurrentContainerName",
+          "pattern": "^[a-z0-9]{15}-.+$",
+          "description": "只读派生的实际版本叶名：稳定15位storage_id加连字符和容器当前名称；不是可独立修改的权威名称。"
         },
         "source_count": {
           "$ref": "#/$defs/UInt64"
@@ -11441,6 +11444,13 @@
       ],
       "additionalProperties": false,
       "description": "At most 64 facts and 64 KiB encoded JSON. Order is (sequence, operation_id, source_id), not wall-clock order. A short nonempty page can continue; next_cursor must bind its exact last member and the original request. Missing evidence is an error, not an empty or final page. No complete-timeline or O(page) cost guarantee."
+    },
+    "VersionStorageId": {
+      "type": "string",
+      "minLength": 15,
+      "maxLength": 15,
+      "pattern": "^[a-z0-9]{15}$",
+      "description": "容器内稳定版本身份，严格15位小写ASCII字母或数字；不含文件名。"
     }
   }
 }

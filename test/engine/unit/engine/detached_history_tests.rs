@@ -167,3 +167,40 @@ fn terminal_files_leave_discovery_without_rewriting_their_old_records() {
         ContentState::Retired
     );
 }
+
+#[test]
+fn detached_discovery_uses_current_container_name_for_pre_rename_versions() {
+    let (_temp, mut engine, repository) = fixture();
+    let old = save(&mut engine, &repository, "before.txt", b"retained");
+    engine
+        .file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "before.txt",
+                Some("after.bin"),
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    engine
+        .file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Delete,
+                "after.bin",
+                None,
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let listed = page(&engine);
+    assert_eq!(listed.files.len(), 1);
+    assert_eq!(listed.files[0].file_id.as_str(), old.file_id);
+    assert_eq!(listed.files[0].recorded_name, "after.bin");
+    assert_eq!(engine.state().versions[&old.version_id].creation_name, "before.txt");
+}

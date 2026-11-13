@@ -122,7 +122,7 @@ impl Fixture {
                 .join(version.file_id)
                 .join(version.creation_name)
                 .join("versions")
-                .join(version.storage_name);
+                .join(format!("{}-lost.txt", version.storage_id));
             assert_ne!(payload, staged.source_path);
             assert_eq!(fs::read(&payload).unwrap(), LOST_PAYLOAD);
             fs::remove_file(payload).unwrap();

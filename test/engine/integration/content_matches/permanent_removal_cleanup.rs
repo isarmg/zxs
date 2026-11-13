@@ -33,7 +33,11 @@ fn fixture() -> (Pool, Entry, std::path::PathBuf, std::path::PathBuf) {
     let mut found = Vec::new();
     containers(&history, &a.file_id, &mut found);
     assert_eq!(found.len(), 1);
-    let body = found[0].join("versions").join(&version.storage_name);
+    let body = found[0].join("versions").join(format!(
+        "{}-{}",
+        version.storage_id,
+        found[0].file_name().unwrap().to_str().unwrap(),
+    ));
     assert!(body.is_file());
     assert!(metadata.join("version.json").is_file());
     (pool, a, metadata, body)

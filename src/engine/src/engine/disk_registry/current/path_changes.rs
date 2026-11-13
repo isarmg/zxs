@@ -221,7 +221,7 @@ pub(in crate::engine) fn verify(
     };
     let facts = path_changes::read(receipt)?;
     let principal = next.operation_principals.get(&receipt.operation_id).ok_or_else(invalid)?;
-    let principal = storage_contract::Principal::new(principal.clone())
+    let principal = storage_contract::Principal::new(principal.clone().into())
         .map_err(|source| crate::Error::PathChange(crate::PathChangeError::Principal(source)))?;
     if receipt.sequence != next.sequence || next.sequence <= previous.sequence {
         return Err(invalid());

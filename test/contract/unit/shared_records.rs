@@ -256,7 +256,7 @@ fn file_version_records_preserve_map_bytes_hashes_and_state_roundtrip() {
                     checksum_chunk_bytes: 4096,
                     checksum_manifest_hash: "b".repeat(64),
                     creation_name: "文件\n\".txt".into(),
-                    storage_name: "stored.txt".into(),
+                    storage_id: "000000000000001".parse().unwrap(),
                     created_at: "2026-10-25T00:00:00Z".into(),
                     source_version_ids: vec!["source-a".into(), "来源".into()],
                     created_as_full_checkpoint: true,

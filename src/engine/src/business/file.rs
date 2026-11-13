@@ -811,6 +811,9 @@ impl Engine {
             let branch=state.branches.get_mut(&repo.main_branch_id).expect("checked");branch.head_commit_id=id.clone();branch.generation = branch.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
             branch.pending_file_versions.retain(|file,_|live_files.contains(file));
             let mut changed_paths=vec![change.path().to_owned()];
+            changed_paths.extend(path_changes.iter().flat_map(|fact| {
+                [fact.before.path.as_str().to_owned(), fact.after.path.as_str().to_owned()]
+            }));
             changed_paths.extend(renamed_directories);
             if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
             let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;

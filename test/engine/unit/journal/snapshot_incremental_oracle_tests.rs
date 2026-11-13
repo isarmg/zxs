@@ -266,7 +266,7 @@ fn assert_explicit_empty_roots(snapshot: &Snapshot) {
     );
     assert_eq!(snapshot.events.hash(), expected_hash);
     let encoded = json_codec::to_value(snapshot).unwrap();
-    assert_eq!(encoded["format"], "container-path-facts-radix-map-roots");
+    assert_eq!(encoded["format"], "container-current-name-radix-map-roots");
     for format in ["radix-map-roots", "container-tags-radix-map-roots"] {
         let mut prior_format = encoded.clone();
         prior_format["format"] = format.into();

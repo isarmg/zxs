@@ -52,7 +52,7 @@ fn file_version_disk_record_parses_content_hash_without_changing_canonical_bytes
         "history_tree_id":"history", "version_id":"version", "file_id":"file",
         "creation_primary_slot_id":"P01", "logical_size":"3", "version_sequence":"1",
         "content_hash":ABC, "checksum_chunk_bytes":65536, "checksum_manifest_hash":"a".repeat(64),
-        "creation_name":"body.txt", "storage_name":"v000001_20261026T000000Z_6437b3ac.txt",
+        "creation_name":"body.txt", "storage_id":"000000000000001",
         "created_at":"2026-10-26T00:00:00Z", "source_version_ids":[], "created_as_full_checkpoint":true
     });
     let bytes = canonical_json(&record).unwrap();
@@ -67,4 +67,15 @@ fn file_version_disk_record_parses_content_hash_without_changing_canonical_bytes
         damaged["content_hash"] = json_codec::json!(bad);
         assert!(json_codec::from_value::<FileVersion>(damaged).is_err());
     }
+    for invalid in ["", "00000000000000", "0000000000000000", "A00000000000000"] {
+        let mut damaged = record.clone();
+        damaged["storage_id"] = invalid.into();
+        assert!(json_codec::from_value::<FileVersion>(damaged).is_err());
+    }
+    let mut missing = record.clone();
+    missing.as_object_mut().unwrap().remove("storage_id");
+    assert!(json_codec::from_value::<FileVersion>(missing).is_err());
+    let mut prior = record;
+    prior["storage_name"] = "v000001_20261026T000000Z_6437b3ac.txt".into();
+    assert!(json_codec::from_value::<FileVersion>(prior).is_err());
 }

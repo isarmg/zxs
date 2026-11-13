@@ -148,7 +148,7 @@ fn capture_entity(
         let mut proved = false;
         for id in view.owners().versions(file) {
             let version = &view.state().versions[id];
-            let body = versions.join(&version.storage_name);
+            let body = crate::container_storage::installed_version_path(held.path(), version)?;
             if held.optional_metadata(&body)?.is_some() {
                 verify_body(&held, &body, version)?;
                 proved = true;

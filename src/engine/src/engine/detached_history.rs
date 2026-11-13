@@ -168,7 +168,11 @@ impl DetachedHistoryRead {
                 history_tree_id: HistoryTreeId::parse(&version.history_tree_id)?,
                 history_root: root,
                 representative_version_id: HistoryVersionId::parse(&version.version_id)?,
-                recorded_name: version.creation_name.clone(),
+                recorded_name: crate::container_storage::current_container_name(
+                    state,
+                    &version.file_id,
+                )?
+                .to_string(),
                 representative_size: version.logical_size,
                 retained_versions: count,
             });

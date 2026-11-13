@@ -62,7 +62,7 @@ fn summary(index: usize) -> HistoryNodeSummary {
         content_hash: ContentHash::from_digest(blake3::hash(b"body")),
         content_state: Some(storage_contract::ContentState::Purged),
         download_name: "report.txt".into(),
-        storage_name: "version.txt".into(),
+        storage_name: "000000000000001-report.txt".into(),
         parents: HistoryParentSet::Complete,
         fields: fields(),
     }
@@ -277,7 +277,7 @@ fn every_collection_enforces_its_record_limit_before_encoding() {
         content_state: None,
         note: String::new(),
         download_name: "file.txt".into(),
-        storage_name: "stored.txt".into(),
+        storage_name: "000000000000001-file.txt".into(),
         source_count: 0,
         fields: fields(),
     };
@@ -482,7 +482,7 @@ fn maximum_inline_fields_and_node_rows_remain_within_encoded_budget() {
     value.previous_path = Some(value.path.clone());
     value.note = "\\\"".repeat(storage_contract::MAX_NOTE_BYTES / 2);
     value.download_name = "界".repeat(80);
-    value.storage_name = "s".repeat(240);
+    value.storage_name = format!("000000000000001-{}", value.download_name);
     let count = HistoryCollection::Nodes.maximum_limit();
     let page = nodes_page(
         (0..count)
@@ -557,4 +557,21 @@ fn page_continuations_include_the_exact_page_scope_and_query() {
     payload.history_root = HistoryRoot::parse(&"c".repeat(64)).unwrap();
     cursors.next_cursor = Some(HistoryCursor::from_payload(payload).unwrap());
     assert!(encode(&page).is_err());
+}
+
+#[test]
+fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
+    let mut value = summary(1);
+    for stored in ["v000001_report.txt", "00000000000000A-report.txt", "000000000000001-old.txt"] {
+        value.storage_name = stored.into();
+        assert!(encode(&nodes_page(vec![value.clone()], Vec::new(), 1)).is_err());
+    }
+    for name in ["x".repeat(240), "界".repeat(80)] {
+        value.download_name = name;
+        value.storage_name = format!("000000000000001-{}", value.download_name);
+        assert!(encode(&nodes_page(vec![value.clone()], Vec::new(), 1)).is_ok());
+    }
+    value.download_name = "x".repeat(241);
+    value.storage_name = format!("000000000000001-{}", value.download_name);
+    assert!(encode(&nodes_page(vec![value], Vec::new(), 1)).is_err());
 }

@@ -265,7 +265,8 @@ impl Fixture {
                 .unwrap();
         assert_eq!(owner, entry.file_id);
         assert_eq!(
-            fs::read(container.join("versions").join(&version.storage_name)).unwrap(),
+            fs::read(container.join("versions").join(format!("{}-{}", version.storage_id,
+                container.file_name().unwrap().to_str().unwrap()))).unwrap(),
             expected
         );
         let mut opened = self.engine.open_content(&entry.version_id).unwrap();
@@ -567,7 +568,8 @@ fn unknown_empty_target_is_rejected_without_changing_original_data() {
     assert!(fs::read_dir(&unknown).unwrap().next().is_none());
     let version = &fixture.engine.state().versions[&entry.version_id];
     assert_eq!(
-        fs::read(source.join("versions").join(&version.storage_name)).unwrap(),
+        fs::read(source.join("versions").join(format!("{}-{}", version.storage_id,
+                source.file_name().unwrap().to_str().unwrap()))).unwrap(),
         b"original bytes must survive refusal"
     );
     let mut opened = fixture.engine.open_content(&entry.version_id).unwrap();

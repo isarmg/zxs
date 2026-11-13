@@ -13,7 +13,7 @@ mod rows;
 pub(super) use material::{read_material, reconstruct_material};
 
 pub(crate) const NAME: &str = ".zxs-file.sqlite";
-const FORMAT: &str = "file-local-container-path-facts";
+const FORMAT: &str = "file-local-container-current-name";
 pub(super) const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const META: &str = "CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), format TEXT NOT NULL, file_id TEXT NOT NULL, history_tree_id TEXT NOT NULL, source_sequence TEXT NOT NULL, records_hash TEXT NOT NULL) STRICT";
 const RECORDS: &str = "CREATE TABLE records (kind TEXT NOT NULL CHECK(kind IN ('file','version','branch','path_change','metadata','deletion','lifecycle','merge','merge_link')), id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id)) STRICT";

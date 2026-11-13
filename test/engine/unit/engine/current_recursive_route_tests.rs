@@ -16,7 +16,7 @@ fn version(state: &mut State, file: &str, id: &str, route: &[&str]) {
             checksum_chunk_bytes: 1024,
             checksum_manifest_hash: "manifest".into(),
             creation_name: "file".into(),
-            storage_name: "version".into(),
+            storage_id: "000000000000001".parse().unwrap(),
             created_at: "2026-11-07T00:00:00Z".into(),
             source_version_ids: Vec::new(),
             created_as_full_checkpoint: true,

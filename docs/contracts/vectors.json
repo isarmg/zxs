@@ -1,5 +1,5 @@
 {
-  "description": "合成测试数据，不是实际持久化回执；内容、清单、JCS 和摘要值为固定向量。",
+  "description": "合成测试数据，不是实际持久化回执；内容、清单、JCS 和摘要值为固定向量。 当前版本身份和历史读取名称样例为合成更新，不是GitHub真实捕获；canonical组保留原始编码与摘要，只验证通用JCS，不表示旧Version格式可被新格式准入。",
   "positive": [
     {
       "name": "version",
@@ -18,8 +18,8 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt",
-        "created_at": "2026-10-20T00:00:00Z"
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -1903,7 +1903,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -1933,7 +1933,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -1963,7 +1963,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -1993,7 +1993,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2023,7 +2023,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2053,7 +2053,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2083,7 +2083,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2180,7 +2180,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "source_count": "0",
             "fields": {
               "message": {
@@ -2202,7 +2202,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "source_count": "1",
             "fields": {
               "message": {
@@ -2224,7 +2224,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "source_count": "1",
             "fields": {
               "message": {
@@ -2688,7 +2688,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "more",
               "cursor": "7b22666f726d6174223a22686973746f72795f77696e646f775f7631222c22686973746f72795f726f6f74223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22686973746f72795f747265655f6964223a22686973746f72795f3437323338636162376662623439376161386638313136306633363433343237222c2266696c655f6964223a2266696c655f6430373336316233353839303437663139336233636435666463613062366439222c22636f6c6c656374696f6e223a7b226b696e64223a226e6f64655f706172656e7473222c226e6f64655f6964223a22666d6574615f6464643864623635633362333430623839306561333463616136393761333638227d2c2271756572795f68617368223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c226c696d6974223a3235362c22646972656374696f6e223a22666f7277617264222c22706f736974696f6e223a7b226b696e64223a227374617274227d2c22616e63686f725f6e6f64655f6964223a6e756c6c7d"
@@ -2888,7 +2888,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2918,7 +2918,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2948,7 +2948,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -2978,7 +2978,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -3008,7 +3008,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -3038,7 +3038,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -3068,7 +3068,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -5979,8 +5979,8 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt",
-        "created_at": "2026-10-20T00:00:00Z"
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -6001,8 +6001,8 @@
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
         "unrecognized_required_feature": true,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt",
-        "created_at": "2026-10-20T00:00:00Z"
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -6447,8 +6447,8 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt",
-        "created_at": "2026-10-20T00:00:00Z"
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -8031,7 +8031,7 @@
       }
     },
     {
-      "name": "version-null-storage-name",
+      "name": "version-null-storage-id",
       "schema": "Version",
       "layer": "schema",
       "value": {
@@ -8047,8 +8047,8 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": null,
-        "created_at": "2026-10-20T00:00:00Z"
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": null
       }
     },
     {
@@ -8068,7 +8068,7 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt"
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -8088,8 +8088,8 @@
         "creation_name": "报告.txt",
         "source_version_ids": [],
         "created_as_full_checkpoint": false,
-        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt",
-        "created_at": null
+        "created_at": null,
+        "storage_id": "000000000000001"
       }
     },
     {
@@ -12184,7 +12184,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12215,7 +12215,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12245,7 +12245,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12275,7 +12275,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12305,7 +12305,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12335,7 +12335,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12365,7 +12365,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12478,7 +12478,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12509,7 +12509,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12539,7 +12539,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12569,7 +12569,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12599,7 +12599,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12629,7 +12629,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12659,7 +12659,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12772,7 +12772,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12803,7 +12803,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12833,7 +12833,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12863,7 +12863,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12893,7 +12893,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12923,7 +12923,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -12953,7 +12953,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13066,7 +13066,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13096,7 +13096,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13126,7 +13126,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13156,7 +13156,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13186,7 +13186,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13216,7 +13216,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13246,7 +13246,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13344,7 +13344,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "source_count": "0",
             "fields": {
               "message": {
@@ -13367,7 +13367,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "source_count": "1",
             "fields": {
               "message": {
@@ -13389,7 +13389,7 @@
             "content_state": "AVAILABLE",
             "note": "",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "source_count": "1",
             "fields": {
               "message": {
@@ -13501,7 +13501,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13531,7 +13531,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13561,7 +13561,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13591,7 +13591,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13621,7 +13621,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13651,7 +13651,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13681,7 +13681,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13794,7 +13794,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13824,7 +13824,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13854,7 +13854,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13884,7 +13884,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13914,7 +13914,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13944,7 +13944,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -13974,7 +13974,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14087,7 +14087,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "0ea34caa697a368-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14117,7 +14117,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14147,7 +14147,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14177,7 +14177,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14207,7 +14207,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14237,7 +14237,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14267,7 +14267,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14471,7 +14471,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "more"
             },
@@ -14612,7 +14612,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14642,7 +14642,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14672,7 +14672,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14702,7 +14702,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14732,7 +14732,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14762,7 +14762,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -14792,7 +14792,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15084,7 +15084,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15114,7 +15114,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15144,7 +15144,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15174,7 +15174,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15204,7 +15204,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15234,7 +15234,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15264,7 +15264,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15377,7 +15377,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15407,7 +15407,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15437,7 +15437,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15467,7 +15467,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15497,7 +15497,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15527,7 +15527,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15557,7 +15557,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -15934,7 +15934,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "more",
               "cursor": "7b22666f726d6174223a22686973746f72795f77696e646f775f7631222c22686973746f72795f726f6f74223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22686973746f72795f747265655f6964223a22686973746f72795f3437323338636162376662623439376161386638313136306633363433343237222c2266696c655f6964223a2266696c655f6430373336316233353839303437663139336233636435666463613062366439222c22636f6c6c656374696f6e223a7b226b696e64223a226e6f64655f706172656e7473222c226e6f64655f6964223a22666d6574615f6464643864623635633362333430623839306561333463616136393761333638227d2c2271756572795f68617368223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c226c696d6974223a3235362c22646972656374696f6e223a22666f7277617264222c22706f736974696f6e223a7b226b696e64223a227374617274227d2c22616e63686f725f6e6f64655f6964223a6e756c6c7d"
@@ -21401,7 +21401,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21432,7 +21432,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21462,7 +21462,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21492,7 +21492,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21522,7 +21522,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21552,7 +21552,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21582,7 +21582,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21695,7 +21695,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21725,7 +21725,7 @@
             "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+            "storage_name": "fc94e3f1653367d-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21755,7 +21755,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21785,7 +21785,7 @@
             "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+            "storage_name": "241cbd7a7045371-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21815,7 +21815,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21845,7 +21845,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -21875,7 +21875,7 @@
             "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
             "content_state": "AVAILABLE",
             "download_name": "renamed.txt",
-            "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+            "storage_name": "187aa30301d4d68-renamed.txt",
             "parents": {
               "state": "complete"
             },
@@ -23449,6 +23449,153 @@
       "schema": "FileLifecycleCursor",
       "layer": "semantic",
       "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:op_00000000000000000000000000000001:18446744073709551616:fpath_00000000000000000000000000000001"
+    },
+    {
+      "name": "version-storage-id-short",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "00000000000000"
+      }
+    },
+    {
+      "name": "version-storage-id-long",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "0000000000000000"
+      }
+    },
+    {
+      "name": "version-storage-id-uppercase",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "A00000000000000"
+      }
+    },
+    {
+      "name": "version-storage-id-newline",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "00000000000000\n"
+      }
+    },
+    {
+      "name": "version-storage-id-non-ascii",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "界00000000000000"
+      }
+    },
+    {
+      "name": "version-missing-storage-id",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z"
+      }
+    },
+    {
+      "name": "version-reject-prior-storage-name",
+      "schema": "Version",
+      "layer": "schema",
+      "value": {
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "version_id": "ver_00000000000000000000000000000001",
+        "file_id": "file_00000000000000000000000000000001",
+        "creation_primary_slot_id": "P01",
+        "logical_size": "3",
+        "version_sequence": "1",
+        "content_hash": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        "checksum_chunk_bytes": 262144,
+        "checksum_manifest_hash": "0d2a3fe88c554bc9d5b8dd24780685da2e43e00fa98ca9eb1a9151953d9b35cb",
+        "creation_name": "报告.txt",
+        "source_version_ids": [],
+        "created_as_full_checkpoint": false,
+        "created_at": "2026-10-20T00:00:00Z",
+        "storage_id": "000000000000001",
+        "storage_name": "v000001_20261020T000000Z_6437b3ac.txt"
+      }
     }
   ],
   "canonical": [

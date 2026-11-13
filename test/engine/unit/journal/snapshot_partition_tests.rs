@@ -85,7 +85,7 @@ fn current_snapshot_and_candidate_reject_old_and_unknown_shapes_without_rewritin
     let disk = &config.disks[0];
     let prepared = prepare_snapshot(&State::default(), MAX_METADATA).unwrap();
     let mut value = json_codec::to_value(&prepared.descriptor).unwrap();
-    assert_eq!(value["format"], "container-path-facts-radix-map-roots");
+    assert_eq!(value["format"], "container-current-name-radix-map-roots");
     for mutation in [
         "missing_format",
         "unknown_format",

@@ -280,10 +280,6 @@ fn stored_snapshot_rejects_file_identity_reused_across_histories() {
 
 #[derive(Clone, Copy, Debug)]
 enum VersionIdentityCorruption {
-    StorageName,
-    ZeroSequence,
-    OverflowSequence,
-    DigestPrefix,
     CreationTimeOffset,
     CreationTimeInvalidDate,
     CreationName,
@@ -292,20 +288,6 @@ enum VersionIdentityCorruption {
 impl VersionIdentityCorruption {
     fn apply(self, version: &mut FileVersion) {
         match self {
-            Self::StorageName => version.storage_name = "invalid.txt".into(),
-            Self::ZeroSequence => {
-                let suffix = version.storage_name.split_once('_').unwrap().1;
-                version.storage_name = format!("v000000_{suffix}");
-            }
-            Self::OverflowSequence => {
-                let suffix = version.storage_name.split_once('_').unwrap().1;
-                version.storage_name = format!("v18446744073709551616_{suffix}");
-            }
-            Self::DigestPrefix => {
-                let (prefix, digest) = version.storage_name.rsplit_once('_').unwrap();
-                let first = if digest.starts_with('0') { '1' } else { '0' };
-                version.storage_name = format!("{prefix}_{first}{}", &digest[1..]);
-            }
             Self::CreationTimeOffset => {
                 version.created_at = "2026-10-27T00:00:00+00:00".into();
             }
@@ -376,20 +358,14 @@ fn stored_snapshots_admit_all_version_identities_before_per_file_sequence_use() 
                     .unwrap()
                     .into_state();
             assert_eq!(admitted, baseline, "{} {status:?}", target.path());
-            let (name, _) = crate::container_storage::version_identity(
-                &admitted,
-                &matching.file_id,
-                matching.path(),
-                &blake3::hash(b"next"),
+            let next = storage_contract::VersionId::generate().unwrap();
+            let id = crate::container_storage::allocate_version_storage_id(
+                &admitted, &matching.file_id, next,
             )
             .unwrap();
-            assert!(name.starts_with("v000002_"), "{name}");
+            assert!(admitted.versions.values().all(|version| version.storage_id != id));
 
             for corruption in [
-                StorageName,
-                ZeroSequence,
-                OverflowSequence,
-                DigestPrefix,
                 CreationTimeOffset,
                 CreationTimeInvalidDate,
                 CreationName,
@@ -437,14 +413,13 @@ fn stored_snapshots_admit_all_version_identities_before_per_file_sequence_use() 
     drop(engine);
     let reopened = Engine::open(&fixture.root).unwrap();
     assert_eq!(reopened.state.as_ref(), &original);
-    let (name, _) = crate::container_storage::version_identity(
+    let id = crate::container_storage::allocate_version_storage_id(
         reopened.state(),
         &matching.file_id,
-        matching.path(),
-        &blake3::hash(b"after reopen"),
+        storage_contract::VersionId::generate().unwrap(),
     )
     .unwrap();
-    assert!(name.starts_with("v000002_"), "{name}");
+    assert!(reopened.state().versions.values().all(|version| version.storage_id != id));
 }
 
 #[test]

@@ -632,11 +632,15 @@ fn completed_identity_and_graph_material_still_recheck_each_replicas_full_body()
     let mut directories = vec![roots[0].join("material/source")];
     let mut bodies = Vec::new();
     while let Some(directory) = directories.pop() {
-        for entry in fs::read_dir(directory).unwrap() {
+        for entry in fs::read_dir(&directory).unwrap() {
             let entry = entry.unwrap();
             if entry.file_type().unwrap().is_dir() {
                 directories.push(entry.path());
-            } else if entry.file_name() == std::ffi::OsStr::new(&version.storage_name) {
+            } else if entry.file_name() == std::ffi::OsStr::new(&format!(
+                "{}-{}",
+                version.storage_id,
+                directory.parent().unwrap().file_name().unwrap().to_str().unwrap(),
+            )) {
                 bodies.push(entry.path());
             }
         }

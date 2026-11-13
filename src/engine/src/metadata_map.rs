@@ -22,7 +22,7 @@ pub(crate) use update::{HistoryBinding, MapRoot, MapUpdate, ProofMeasure};
 /// Every current aggregate root carries this semantic discriminator.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub(crate) enum RootFormat {
-    #[serialization(rename = "container-path-facts-radix-map-roots")]
+    #[serialization(rename = "container-current-name-radix-map-roots")]
     RadixMapRoots,
 }
 

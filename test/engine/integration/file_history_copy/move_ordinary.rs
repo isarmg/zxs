@@ -126,7 +126,7 @@ fn all_ordinary_copies_are_independent_but_the_same_move_and_databases_stay_unpu
     );
     for (source, target) in projection.version_mapping() {
         let version = stored_version(&root, &fixture.target.history_tree_id, target);
-        let final_body = container.join("versions").join(&version.storage_name);
+        let final_body = installed_body(&container, &version);
         let original = root
             .join("file-history-move-target/versions")
             .join(target)
@@ -191,13 +191,14 @@ fn cold_retry_preserves_the_ordinary_inode_and_original_pending_scopes() {
     let root = target(&fixture.engine);
     let version_id = projection.version_mapping().values().next().unwrap();
     let version = stored_version(&root, &fixture.target.history_tree_id, version_id);
-    let body = named(
-        &root,
-        &fixture.target.history_tree_id,
-        projection.target_file_id().as_str(),
-    )
-    .join("versions")
-    .join(&version.storage_name);
+    let body = installed_body(
+        &named(
+            &root,
+            &fixture.target.history_tree_id,
+            projection.target_file_id().as_str(),
+        ),
+        &version,
+    );
     let inode = fs::metadata(&body).unwrap().ino();
     let origin = fs::read(
         root.join(STAGE)
@@ -256,13 +257,14 @@ fn original_two_rename_interruption_resumes_without_recopying_or_publishing() {
     let id = projection.version_mapping().values().next().unwrap();
     let version = stored_version(&root, &fixture.target.history_tree_id, id);
     let formal = directory(&root, &fixture.target.history_tree_id, id);
-    let body = named(
-        &root,
-        &fixture.target.history_tree_id,
-        projection.target_file_id().as_str(),
-    )
-    .join("versions")
-    .join(&version.storage_name);
+    let body = installed_body(
+        &named(
+            &root,
+            &fixture.target.history_tree_id,
+            projection.target_file_id().as_str(),
+        ),
+        &version,
+    );
     let inode = fs::metadata(&body).unwrap().ino();
     fs::rename(&body, formal.join("content").join(&version.creation_name)).unwrap();
     fs::rename(&formal, root.join(STAGE).join("versions").join(id)).unwrap();
@@ -295,13 +297,14 @@ fn equal_bytes_on_a_replacement_inode_cannot_stand_in_for_the_original_ordinary_
     let root = target(&fixture.engine);
     let id = projection.version_mapping().values().next().unwrap();
     let version = stored_version(&root, &fixture.target.history_tree_id, id);
-    let body = named(
-        &root,
-        &fixture.target.history_tree_id,
-        projection.target_file_id().as_str(),
-    )
-    .join("versions")
-    .join(&version.storage_name);
+    let body = installed_body(
+        &named(
+            &root,
+            &fixture.target.history_tree_id,
+            projection.target_file_id().as_str(),
+        ),
+        &version,
+    );
     let retained = root.join("retained-original-body");
     fs::rename(&body, &retained).unwrap();
     fs::write(&body, fs::read(&retained).unwrap()).unwrap();
@@ -339,13 +342,14 @@ fn missing_origin_and_missing_known_body_are_retained_refusals_not_recopy_author
         let root = target(&fixture.engine);
         let id = projection.version_mapping().values().next().unwrap();
         let version = stored_version(&root, &fixture.target.history_tree_id, id);
-        let body = named(
-            &root,
-            &fixture.target.history_tree_id,
-            projection.target_file_id().as_str(),
-        )
-        .join("versions")
-        .join(&version.storage_name);
+        let body = installed_body(
+            &named(
+                &root,
+                &fixture.target.history_tree_id,
+                projection.target_file_id().as_str(),
+            ),
+            &version,
+        );
         let missing = if remove_origin {
             root.join(STAGE).join("origins").join(format!("{id}.json"))
         } else {

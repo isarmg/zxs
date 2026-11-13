@@ -158,11 +158,7 @@ fn object_move_publishes_independent_fulls_and_equal_file_databases_on_both_targ
             .unwrap();
         let mut identities = BTreeSet::from([(old.dev(), old.ino())]);
         for database in &paths {
-            let body = database
-                .parent()
-                .unwrap()
-                .join("versions")
-                .join(&version.storage_name);
+            let body = installed_body(database.parent().unwrap(), &version);
             let contents = fs::read(&body).unwrap();
             assert_eq!(contents, bytes(&fixture.engine, &original.version_id));
             let metadata = fs::metadata(&body).unwrap();

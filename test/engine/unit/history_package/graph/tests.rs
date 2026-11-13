@@ -583,7 +583,7 @@ fn path_fact_golden() -> Vec<u8> {
         assert_eq!(bytes.matches("container-tags-radix-map-roots").count(), 1);
         let current = bytes.replace(
             "container-tags-radix-map-roots",
-            "container-path-facts-radix-map-roots",
+            "container-current-name-radix-map-roots",
         );
         let digest = hash(current.as_bytes());
         assert!(replacement.replace(digest.clone()).is_none());

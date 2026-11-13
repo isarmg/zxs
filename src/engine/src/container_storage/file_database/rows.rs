@@ -106,6 +106,7 @@ pub(super) struct Validation<'a> {
     file_row: bool,
     selected_branch: Option<String>,
     versions: usize,
+    storage_ids: BTreeSet<storage_contract::VersionStorageId>,
     current: Option<DeletionRow>,
     lifecycle: BTreeMap<u64, LifecycleRow>,
 }
@@ -121,6 +122,7 @@ impl<'a> Validation<'a> {
             file_row: false,
             selected_branch: None,
             versions: 0,
+            storage_ids: BTreeSet::new(),
             current: None,
             lifecycle: BTreeMap::new(),
         }
@@ -176,6 +178,11 @@ impl<'a> Validation<'a> {
             "version" => {
                 let row: VersionRow = decode_local(body.as_bytes())?;
                 crate::container_storage::validate_version(&row.version)?;
+                if !self.storage_ids.insert(row.version.storage_id) {
+                    return Err(crate::Error::VersionNames(
+                        crate::container_storage::VersionNameError::Collision,
+                    ));
+                }
                 self.node(
                     &row.version.version_id,
                     &row.version.history_tree_id,

@@ -153,7 +153,12 @@ fn payload(engine: &Engine, repo: &Repository, entry: &Entry) -> std::path::Path
         .join("namespace")
         .join(&engine.state().file_locations[&entry.file_id])
         .join("versions")
-        .join(&engine.state().versions[&entry.version_id].storage_name)
+        .join(format!(
+            "{}-{}",
+            engine.state().versions[&entry.version_id].storage_id,
+            std::path::Path::new(&engine.state().file_locations[&entry.file_id])
+                .file_name().unwrap().to_str().unwrap(),
+        ))
 }
 
 #[test]

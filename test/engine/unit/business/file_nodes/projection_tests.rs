@@ -60,6 +60,8 @@ fn merge(state: &mut State, id: &str, result: &str, parents: &[&str]) {
 }
 
 fn body(state: &mut State, id: &str, file: &str) {
+    state.file_locations.insert(file.into(), "body".into());
+    state.file_names.insert(file.into(), "body".into());
     state.versions.insert(
         id.into(),
         FileVersion {
@@ -73,7 +75,7 @@ fn body(state: &mut State, id: &str, file: &str) {
             checksum_chunk_bytes: 262144,
             checksum_manifest_hash: "0".repeat(64),
             creation_name: "body".into(),
-            storage_name: "v000001_20261020T000000Z_00000000.txt".into(),
+            storage_id: "000000000000001".parse().unwrap(),
             created_at: "2026-10-20T00:00:00Z".into(),
             source_version_ids: Vec::new(),
             created_as_full_checkpoint: true,
@@ -142,6 +144,8 @@ fn metadata_view_releases_authoritative_generation_and_shares_only_business_fiel
 #[test]
 fn projection_matches_uncached_nodes_and_serialized_bytes() {
     let mut state = State::default();
+    state.file_locations.insert("file".into(), "body".into());
+    state.file_names.insert("file".into(), "body".into());
     metadata(&mut state, "tagged", &["tagged"]);
     metadata(&mut state, "empty", &["tagged"]);
     path(&mut state, "tagged", &["missing"]); // metadata wins over a path ID
@@ -175,7 +179,7 @@ fn projection_matches_uncached_nodes_and_serialized_bytes() {
                 checksum_chunk_bytes: 262144,
                 checksum_manifest_hash: "0".repeat(64),
                 creation_name: "body".into(),
-                storage_name: "v000001_20261020T000000Z_00000000.txt".into(),
+                storage_id: "000000000000001".parse().unwrap(),
                 created_at: "2026-10-20T00:00:00Z".into(),
                 source_version_ids: parents.into_iter().map(str::to_owned).collect(),
                 created_as_full_checkpoint: true,

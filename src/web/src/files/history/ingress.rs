@@ -512,9 +512,8 @@ fn ordinals(values: impl IntoIterator<Item = u64>) -> Result<(), DecodeError> {
 
 fn note_and_names(note: &str, download: &str, stored: &str) -> Result<(), DecodeError> {
     storage_contract::validate_note(note).map_err(DecodeError::Name)?;
-    for name in [download, stored] {
-        name_policy::validate_name(name).map_err(DecodeError::Path)?;
-    }
+    storage_contract::validate_installed_version_name(stored, download)
+        .map_err(DecodeError::InstalledName)?;
     Ok(())
 }
 

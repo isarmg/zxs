@@ -39,7 +39,9 @@ fn body(file: u32, version: u32) -> FileVersion {
         checksum_chunk_bytes: 262144,
         checksum_manifest_hash: "b".repeat(64),
         creation_name: "Alpha.txt".into(),
-        storage_name: "v000001_20261106T000000Z_aaaaaaaa.txt".into(),
+        storage_id: storage_contract::VersionStorageId::from_version(
+            id("ver", version).parse().unwrap(),
+        ),
         created_at: "2026-11-06T00:00:00Z".into(),
         source_version_ids: vec![],
         created_as_full_checkpoint: true,

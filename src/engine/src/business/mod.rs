@@ -38,7 +38,7 @@ pub(crate) mod file_publication;
 mod file_requests;
 pub(crate) mod file_tags;
 mod history;
-mod namespace;
+pub(crate) mod namespace;
 mod repository;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;

@@ -8,6 +8,55 @@ const FILE: &str = "file_00000000000000000000000000000001";
 const HISTORY: &str = "history_00000000000000000000000000000001";
 
 #[test]
+fn historical_node_and_body_names_use_current_container_name_without_rewriting_evidence() {
+    let mut view = fixture();
+    let state = Arc::make_mut(&mut view.state.0);
+    state.file_locations.insert(FILE.into(), "现在/最新.txt".into());
+    state.file_names.insert(FILE.into(), "最新.txt".into());
+    view.history_window_roots = Some(HistoryRootBindings::recovered(
+        &view.state.0,
+        BTreeMap::from([(
+            HISTORY.into(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        )]),
+    ));
+    let before = storage_contract::encoding::canonical_json(view.business_projection()).unwrap();
+    let request = request(HistoryCollection::Nodes, 64);
+    let cancel = HistoryWindowCancellation::new();
+    for retained in [false, true] {
+        let mut context = context();
+        if retained {
+            context.path = None;
+        }
+        let query = Query::new(&view, &request, &context, &cancel).unwrap();
+        for id in [
+            "ver_00000000000000000000000000000000",
+            "ver_00000000000000000000000000000001",
+        ] {
+            let version = &query.state.versions[id];
+            let body = query.version_summary(version).unwrap();
+            let node = query
+                .node_summary(
+                    Node::Content(version),
+                    first_commit_oracle(query.state, version),
+                    HistoryParentSet::Complete,
+                )
+                .unwrap();
+            assert_eq!(body.download_name, "最新.txt");
+            assert_eq!(node.download_name, "最新.txt");
+            assert_eq!(body.storage_name, format!("{}-最新.txt", version.storage_id));
+            assert_eq!(node.storage_name, body.storage_name);
+            assert_eq!(node.path, oracle_path(query.state, id));
+            assert_eq!(version.creation_name, "原稿.txt");
+        }
+    }
+    assert_eq!(
+        storage_contract::encoding::canonical_json(view.business_projection()).unwrap(),
+        before,
+    );
+}
+
+#[test]
 fn creation_time_fields_preserve_utc_text_range_errors_and_state_bytes() {
     use std::error::Error as _;
     use storage_contract::{ErrorCode, encoding::canonical_json};

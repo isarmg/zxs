@@ -2978,7 +2978,7 @@ fn recorded_version(version: &str) -> crate::VersionSnapshot {
             checksum_chunk_bytes: 4096,
             checksum_manifest_hash: "manifest".into(),
             creation_name: "file.txt".into(),
-            storage_name: "body".into(),
+            storage_id: "000000000000001".parse().unwrap(),
             created_at: "now".into(),
             source_version_ids: vec![],
             created_as_full_checkpoint: true,

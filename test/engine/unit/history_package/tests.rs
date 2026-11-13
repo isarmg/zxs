@@ -2233,13 +2233,13 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
         storage_contract::ContentState::Purged,
         storage_contract::ContentState::Migrated,
     ] {
-        for malformed in ["none", "storage_name", "created_at"] {
+        for malformed in ["none", "creation_name", "created_at"] {
             let label = format!("{}-{malformed}", status.as_str());
             let mut manifest = baseline.clone();
             manifest.content_states.insert(old.clone(), status);
             let version = manifest.versions.get_mut(&old).unwrap();
             match malformed {
-                "storage_name" => version.storage_name = "invalid.txt".into(),
+                "creation_name" => version.creation_name = "../invalid.txt".into(),
                 "created_at" => version.created_at.clear(),
                 _ => (),
             }

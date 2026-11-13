@@ -397,7 +397,7 @@
     "/api/versions/{version}/content": {
       "get": {
         "operationId": "getContent",
-        "description": "固定版本单范围读取；不执行改变字节偏移的编码转换。repository_id/path成对指定逻辑别名，验证此路径当前条目属于该版本的文件身份，以此视图名称生成Content-Disposition。省略时采用兼容默认名称；历史正文仍以稳定版本ID读取，不使用storage_name作为下载名。",
+        "description": "固定版本单范围读取；不执行改变字节偏移的编码转换。repository_id/path成对指定逻辑别名，验证此路径当前条目属于该版本的文件身份，下载名始终取容器当前名称，不取历史或别名路径叶名。省略位置时仍使用已登记的当前容器名；历史正文仍以稳定版本ID读取，不使用storage_name作为下载名。",
         "parameters": [
           {
             "name": "version",
@@ -10413,12 +10413,11 @@
           "created_as_full_checkpoint": {
             "type": "boolean"
           },
-          "storage_name": {
-            "type": "string",
-            "pattern": "^v[0-9]{6,}_[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}(\\..+)?$"
-          },
           "created_at": {
             "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "storage_id": {
+            "$ref": "#/components/schemas/VersionStorageId"
           }
         },
         "required": [
@@ -10434,11 +10433,11 @@
           "creation_name",
           "source_version_ids",
           "created_as_full_checkpoint",
-          "storage_name",
+          "storage_id",
           "created_at"
         ],
         "additionalProperties": false,
-        "description": "字段草案；完整 PortableName、实体关系及物理证据需另行验证。"
+        "description": "版本持久记录只保存稳定storage_id。实际版本叶名为storage_id、连字符和容器当前名称，改名不改变版本身份或历史内容证据。完整名称预算、实体关系与物理发布另行准入。"
       },
       "PlacementRequest": {
         "type": "object",
@@ -14391,10 +14390,12 @@
           },
           "storage_name": {
             "type": "string",
-            "maxLength": 768,
-            "x-maxUtf8Bytes": 768,
-            "x-maxUtf16Units": 200,
-            "x-namePolicy": "PortableName"
+            "maxLength": 256,
+            "x-maxUtf8Bytes": 256,
+            "x-maxUtf16Units": 256,
+            "x-namePolicy": "VersionStorageId-CurrentContainerName",
+            "pattern": "^[a-z0-9]{15}-.+$",
+            "description": "只读派生的实际版本叶名：稳定15位storage_id加连字符和容器当前名称；不是可独立修改的权威名称。"
           },
           "parents": {
             "$ref": "#/components/schemas/HistoryParentSet"
@@ -14533,10 +14534,12 @@
           },
           "storage_name": {
             "type": "string",
-            "maxLength": 768,
-            "x-maxUtf8Bytes": 768,
-            "x-maxUtf16Units": 200,
-            "x-namePolicy": "PortableName"
+            "maxLength": 256,
+            "x-maxUtf8Bytes": 256,
+            "x-maxUtf16Units": 256,
+            "x-namePolicy": "VersionStorageId-CurrentContainerName",
+            "pattern": "^[a-z0-9]{15}-.+$",
+            "description": "只读派生的实际版本叶名：稳定15位storage_id加连字符和容器当前名称；不是可独立修改的权威名称。"
           },
           "source_count": {
             "$ref": "#/components/schemas/UInt64"
@@ -21737,6 +21740,13 @@
         ],
         "additionalProperties": false,
         "description": "At most 64 facts and 64 KiB encoded JSON. Order is (sequence, operation_id, source_id), not wall-clock order. A short nonempty page can continue; next_cursor must bind its exact last member and the original request. Missing evidence is an error, not an empty or final page. No complete-timeline or O(page) cost guarantee."
+      },
+      "VersionStorageId": {
+        "type": "string",
+        "minLength": 15,
+        "maxLength": 15,
+        "pattern": "^[a-z0-9]{15}$",
+        "description": "容器内稳定版本身份，严格15位小写ASCII字母或数字；不含文件名。"
       }
     }
   }

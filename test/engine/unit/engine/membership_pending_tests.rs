@@ -834,7 +834,7 @@ fn pending_old_seal_format_rejects_without_rewriting_any_member() {
     let path = f.target.disks[2].root.join("disk.json");
     let original = fs::read(&path).unwrap();
     let mut seal: json_codec::Value = json_codec::from_slice(&original).unwrap();
-    assert_eq!(seal["format"], "container-path-facts-membership-pending");
+    assert_eq!(seal["format"], "container-current-name-membership-pending");
     for format in ["membership-pending", "container-tags-membership-pending"] {
         seal["format"] = json_codec::json!(format);
         let changed = canonical_json(&seal).unwrap();

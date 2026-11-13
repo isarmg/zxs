@@ -17,10 +17,12 @@ class OfflineTargetedCi(unittest.TestCase):
 
     def test_engine_export_keeps_original_selections_and_adds_conversion_budget(self):
         plan = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
-        self.assertEqual(plan['groups'], ['held-directory-layout',
+        self.assertEqual(plan['groups'], ['container-lifecycle-engine',
+                                         'container-path-facts-engine',
+                                         'held-directory-layout',
                                          'ordinary-conversion-name-budget',
                                          'typed-name-consumers'])
-        self.assertEqual(len(plan['rust_targets']), 9)
+        self.assertEqual(len(plan['rust_targets']), 13)
         for group in plan['groups']:
             selections = []
             for target in plan['rust_targets']:

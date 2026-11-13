@@ -14,7 +14,7 @@ fn history_wire_keeps_numeric_facts_sparse_disposition_and_field_whitelist() {
         content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"body")),
         note: String::new(),
         download_name: "report.txt".into(),
-        storage_name: "stored".into(),
+        storage_name: "000000000000001-report.txt".into(),
     });
     let snapshot = FileHistorySnapshot {
         file_id: "file".into(),

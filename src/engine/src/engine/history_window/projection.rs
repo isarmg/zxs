@@ -135,23 +135,10 @@ impl<'a> Query<'a> {
         })
     }
 
-    fn download_name(&self, version: &'a crate::FileVersion) -> &str {
-        self.context
-            .path
-            .as_ref()
-            .map(|path| {
-                path.as_str()
-                    .rsplit('/')
-                    .next()
-                    .expect("invariant: portable paths have a final component")
-            })
-            .or_else(|| {
-                self.state
-                    .file_names
-                    .get(self.scope().file)
-                    .map(String::as_str)
-            })
-            .unwrap_or(&version.creation_name)
+    fn download_name(&self) -> Result<name_policy::Name> {
+        // The context may describe a frozen location. Content selection does not
+        // restore that historical name or change the container's current identity.
+        crate::container_storage::current_container_name(self.state, self.scope().file)
     }
 
     fn content_branch(&self, version: &str) -> Result<Option<HistoryBranchId>> {
@@ -190,6 +177,7 @@ impl<'a> Query<'a> {
     ) -> Result<HistoryNodeSummary> {
         self.cancel.checkpoint()?;
         let version = node.version(self.state);
+        let name = self.download_name()?;
         let (kind, branch_id, previous_path, note) = match node {
             Node::Content(version) => (
                 HistoryNodeKind::Content,
@@ -238,8 +226,11 @@ impl<'a> Query<'a> {
             size: version.logical_size,
             content_hash: version.content_hash,
             content_state: self.state.content_states.get(&version.version_id).copied(),
-            download_name: self.download_name(version).into(),
-            storage_name: version.storage_name.clone(),
+            download_name: name.as_str().into(),
+            storage_name: crate::container_storage::installed_version_name(
+                version.storage_id,
+                &name,
+            )?,
             parents,
             fields: match node {
                 Node::Content(version) => content_fields(version, commit, self.cancel)?,
@@ -253,6 +244,7 @@ impl<'a> Query<'a> {
         version: &'a crate::FileVersion,
     ) -> Result<HistoryVersionSummary> {
         self.cancel.checkpoint()?;
+        let name = self.download_name()?;
         let mut sources = 0usize;
         for source in &version.source_version_ids {
             self.cancel.checkpoint()?;
@@ -270,8 +262,11 @@ impl<'a> Query<'a> {
                 .get(&version.version_id)
                 .map_or("", String::as_str)
                 .into(),
-            download_name: self.download_name(version).into(),
-            storage_name: version.storage_name.clone(),
+            download_name: name.as_str().into(),
+            storage_name: crate::container_storage::installed_version_name(
+                version.storage_id,
+                &name,
+            )?,
             source_count: u64::try_from(sources).map_err(Error::IntegerRange)?,
             fields: self.fields(Node::Content(version))?,
         })

@@ -234,7 +234,12 @@ impl Pool {
             .join("namespace")
             .join(&state.file_locations[file])
             .join("versions")
-            .join(&version.storage_name)
+            .join(format!(
+                "{}-{}",
+                version.storage_id,
+                std::path::Path::new(&state.file_locations[file])
+                    .file_name().unwrap().to_str().unwrap(),
+            ))
     }
     fn current_entry(&self, path: &str) -> Entry {
         self.engine

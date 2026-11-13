@@ -205,7 +205,7 @@ impl Remap<'_> {
             checksum_chunk_bytes: _,
             checksum_manifest_hash: _,
             creation_name: _,
-            storage_name: _,
+            storage_id: _,
             created_at: _,
             created_as_full_checkpoint: _,
         } = value;

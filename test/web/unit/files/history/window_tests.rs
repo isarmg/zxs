@@ -95,7 +95,7 @@ fn node(number: u64) -> wire::HistoryNodeSummary {
         content_hash: "b".repeat(64).parse().unwrap(),
         content_state: None,
         download_name: "file.txt".into(),
-        storage_name: "v000001_fixture.txt".into(),
+        storage_name: "000000000000001-file.txt".into(),
         parents: wire::HistoryParentSet::Complete,
         fields: wire::HistoryNodeFields {
             message: wire::HistoryFieldInfo { byte_length: 0 },
@@ -811,4 +811,25 @@ fn duplicate_visible_and_external_parent_edges_are_rejected_at_admission() {
     for pairs in [vec![(1, 2), (1, 2)], vec![(1, 3), (1, 3)]] {
         assert!(!accepted(&graph_page(&request, 2, &pairs), &request));
     }
+}
+
+#[test]
+fn installed_names_bind_current_name_and_admit_the_full_suffix_budget() {
+    let request = read_request(wire::HistoryCollection::Nodes);
+    for stored in ["v000001_file.txt", "00000000000000A-file.txt", "000000000000001-old.txt"] {
+        let mut page = value(&nodes(&request, 1));
+        page["nodes"][0]["storage_name"] = stored.into();
+        assert!(admit(page, &request, None).is_err());
+    }
+    for name in ["x".repeat(240), "界".repeat(80)] {
+        let mut page = value(&nodes(&request, 1));
+        page["nodes"][0]["download_name"] = name.clone().into();
+        page["nodes"][0]["storage_name"] = format!("000000000000001-{name}").into();
+        assert!(admit(page, &request, None).is_ok());
+    }
+    let name = "x".repeat(241);
+    let mut page = value(&nodes(&request, 1));
+    page["nodes"][0]["download_name"] = name.clone().into();
+    page["nodes"][0]["storage_name"] = format!("000000000000001-{name}").into();
+    assert!(admit(page, &request, None).is_err());
 }

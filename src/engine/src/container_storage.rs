@@ -5,6 +5,13 @@ pub(crate) mod backup_entities;
 pub(crate) mod backup_ordinary;
 pub(crate) mod backup_original_objects;
 mod changes;
+mod version_names;
+mod version_rename;
+pub use version_names::VersionNameError;
+pub(crate) use version_names::{
+    allocate_version_storage_id, current_container_name, installed_version_leaf,
+    installed_version_name, installed_version_path,
+};
 mod directory_database;
 mod local_database;
 mod object_database;
@@ -45,67 +52,11 @@ fn invalid(message: &str) -> Error {
     Error::new(storage_contract::ErrorCode::ContainerLayoutInvalid, message)
 }
 
-fn sequence(name: &str) -> Result<u64> {
-    name_policy::validate_name(name)?;
-    let mut parts = name.splitn(3, '_');
-    let number = parts
-        .next()
-        .and_then(|part| part.strip_prefix('v'))
-        .ok_or_else(|| invalid("version storage name has no sequence"))?;
-    let stamp = parts
-        .next()
-        .ok_or_else(|| invalid("version storage name has no timestamp"))?;
-    let suffix = parts
-        .next()
-        .ok_or_else(|| invalid("version storage name has no digest"))?;
-    let digest = suffix.split('.').next().unwrap_or("");
-    if number.len() < 6
-        || !number.bytes().all(|byte| byte.is_ascii_digit())
-        || stamp.len() != 16
-        || stamp.as_bytes()[8] != b'T'
-        || stamp.as_bytes()[15] != b'Z'
-        || !stamp
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| index == 8 || index == 15 || byte.is_ascii_digit())
-        || digest.len() != 8
-        || !digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(invalid(
-            "version storage name is not a numbered UTC checkpoint",
-        ));
-    }
-    let value = number.parse::<u64>().map_err(|source| {
-        Error::Integer(source).context(
-            ErrorCode::ContainerLayoutInvalid,
-            "version sequence exceeds the storage format",
-        )
-    })?;
-    if value == 0 {
-        return Err(invalid("version storage sequence starts at one"));
-    }
-    Ok(value)
-}
-
 pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
     validate_id(&version.file_id, "file")?;
     validate_id(&version.history_tree_id, "history")?;
     validate_id(&version.version_id, "ver")?;
     name_policy::validate_name(&version.creation_name)?;
-    let name = &version.storage_name;
-    sequence(name)?;
-    let digest = name
-        .splitn(3, '_')
-        .nth(2)
-        .and_then(|value| value.split('.').next())
-        .unwrap_or("");
-    if digest != &version.content_hash.digest().to_hex()[..8] {
-        return Err(invalid(
-            "version storage name does not identify its content digest",
-        ));
-    }
     if version.created_at.len() != 20
         || version.created_at.as_bytes()[10] != b'T'
         || !version.created_at.ends_with('Z')
@@ -121,57 +72,11 @@ pub(crate) fn validate_version(version: &FileVersion) -> Result<()> {
     Ok(())
 }
 
-/// Per-file storage sequence; the existing global audit sequence is unchanged.
-pub(crate) fn version_identity(
-    state: &State,
-    file_id: &str,
-    path: &str,
-    hash: &blake3::Hash,
-) -> Result<(String, String)> {
-    validate_id(file_id, "file")?;
-    let mut maximum = 0;
-    for version in state
-        .versions
-        .values()
-        .filter(|version| version.file_id == file_id)
-    {
-        // Snapshot/import admission and version builders preserve this identity.
-        maximum = maximum.max(
-            sequence(&version.storage_name)
-                .expect("invariant: admitted or generated versions have valid storage names"),
-        );
-    }
-    let number = maximum.checked_add(1).ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::ResourceLimit,
-            "file version sequence exhausted",
-        )
-    })?;
+/// Creation time is immutable evidence, never part of the installed filename.
+pub(crate) fn version_created_at() -> Result<String> {
     let now = version_time(std::time::SystemTime::now())?;
-    let timestamp = now
-        .format(&Rfc3339)
-        .expect("invariant: nonnegative UTC time is within the RFC3339 year range");
-    let format = date_time::format_description::parse_borrowed::<3>(
-        "[year][month][day]T[hour][minute][second]Z",
-    )
-    .expect("invariant: static checkpoint format is valid");
-    let stamp = now
-        .format(&format)
-        .expect("invariant: UTC datetime contains every checkpoint format component");
-    let current_name = state
-        .file_names
-        .get(file_id)
-        .map(String::as_str)
-        .unwrap_or(path);
-    name_policy::validate_path(current_name)?;
-    let extension = Path::new(current_name)
-        .extension()
-        .and_then(|name| name.to_str())
-        .map(|name| format!(".{name}"))
-        .unwrap_or_default();
-    let name = format!("v{number:06}_{stamp}_{}{extension}", &hash.to_hex()[..8]);
-    name_policy::validate_name(&name)?;
-    Ok((name, timestamp))
+    Ok(now.format(&Rfc3339)
+        .expect("invariant: nonnegative UTC time is within the RFC3339 year range"))
 }
 
 #[cfg(test)]
@@ -513,7 +418,7 @@ pub(crate) fn content_path(directory: &Path, version: &FileVersion) -> Result<Pa
     validate_version(version)?;
     let history = history_root(directory)?;
     if !directory_exists(history)? {
-        return Ok(expected_content_path(history, version));
+        return expected_content_path(history, version);
     }
     let root = DiskRoot::open(history)?;
     let directory = root.path().join(
@@ -560,13 +465,11 @@ pub(crate) fn content_location_at(
     content_path_inner(root, directory, version, observe)
 }
 
-fn expected_content_path(history: &Path, version: &FileVersion) -> PathBuf {
-    history
-        .join("file-containers")
-        .join(&version.file_id)
-        .join(&version.creation_name)
-        .join("versions")
-        .join(&version.storage_name)
+fn expected_content_path(history: &Path, version: &FileVersion) -> Result<PathBuf> {
+    installed_version_path(
+        &history.join("file-containers").join(&version.file_id).join(&version.creation_name),
+        version,
+    )
 }
 
 fn content_path_inner(
@@ -580,7 +483,7 @@ fn content_path_inner(
     if !path_directory_exists_at(root, root.path(), history)? {
         return Ok(ContentLocation::Absent(expected_content_path(
             history, version,
-        )));
+        )?));
     }
     let target = match installed_content_path_at(root, history, version, observe)? {
         Some(target) => {
@@ -592,7 +495,7 @@ fn content_path_inner(
             }
             target
         }
-        None => expected_content_path(history, version),
+        None => expected_content_path(history, version)?,
     };
     // Current preparation and offline packages hold the verified body beside
     // its immutable metadata until installation moves it into the container.
@@ -610,14 +513,13 @@ fn installed_content_path_at(
     version: &FileVersion,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Option<PathBuf>> {
-    Ok(container_at(
-        root,
-        history,
-        Some(&version.history_tree_id),
-        &version.file_id,
-        observe,
-    )?
-    .map(|named| named.join("versions").join(&version.storage_name)))
+    let Some(named) = container_at(
+        root, history, Some(&version.history_tree_id), &version.file_id, observe,
+    )? else { return Ok(None); };
+    if let Some(path) = version_rename::interrupted_path(root, &named, version)? {
+        return Ok(Some(path));
+    }
+    installed_version_path(&named, version).map(Some)
 }
 
 /// Called only after the caller has persisted the authorized content tombstone.
@@ -632,7 +534,7 @@ pub(crate) fn cleanup_version_content_at(
     let installed = match installed_content_path_at(root, history, version, &mut |_| Ok(()))? {
         Some(installed) => installed,
         None => {
-            let expected = expected_content_path(history, version);
+            let expected = expected_content_path(history, version)?;
             root.directory_identity(
                 expected
                     .parent()
@@ -760,7 +662,6 @@ pub(crate) fn install_version_content_at(
     };
     validate_version(version)?;
     let source = directory.join("content").join(&version.creation_name);
-    let name = &version.storage_name;
     let history = history_root(directory)?;
     root.directory_identity(history)?;
     let stable = history.join("file-containers").join(&version.file_id);
@@ -782,7 +683,11 @@ pub(crate) fn install_version_content_at(
     };
     let versions = named.join("versions");
     root.private_dir(&versions)?;
-    let target = versions.join(name);
+    let target = installed_version_path(&named, version)?;
+    let leaf = platform_io::fs_safety::EntryName::new(
+        target.file_name().expect("invariant: installed version path has a leaf"),
+    )?;
+    version_names::check_target_name(root, &leaf)?;
     if file_exists_at(root, &target)? {
         if let Some(verified) = &verified
             && verified.path() == target
@@ -1110,6 +1015,8 @@ struct PreparedName {
     offset: u64,
     length: usize,
     database: Option<file_database::install::PreparedFile>,
+    version_names: Option<version_rename::Prepared>,
+    finish_version_names: bool,
 }
 impl PreparedNames {
     /// Exact FILE write set from the candidate's projection, before probing
@@ -1244,9 +1151,20 @@ impl PreparedNames {
         self.apply_observed(&mut |_| Ok(()))
     }
     pub(crate) fn apply_observed(
-        self,
+        mut self,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<DirectoryLayoutReceipt> {
+        if let Some(cache) = &mut self.cache {
+            for item in &mut cache.items {
+                if let Some(names) = item.version_names.take() {
+                    let current = container_at(
+                        &item.disk.root, &item.history, Some(&item.history_id),
+                        &item.file, &mut |_| Ok(()),
+                    )?.ok_or(Error::VersionNames(VersionNameError::Intent))?;
+                    names.apply(&item.disk.root, &current, observe)?;
+                }
+            }
+        }
         let receipt = self.layouts.apply(observe)?;
         let Some(mut cache) = self.cache else {
             return Ok(receipt);
@@ -1313,6 +1231,9 @@ impl PreparedNames {
             root.sync_dir(&named)?;
             if let Some(database) = item.database {
                 database.apply(root, &named, observe)?;
+            }
+            if item.finish_version_names {
+                version_rename::finish(root, &named)?;
             }
         }
         Ok(receipt)
@@ -1612,9 +1533,12 @@ fn prepare_names_inner(
                     .map(|key| &next.file_branch_merges[key]);
                 crate::business::file_nodes::NodeProjection::from_merge_events(next, events)
             });
-            let descriptor = encoded_histories
-                .entry(history_id.clone())
-                .or_insert_with(|| description.encode_history(&history_id, next, nodes));
+            let descriptor = match encoded_histories.entry(history_id.clone()) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(description.encode_history(&history_id, next, nodes)?)
+                }
+            };
             let mut descriptor_value = json!({
                 "cache_only": true,
                 "file_id": file,
@@ -1676,6 +1600,14 @@ fn prepare_names_inner(
             };
             let offset = staged.file.stream_position()?;
             staged.file.write_all(&bytes)?;
+            let version_names = if skip_shared {
+                None
+            } else {
+                version_rename::Prepared::capture(
+                    &held.root, &current, next, &file, &history_id,
+                    &name_policy::Name::parse(name)?,
+                )?
+            };
             staged.items.push(PreparedName {
                 disk: Arc::clone(held),
                 history,
@@ -1686,6 +1618,8 @@ fn prepare_names_inner(
                 offset,
                 length: bytes.len(),
                 database,
+                version_names,
+                finish_version_names: !skip_shared,
             });
         }
     }

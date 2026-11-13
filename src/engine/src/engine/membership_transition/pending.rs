@@ -90,7 +90,7 @@ impl MemberIdentity {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum PendingFormat {
-    #[serialization(rename = "container-path-facts-membership-pending")]
+    #[serialization(rename = "container-current-name-membership-pending")]
     MembershipPending,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

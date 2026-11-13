@@ -48,6 +48,74 @@ fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResu
 }
 
 #[test]
+fn selecting_pre_rename_content_keeps_the_latest_container_name_after_reopen() {
+    let (temporary, mut engine, repository) = setup();
+    save(&mut engine, &repository, "original.txt", b"historical content");
+    let original = entries(&engine, &repository)["original.txt"].clone();
+    let branch = engine
+        .create_file_branch_from_node(
+            &original.file_id,
+            &original.version_id,
+            &original.version_id,
+            &storage_contract::BranchName::parse("historical source").unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .result["branch_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    save(&mut engine, &repository, "original.txt", b"later content");
+    rename(&mut engine, &repository, "original.txt", "最新.txt");
+    let versions = engine.state().versions.clone();
+    let path = name_policy::PortablePath::parse("最新.txt").unwrap();
+    let operation = OperationId::generate().unwrap();
+    let selected = engine
+        .select_file_branch_at(
+            &repository.repository_id,
+            &path,
+            &original.file_id,
+            &branch,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    assert_eq!(engine.state().versions, versions);
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&temporary.path().join("system")).unwrap();
+        }
+        let current = entries(&engine, &repository);
+        assert!(!current.contains_key("original.txt"));
+        let file = &current["最新.txt"];
+        assert_eq!(file.name(), "最新.txt");
+        assert_eq!(file.file_id, original.file_id);
+        assert_eq!(file.version_id, original.version_id);
+        assert_eq!(engine.state().file_locations[&original.file_id], "最新.txt");
+        assert_eq!(engine.state().file_names[&original.file_id], "最新.txt");
+        let mut bytes = Vec::new();
+        engine.valid_replica(&original.version_id).unwrap().0.open().unwrap()
+            .read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"historical content");
+        let before = canonical_json(engine.state()).unwrap();
+        let replay = engine
+            .select_file_branch_at(
+                &repository.repository_id,
+                &path,
+                &original.file_id,
+                &branch,
+                "admin",
+                operation,
+            )
+            .unwrap();
+        assert_eq!(replay.result, selected.result);
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    }
+}
+
+#[test]
 fn path_fact_receipts_are_ordered_isolated_and_replayed_after_later_renames() {
     let (temporary, mut engine, repo) = setup();
     save(&mut engine, &repo, "folder/z.txt", b"Z");

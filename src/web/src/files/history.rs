@@ -27,6 +27,8 @@ pub enum DecodeError {
     Path(#[source] name_policy::Error),
     #[error("inconsistent history window response: {0}")]
     Relation(&'static str),
+    #[error("invalid history installed name: {0}")]
+    InstalledName(#[source] storage_contract::InvalidInstalledVersionName),
 }
 impl From<DecodeError> for api::Error {
     fn from(source: DecodeError) -> Self {

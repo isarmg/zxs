@@ -318,7 +318,7 @@ impl<'a> Image<'a> {
             if state.content_states[&version.version_id] == ContentState::Available {
                 let home = &self.file_homes[&key];
                 self.add_file(
-                    home.path.join("versions").join(&version.storage_name),
+                    crate::container_storage::installed_version_path(&home.path, version)?,
                     Data::Body(version),
                 )?;
                 self.bodies += 1;

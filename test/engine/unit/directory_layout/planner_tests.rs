@@ -85,7 +85,9 @@ fn file(state: &mut State, n: u64, path: &str) -> Entry {
         checksum_chunk_bytes: 4096,
         checksum_manifest_hash: "0".repeat(64),
         creation_name: path.rsplit('/').next().unwrap().into(),
-        storage_name: "v000001_20261106T120000Z_00000000.txt".into(),
+        storage_id: storage_contract::VersionStorageId::from_version(
+            id("ver", n).parse().unwrap(),
+        ),
         created_at: "2026-11-06T12:00:00Z".into(),
         source_version_ids: vec![],
         created_as_full_checkpoint: false,

@@ -300,6 +300,24 @@ pub struct MetadataView {
 }
 
 impl MetadataView {
+    /// Current container identity, independent of a selected historical node.
+    /// This projection does not grant authorization; callers retain their read scope.
+    pub fn current_container_name(
+        &self,
+        file: storage_contract::FileId,
+    ) -> Result<name_policy::Name> {
+        crate::container_storage::current_container_name(self.state.0.as_ref(), &file.to_string())
+    }
+
+    /// Derive the installed version leaf from its immutable identity and this view's name.
+    pub fn installed_version_name(
+        &self,
+        version: &FileVersion,
+    ) -> Result<String> {
+        let name = self.current_container_name(version.file_id.parse()?)?;
+        crate::container_storage::installed_version_name(version.storage_id, &name)
+    }
+
     /// Read-only business fields for listing and history projection only.
     ///
     /// This is not the authoritative State: authentication, operation receipts,

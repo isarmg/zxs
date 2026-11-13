@@ -1233,11 +1233,13 @@ impl crate::engine::PlanningContext<'_> {
                 "copied content differs from the published source version",
             ));
         }
-        let (storage_name, created_at) =
-            crate::container_storage::version_identity(state, file_id, path.as_str(), &digest)?;
+        let version_id = storage_contract::VersionId::generate()?;
+        let storage_id =
+            crate::container_storage::allocate_version_storage_id(state, file_id, version_id)?;
+        let created_at = crate::container_storage::version_created_at()?;
         let version = FileVersion {
             history_tree_id: history.into(),
-            version_id: new_id("ver")?,
+            version_id: version_id.to_string(),
             file_id: file_id.into(),
             creation_primary_slot_id: primary.into(),
             logical_size: size,
@@ -1246,7 +1248,7 @@ impl crate::engine::PlanningContext<'_> {
             checksum_chunk_bytes: self.config.checksum_chunk_bytes,
             checksum_manifest_hash: blake3::hash(&manifest.encode()?).to_hex().to_string(),
             creation_name: path.file_name().into(),
-            storage_name,
+            storage_id,
             created_at,
             source_version_ids: source_ids,
             created_as_full_checkpoint: checkpoint,
@@ -1569,6 +1571,9 @@ impl crate::engine::PlanningContext<'_> {
                     let changed_paths = written_paths.into_iter()
                         .chain(w.namespace_operations.iter().flat_map(|n| std::iter::once(n.path().to_owned()).chain(n.destination().map(|path|path.as_str().to_owned()))))
                         .chain(renamed_directories)
+                        .chain(path_changes.iter().flat_map(|fact| {
+                            [fact.before.path.as_str().to_owned(), fact.after.path.as_str().to_owned()]
+                        }))
                         .collect::<Vec<_>>();
                     super::directory::record_projected_directory_edits(state, &repo.repository_id, &changed_paths, None, engine.current_namespaces.map(std::sync::Arc::as_ref))?;
                 }

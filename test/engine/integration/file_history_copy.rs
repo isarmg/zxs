@@ -13,6 +13,11 @@ use storage_contract::{
 };
 use storage_engine::*;
 
+fn installed_body(container: &std::path::Path, version: &FileVersion) -> std::path::PathBuf {
+    let name = container.file_name().unwrap().to_str().unwrap();
+    container.join("versions").join(format!("{}-{name}", version.storage_id))
+}
+
 fn op() -> OperationId {
     OperationId::generate().unwrap()
 }
@@ -260,7 +265,7 @@ fn history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_rep
         for old in &versions {
             let copy = copies
                 .iter()
-                .find(|copy| copy.storage_name == old.storage_name)
+                .find(|copy| copy.storage_id == old.storage_id)
                 .unwrap();
             assert_eq!(copy.created_at, old.created_at);
             assert_eq!(copy.version_sequence, old.version_sequence);

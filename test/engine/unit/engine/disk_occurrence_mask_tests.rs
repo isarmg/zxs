@@ -162,7 +162,9 @@ impl Fixture {
             checksum_chunk_bytes: 262144,
             checksum_manifest_hash: "1".repeat(64),
             creation_name: format!("file-{file}"),
-            storage_name: format!("v{n:06}_20261104T000000Z_00000000.txt"),
+            storage_id: storage_contract::VersionStorageId::from_version(
+                id("ver", n).parse().unwrap(),
+            ),
             created_at: "2026-11-04T00:00:00Z".into(),
             source_version_ids: Vec::new(),
             created_as_full_checkpoint: true,

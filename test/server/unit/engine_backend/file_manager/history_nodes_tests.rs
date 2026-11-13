@@ -186,7 +186,7 @@ fn projected_version(id: &str, sequence: u64) -> HistoryVersion {
             content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"")),
             note: String::new(),
             download_name: "file.txt".into(),
-            storage_name: "stored".into(),
+            storage_name: "000000000000001-file.txt".into(),
         }),
         sequence,
         current: false,
