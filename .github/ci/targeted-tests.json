@@ -1,5 +1,62 @@
 {
   "groups": {
+    "readmission-member-proof-scope": {
+      "reason": "One verify_member call retains its immutable full proposal proof only. Keep the original single 17-cut regression under its unchanged total 300-second timeout, all readmission core/runtime tests, restricted cold consumers and server readmission entry points. No cross-root or cross-cut cache.",
+      "python_tests": [
+        "test_readmission_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::membership_transition::readmission::",
+            "engine::membership_transition::pending::activation::recovery::restricted::"
+          ],
+          "max_tests": 60,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::storage_readmission::tests::",
+            "management::storage_readmission::exclusive::tests::",
+            "management::terminal_readmission::tests::"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "offline::disk_readmission::tests::"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 300
+        }
+      ]
+    },
     "manual-working-blocked-server-carry-forward": {
       "reason": "Carry forward all 26 server core lib origin selections blocked by the ordinary-rmdir fixture compile errors in bf0445acf run 43431210851, plus its separate core,fault-injection retirement exact test. Preserve each original inventory budget and timeout; this is not whole-workspace or new-SHA engine evidence.",
       "python_tests": [
@@ -4369,6 +4426,24 @@
     }
   },
   "rules": [
+      {
+        "path": "src/engine/src/engine/membership_transition/readmission/core.rs",
+        "groups": [
+          "readmission-member-proof-scope"
+        ]
+      },
+      {
+        "path": "test/engine/unit/engine/readmission_core_tests.rs",
+        "groups": [
+          "readmission-member-proof-scope"
+        ]
+      },
+      {
+        "path": "test/ci/test_readmission_targeted_ci.py",
+        "groups": [
+          "readmission-member-proof-scope"
+        ]
+      },
     {
       "path": "src/engine/src/engine/membership_transition/pending/reservation.rs",
       "groups": [

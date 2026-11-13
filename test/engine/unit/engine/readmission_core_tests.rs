@@ -2,7 +2,7 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 
-fn admitted_core() -> (tempfile::TempDir, ReadmissionCore) {
+fn admitted_core() -> (tempfile::TempDir, ReadmissionCore, String) {
     let temp = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
@@ -63,7 +63,8 @@ fn admitted_core() -> (tempfile::TempDir, ReadmissionCore) {
         .readmission_core()
         .unwrap()
         .clone();
-    (temp, core)
+    let generation = engine.config.generation().unwrap().hash.clone();
+    (temp, core, generation)
 }
 
 fn rejected_at_both_entries(core: &ReadmissionCore, expected: ErrorCode) {
@@ -76,7 +77,8 @@ fn rejected_at_both_entries(core: &ReadmissionCore, expected: ErrorCode) {
 
 #[test]
 fn verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering() {
-    let (_temp, core) = admitted_core();
+    let (temp, core, generation) = admitted_core();
+    assert_member_proof_rechecks_disk(&temp, &core, &generation);
     let bytes = canonical_json(&core).unwrap();
     let intent = core.intent().unwrap();
     assert_eq!(intent.origin.config().metadata_members().len(), 2);
@@ -142,4 +144,33 @@ fn verified_readmission_proposal_preserves_all_decisions_and_rejects_tampering()
     receipt["target_decision"]["record_hash"] = json_codec::Value::String("0".repeat(64));
     let receipt: ReadmissionCore = json_codec::from_value(receipt).unwrap();
     rejected_at_both_entries(&receipt, ErrorCode::LogFork);
+}
+
+// Reusing a pure proposal inside one call must not cache any disk observation.
+fn assert_member_proof_rechecks_disk(
+    temp: &tempfile::TempDir,
+    core: &ReadmissionCore,
+    generation: &str,
+) {
+    let intent = core.intent().unwrap();
+    for (index, disk) in intent.target.disks.iter().enumerate() {
+        let held = crate::disk::DiskRoot::open(&disk.root).unwrap();
+        core.verify_member(&held, disk, generation, true).unwrap();
+        let decision = disk.root.join("metadata/membership-decisions")
+            .join(&core.proposal.transition_hash).join("decision.json");
+        let bytes = fs::read(&decision).unwrap();
+        let retained = temp.path().join(format!("retained-decision-{index}"));
+        fs::rename(&decision, &retained).unwrap();
+        assert!(core.verify_member(&held, disk, generation, true).is_err());
+        assert!(!decision.exists());
+        assert_eq!(fs::read(&retained).unwrap(), bytes);
+        fs::rename(&retained, &decision).unwrap();
+        core.verify_member(&held, disk, generation, true).unwrap();
+        assert_eq!(fs::read(&decision).unwrap(), bytes);
+
+        let other = &intent.target.disks[(index + 1) % intent.target.disks.len()];
+        let wrong_root = crate::disk::DiskRoot::open(&other.root).unwrap();
+        assert!(core.verify_member(&wrong_root, disk, generation, false).is_err());
+        assert_eq!(fs::read(&decision).unwrap(), bytes);
+    }
 }

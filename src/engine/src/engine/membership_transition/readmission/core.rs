@@ -394,8 +394,10 @@ impl ReadmissionCore {
         generation: &str,
         synchronize: bool,
     ) -> Result<()> {
-        let intent = self.intent()?;
-        let request = request(&intent)?;
+        // Keep the full immutable proposal/decision proof for this call only.
+        // Disk identity and receipt durability below are still read back anew.
+        let verified = self.verify()?;
+        let request = request(&verified.intent)?;
         let expected = if disk.disk_id == request.target.disk_id {
             request.directory.verify_physical_root(root)?;
             let stored =
@@ -423,7 +425,7 @@ impl ReadmissionCore {
                 )
             })?
         };
-        let (identity, _) = self.proposal.verify()?.acceptance(&disk.disk_id)?;
+        let (identity, _) = verified.acceptance(&disk.disk_id)?;
         DecisionStore::open(root, &identity, &self.proposal.transition_hash, false)?
             .verify_receipt(expected, synchronize)
     }
