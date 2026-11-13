@@ -18,14 +18,17 @@ fn actual_with_path(
     path: &str,
 ) -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     let temp = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
-        &temp.path().join("state"),
-        crate::Config::development(
-            (0..disks).map(|index| temp.path().join(format!("disk-{index}"))),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let mut config = crate::Config::development(
+        (0..disks).map(|index| temp.path().join(format!("disk-{index}"))),
+    ).unwrap();
+    // Extra roots in the history-copy fixture are independent destinations,
+    // not the fourth tier of the source's P01/B01/C01 backup chain.
+    for disk in config.disks.iter_mut().skip(3) {
+        disk.level = 1;
+        disk.upstream_slot_id = None;
+        disk.metadata_member = false;
+    }
+    let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("observed").unwrap(),
@@ -391,16 +394,20 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
             OperationId::generate().unwrap(),
         )
         .unwrap();
-    // This is an independent history-copy target, not a secondary-slot disk root.
+    // Empty ordinary repository on a different primary: history copy does not
+    // authorize a same-primary fork or an initialized target directory scope.
     let target = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("audit copy target").unwrap(),
-            "P01",
+            "D04",
             1,
             "admin",
             OperationId::generate().unwrap(),
         )
         .unwrap();
+    assert_ne!(source.primary_slot_id, target.primary_slot_id);
+    assert!(!target.file_manager_root);
+    assert!(engine.list_tree(&target.main_branch_id).unwrap().is_empty());
     let operation = OperationId::generate().unwrap();
     let receipt = engine.copy_file_history(
         &crate::FileHistoryCopyRequest {
