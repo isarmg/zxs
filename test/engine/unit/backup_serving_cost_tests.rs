@@ -1,6 +1,8 @@
 //! Real native first-publication component costs, not a serving-success certificate.
 //! Timings are observations only. The original 900-second full transaction stays separate.
 use super::*;
+use crate::engine::backup_preparation::native_control::databases::scoped::encoding_memo::tests
+    as account_probe;
 use crate::engine::backup_preparation::native_control::databases::scoped::cutover::registration;
 use crate::{
     BackupPreparationPhase, BackupPreparationRequest, BackupTopologyTarget,
@@ -526,6 +528,8 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     let installed = install(&prepared, &decision, &expected, &stop)?;
     choices.observe_first_publication(&prepared, &candidate, &stop)?;
     assert_eq!(installed.targets.len(), 2);
+    let before_probes = prepared.scope_encoding.as_ref().map(account_probe::account_snapshot);
+    account_probe::log_account("before_isolated_probes", prepared.scope_encoding.as_ref());
     published_scopes::projection::encoding_probe::verify_published_encoding_reuse(
         _temp.path(), &mut prepared, &decision, &expected, &stop,
     )?;
@@ -535,9 +539,17 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     generation_control::encoding_probe::verify_generation_encoding_reuse(
         _temp.path(), &mut prepared, &decision, &stop,
     )?;
+    assert_eq!(
+        prepared.scope_encoding.as_ref().map(account_probe::account_snapshot), before_probes,
+    );
+    account_probe::log_account("after_restored_probes", prepared.scope_encoding.as_ref());
     let mut previous_completion = None;
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {
+        account_probe::log_account(
+            if iteration == 0 { "iteration_0_before" } else { "iteration_1_before" },
+            prepared.scope_encoding.as_ref(),
+        );
         measure_upstream(&prepared, &decision, &candidate, iteration, &stop)?;
         measure_original_scope_components(&prepared, iteration, &stop)?;
         measure_original_verification(&prepared, iteration, &stop)?;
@@ -703,6 +715,10 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
         sources.recheck(&system)?;
         index.require_root(&system)?;
         prepared.recheck_names()?;
+        account_probe::log_account(
+            if iteration == 0 { "iteration_0_after" } else { "iteration_1_after" },
+            prepared.scope_encoding.as_ref(),
+        );
     }
     assert!(engine.is_read_only());
     assert!(engine.membership_fence_status().is_some());

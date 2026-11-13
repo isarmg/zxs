@@ -17,6 +17,18 @@ fn observe_generation_encoding(
     index: usize,
     stop: &AtomicBool,
 ) -> Result<GenerationEncodingObservation> {
+    encoding_memo::tests::unchanged_account(prepared.scope_encoding.as_ref(), || {
+        observe_generation_encoding_inner(prepared, decision, generation, index, stop)
+    })
+}
+
+fn observe_generation_encoding_inner(
+    prepared: &PreparedBackupRegistry,
+    decision: &AdmittedBackupDecision,
+    generation: &BackupGenerationPreparationReport,
+    index: usize,
+    stop: &AtomicBool,
+) -> Result<GenerationEncodingObservation> {
     let native = &prepared.task.installation.evidence.task.scoped.objects.native;
     let root = &prepared.targets[index].root;
     let job = &prepared.task.selection().jobs()[index];
@@ -140,8 +152,8 @@ fn verify_generation_encoding_reuse(
             assert_eq!(generation_fixture_tree(root), before);
         }
     }
-    // Account immutability itself is covered by the memo module's private-state
-    // tests; this real fixture observes complete outputs and filesystem effects.
+    // Every pure read above and below also checks aggregate account equality.
+    // Complete entry/payload identity remains covered by the private memo tests.
     for index in 0..prepared.targets.len() {
         let path = prepared.targets[index].root.path().join("native-control/objects/snapshot")
             .join(format!("{}.json", prepared.task.selection().jobs()[index].snapshot));

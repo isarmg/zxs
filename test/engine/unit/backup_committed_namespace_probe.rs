@@ -10,6 +10,17 @@ fn namespaces(
     expected: &BackupFirstPublicationHash,
     stop: &AtomicBool,
 ) -> Result<Vec<Vec<u8>>> {
+    encoding_memo::tests::unchanged_account(prepared.scope_encoding.as_ref(), || {
+        namespaces_inner(prepared, plan, expected, stop)
+    })
+}
+
+fn namespaces_inner(
+    prepared: &PreparedBackupRegistry,
+    plan: &Plan,
+    expected: &BackupFirstPublicationHash,
+    stop: &AtomicBool,
+) -> Result<Vec<Vec<u8>>> {
     let mut observations = Vec::new();
     for index in 0..prepared.targets.len() {
         observations.push(plan.with_namespaces(prepared, index, expected, stop, |admitted| {
@@ -65,10 +76,14 @@ fn compare_rejection(
     action: impl Fn(&PreparedBackupRegistry) -> Result<()>,
 ) {
     let before = fixture_tree(root);
-    let warm = action(prepared).err().expect("warm read must reject");
+    let warm = encoding_memo::tests::unchanged_account(
+        prepared.scope_encoding.as_ref(), || action(prepared),
+    ).err().expect("warm read must reject");
     assert_eq!(fixture_tree(root), before);
     let memo = prepared.scope_encoding.take();
-    let plain = action(prepared).err().expect("plain read must reject");
+    let plain = encoding_memo::tests::unchanged_account(
+        prepared.scope_encoding.as_ref(), || action(prepared),
+    ).err().expect("plain read must reject");
     assert_eq!(fixture_tree(root), before);
     prepared.scope_encoding = memo;
     assert_eq!(error_chain(&warm), error_chain(&plain));
@@ -89,8 +104,8 @@ fn verify_committed_namespace_encodings(
     assert_eq!(baseline.len(), 2);
     assert_eq!(fixture_tree(root), before);
     prepared.scope_encoding = Some(encoding_memo::ScopeEncodingMemo::new());
-    // This is a cold, committed-only miss. It must not populate the account;
-    // the dedicated memo tests assert the exact internal account equality.
+    // This cold committed-only read must not change aggregate account usage.
+    // Dedicated memo tests additionally compare complete entries and payloads.
     assert_eq!(namespaces(prepared, &plan, expected, stop)?, baseline);
     assert_eq!(fixture_tree(root), before);
     // Only the original full registry verifier may populate this request memo.

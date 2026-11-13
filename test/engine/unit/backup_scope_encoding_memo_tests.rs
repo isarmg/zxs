@@ -794,3 +794,92 @@ fn committed_metadata_capacity_decline_and_colliding_proof_do_not_fill_or_replac
     ).err().unwrap().code(), ErrorCode::ObjectCorrupt);
     assert!(committed_account(&memo) == before);
 }
+
+// Test-only aggregate accounting. This is neither a hit counter nor a process
+// memory measurement; pending reservations and fixed entry costs stay distinct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::engine::backup_preparation::native_control::databases::scoped)
+struct AccountSnapshot {
+    entries: usize,
+    system_entries: usize,
+    disk_pair_entries: usize,
+    canonical_entries: usize,
+    system_payload_bytes: usize,
+    disk_pair_payload_bytes: usize,
+    canonical_payload_bytes: usize,
+    entry_structure_bytes: usize,
+    used_bytes: usize,
+    reserved_bytes: usize,
+    reserved_entries: usize,
+    maximum_bytes: usize,
+    maximum_entries: usize,
+}
+
+pub(in crate::engine::backup_preparation::native_control::databases::scoped)
+fn account_snapshot(memo: &ScopeEncodingMemo) -> AccountSnapshot {
+    let state = memo.state.lock().unwrap();
+    let mut snapshot = AccountSnapshot {
+        entries: state.entries.len(),
+        system_entries: 0,
+        disk_pair_entries: 0,
+        canonical_entries: 0,
+        system_payload_bytes: 0,
+        disk_pair_payload_bytes: 0,
+        canonical_payload_bytes: 0,
+        entry_structure_bytes: state.entries.len()
+            .checked_mul(std::mem::size_of::<(Key, Bytes)>()).unwrap(),
+        used_bytes: state.bytes,
+        reserved_bytes: state.reserved_bytes,
+        reserved_entries: state.reserved_entries,
+        maximum_bytes: memo.maximum_bytes,
+        maximum_entries: memo.maximum_entries,
+    };
+    for bytes in state.entries.values() {
+        match bytes {
+            Bytes::System(bytes) => {
+                snapshot.system_entries += 1;
+                snapshot.system_payload_bytes = snapshot.system_payload_bytes
+                    .checked_add(bytes.len()).unwrap();
+            }
+            Bytes::DiskPair(current, history) => {
+                snapshot.disk_pair_entries += 1;
+                snapshot.disk_pair_payload_bytes = snapshot.disk_pair_payload_bytes
+                    .checked_add(current.len()).unwrap().checked_add(history.len()).unwrap();
+            }
+            Bytes::Canonical { payload, .. } => {
+                snapshot.canonical_entries += 1;
+                snapshot.canonical_payload_bytes = snapshot.canonical_payload_bytes
+                    .checked_add(*payload).unwrap();
+            }
+        }
+    }
+    assert_eq!(snapshot.used_bytes, snapshot.entry_structure_bytes
+        .checked_add(snapshot.system_payload_bytes).unwrap()
+        .checked_add(snapshot.disk_pair_payload_bytes).unwrap()
+        .checked_add(snapshot.canonical_payload_bytes).unwrap());
+    assert!(snapshot.used_bytes.checked_add(snapshot.reserved_bytes).unwrap()
+        <= snapshot.maximum_bytes);
+    assert!(snapshot.entries.checked_add(snapshot.reserved_entries).unwrap()
+        <= snapshot.maximum_entries);
+    snapshot
+}
+
+pub(in crate::engine::backup_preparation::native_control::databases::scoped)
+fn unchanged_account<T>(
+    memo: Option<&ScopeEncodingMemo>,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let before = memo.map(account_snapshot);
+    let result = action();
+    assert_eq!(memo.map(account_snapshot), before);
+    result
+}
+
+pub(in crate::engine::backup_preparation::native_control::databases::scoped)
+fn log_account(stage: &'static str, memo: Option<&ScopeEncodingMemo>) {
+    let snapshot = memo.map(account_snapshot);
+    let _ = std::io::Write::write_fmt(
+        &mut std::io::stderr(),
+        format_args!("[backup memo account] stage={stage} {snapshot:?}\n"),
+    );
+}

@@ -384,4 +384,4 @@ impl<'a> Transaction<'a> {
 
 #[cfg(test)]
 #[path = "../../../../../../../../test/engine/unit/backup_scope_encoding_memo_tests.rs"]
-mod tests;
+pub(super) mod tests;
