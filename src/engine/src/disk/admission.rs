@@ -1098,6 +1098,32 @@ impl<T: Send + 'static> DiskIoResource<T> {
 }
 
 impl DiskIoResource<File> {
+    /// Pin this inode until the last descriptor cloned from this open file
+    /// description closes. There is no early-unlock guard: managed uploads,
+    /// HTTP streams and idle SMB readers retain the same kernel shared lock.
+    /// Call only while the draft-store admission lock excludes retirement.
+    pub(crate) fn pin_draft_body(&self) -> io::Result<()> {
+        let mut access = self.access()?;
+        rustix::fs::flock(
+            &access.value().resource,
+            rustix::fs::FlockOperation::NonBlockingLockShared,
+        ).map_err(io::Error::from)
+    }
+
+    /// Obtain the retiring inode exclusively without cancelling existing
+    /// readers. The store lock prevents another managed reader from entering.
+    pub(crate) fn try_pin_retiring_draft(&self) -> io::Result<bool> {
+        let mut access = self.access()?;
+        match rustix::fs::flock(
+            &access.value().resource,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        ) {
+            Ok(()) => Ok(true),
+            Err(rustix::io::Errno::WOULDBLOCK) => Ok(false),
+            Err(error) => Err(io::Error::from(error)),
+        }
+    }
+
     /// Never expose the inner File: verification holds its real resource guard
     /// through identity, reads and cleanup, with cancellation between chunks.
     pub(crate) fn verify_full(

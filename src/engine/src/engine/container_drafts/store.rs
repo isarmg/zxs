@@ -8,6 +8,9 @@ use storage_contract::{ChecksumManifest, FileId, Generation};
 use storage_contract::container_edit::DraftRevision;
 use storage_contract::working_tree::{DiskRegistrationIdentity, LocalEntityIdentity};
 
+mod retirement;
+pub(crate) use retirement::{retire_superseded, verify_retired_or_present};
+
 const MAX_INTENT: usize = 64 * 1024;
 type Result<T> = std::result::Result<T, StoreError>;
 
@@ -215,7 +218,7 @@ fn retained_budget(
 /// Persist the exact original intent before body I/O. A directory with no
 /// original intent or unknown partial files is preserved and cannot be adopted.
 /// Retry of intent-only evidence may supply the same body; completed bytes are
-/// verified, never overwritten. Prior revisions are never removed by this store.
+/// verified, never overwritten. Only permanent successor admission may retire prior bodies.
 pub(crate) fn prepare(
     disk: &DiskHandle, file: FileId, expected: Generation, revision: &DraftRevision,
     source: File, limits: DraftLimits,
@@ -281,6 +284,9 @@ pub(crate) fn reopen(
     }
     let root = disk.root.private_child(&disk.root.path().join(layout::ROOT.as_path()))
         .map_err(engine)?;
+    let directory_handle = root.directory(root.path()).map_err(engine)?;
+    let _lock = platform_io::fs_safety::linux::AdvisoryLock::directory(&directory_handle)
+        .map_err(|error| engine(error.into()))?;
     reopen_at(&root, disk, file, expected, revision, limits.checksum_chunk_bytes)
 }
 fn reopen_at(
@@ -291,6 +297,7 @@ fn reopen_at(
     require_intent(root, &path, &Intent::new(disk, file, expected, revision))?;
     let mut body = root.open_leased_regular(&path.join(layout::BODY.as_path()))
         .map_err(engine)?;
+    body.pin_draft_body().map_err(|error| engine(error.into()))?;
     body.verify_full(platform_io::payload::Expectation {
         bytes: revision.size, blake3: Some(revision.content_hash.digest()),
     }).map_err(StoreError::Payload)?;

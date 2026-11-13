@@ -156,6 +156,9 @@ fn exercise_manual_commit(public: bool, historical: bool) {
     assert!(engine.commit_workspace(request.clone()).is_err());
     assert_eq!(engine.container_edit(file).unwrap(), dirty);
     let envelope = if public {
+        // The rejected ordinary workspace still owns its file lease. Explicit
+        // shared preparation creates a distinct workspace, so end that attempt.
+        engine.abort_workspace(&workspace.workspace_id, principal.as_str()).unwrap();
         let context = storage_contract::file_container_tags::Context {
             repository_id: repository.repository_id.parse().unwrap(),
             path: name_policy::PortablePath::parse("note.txt").unwrap(),
@@ -236,6 +239,9 @@ fn exercise_manual_commit(public: bool, historical: bool) {
     let mut historical = Vec::new();
     original.file.read_to_end(&mut historical).unwrap();
     assert_eq!(historical, b"original");
+    // A ReadFile intentionally retains the disk writer lifetime after Engine.
+    // Release this reader before the later cold-open boundary.
+    drop(original);
     let source = temporary.path().join("discard-source");
     fs::write(&source, b"discard this draft").unwrap();
     let revision = DraftRevision {
@@ -319,3 +325,6 @@ fn assert_installed_edit(
     }
     assert!(matches > 0);
 }
+
+#[path = "container_draft_retirement_tests.rs"]
+mod retirement;

@@ -195,7 +195,10 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
             'test/ci/test_targeted_ci.py',
         ]
         plan = assert_path_group_extension(self, self.policy, paths, None,
-                                           ['container-manual-fresh-format'])
+                                           ['container-manual-fresh-format', 'container-manual-drafts',
+                                            'container-manual-drafts-consumers',
+                                            'container-manual-recovery',
+                                            'manual-body-retirement-consumers'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])

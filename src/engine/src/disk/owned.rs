@@ -647,6 +647,28 @@ impl DiskRoot {
             .rename_noreplace_synced(from, to, RenameSyncOrder::DestinationFirst)
     }
 
+    /// Delete a verified leaf only under this held private parent. The caller
+    /// holds the store writer lock and the original body descriptor throughout.
+    /// This is not atomic compare-and-unlink against a malicious same-UID writer.
+    pub(crate) fn remove_owned_regular_entry_synced(
+        &self,
+        name: &EntryName,
+        expected: platform_io::fs_safety::linux::FileIdentity,
+    ) -> Result<bool> {
+        let operation = self.operation()?;
+        let body = operation.open_relative_regular(&name.as_relative())?;
+        if platform_io::fs_safety::linux::FileIdentity::from_fd(&body)? != expected {
+            return Ok(false);
+        }
+        operation.check_running()?;
+        let parent = operation.held().directory();
+        rustix::fs::unlinkat(parent, name.as_os_str(), rustix::fs::AtFlags::empty())
+            .map_err(std::io::Error::from)?;
+        parent.sync_all()?;
+        operation.check_running()?;
+        Ok(true)
+    }
+
     pub(crate) fn remove_file_synced(&self, path: &Path) -> Result<()> {
         self.operation()?
             .remove_synced(path, rustix::fs::AtFlags::empty())

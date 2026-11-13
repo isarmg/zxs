@@ -29,6 +29,7 @@ impl Engine {
         let mut previous_state = Arc::clone(&self.state);
         let mut namespaces = self.current_namespaces.as_deref().cloned();
         let mut published = None;
+        let mut draft_prefix = (*self.state).clone();
         for (sequence, candidates) in &prepared.records {
             let mut active = candidates.iter().filter(|(hash, receipts)| {
                 self.move_completion.as_ref().is_some_and(|selected| {
@@ -156,6 +157,20 @@ impl Engine {
                 }
                 candidate.snapshot = Some(shared);
             }
+            // Retirement authority requires the complete original edit-state
+            // chain, not just a later snapshot claiming an older save succeeded.
+            // These checks supplement, never replace, apply's transition checks.
+            previous_state = Arc::new((*previous_state).clone());
+            let draft_snapshot = match candidate.snapshot.take() {
+                Some(snapshot) => snapshot.into_admitted(),
+                None => verified_recovery_snapshot_at(
+                    &self.disk_resources, &prepared.online, &candidate.candidate.snapshot_hash,
+                )?,
+            };
+            let draft_state = draft_snapshot.for_candidate(&candidate.candidate)?.state();
+            crate::engine::container_drafts::verify_transition(&draft_prefix, draft_state)?;
+            draft_prefix = draft_state.clone();
+            candidate.snapshot = Some(draft_snapshot.into_shared());
             previous = Some(candidate.candidate.snapshot_hash.clone());
             published = Some(*sequence);
             // Keep only the latest proven slot, plus at most the first pending
@@ -213,12 +228,21 @@ impl Engine {
         } else {
             Arc::clone(&self.state)
         };
+        self.verify_selected_draft_bodies(&state)?;
         // The seed is read-only and borrows this verified publication view only
         // for admission. Replay must still start from its original prefix.
         let original = self.named_namespaces.install_state(&mut self.state, state);
         let admission = self.seed_workspace_recovery();
         self.named_namespaces.install_state(&mut self.state, original);
-        admission
+        admission?;
+        if published.is_some() {
+            prepared.draft_successors = Some(
+                super::super::container_drafts::retirement::PublishedDraftSuccessors::capture(
+                    &draft_prefix,
+                ),
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn read_workspace_receipt_candidate(

@@ -20,6 +20,7 @@ pub(super) struct PreparedRecovery {
     records: super::recovery_checkpoint::Records,
     torn_tail: bool,
     candidates: BTreeMap<u64, workspace_receipts::PreparedCandidate>,
+    draft_successors: Option<super::container_drafts::retirement::PublishedDraftSuccessors>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,6 +287,7 @@ impl Engine {
             records,
             torn_tail,
             candidates: BTreeMap::new(),
+            draft_successors: None,
         })
     }
 
@@ -334,6 +336,7 @@ impl Engine {
             records,
             torn_tail,
             mut candidates,
+            draft_successors,
         } = prepared;
         let fenced = self.membership_fence.is_some();
         let members_ready = online.len() == members.len() && !fenced;
@@ -351,7 +354,11 @@ impl Engine {
             .config
             .generation()
             .is_some_and(|generation| generation.registry().is_some());
-        let checkpoint = if can_repair && !torn_tail && !exit_generation {
+        // Existing checkpoints cover metadata/history, not draft intents or
+        // retired bodies. Manual edit history therefore retains full replay.
+        let draft_replay = draft_successors.as_ref()
+            .is_some_and(|proof| proof.requires_full_replay());
+        let checkpoint = if can_repair && !torn_tail && !exit_generation && !draft_replay {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {
                     records
@@ -525,7 +532,7 @@ impl Engine {
                 )?;
             let next = original.state();
             crate::engine::container_drafts::verify_transition(&self.state, next)?;
-            self.verify_draft_material(next)?;
+            self.verify_recovered_draft_material(next, draft_successors.as_ref())?;
             // Prove the authenticated transition before repairing any of this
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.

@@ -554,6 +554,8 @@ class TargetedSelection(unittest.TestCase):
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema',
             'container-manual-drafts', 'container-manual-fresh-format',
+            'container-manual-drafts-consumers', 'container-manual-recovery',
+            'manual-body-retirement-consumers',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -2874,7 +2876,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
                              'engine::container_drafts::tests::',
                              'engine::container_drafts::store::tests::',
                          ]))
-        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (9, 900))
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (19, 900))
         self.assertEqual(engine['exact'], [
             'disk::admission::upload::tests::'
             'managed_upload_source_remains_revocable_on_a_different_target_disk',
@@ -3125,3 +3127,60 @@ class ManualRetainedCapacitySelection(unittest.TestCase):
             'prefixes': ['smb_rpc::tests::manual_draft_tests::capacity::'],
             'max_tests': 2, 'timeout_seconds': 900,
         }])
+
+
+class ManualBodyRetirementSelection(unittest.TestCase):
+    def test_retirement_producers_keep_all_original_and_reader_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'manual-body-retirement-consumers'
+        for path in [
+            'src/engine/src/engine/container_drafts/retirement.rs',
+            'src/engine/src/engine/container_drafts/store/retirement.rs',
+            'src/engine/src/engine/container_drafts.rs',
+            'src/engine/src/engine/container_drafts/store.rs',
+            'src/engine/src/engine/recovery.rs',
+            'src/engine/src/disk/admission.rs',
+            'src/engine/src/disk/owned.rs',
+            'src/server/src/transfer.rs',
+            'test/server/unit/transfer/tests.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], None, [group])
+        for path in [
+            'src/engine/src/engine/container_drafts/retirement.rs',
+            'src/engine/src/engine/container_drafts/store/retirement.rs',
+        ]:
+            assert_path_group_extension(self, policy, [path], [
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-fresh-format',
+                'container-manual-recovery',
+                'container-tags-engine',
+                'held-directory-layout',
+                'container-unchanged-save',
+                'portable-path-consumers',
+                'container-path-facts-engine',
+                'container-lifecycle-engine',
+                'version-metadata-read',
+                'current-name-layout-consumers',
+            ], [group])
+        engine, transfer = policy['groups'][group]['rust_targets']
+        self.assertEqual(engine['prefixes'], [
+            'disk::admission::tests::',
+            'business::workspace::published_selection_tests::',
+            'business::workspace::selection_tests::',
+            'business::workspace::upload_admission_tests::',
+            'engine::recovery::tests::',
+            'engine::recovery::diagnostics_tests::',
+            'engine::recovery::snapshot_proof_tests::',
+        ])
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (64, 900))
+        self.assertEqual(transfer['prefixes'], ['transfer::tests::'])
+        self.assertEqual(transfer['features'], ['core'])
+        self.assertEqual((transfer['max_tests'], transfer['timeout_seconds']), (41, 900))
+        assert_path_group_extension(self, policy, [
+            'test/engine/unit/container_draft_retirement_tests.rs',
+        ], [], ['manual-body-retirement-regressions'])
+        regression, = policy['groups']['manual-body-retirement-regressions']['rust_targets']
+        self.assertEqual(regression['prefixes'], ['engine::container_drafts::tests::retirement::'])
+        self.assertEqual((regression['max_tests'], regression['timeout_seconds']), (7, 900))

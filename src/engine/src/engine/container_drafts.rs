@@ -2,6 +2,7 @@
 pub(crate) mod store;
 pub(crate) mod commit;
 pub(crate) mod format;
+pub(in crate::engine) mod retirement;
 
 use crate::{Engine, Error, OperationId, OperationResult, State};
 use storage_contract::container_edit::{
@@ -183,9 +184,11 @@ impl Engine {
         self.require_write()?;
         let request = EditCommand::Save { file, revision: revision.clone() };
         if self.state.operations.contains_key(&revision.operation) {
-            return crate::persist::container_edits::publish(
+            let result = crate::persist::container_edits::publish(
                 self, &request, &revision.principal, revision.operation,
-            );
+            )?;
+            self.retire_superseded_drafts(file)?;
+            return Ok(result);
         }
         plan_edit(&self.state, &request)?;
         self.require_draft_source_write(file, revision)?;
@@ -194,6 +197,7 @@ impl Engine {
         {
             return Err(Error::ContainerEdit(EditConflict::SourceChanged));
         }
+        self.retire_superseded_drafts(file)?;
         let handle = self.draft_disk(revision)?;
         let prepared = store::prepare(
             &handle, file, revision.expected_generation, revision, source, self.draft_limits(),
@@ -202,7 +206,9 @@ impl Engine {
             self, &request, &revision.principal, revision.operation,
         );
         drop(prepared);
-        result
+        let result = result?;
+        self.retire_superseded_drafts(file)?;
+        Ok(result)
     }
 
     pub fn discard_container_draft(

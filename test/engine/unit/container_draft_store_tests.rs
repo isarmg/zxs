@@ -3,7 +3,7 @@
 use super::*;
 use crate::{Config, Engine};
 use std::{collections::BTreeMap, fs, io::{Read, Seek, SeekFrom}};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use storage_contract::{ContentHash, FileNodeId, OperationId};
 use storage_contract::container_edit::DraftBase;
 
@@ -106,9 +106,25 @@ fn draft_body_reopens_after_restart_without_creating_history_or_selecting_itself
     let engine = Engine::open(&temp.path().join("state")).unwrap();
     assert_eq!(storage_contract::canonical_json(engine.state()).unwrap(), before);
     let held = disk(&engine);
+    let reopened_history = image(&history);
+    assert_eq!(reopened_history.keys().collect::<Vec<_>>(), original.keys().collect::<Vec<_>>());
+    for (path, expected) in &original {
+        let actual = &reopened_history[path];
+        if path.file_name().is_some_and(|name| name == "container.json") {
+            // Cold recovery atomically reinstalls this derived descriptor.
+            // Its inode may change, but no descriptor bytes or mode may change.
+            assert_eq!(actual.0, expected.0, "device: {path:?}");
+            assert_eq!(actual.2, expected.2, "mode: {path:?}");
+            assert_eq!(actual.3, expected.3, "bytes: {path:?}");
+        } else {
+            // Frozen bodies, receipts, databases and their directories retain
+            // their exact bytes, inode, device and mode across the cold open.
+            assert_eq!(actual, expected, "immutable history: {path:?}");
+        }
+    }
     let prepared = reopen(&held, file, revision.expected_generation, &revision, limits()).unwrap();
     assert_eq!(body(prepared), b"working draft");
-    assert_eq!(image(&history), original);
+    assert_eq!(image(&history), reopened_history);
 }
 
 #[test]
@@ -186,6 +202,8 @@ fn corrupt_body_and_exhausted_budget_never_fall_back_to_history_or_overwrite_evi
     assert_eq!(body(reopen(&held, file, original.expected_generation, &original,
         bounded).unwrap()), b"working draft");
     let path = directory(&held, file, &original).join(layout::BODY.as_path());
+    // Simulate external corruption of an intentionally read-only saved body.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&path, b"damaged draft").unwrap();
     let before = image(held.root.path());
     assert!(matches!(reopen(&held, file, original.expected_generation, &original,
@@ -218,6 +236,8 @@ fn range_manifest_is_bound_to_selected_bytes_and_detects_later_chunk_tampering()
     body.read_exact_at(&mut last_chunk, 65_536).unwrap();
     assert_eq!(*blake3::hash(&last_chunk).as_bytes(), decoded.chunks[1]);
     let path = directory(&held, file, &revision).join(layout::BODY.as_path());
+    // The published body is read-only; deliberately admit the attack writer.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
     writer.write_all_at(b"x", 65_540).unwrap();
     writer.sync_all().unwrap();
@@ -227,4 +247,81 @@ fn range_manifest_is_bound_to_selected_bytes_and_detects_later_chunk_tampering()
     assert!(matches!(reopen(&held, file, revision.expected_generation, &revision,
         bounds), Err(StoreError::Payload(_))));
     assert_eq!(image(held.root.path()), before);
+}
+
+#[test]
+fn draft_body_pin_survives_descriptor_clone_and_releases_only_after_last_reader() {
+    let (temp, engine, file, revision) = fixture();
+    let held = disk(&engine);
+    let prepared = prepare(&held, file, revision.expected_generation, &revision,
+        source(&temp, b"working draft"), limits()).unwrap();
+    let original = prepared.into_body();
+    let mut cloned = original.try_clone().unwrap();
+    let path = directory(&held, file, &revision).join(layout::BODY.as_path());
+    let contender = File::open(&path).unwrap();
+    let exclusive = || rustix::fs::flock(
+        &contender, rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    );
+    assert_eq!(exclusive().unwrap_err(), rustix::io::Errno::WOULDBLOCK);
+    drop(original);
+    assert_eq!(exclusive().unwrap_err(), rustix::io::Errno::WOULDBLOCK);
+    let mut bytes = Vec::new();
+    cloned.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"working draft");
+    let before = fs::metadata(&path).unwrap().blocks();
+    drop(cloned);
+    exclusive().unwrap();
+    // Lock release proves no managed reader still holds this description,
+    // not deletion or physical allocation release. This test removes nothing.
+    assert_eq!(fs::metadata(&path).unwrap().blocks(), before);
+    assert_eq!(fs::read(&path).unwrap(), b"working draft");
+}
+
+#[test]
+fn retirement_leaf_identity_rejects_replacement_under_the_held_parent() {
+    use platform_io::fs_safety::linux::FileIdentity;
+    let (temp, engine, file, revision) = fixture();
+    let held = disk(&engine);
+    drop(prepare(&held, file, revision.expected_generation, &revision,
+        source(&temp, b"working draft"), limits()).unwrap());
+    let path = directory(&held, file, &revision);
+    let parent = held.root.private_child(&path).unwrap();
+    let body_path = path.join(layout::BODY.as_path());
+    let original = parent.open_leased_regular(&body_path).unwrap();
+    assert!(original.try_pin_retiring_draft().unwrap());
+    let identity = FileIdentity::from_metadata(&original.metadata().unwrap());
+    // Explicit external replacement, not an immutable production write API.
+    fs::rename(&body_path, temp.path().join("original-body")).unwrap();
+    fs::write(&body_path, b"replacement must survive").unwrap();
+    let replacement = File::open(&body_path).unwrap();
+    rustix::fs::flock(&replacement,
+        rustix::fs::FlockOperation::NonBlockingLockShared).unwrap();
+    assert!(!parent.remove_owned_regular_entry_synced(&layout::BODY, identity).unwrap());
+    assert_eq!(fs::read(&body_path).unwrap(), b"replacement must survive");
+    assert_eq!(fs::read(temp.path().join("original-body")).unwrap(), b"working draft");
+}
+
+#[test]
+fn retirement_rejects_replaced_operation_directory_without_unlinking_either_body() {
+    use std::os::unix::fs::DirBuilderExt;
+    let (temp, engine, file, revision) = fixture();
+    let held = disk(&engine);
+    drop(prepare(&held, file, revision.expected_generation, &revision,
+        source(&temp, b"working draft"), limits()).unwrap());
+    let path = directory(&held, file, &revision);
+    let detached = temp.path().join("detached-operation");
+    let result = retire_superseded(&held, file, |_| {
+        // The authorization callback is a real interleaving boundary. Replace
+        // the pathname after its original intent and parent were admitted.
+        fs::rename(&path, &detached).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        fs::copy(detached.join(layout::INTENT.as_path()),
+            path.join(layout::INTENT.as_path())).unwrap();
+        fs::write(path.join(layout::BODY.as_path()), b"replacement must survive").unwrap();
+        Ok(true)
+    });
+    assert!(matches!(result, Err(StoreError::Conflict)));
+    assert_eq!(fs::read(path.join(layout::BODY.as_path())).unwrap(),
+        b"replacement must survive");
+    assert_eq!(fs::read(detached.join(layout::BODY.as_path())).unwrap(), b"working draft");
 }

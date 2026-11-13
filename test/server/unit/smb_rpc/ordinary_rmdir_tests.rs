@@ -16,7 +16,7 @@ fn deleted_child() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
     okay(&mut stream, namespace(Kind::Mkdir, "p/folder"));
     let (opened, file) = open(&mut stream, "p/folder/file.txt", true, true);
     save(&mut stream, &opened, &file, b"retained bytes");
-    okay(&mut stream, Request::Close { handle: opened.handle });
+    // save already flushes and closes the handle; retain only its returned FD here.
     drop(file);
     okay(&mut stream, namespace(Kind::Unlink, "p/folder/file.txt"));
     assert!(directory(&mut stream, "p/folder").is_empty());
