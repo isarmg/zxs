@@ -53,27 +53,57 @@ macro_rules! projection_maps {
 macro_rules! define_fields {
     ($($field:ident => $variant:ident, $owner:ident, $name:literal;)*) => {
         #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-        pub(super) enum Field { $($variant,)* }
+        pub(super) enum Field { $($variant,)* PathAudit }
         impl Field {
-            pub(super) const ALL: &'static [Self] = &[$(Self::$variant,)*];
+            pub(super) const ALL: &'static [Self] = &[$(Self::$variant,)* Self::PathAudit];
             pub(super) fn name(self) -> &'static str {
-                match self { $(Self::$variant => $name,)* }
+                match self { $(Self::$variant => $name,)* Self::PathAudit => "path_audit", }
             }
             fn keys(self, state: &State, mut visit: impl FnMut(&str)) {
-                match self { $(Self::$variant => field_keys!($field, state, visit),)* }
+                match self {
+                    $(Self::$variant => field_keys!($field, state, visit),)*
+                    Self::PathAudit => {
+                        for key in state.operations.keys() {
+                            visit(&key.to_string());
+                        }
+                    }
+                }
             }
             pub(super) fn value(self, state: &State, key: &str) -> Result<Option<Value>> {
-                match self { $(Self::$variant => field_value!($field, state, key),)* }
+                match self {
+                    $(Self::$variant => field_value!($field, state, key),)*
+                    Self::PathAudit => {
+                        let id = key.parse::<storage_contract::OperationId>()?;
+                        if !state.operations.contains_key(&id) {
+                            return Ok(None);
+                        }
+                        Ok(crate::history_package::path_audit::carrier(state, id)?
+                            .map(json_codec::to_value).transpose()?)
+                    }
+                }
             }
             fn equal(self, before: &State, after: &State, key: &str) -> bool {
-                match self { $(Self::$variant => field_equal!($field, before, after, key),)* }
+                match self {
+                    $(Self::$variant => field_equal!($field, before, after, key),)*
+                    Self::PathAudit => key.parse::<storage_contract::OperationId>()
+                        .is_ok_and(|id| before.operations.get(&id) == after.operations.get(&id)
+                            && before.operation_principals.get(&id)
+                                == after.operation_principals.get(&id)),
+                }
             }
             fn owners(self, state: &State, index: &DerivedOwners, key: &str) -> BTreeSet<String> {
                 if !self.present(state, key) { return BTreeSet::new(); }
-                match self { $(Self::$variant => owner_for!($owner, state, index, key, $field),)* }
+                match self {
+                    $(Self::$variant => owner_for!($owner, state, index, key, $field),)*
+                    Self::PathAudit => index.path_audit_histories(state, key),
+                }
             }
             fn present(self, state: &State, key: &str) -> bool {
-                match self { $(Self::$variant => field_present!($field, state, key),)* }
+                match self {
+                    $(Self::$variant => field_present!($field, state, key),)*
+                    Self::PathAudit => key.parse::<storage_contract::OperationId>()
+                        .is_ok_and(|id| state.operations.contains_key(&id)),
+                }
             }
         }
         impl Writes {
@@ -94,6 +124,8 @@ macro_rules! define_fields {
                 $(writes.rows.insert(Field::$variant,
                     exact_keys(after.$field.changes_since(&before.$field))?
                         .into_iter().map(|key| key.to_string()).collect());)*
+                writes.rows.insert(Field::PathAudit,
+                    writes.operations.iter().map(ToString::to_string).collect());
                 Some(writes)
             }
         }
@@ -404,6 +436,8 @@ pub(crate) struct DerivedOwners {
     unscoped_deletions: lifecycles::DeletionOperations,
     unscoped_history_copies: lifecycles::DeletionOperations,
     unscoped_path_changes: lifecycles::DeletionOperations,
+    path_audit_owners: SharedRecords<lifecycles::AuditOwner, storage_contract::OperationId>,
+    unscoped_path_audit: lifecycles::DeletionOperations,
 }
 
 #[derive(Clone, Default)]
@@ -613,6 +647,8 @@ impl DerivedOwners {
         ] {
             field.keys(state, |key| index.repository_row(state, field, key, true));
         }
+        index.build_file_rows(state);
+        index.build_deletion_rows(state);
         for &field in Field::ALL {
             field.keys(state, |key| {
                 for history in field.owners(state, &index, key) {
@@ -620,8 +656,6 @@ impl DerivedOwners {
                 }
             });
         }
-        index.build_file_rows(state);
-        index.build_deletion_rows(state);
         index
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {
@@ -741,6 +775,15 @@ impl DerivedOwners {
         owners.update_dependencies(before, after, &writes, &mut affected);
         owners.update_file_rows(before, after, index, &writes);
         owners.update_deletion_rows(before, after, &writes);
+        if !writes.histories.is_empty() {
+            // Unknown owners must remain visible to every history admission.
+            // Only these indexed malformed carriers depend on the history set.
+            for source in [index, &owners] {
+                for id in source.unscoped_path_audit.keys() {
+                    affected.row(Field::PathAudit, &id.to_string());
+                }
+            }
+        }
         for key in &writes.histories {
             if before.histories.get(key) != after.histories.get(key)
                 && let Some(histories) = histories.as_deref_mut()
@@ -1031,3 +1074,7 @@ mod container_membership_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/state_projection/move_receipts_tests.rs"]
 mod move_receipts_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/state_projection/audit_tests.rs"]
+mod audit_tests;

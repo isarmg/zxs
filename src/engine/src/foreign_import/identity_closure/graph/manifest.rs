@@ -9,8 +9,11 @@ impl Remap<'_> {
         &self,
         source: &HistoryManifest,
     ) -> Result<HistoryManifest> {
+        // Original receipt digests bind their IDs and principals. The existing
+        // graph mapping is not a proof that permits rewriting those envelopes.
         let mut result = source.clone();
         let HistoryManifest {
+            path_audit,
             repository,
             history,
             branches,
@@ -47,6 +50,10 @@ impl Remap<'_> {
             file_contexts,
             file_node_parents,
         } = &mut result;
+        if !path_audit.is_empty() {
+            return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
+        }
+        // The empty map is preserved verbatim, not cleared or remapped.
         self.repository(repository)?;
         self.history(history)?;
         for value in branches.values_mut() {

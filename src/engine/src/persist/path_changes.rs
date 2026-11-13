@@ -227,3 +227,20 @@ pub(crate) fn attach(mut result: Value, mut facts: Vec<PathChanged>) -> Result<V
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/path_changes_tests.rs"]
 mod tests;
+
+/// Shared immutable graph ownership closure for imported typed path projections.
+/// This does not admit a source receipt as a local native operation.
+pub(crate) fn retained_references(
+    state: &crate::State,
+    rows: &[crate::business::history_copy::retained::RetainedPathChange],
+    published: Sequence,
+) -> crate::Result<()> {
+    let mut references = references::References::new(state);
+    for row in rows {
+        references.check(
+            row.file_id, row.history_tree_id, row.branch_id,
+            [row.before_version_id, row.after_version_id], published, &mut || Ok(()),
+        )?;
+    }
+    Ok(())
+}

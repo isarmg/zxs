@@ -1,7 +1,7 @@
 {
   "groups": {
     "history-package-audit-guard": {
-      "reason": "Fail closed before package output writes when native or retained permanent path audit cannot be represented; preserves audit-free export/restore and ordinary copy. This does not implement portable audit.",
+      "reason": "Preserve native and retained permanent path audit through package export/restore; reject unrepresentable partial original batches before any output writes while retaining audit-free package support.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -3454,6 +3454,62 @@
             "empty_directories::mixed::mixed_http_publishes_files_and_empty_directories_together_and_cold_retries"
           ],
           "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "history-package-foreign-audit": {
+      "reason": "Foreign mapping preserves empty audit manifests and rejects real nonempty permanent path evidence before identity rewriting or target mutation; existing capture regression verifies source and target disk bytes remain unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "foreign_import::identity_closure::graph::tests::",
+            "foreign_import::identity_closure::admission::projection::merge::tests::"
+          ],
+          "max_tests": 12
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "exact": [
+            "foreign_import::identity_closure::admission::tests::joint_recipe_round_trip_recomputes_the_same_full_state_without_importing_credentials_or_receipts",
+            "foreign_import::identity_closure::admission::tests::real_path_facts_are_rejected_before_foreign_capture_changes_original_bytes"
+          ],
+          "max_tests": 2
+        }
+      ]
+    },
+    "history-package-path-audit": {
+      "reason": "Verify complete immutable native receipts, principal and batch mapping closure, flat retained restore/copy provenance, cold reopen and repeat export without silent audit loss.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "history_package::tests::path_audit::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "history-path-audit-projection": {
+      "reason": "Compare full and indexed audit projections and exact deltas, preserving operation/principal changes, malformed fail-closed ownership and shared backing without global sequence rescans.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "state_projection::audit_tests::"
+          ],
+          "max_tests": 16,
           "timeout_seconds": 900
         }
       ]
@@ -9697,6 +9753,131 @@
       "path": "test/engine/unit/engine/current_selected_batch_tests.rs",
       "groups": [
         "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/identity_closure/graph/manifest.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/identity_closure/admission/projection/merge.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/identity_closure/admission/projection.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/history_graph_tests.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/path_audit_merge_tests.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/path_audit.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_copy.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_copy/retained.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/file_deletion/retained.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/path_changes.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/path_changes/ledger.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/path_audit_tests.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection.rs",
+      "groups": [
+        "history-path-audit-projection"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection/lifecycles.rs",
+      "groups": [
+        "history-path-audit-projection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/state_projection/audit_tests.rs",
+      "groups": [
+        "history-path-audit-projection"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/identity_closure/admission.rs",
+      "groups": [
+        "history-package-foreign-audit"
+      ]
+    },
+    {
+      "path": "docs/adr/history-package-path-audit.md",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard",
+        "history-path-audit-projection"
       ]
     }
   ],

@@ -2,8 +2,9 @@
 //! Exhaustive destructuring makes a newly added history family a compile error.
 use super::*;
 
-pub(super) fn include(next: &mut State, mapped: HistoryManifest) {
+pub(super) fn include(next: &mut State, mapped: HistoryManifest) -> Result<()> {
     let HistoryManifest {
+        path_audit,
         repository,
         history,
         branches,
@@ -40,6 +41,11 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) {
         placement_rules,
         protection_policies,
     } = mapped;
+    // This merge has no source-envelope identity mapping proof. Reject before
+    // changing even one target record rather than dropping permanent evidence.
+    if !path_audit.is_empty() {
+        return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
+    }
     next.container_tags.extend(container_tags);
     next.repositories
         .insert(repository.repository_id.clone(), repository);
@@ -58,4 +64,9 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) {
         file_selection_generations, file_notes, version_notes, file_names, versions,
         placements, merge_links, content_states, placement_rules, protection_policies,
     }
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../test/engine/unit/foreign_import/path_audit_merge_tests.rs"]
+mod tests;

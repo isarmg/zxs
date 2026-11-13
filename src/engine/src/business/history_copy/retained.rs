@@ -14,7 +14,7 @@ use crate::file_deletion::retained::LifecycleRow;
 const FIELD: &str = "retained_lifecycle";
 const MAX_BYTES: usize = storage_contract::file_lifecycle::MAX_AUDIT_BYTES;
 
-pub(in crate::business) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
+pub(crate) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     bounded_bytes(value).map(|_| ())
 }
 
@@ -65,6 +65,7 @@ pub(crate) struct CopiedLifecycle {
     pub history_tree_id: String,
     pub events: Vec<LifecycleRow>,
     pub path_changes: Vec<RetainedPathChange>,
+    pub path_audit: crate::history_package::path_audit::Sources,
 }
 
 /// Original source evidence is immutable; these fields describe only the
@@ -162,6 +163,12 @@ pub(in crate::business) fn validate_payload(
             return Err(crate::persist::path_changes::invalid());
         }
         previous = Some(key);
+    }
+    crate::history_package::path_audit::validate_copy(value)?;
+    if value.path_audit.values().any(|source| {
+        source.derivations.values().any(|chain| chain.last() != Some(&receipt.operation_id))
+    }) {
+        return Err(crate::persist::path_changes::invalid());
     }
     storage_contract::validate_id(&value.source_file_id, "file")?;
     storage_contract::validate_id(&value.source_history_tree_id, "history")?;
@@ -283,6 +290,9 @@ pub(in crate::business) fn capture_mapped(
         history_tree_id: history.to_owned(),
         events,
         path_changes,
+        path_audit: crate::history_package::path_audit::capture_mapped(
+            source, &source_file_id, history, operation,
+        )?,
     };
     if copied.events.len() > storage_contract::file_lifecycle::MAX_AUDIT_EVENTS
         || copied.path_changes.len()
@@ -354,6 +364,18 @@ pub(crate) fn path_changes(
     }
     for id in rows.path_operations.keys() {
         let receipt = state.operations.get(id).ok_or_else(crate::persist::path_changes::invalid)?;
+        if receipt.kind == crate::history_package::path_audit::RESTORE_KIND {
+            if receipt.operation_id != *id {
+                return Err(crate::persist::path_changes::invalid());
+            }
+            let sources = crate::history_package::path_audit::restored(receipt)?;
+            for fact in crate::history_package::path_audit::facts(&sources) {
+                if fact.file_id.to_string() == file.as_str() {
+                    insert(fact)?;
+                }
+            }
+            continue;
+        }
         let principal = state.operation_principals.get(id)
             .ok_or_else(crate::persist::path_changes::invalid)?;
         if receipt.operation_id != *id {

@@ -9,7 +9,7 @@ mod changes;
 #[cfg(test)]
 use crate::state_projection::DerivedOwners;
 use crate::state_projection::ProjectionTransition;
-mod audit_guard;
+pub(crate) mod path_audit;
 mod directory_git;
 mod graph;
 #[cfg(test)]
@@ -734,6 +734,7 @@ fn load_package_at(
         )
     })?;
     manifest.validate()?;
+    path_audit::portable(&manifest, proof.candidate.sequence)?;
     if manifest
         .content_states
         .values()
@@ -842,12 +843,12 @@ impl Engine {
         history: &str,
         destination: &Path,
     ) -> Result<HistoryPackageReport> {
-        audit_guard::require_representable(&self.state, history)?;
         let preparation::HistoryMetadata {
             manifest,
             proof,
             graph_objects,
         } = self.history_package_metadata(history)?;
+        path_audit::portable(&manifest, proof.candidate.sequence)?;
         crate::node_retirement_engine::require_portable_history(&self.state, history)?;
         let parent = destination
             .parent()
@@ -936,6 +937,8 @@ impl Engine {
     ) -> Result<OperationResult> {
         self.require_write()?;
         let (manifest, proof, report) = load_package(package)?;
+        let restored_path_audit = path_audit::portable(&manifest, proof.candidate.sequence)?;
+        path_audit::check_collisions(&self.state, &restored_path_audit, operation)?;
         let route = self.route(primary, copies)?;
         for version in manifest.versions.values() {
             if version.checksum_chunk_bytes != self.config.checksum_chunk_bytes
@@ -1111,7 +1114,8 @@ impl Engine {
             }
             Ok(json!({"history_tree_id":manifest.history.history_tree_id,"repository_id":repository.repository_id,
                 "branch_id":manifest.history.main_branch_id,"manifest_hash":report.manifest_hash,"full_files":report.full_files,
-                "tombstones":report.tombstones,"restoration_manager":principal,"smb_rebind_required":true}))
+                "tombstones":report.tombstones,"restoration_manager":principal,"smb_rebind_required":true,
+                "restored_path_audit":restored_path_audit}))
         })
     }
 }

@@ -202,8 +202,9 @@ impl ForeignAdmissionRecipe {
         }
         for receipt in self.source.0.operations.values() {
             if receipt.kind == crate::business::history_copy::KIND
-                || crate::persist::path_changes::is_kind(&receipt.kind)
-                    && !crate::persist::path_changes::read(receipt)?.is_empty()
+                || crate::history_package::path_audit::carrier(
+                    &self.source.0, receipt.operation_id,
+                )?.is_some()
             {
                 return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
             }

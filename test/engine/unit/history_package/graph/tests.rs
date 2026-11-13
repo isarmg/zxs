@@ -560,12 +560,12 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
 // artifact 13952565718, 594.stdout.log actual canonical bundle.
 // SHA-256: 0af2b80f5e291e88bd8ca21acd72559772e7b6cdf48cc42330d7629b36f603d9.
 // Fixed codec fixture, independent of random IDs and wall-clock time. It need
-// not be a semantically valid history. The current expectation changes only
-// the root discriminant, never the preserved fixture or the production codec.
+// not be a semantically valid history. Adapt only the root discriminant and
+// required empty audit map, never the preserved fixture or production codec.
 fn path_fact_golden() -> Vec<u8> {
-    fn hash(bytes: &[u8]) -> String {
+    fn hash(kind: &str, bytes: &[u8]) -> String {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"zxs:history-manifest\0");
+        hasher.update(format!("zxs:{kind}\0").as_bytes());
         hasher.update(bytes);
         hasher.finalize().to_hex().to_string()
     }
@@ -573,21 +573,34 @@ fn path_fact_golden() -> Vec<u8> {
         "manifest-sharing-container-tags-golden.json"
     ))
     .unwrap();
+    // Authenticate every original object before constructing the new expectation.
+    for object in bundle["objects"].as_array().unwrap() {
+        assert_eq!(
+            hash(object["kind"].as_str().unwrap(), object["bytes"].as_str().unwrap().as_bytes()),
+            object["hash"].as_str().unwrap(),
+        );
+    }
+    let mut logical: Value = json_codec::from_str(bundle["logical"].as_str().unwrap()).unwrap();
+    assert_eq!(logical["branches"], json!({}));
+    assert!(logical.as_object_mut().unwrap().insert("path_audit".into(), json!({})).is_none());
+    bundle["logical"] = json!(String::from_utf8(canonical_json(&logical).unwrap()).unwrap());
+    let original_root = bundle["root"].clone();
     let mut replacement = None;
     for object in bundle["objects"].as_array_mut().unwrap() {
         if object["kind"] != "history-manifest" {
             continue;
         }
-        let bytes = object["bytes"].as_str().unwrap();
-        assert_eq!(hash(bytes.as_bytes()), object["hash"].as_str().unwrap());
-        assert_eq!(bytes.matches("container-tags-radix-map-roots").count(), 1);
-        let current = bytes.replace(
-            "container-tags-radix-map-roots",
-            "container-current-name-radix-map-roots",
-        );
-        let digest = hash(current.as_bytes());
+        assert_eq!(object["hash"], original_root);
+        let mut root: Value = json_codec::from_str(object["bytes"].as_str().unwrap()).unwrap();
+        assert_eq!(root["format"], json!("container-tags-radix-map-roots"));
+        root["format"] = json!("container-current-name-radix-map-roots");
+        let empty = root["maps"]["branches"].clone();
+        assert_eq!(empty, json!({"kind":"state-page", "hash":hash("state-page", b"{}")}));
+        assert!(root["maps"].as_object_mut().unwrap().insert("path_audit".into(), empty).is_none());
+        let current = canonical_json(&root).unwrap();
+        let digest = hash("history-manifest", &current);
         assert!(replacement.replace(digest.clone()).is_none());
-        object["bytes"] = json!(current);
+        object["bytes"] = json!(String::from_utf8(current).unwrap());
         object["hash"] = json!(digest);
     }
     bundle["root"] = json!(replacement.unwrap());
@@ -718,10 +731,7 @@ mod descriptor_tests;
 
 #[test]
 fn manifest_structural_equality_matches_canonical_closed_fields() {
-    let bundle: Value = json_codec::from_slice(include_bytes!(
-        "manifest-sharing-container-tags-golden.json"
-    ))
-    .unwrap();
+    let bundle: Value = json_codec::from_slice(&path_fact_golden()).unwrap();
     let logical: Value = json_codec::from_str(bundle["logical"].as_str().unwrap()).unwrap();
     let original: HistoryManifest = json_codec::from_value(logical.clone()).unwrap();
     assert_eq!(original, original.clone());
