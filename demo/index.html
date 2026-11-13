@@ -1243,7 +1243,7 @@ function helperModelUI() {
 }
 function webFileTable() {
   return `<div class="app-crumb">${button('磁盘',()=>{ui.page='磁盘与接入';})} › ${esc(sim.disks[sim.dirs[sim.currentDir].disk].name)} › ${esc(sim.path(sim.currentDir))}</div>`+
-    row(button('刷新文件夹',()=>{}),button('新建文件夹',()=>{editInline('新建文件夹','',n=>sim.mkdir(sim.currentDir,n));}),button('当前目录详情',()=>{ui.page='详情';}))+
+    row(button('刷新文件夹',()=>{}),button('当前目录详情',()=>{ui.page='详情';}))+
     `<table class="data-table"><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr></thead><tbody>`+
     Object.values(sim.dirs).filter(d=>d.parent===sim.currentDir).map(d=>`<tr><td>${button('▱ '+d.name,()=>{sim.currentDir=d.id;})}</td><td>文件夹</td><td>—</td><td>${button('详情',()=>{sim.selected={kind:'dir',id:d.id};ui.page='详情';})}</td></tr>`).join('')+
     Object.values(sim.files).filter(f=>!f.deleted&&f.dir===sim.currentDir).map(f=>`<tr><td>${button('▤ '+f.name,()=>{sim.selected={kind:'file',id:f.id};ui.page='详情';})}</td><td>文件</td><td>${bytes(sim.current(f))} B</td><td>${button('详情',()=>{sim.selected={kind:'file',id:f.id};ui.page='详情';})}</td></tr>`).join('')+`</tbody></table><p class="reference">本页为独立模拟状态，不连接真实文件 API。</p>`;

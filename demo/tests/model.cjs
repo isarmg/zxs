@@ -90,3 +90,24 @@ test('UTF8 budget and reserved names fail without truncation',()=>{
   const {s,f}=fixture();assert.throws(()=>s.add(f.dir,'中'.repeat(80),'x'));
   assert.throws(()=>s.add(f.dir,'.zxs','x'));assert.throws(()=>s.add(f.dir,'CON.txt','x'));
 });
+test('only SMB exposes folder creation and its action updates the shared directory model',()=>{
+  const {s}=fixture();
+  const controls=[];
+  const uiContext=vm.createContext({
+    sim:s,ui:{page:'文件'},TextEncoder,
+    button:(label,action)=>{controls.push({label,action});return label;},
+    esc:String,row:(...parts)=>parts.join(''),box:(_title,body)=>body,
+    input:()=>'',select:()=>'',dirOptions:()=>[],value:()=> 'SMB新目录',
+    bytes:value=>new TextEncoder().encode(value).length,
+  });
+  vm.runInContext(script.slice(script.indexOf('function webFileTable()'),
+    script.indexOf('function referenceDetails()'))+';webFileTable();',uiContext);
+  assert(!controls.some(c=>c.label==='新建文件夹'));
+  assert(controls.some(c=>c.label==='刷新文件夹'));
+  controls.length=0;
+  vm.runInContext(script.slice(script.indexOf('function smbActions()'),
+    script.indexOf('function fileRow('))+';smbActions();',uiContext);
+  const create=controls.find(c=>c.label==='创建普通目录');
+  assert(create);const parent=s.currentDir;create.action();
+  assert(Object.values(s.dirs).some(d=>d.name==='SMB新目录'&&d.parent===parent));
+});
