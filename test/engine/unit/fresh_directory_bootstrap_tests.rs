@@ -541,3 +541,24 @@ fn system_only_activation_probe_precedes_disk_access_and_preserves_pristine_stat
     assert_eq!(engine.state(), &state);
     assert_eq!(image(temp.path()), before);
 }
+
+#[test]
+fn contended_system_and_disk_directory_locks_preserve_writer_error_without_side_effects() {
+    for system_owner in [true, false] {
+        let (temp, system, config) = fixture();
+        let selected = if system_owner { &system } else { &config.disks[0].root };
+        let directory = fs::File::open(selected).unwrap();
+        let owner = AdvisoryLock::directory(&directory).unwrap();
+        let before = image(temp.path());
+        let error = crate::Engine::initialize_storage(
+            &system, config.clone(), OperationId::generate().unwrap(),
+        ).err().unwrap();
+        assert_eq!(error.code(), crate::ErrorCode::WriterAlreadyActive);
+        assert_eq!(image(temp.path()), before);
+        drop(owner);
+        let engine = crate::Engine::initialize_storage(
+            &system, config, OperationId::generate().unwrap(),
+        ).unwrap();
+        assert!(!engine.is_read_only());
+    }
+}

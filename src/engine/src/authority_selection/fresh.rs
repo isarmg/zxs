@@ -40,6 +40,12 @@ impl FreshBootstrapError {
             Self::Changed => ErrorCode::PublicationInvalid,
             Self::Topology => ErrorCode::UnsupportedOperation,
             Self::Format | Self::Codec(_) | Self::UnsupportedReader => ErrorCode::FormatUnsupported,
+            Self::Filesystem(platform_io::fs_safety::Error::AlreadyLocked(_)) => {
+                ErrorCode::WriterAlreadyActive
+            }
+            Self::Engine(error) if error.code() == ErrorCode::WriterAlreadyActive => {
+                ErrorCode::WriterAlreadyActive
+            }
             Self::Filesystem(_) | Self::Engine(_) => ErrorCode::RecoveryRequired,
         }
     }

@@ -111,7 +111,7 @@
             "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
             "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
           ],
-          "max_tests": 15,
+          "max_tests": 16,
           "timeout_seconds": 900
         }
       ]
@@ -4172,6 +4172,13 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "standalone-demo": {
+      "reason": "Exercise standalone browser simulation state transitions without building or importing ZXS product code.",
+      "python_tests": [
+        "test_zxs_demo"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -13558,6 +13565,18 @@
       "path": "test/ci/fixtures/storage-format-fence/recover.rs",
       "groups": [
         "storage-format-binary-fence"
+      ]
+    },
+    {
+      "path": "demo/*",
+      "groups": [
+        "standalone-demo"
+      ]
+    },
+    {
+      "path": "test/ci/test_zxs_demo.py",
+      "groups": [
+        "standalone-demo"
       ]
     }
   ],

@@ -320,15 +320,23 @@ fn membership_preparation_directory_lock_excludes_initializer_before_writer_crea
     std::thread::scope(|scope| {
         let begin = scope.spawn(|| f.begin());
         barrier.wait();
-        let before = files(&new_root);
-        let other = primary_config([new_root.clone()]).unwrap();
-        let error = initialize_fresh(&other_system, other).err().unwrap();
-        assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
-        assert_eq!(files(&new_root), before);
-        assert!(!new_root.join("disk.json").exists());
-        assert!(!new_root.join(".writer.lock").exists());
+        // A failed assertion must release the injected pause before scoped
+        // thread joining; otherwise the original failure becomes a CI timeout.
+        let observed = std::panic::catch_unwind(|| {
+            let before = files(&new_root);
+            let other = primary_config([new_root.clone()]).unwrap();
+            let error = initialize_fresh(&other_system, other).err().unwrap();
+            assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
+            assert_eq!(files(&new_root), before);
+            assert!(!new_root.join("disk.json").exists());
+            assert!(!new_root.join(".writer.lock").exists());
+        });
         barrier.wait();
-        assert!(begin.join().unwrap().unwrap().all_members_fenced());
+        let prepared = begin.join();
+        if let Err(panic) = observed {
+            std::panic::resume_unwind(panic);
+        }
+        assert!(prepared.unwrap().unwrap().all_members_fenced());
     });
     assert!(f.enroll().all_control_metadata_synchronized());
 }

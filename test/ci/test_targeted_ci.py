@@ -3181,7 +3181,7 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
         target, = policy['groups'][group]['rust_targets']
         self.assertEqual(target['prefixes'],
                          ['engine::snapshot_initialization::bootstrap::tests::'])
-        self.assertEqual(target['max_tests'], 15)
+        self.assertEqual(target['max_tests'], 16)
         self.assertEqual(target['timeout_seconds'], 900)
         self.assertEqual(target['exact'], [
             'disk::discovery::tests::'
