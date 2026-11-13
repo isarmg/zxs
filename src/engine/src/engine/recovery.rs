@@ -534,6 +534,7 @@ impl Engine {
                 original,
                 publication.as_ref(),
             )?;
+            self.require_directory_snapshot_transition(&candidate, next)?;
             if self.move_completion.as_ref().is_some_and(|selected| {
                 selected.sequence() == candidate.sequence && selected.candidate_hash() == hash
             }) && next
@@ -722,6 +723,7 @@ impl Engine {
                     self.blocked = true;
                     break;
                 }
+                self.admit_directory_snapshot_publication(&candidate, next, &p)?;
                 let recovered_result = p.recovery.as_ref().map(|_| p.result.clone());
                 self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),

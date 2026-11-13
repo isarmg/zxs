@@ -54,6 +54,9 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
     # This projection is only an additional regression oracle. It is never
     # executed instead of the complete production plan checked above.
+    if not retained:
+        # The complete new-only plan was checked above; no old policy exists.
+        return {**complete, "groups": [], "rust_targets": [], "python_tests": []}
     previous = copy.deepcopy(policy)
     previous['groups'] = {name: previous['groups'][name] for name in retained}
     for rule in previous['rules']:
@@ -66,6 +69,44 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+
+    def test_cache_budget_fixture_routes_full_fault_module_without_production_scope_changes(self):
+        fixture = 'test/engine/unit/engine/publication/cache_budget_tests.rs'
+        plan = assert_path_group_extension(
+            self, self.policy, [fixture], ['publication-cache-budget'], [])
+        self.assertEqual(plan['python_tests'], [])
+        self.assertEqual(len(plan['rust_targets']), 1)
+        expected = {
+            'package': 'storage-engine',
+            'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'features': ['fault-injection'],
+            'prefixes': ['engine::publication::cache_budget_tests::'],
+            'max_tests': 160,
+            'timeout_seconds': 900,
+        }
+        self.assertEqual(origin_selections(plan, 'publication-cache-budget'), [expected])
+        target = plan['rust_targets'][0]
+        prefix = 'engine::publication::cache_budget_tests::'
+        names = [
+            prefix + 'cache_encoder_rejects_before_accept_and_reopens_cleanly',
+            prefix + 'payload_cache_rejection_preserves_names_and_retries_installed_payloads',
+        ]
+        self.assertEqual(CI.selected_tests(names + ['unrelated::test'], [], target), sorted(names))
+        with self.assertRaises(ValueError):
+            CI.selected_tests(['unrelated::test'], [], target)
+        with self.assertRaises(ValueError):
+            CI.selected_tests([prefix + f'behavior_{index}' for index in range(161)], [], target)
+        production = assert_path_group_extension(
+            self, self.policy, ['src/engine/src/engine/publication.rs'],
+            ['container-current-name', 'current-name-layout-consumers',
+             'directory-snapshot-initialization'], [])
+        self.assertNotIn('publication-cache-budget', production['groups'])
+        self.assertEqual(
+            [rule for rule in self.policy['rules']
+             if 'publication-cache-budget' in rule['groups']],
+            [{'path': fixture, 'groups': ['publication-cache-budget']}],
+        )
 
     def test_deletion_graph_sources_keep_lifecycle_and_http_consumers(self):
         paths = [
@@ -251,7 +292,8 @@ class TargetedSelection(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             CI.select_plan(self.policy, paths)
-        plan = CI.select_plan(self.policy, paths, shardable=True)
+        plan = assert_path_group_extension(self, self.policy, paths, None,
+                                           ['container-manual-drafts-consumers'])
         self.assertEqual(plan['groups'], [
             'ci-selection', 'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery', 'historical-directory-web',
@@ -362,7 +404,10 @@ class TargetedSelection(unittest.TestCase):
             'test/engine/unit/engine/provenance_publication_tests.rs',
             CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        plan = assert_path_group_extension(self, self.policy, paths,
+            ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+             'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
+            ['directory-snapshot-initialization', 'container-manual-fresh-format'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -548,7 +593,8 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema',
-            'container-manual-drafts',
+            'container-manual-drafts', 'container-manual-fresh-format',
+            'directory-snapshot-initialization', 'directory-storage-bootstrap',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -563,7 +609,8 @@ class TargetedSelection(unittest.TestCase):
                                              ['src/engine/src/lib.rs'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine',
+            'directory-snapshot-initialization'])
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -613,6 +660,35 @@ class TargetedSelection(unittest.TestCase):
         self.assertIn('historical-directory-runtime', central['groups'])
         self.assertIn('version-metadata-read', central['groups'])
 
+    def test_snapshot_execution_paths_keep_original_and_fault_injection_scopes_separate(self):
+        for path in [
+            'src/engine/src/engine/snapshot_initialization/execution.rs',
+            'test/engine/unit/snapshot_initialization_execution_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-initialization'], [])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 2)
+                self.assertCountEqual(origin_selections(plan, 'directory-snapshot-initialization'), [
+                    {
+                        'package': 'storage-engine',
+                        'manifest': 'src/engine/Cargo.toml',
+                        'prefixes': ['engine::snapshot_initialization::tests::'],
+                        'max_tests': 8,
+                        'timeout_seconds': 300,
+                    },
+                    {
+                        'package': 'storage-engine',
+                        'manifest': 'src/engine/Cargo.toml',
+                        'kind': 'lib',
+                        'features': ['fault-injection'],
+                        'prefixes': ['engine::snapshot_initialization::execution_tests::'],
+                        'max_tests': 5,
+                        'timeout_seconds': 900,
+                    },
+                ])
+
     def test_snapshot_source_paths_select_real_engine_and_http_preview_modules(self):
         paths = [
             'src/engine/src/engine/directory_snapshot_source.rs',
@@ -624,7 +700,10 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['directory-snapshot-initialization']
+                         if path == 'src/engine/src/engine/directory_snapshot_source.rs' else [])
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-source-preview'], added)
                 self.assertEqual(plan['groups'], ['directory-snapshot-source-preview'])
                 self.assertEqual(plan['python_tests'], [])
                 self.assertEqual(len(plan['rust_targets']), 3)
@@ -667,8 +746,12 @@ class TargetedSelection(unittest.TestCase):
                                     for target in plan['rust_targets']))
 
     def test_layout_and_ci_changes_union_groups_once(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
-                            'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
+        plan = assert_path_group_extension(self, self.policy,
+            ['src/engine/src/persist/layout.rs', 'src/engine/src/journal.rs',
+             '.github/workflows/ci.yml'],
+            ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+             'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
+            ['directory-snapshot-initialization', 'container-manual-fresh-format'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -1243,6 +1326,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
+            'directory-snapshot-initialization',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',
@@ -1909,6 +1993,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-path-facts-http', 'container-lifecycle-http',
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema', 'container-manual-drafts-consumers',
+            'container-manual-recovery',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -2681,7 +2766,10 @@ class ContainerPathFactSelection(unittest.TestCase):
             'test/engine/unit/working_tree/snapshot/store_tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['directory-snapshot-initialization']
+                         if path == 'src/engine/src/working_tree/snapshot/store.rs' else [])
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-material'], added)
                 self.assertEqual(plan['groups'], ['directory-snapshot-material'])
                 self.assertEqual(plan['python_tests'], [])
                 engine, product = plan['rust_targets']
@@ -2958,7 +3046,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             ('src/server/src/lib.rs', ['directory-rename-http-retirement', 'paged-deletion-review'],
              ['container-manual-drafts-consumers']),
             ('src/server/src/backend_methods.rs', ['container-tags-http', 'paged-deletion-review'],
-             ['container-manual-drafts-consumers']),
+             ['container-manual-drafts-consumers', 'container-manual-recovery']),
         ]:
             with self.subTest(path=path):
                 assert_path_group_extension(self, self.policy, [path], retained, added)
@@ -3033,3 +3121,23 @@ class CurrentBackupPublicationAttackSelection(unittest.TestCase):
             'max_tests': 16,
             'timeout_seconds': 900,
         }])
+class DirectoryBootstrapColdProofSelection(unittest.TestCase):
+    def test_original_bootstrap_consumers_keep_complete_selection_and_budget(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'directory-storage-bootstrap'
+        target, = policy['groups'][group]['rust_targets']
+        self.assertEqual(target['prefixes'],
+                         ['engine::snapshot_initialization::bootstrap::tests::'])
+        self.assertEqual(target['max_tests'], 10)
+        self.assertEqual(target['timeout_seconds'], 900)
+        self.assertEqual(target['exact'], [
+            'disk::discovery::tests::'
+            'fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate',
+            'foreign_import::tests::'
+            'fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection',
+        ])
+        for source in ['runtime.rs', 'store.rs']:
+            path = 'src/engine/src/engine/disk_lifecycle/bootstrap/' + source
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path],
+                                            ['held-directory-layout'], [group])

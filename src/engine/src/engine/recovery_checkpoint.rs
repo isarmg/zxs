@@ -63,7 +63,9 @@ impl<'a> CheckpointScope<'a> {
         // entries from a late historical snapshot. Even an already installed
         // view must replay D3 after restart; do not read or write an unusable
         // acceleration file. Successor Add/Abort generations can inherit it.
-        if engine.membership_fence.is_some()
+        if engine.config.fresh_bootstrap().is_some()
+            || engine.snapshot_initialization_intent.is_some()
+            || engine.membership_fence.is_some()
             || engine.pending_disk_exit.is_some()
             || engine
                 .config

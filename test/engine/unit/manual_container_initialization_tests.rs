@@ -54,10 +54,10 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
     }).unwrap();
     let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     let decoded = crate::ValidatedConfig::try_from(config.clone()).unwrap();
-    assert!(decoded.manual_selection().is_none());
-    assert!(decoded.manual_completion().is_none());
+    assert!(decoded.fresh_bootstrap().is_none());
+    assert!(decoded.fresh_completion().is_none());
     let selector = fs::read(config.disks[0].root.join(
-        crate::persist::layout::MANUAL_DISK_SELECTION.as_path(),
+        crate::authority_selection::FRESH_DISK_SELECTOR,
     )).unwrap();
     let seal = crate::disk::decode_seal(&fs::read(config.disks[0].root.join(
         crate::persist::layout::DISK_IDENTITY.as_path(),
@@ -66,7 +66,8 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
     let admitted = crate::engine::container_drafts::format::admit_saved_genesis(
         decoded.clone(), &engine.config, &seal, &selector,
     ).unwrap();
-    assert_eq!(admitted.manual_completion(), engine.config.manual_completion());
+    assert!(admitted.fresh_completion().is_some());
+    assert_eq!(admitted.fresh_bootstrap(), engine.config.fresh_bootstrap());
     assert!(crate::engine::container_drafts::format::admit_saved_genesis(
         decoded.clone(), &decoded, &seal, &selector,
     ).is_err());
@@ -87,7 +88,7 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
     let engine = Engine::initialize_manual_container_storage(&system, config, operation).unwrap();
     assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap()[0].version_id, entry.version_id);
     let selector_path = engine.config.disks[0].root.join(
-        crate::persist::layout::MANUAL_DISK_SELECTION.as_path(),
+        crate::authority_selection::FRESH_DISK_SELECTOR,
     );
     drop(engine);
     let mut changed_selector = selector;
@@ -101,7 +102,9 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
 #[test]
 fn old_or_unknown_roots_are_not_upgraded_or_repaired() {
     let (temp, system, config) = roots();
-    let mut old = Engine::initialize(&system, config.clone()).unwrap();
+    let mut old = Engine::initialize_storage(
+        &system, config.clone(), OperationId::generate().unwrap(),
+    ).unwrap();
     let repo = old.create_repository(
         &storage_contract::RepositoryName::parse("old files").unwrap(), "P01", 1, "alice",
         OperationId::generate().unwrap(),
@@ -116,6 +119,10 @@ fn old_or_unknown_roots_are_not_upgraded_or_repaired() {
     }).unwrap();
     let entry = old.list_tree(&repo.main_branch_id).unwrap().remove(0);
     let file = entry.file_id.parse().unwrap();
+    let admitted_base = old.current_container_draft_base(
+        file, repo.repository_id.parse().unwrap(), entry.entry_id.parse().unwrap(),
+    ).unwrap();
+    old.config = crate::ValidatedConfig::try_from(config.clone()).unwrap();
     let principal = storage_contract::Principal::new("alice".into()).unwrap();
     let source = temp.path().join("retained-draft-input");
     fs::write(&source, b"unpublished").unwrap();
@@ -123,9 +130,7 @@ fn old_or_unknown_roots_are_not_upgraded_or_repaired() {
         operation: OperationId::generate().unwrap(),
         expected_generation: storage_contract::Generation::new(0),
         principal: principal.clone(),
-        base: old.current_container_draft_base(
-            file, repo.repository_id.parse().unwrap(), entry.entry_id.parse().unwrap(),
-        ).unwrap(),
+        base: admitted_base,
         content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"unpublished")),
         size: 11,
     };
@@ -165,12 +170,12 @@ fn incomplete_or_replaced_writer_is_preserved_without_cold_sidecar_recreation() 
     for missing in ["complete", "system-writer", "bootstrap-writer", "writer-bytes"] {
         let (temp, system, config) = roots();
         let engine = Engine::initialize_manual_container_storage(
-            &system, config, OperationId::generate().unwrap(),
+            &system, config.clone(), OperationId::generate().unwrap(),
         ).unwrap();
         drop(engine);
         if missing == "complete" {
             fs::remove_file(system.join(
-                crate::persist::layout::MANUAL_INITIALIZATION_COMPLETE.as_path(),
+                "fresh-directory-bootstrap-complete-v1.json",
             )).unwrap();
         } else if missing == "writer-bytes" {
             fs::write(system.join(crate::persist::layout::CONTROL_WRITER_LOCK.as_path()), b"unknown")
@@ -200,11 +205,19 @@ fn bootstrap_replacement_after_preflight_cannot_redirect_cold_writer_admission()
     for replace_root in [true, false] {
         let (temp, system, config) = roots();
         let engine = Engine::initialize_manual_container_storage(
-            &system, config, OperationId::generate().unwrap(),
+            &system, config.clone(), OperationId::generate().unwrap(),
         ).unwrap();
         drop(engine);
         // Capture the original completion commitment before adversarial replacement.
-        let (_, admitted) = Engine::recovery_projection(&system, None).unwrap();
+        let decoded = crate::ValidatedConfig::try_from(config.clone()).unwrap();
+        let selection = crate::authority_selection::SelectionGuard::acquire(&system).unwrap()
+            .recover_fresh(&decoded).unwrap();
+        let admitted = decoded.with_fresh_bootstrap(selection.fresh_selection().unwrap()).unwrap();
+        let proof = crate::engine::snapshot_initialization::bootstrap::require_complete(
+            &system, &admitted,
+        ).unwrap();
+        let admitted = admitted.with_fresh_completion(proof);
+        drop(selection);
         let bootstrap = system.join(runtime::DIRECTORY);
         if replace_root {
             fs::rename(&bootstrap, system.join("original-bootstrap-retained")).unwrap();
@@ -216,7 +229,7 @@ fn bootstrap_replacement_after_preflight_cannot_redirect_cold_writer_admission()
         } else {
             let system_handle = PrivateDirectory::open_existing(&system).unwrap();
             let bootstrap_handle = OpenAt2Root::open(&bootstrap, MountPolicy::SameMount).unwrap();
-            let expected = crate::engine::container_drafts::format::admit_bootstrap_handle(
+            let expected = crate::engine::snapshot_initialization::bootstrap::admit_bootstrap_handle(
                 &system_handle, &admitted, bootstrap_handle.identity(),
             ).unwrap();
             let writer = bootstrap.join(crate::persist::layout::CONTROL_WRITER_LOCK.as_path());

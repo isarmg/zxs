@@ -1,5 +1,72 @@
 {
   "groups": {
+    "publication-cache-budget": {
+      "reason": "Fixture-only route for the complete publication cache budget module, including explicit fault-injection recovery; production consumer routes remain unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::publication::cache_budget_tests::"
+          ],
+          "max_tests": 160,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "directory-storage-bootstrap": {
+      "reason": "Explicit fresh SYSTEM selection precedes writer sidecars; new disk format, exact completed cold admission, original-byte preservation and refusal by legacy discovery/import. Partial unclaimed material is fenced, not adopted.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::snapshot_initialization::bootstrap::tests::"
+          ],
+          "exact": [
+            "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
+            "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
+          ],
+          "max_tests": 10,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "directory-snapshot-initialization": {
+      "reason": "Fresh-only original intent and deny fence; explicit FILE-source snapshot candidate/material binding, cold publication/reads and exact recovery. Does not cover existing-host catalog registration or SMB activation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::snapshot_initialization::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::snapshot_initialization::execution_tests::"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "current-backup-publication-attacks": {
       "reason": "Execute the complete live and cold Current backup publication attack module, including exhaustive per-State-field mutation refusal for container edits. Compilation alone is not attack execution evidence.",
       "python_tests": [],
@@ -3874,6 +3941,433 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/store.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/execution.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_initialization_execution_tests.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/fencing.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/local.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "test/engine/unit/fresh_directory_bootstrap_tests.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/discovery.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/inspect.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/discovery_tests.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/tests.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/registration.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/material.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/candidate.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/directory_snapshot_source.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/store.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery_checkpoint.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/intent.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/store.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/snapshot_init.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_initialization_tests.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/contract/src/model.rs",
+      "groups": [
+        "container-tags-contract"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/changes.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/projection.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/rows.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": [
+        "container-tags-engine",
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
+      "groups": [
+        "container-tags-engine",
+        "held-directory-layout",
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/snapshot.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection.rs",
+      "groups": [
+        "container-tags-storage"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-tags-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/historical_save.rs",
+      "groups": [
+        "container-current-name",
+        "container-tags-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-unchanged-save"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery/restricted.rs",
+      "groups": [
+        "held-directory-layout"
+      ]
+    },
+    {
+      "path": "src/engine/src/wire.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/cache_budget_tests.rs",
+      "groups": [
+        "publication-cache-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/historical_save.rs",
+      "groups": [
+        "typed-name-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "portable-path-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "historical-directory-runtime"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "engine-date-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/historical_save.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "engine-integer-errors"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/changes.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/rows.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package/manifest.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/state_projection.rs",
+      "groups": [
+        "history-path-audit-projection"
+      ]
+    },
     {
       "path": "test/engine/unit/engine/current_backup_configuration_tests.rs",
       "groups": [

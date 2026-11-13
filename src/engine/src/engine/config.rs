@@ -1,6 +1,7 @@
 //! Disk topology, resource admission configuration and OS writer locks.
 use crate::{disk::*, *};
 use crate::persist::layout;
+use crate::engine::snapshot_initialization::bootstrap::CompletionProof;
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -30,16 +31,10 @@ pub struct ValidatedConfig {
 }
 
 #[derive(Clone, Debug)]
-struct ManualAdmission {
-    selection: Arc<crate::authority_selection::manual::ManualSelection>,
-    commitment: storage_contract::working_tree::MaterialCommitment,
-    completion: Option<storage_contract::working_tree::MaterialCommitment>,
-}
-
-#[derive(Clone, Debug)]
 struct AdmittedConfig {
     config: Config,
-    manual: Option<ManualAdmission>,
+    fresh_bootstrap: Option<storage_contract::working_tree::MaterialCommitment>,
+    fresh_completion: Option<Arc<CompletionProof>>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -65,7 +60,8 @@ impl TryFrom<Config> for ValidatedConfig {
         Ok(Self {
             admitted: Arc::new(AdmittedConfig {
                 config,
-                manual: None,
+                fresh_bootstrap: None,
+                fresh_completion: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -95,6 +91,37 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// Admission-only format proof. Serialized Config never upgrades a root.
+    pub(crate) fn with_fresh_bootstrap(
+        mut self,
+        selection: &crate::authority_selection::FreshSelection,
+    ) -> Result<Self> {
+        selection.require_config(&self)?;
+        let admitted = Arc::make_mut(&mut self.admitted);
+        admitted.fresh_bootstrap = Some(selection.commitment()?);
+        admitted.fresh_completion = None;
+        Ok(self)
+    }
+
+    pub(crate) fn with_fresh_completion(
+        mut self, proof: CompletionProof,
+    ) -> Self {
+        Arc::make_mut(&mut self.admitted).fresh_completion = Some(Arc::new(proof));
+        self
+    }
+
+    pub(crate) fn fresh_completion(
+        &self,
+    ) -> Option<&CompletionProof> {
+        self.admitted.fresh_completion.as_deref()
+    }
+
+    pub(crate) fn fresh_bootstrap(
+        &self,
+    ) -> Option<storage_contract::working_tree::MaterialCommitment> {
+        self.admitted.fresh_bootstrap
+    }
+
     /// A deterministic configuration projection of the exact admitted Backup
     /// choice, not a Genesis admission of the new targets. Only the native
     /// Backup verifier supplies this closed projection. Original I/O and voter
@@ -103,7 +130,7 @@ impl ValidatedConfig {
         original: &Self,
         projection: &super::backup_preparation::BackupRegistryProjection,
     ) -> Result<Self> {
-        if original.manual_selection().is_some() {
+        if original.fresh_bootstrap().is_some() {
             return Err(super::container_drafts::format_error(
                 crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
             ));
@@ -146,10 +173,10 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
-        if self.manual_selection().is_some() {
-            return Err(super::container_drafts::format_error(
-                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
-            ));
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
         }
         if self.generation().is_some() {
             return Err(Error::new(
@@ -171,10 +198,10 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
-        if self.manual_selection().is_some() {
-            return Err(super::container_drafts::format_error(
-                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
-            ));
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
         }
         let original = self.generation().ok_or_else(|| {
             Error::new(
@@ -200,7 +227,7 @@ impl ValidatedConfig {
         mut self,
         admission: &super::membership_transition::pending::activation::backup::startup::BackupStartupAdmission,
     ) -> Result<Self> {
-        if self.manual_selection().is_some() {
+        if self.fresh_bootstrap().is_some() {
             return Err(super::container_drafts::format_error(
                 crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
             ));
@@ -214,7 +241,7 @@ impl ValidatedConfig {
         mut self,
         barrier: &super::backup_preparation::ServingBarrier,
     ) -> Result<Self> {
-        if self.manual_selection().is_some() {
+        if self.fresh_bootstrap().is_some() {
             return Err(super::container_drafts::format_error(
                 crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
             ));
@@ -276,18 +303,19 @@ impl ValidatedConfig {
     /// Context equality only. Authentication still belongs to Genesis admission
     /// or the verified successor; neither schema validity nor equal voters suffice.
     pub(crate) fn same_genesis_io_authority(&self, other: &Self) -> bool {
-        Arc::ptr_eq(
-            &self.admitted.genesis_io_authority,
-            &other.admitted.genesis_io_authority,
-        ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority
+        self.admitted.fresh_bootstrap == other.admitted.fresh_bootstrap
+            && (Arc::ptr_eq(
+                &self.admitted.genesis_io_authority,
+                &other.admitted.genesis_io_authority,
+            ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority)
     }
 
     /// The fixed saved Genesis authority permits only tighter local retained
     /// limits. This is a recovery projection check, not I/O-context equality.
     pub(crate) fn permits_genesis_recovery_projection(&self, projected: &Self) -> bool {
-        self.admitted
-            .genesis_io_authority
-            .permits_recovery_projection(&projected.admitted.genesis_io_authority)
+        self.admitted.fresh_bootstrap == projected.admitted.fresh_bootstrap
+            && self.admitted.genesis_io_authority
+                .permits_recovery_projection(&projected.admitted.genesis_io_authority)
     }
 
     pub(crate) fn verify_candidate_membership(
@@ -317,49 +345,6 @@ impl ValidatedConfig {
     ) -> Option<&Arc<super::membership_transition::pending::activation::Generation>> {
         self.admitted.generation.as_ref()
     }
-    pub(crate) fn with_manual_selection(
-        mut self,
-        selection: &crate::authority_selection::manual::ManualSelection,
-    ) -> Result<Self> {
-        selection.require_config(&self).map_err(super::container_drafts::format_error)?;
-        let commitment = selection.commitment().map_err(super::container_drafts::format_error)?;
-        Arc::make_mut(&mut self.admitted).manual = Some(ManualAdmission {
-            selection: Arc::new(selection.clone()), commitment, completion: None,
-        });
-        Ok(self)
-    }
-
-    pub(crate) fn with_manual_completion(
-        mut self,
-        completion: storage_contract::working_tree::MaterialCommitment,
-    ) -> Result<Self> {
-        let admission = Arc::make_mut(&mut self.admitted).manual.as_mut().ok_or_else(|| {
-            super::container_drafts::format_error(
-                crate::authority_selection::manual::ManualFormatError::Changed,
-            )
-        })?;
-        admission.completion = Some(completion);
-        Ok(self)
-    }
-
-    pub(crate) fn manual_completion(
-        &self,
-    ) -> Option<&storage_contract::working_tree::MaterialCommitment> {
-        self.admitted.manual.as_ref().and_then(|value| value.completion.as_ref())
-    }
-
-    pub(crate) fn manual_selection(
-        &self,
-    ) -> Option<&crate::authority_selection::manual::ManualSelection> {
-        self.admitted.manual.as_ref().map(|admission| admission.selection.as_ref())
-    }
-
-    pub(crate) fn manual_commitment(
-        &self,
-    ) -> Option<&storage_contract::working_tree::MaterialCommitment> {
-        self.admitted.manual.as_ref().map(|admission| &admission.commitment)
-    }
-
     pub(crate) fn generation_hash(&self) -> Option<&str> {
         self.generation().map(|generation| generation.hash.as_str())
     }
@@ -373,10 +358,10 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
-        if self.manual_selection().is_some() {
-            return Err(super::container_drafts::format_error(
-                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
-            ));
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
         }
         if generation.portable.is_foreign() {
             return Err(Error::new(
@@ -426,7 +411,7 @@ impl ValidatedConfig {
                 "disk root count differs from configured membership",
             ));
         }
-        if self.manual_selection().is_some()
+        if self.fresh_bootstrap().is_some()
             && self.disks.iter().zip(&roots).any(|(disk, root)| &disk.root != root)
         {
             return Err(super::container_drafts::format_error(
@@ -491,23 +476,19 @@ pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<Valid
     Ok(config)
 }
 
-pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<WriterLocks> {
-    let guard = crate::authority_selection::SelectionGuard::acquire(root)?;
-    let system = guard.selected_directory()?;
-    let manual = crate::authority_selection::manual::ManualSelection::read(&system)
-        .map_err(super::container_drafts::format_error)?;
-    let guard = match manual {
-        Some(selection) => {
-            let saved: Config = storage_contract::decode_strict(
-                &system.read_bounded(&layout::SYSTEM_CONFIG, 1024 * 1024)?,
-            )?;
-            let config = ValidatedConfig::try_from(saved)?;
-            super::container_drafts::format::require_complete(&system, &config, &selection)?;
-            guard.with_recovered_manual(selection)
-        }
-        None => { guard.require_legacy()?; guard }
-    };
-    acquire_locks_selected(root, disks, guard)
+pub(super) fn acquire_locks(
+    root: &Path,
+    disks: &DiskResources,
+) -> Result<WriterLocks> {
+    let selection = crate::authority_selection::SelectionGuard::acquire(root)?;
+    let system = selection.selected_directory()?;
+    let saved: Config = storage_contract::decode_strict(
+        &system.read_bounded(&layout::SYSTEM_CONFIG, 1024 * 1024)?,
+    )?;
+    let config = ValidatedConfig::try_from(saved)?;
+    let selection = selection.recover_fresh(&config)
+        .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
+    acquire_locks_selected(root, disks, selection)
 }
 
 pub(super) fn acquire_locks_selected(
@@ -516,19 +497,22 @@ pub(super) fn acquire_locks_selected(
     selection: crate::authority_selection::SelectionGuard,
 ) -> Result<WriterLocks> {
     selection.require_selected()?;
+    // The selection owns the original SYSTEM descriptor. A path check before
+    // absolute CREATE would still permit a replacement directory to receive a
+    // sidecar, even if the later identity check rejected the operation.
     let directory = selection.selected_directory()?;
     if directory.path() != root {
-        return Err(super::container_drafts::format_error(
-            crate::authority_selection::manual::ManualFormatError::Changed,
-        ));
+        return Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::Changed,
+        )));
     }
-    use platform_io::fs_safety::PayloadOpenMode;
     let create_writer = selection.allows_writer_creation();
+    use platform_io::fs_safety::PayloadOpenMode;
     let opened = directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::Existing);
     let system = match opened {
         Ok(file) => file,
         Err(platform_io::fs_safety::Error::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound && create_writer => {
+            if create_writer && error.kind() == std::io::ErrorKind::NotFound => {
                 directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::CreateNew)?
             }
         Err(error) => return Err(error.into()),

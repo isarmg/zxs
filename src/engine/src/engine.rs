@@ -89,6 +89,8 @@ pub use disk_catalog::{
     inspect_disk_database_material, reconstruct_disk_database_material,
 };
 mod history_move_recovery;
+pub(crate) mod snapshot_initialization;
+pub use snapshot_initialization::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub(crate) mod move_execution;
 pub(crate) use move_execution::PublishedMove;
@@ -268,6 +270,8 @@ pub struct Engine {
     pub(crate) blocked: bool,
     move_completion: Option<move_execution::CompletionBinding>,
     history_move_intent: Option<OperationId>,
+    snapshot_initialization_intent: Option<OperationId>,
+    directory_snapshots: BTreeMap<OperationId, snapshot_initialization::RegisteredSnapshot>,
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
@@ -536,170 +540,36 @@ impl Engine {
     ///
     /// # Errors
     /// Returns filesystem, disk identity, canonical root overlap or initialization errors.
-    pub fn initialize_validated(root: &Path, config: ValidatedConfig) -> Result<Self> {
-        if root.join("config.json").try_exists()? {
-            return Err(Error::new(
-                storage_contract::ErrorCode::AlreadyInitialized,
-                "configuration already exists; use open/recovery",
-            ));
-        }
-        private_dir(root)?;
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
-        let mut roots = Vec::with_capacity(config.disks.len());
-        for disk in &config.disks {
-            private_dir(&disk.root)?;
-            let path = disk.root.canonicalize()?;
-            if path.join(layout::DISK_IDENTITY.as_path()).try_exists()? {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::DiskAlreadyEnrolled,
-                    "disk already contains a managed identity",
-                ));
-            }
-            roots.push(path);
-        }
-        let config = config.with_disk_roots(roots)?;
-        let disk_resources = Arc::new(DiskResources::open(&config, false)?);
-        Self::initialize_resources(root, config, disk_resources, selection)
+    pub fn initialize_validated(_root: &Path, _config: ValidatedConfig) -> Result<Self> {
+        Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+        )))
     }
 
-    /// Initialize exactly the selected, already-open empty storage directories.
-    /// The handles are consumed and retained for all writes; their paths are
-    /// diagnostic/configuration bindings, never reopened as write destinations.
-    /// No storage directory is created, formatted, emptied or chmodded here.
-    ///
-    /// # Errors
-    /// Rejects a changed path binding, non-private or nonempty directory, wrong
-    /// handle count, existing pool, or any lock/persistence failure.
+    /// The retired entry cannot create old-format material or adopt supplied roots.
     pub fn initialize_held(
-        root: &Path,
-        config: ValidatedConfig,
-        directories: Vec<File>,
+        _root: &Path,
+        _config: ValidatedConfig,
+        _directories: Vec<File>,
     ) -> Result<Self> {
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let selection = crate::authority_selection::SelectionGuard::legacy(&root)?;
-        if root.join("config.json").try_exists()? {
-            return Err(Error::new(
-                ErrorCode::AlreadyInitialized,
-                "configuration already exists; use open/recovery",
-            ));
-        }
-        if config
-            .disks
-            .iter()
-            .any(|disk| disk.root.starts_with(&root) || root.starts_with(&disk.root))
-        {
-            return Err(Error::new(
-                ErrorCode::ConfigInvalid,
-                "storage and system directories must not overlap",
-            ));
-        }
-        let disk_resources = Arc::new(DiskResources::initialize_held(&config, directories)?);
-        Self::initialize_resources(root, config, disk_resources, selection)
+        Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+        )))
     }
 
-    fn initialize_resources(
+    /// Called only after fresh initialization has admitted all durable inputs.
+    /// A partial initializer must not use this to adopt or rebuild unknown data.
+    fn assemble_initialized(
         root: PathBuf,
         config: ValidatedConfig,
         disk_resources: Arc<DiskResources>,
-        selection: crate::authority_selection::SelectionGuard,
+        locks: WriterLocks,
+        journals: BTreeMap<String, crate::journal::JournalWriter>,
     ) -> Result<Self> {
-        // Hold the same directory-before-writer lock order as online preparation
-        // through all initialization writes and index construction. A losing
-        // preparation must not install a reservation into this initializer's root.
-        let _directory_locks =
-            membership_transition::pending::reservation::lock_initialization_directories(
-                &disk_resources,
-            )?;
-        Self::initialize_resources_locked(root, config, disk_resources, selection, &_directory_locks)
-    }
-
-    fn initialize_resources_locked(
-        root: PathBuf,
-        config: ValidatedConfig,
-        disk_resources: Arc<DiskResources>,
-        selection: crate::authority_selection::SelectionGuard,
-        _directory_locks: &[platform_io::fs_safety::linux::AdvisoryLock],
-    ) -> Result<Self> {
-        // The same directory lock arbitrates independent-format creation.
-        // Admit every root before creating even a legacy writer sidecar, so a
-        // different SYSTEM cannot claim an existing independent disk or SYSTEM.
-        for disk in disk_resources.handles() {
-            if disk
-                .root
-                .entries(disk.root.path())?
-                .next()
-                .transpose()?
-                .is_some()
-            {
-                return Err(Error::new(
-                    ErrorCode::DiskAlreadyEnrolled,
-                    "storage initialization requires empty directories; existing contents are preserved",
-                ));
-            }
-        }
-        let locks = config::acquire_locks_selected(&root, &disk_resources, selection)?;
-        // Recheck after locking: an earlier empty-root observation can be stale.
-        for disk in disk_resources.handles() {
-            membership_transition::pending::reservation::reject_reserved_initialization(
-                &disk.root,
-            )?;
-        }
-        for d in &config.disks {
-            let disk = disk_resources.get(d)?;
-            disk.root
-                .write_json(&d.root.join(layout::DISK_IDENTITY.as_path()), &disk.seal, false)?;
-            if let Some(selection) = config.manual_selection() {
-                let directory = disk.root.private_directory(disk.root.path())?;
-                let mut file = directory.open_payload(&layout::MANUAL_DISK_SELECTION,
-                    platform_io::fs_safety::PayloadOpenMode::CreateNew)?;
-                std::io::Write::write_all(&mut file, &selection.canonical_bytes()
-                    .map_err(container_drafts::format_error)?)?;
-                file.sync_all()?;
-                directory.verify_payload(&layout::MANUAL_DISK_SELECTION, &file)?;
-                directory.sync()?;
-            }
-            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
-            for p in [
-                "histories",
-                "metadata/application-log",
-                "metadata/objects",
-                "staging",
-                "quarantine",
-            ] {
-                disk.root.private_dir(&d.root.join(p))?;
-            }
-            disk.root.sync_dir(&d.root)?;
-        }
-        // Every payload disk retains the fixed membership anchor for offline proofs.
-        for d in &config.disks {
-            disk_resources.get(d)?.root.write_json(
-                &d.root.join("metadata/pool-membership/config.json"),
-                &config,
-                false,
-            )?;
-        }
-        disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
-        write_json(&root.join("config.json"), &config, false)?;
-        private_dir(&root.join("workspaces"))?;
         let state = State {
             topology_generation: 1,
             ..State::default()
         };
-        let journals = config
-            .disks
-            .iter()
-            .filter(|disk| disk.metadata_member)
-            .map(|disk| {
-                Ok((
-                    disk.disk_id.clone(),
-                    crate::journal::JournalWriter::create_at(
-                        &disk_resources.get(disk)?.root,
-                        disk,
-                    )?,
-                ))
-            })
-            .collect::<Result<_>>()?;
         let engine = Self {
             root,
             config,
@@ -714,6 +584,8 @@ impl Engine {
             blocked: false,
             move_completion: None,
             history_move_intent: None,
+            snapshot_initialization_intent: None,
+            directory_snapshots: BTreeMap::new(),
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -800,35 +672,12 @@ impl Engine {
     }
 
     fn recovery_projection(
-        root: &Path,
-        workspace_limits: Option<RetainedWorkspaceLimits>,
+        _root: &Path,
+        _workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<(PathBuf, ValidatedConfig)> {
-        let root = existing_private_dir(root).map_err(|source| source.context(
-            ErrorCode::RecoveryRequired,
-            "system state is unavailable; use explicit retained metadata roots for management recovery",
-        ))?.path().to_path_buf();
-        let system = platform_io::fs_safety::PrivateDirectory::open_existing(&root)?;
-        let manual = crate::authority_selection::manual::ManualSelection::read(&system)
-            .map_err(container_drafts::format_error)?;
-        if manual.is_none() {
-            crate::authority_selection::require_legacy(&root)?;
-        }
-        disk_lifecycle::terminal::require_active_startup(&root)?;
-        let config = read_json::<Config>(&root.join("config.json")).map_err(|source| source.context(
-            ErrorCode::RecoveryRequired,
-            "system projection is unavailable; use explicit retained metadata roots for management recovery",
-        ))?;
-        let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
-        let config = match manual {
-            Some(selection) => {
-                let completion = container_drafts::format::require_complete(
-                    &system, &config, &selection,
-                )?;
-                config.with_manual_selection(&selection)?.with_manual_completion(completion)?
-            }
-            None => config,
-        };
-        Ok((root, config))
+        Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+        )))
     }
 
     fn open_mode(
@@ -836,8 +685,44 @@ impl Engine {
         mode: RecoveryMode,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        let (root, config) = Self::recovery_projection(root, workspace_limits)?;
-        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
+        // Keep the original locator lock through cold recovery. Fresh recovery
+        // does not call the generic discovery path or reacquire this lock.
+        let mut bootstrap_guard = None;
+        let (engine, warnings) = if crate::authority_selection::has_fresh_selector(root)? {
+            let root = existing_private_dir(root)?.path().to_path_buf();
+            let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
+                .with_workspace_limits(workspace_limits)?;
+            let selection = crate::authority_selection::SelectionGuard::acquire(&root)?
+                .recover_fresh(&config)
+                .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
+            let selected = selection.fresh_selection()
+                .ok_or_else(|| Error::FreshBootstrap(Box::new(
+                    crate::authority_selection::FreshBootstrapError::Changed,
+                )))?;
+            let config = config.with_fresh_bootstrap(selected)?;
+            let proof = snapshot_initialization::bootstrap::require_complete(&root, &config)?;
+            let config = config.with_fresh_completion(proof);
+            let store = disk_lifecycle::bootstrap::runtime::open_store_for_config(&root, &config)?;
+            store.reload(&config.pool_id)
+                .map_err(disk_lifecycle::bootstrap::runtime::management_error)?;
+            bootstrap_guard = Some(store);
+            let resources = Arc::new(DiskResources::open(&config, true)?);
+            let locks = config::acquire_locks_selected(&root, &resources, selection)?;
+            (Self::recovery_resources_with_locks(root, config, resources, locks)?, Vec::new())
+        } else {
+            let (root, config) = Self::recovery_projection(root, workspace_limits)?;
+            Self::prepare_workspace_recovery(root, config)?
+        };
+        let result = Self::finish_open(engine, warnings, mode);
+        drop(bootstrap_guard);
+        result
+    }
+
+    fn finish_open(
+        mut engine: Self,
+        warnings: Vec<RecoverySealFailure>,
+        mode: RecoveryMode,
+    ) -> Result<Self> {
         let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         engine.recover_prepared(mode, prepared)?;
@@ -853,7 +738,10 @@ impl Engine {
         engine.load_workspaces()?;
         engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
-        if mode == RecoveryMode::CompletePending && !engine.move_is_retained() {
+        if mode == RecoveryMode::CompletePending
+            && !engine.move_is_retained()
+            && engine.snapshot_initialization_intent.is_none()
+        {
             engine.refresh_published_disk_catalogs(None);
             engine.restore_published_disk_histories();
             engine.resume_backup_preparation()?;
@@ -906,14 +794,7 @@ impl Engine {
         disk_resources: Arc<DiskResources>,
         locks: crate::disk::WriterLocks,
     ) -> Result<Self> {
-        if let Some(selection) = config.manual_selection() {
-            container_drafts::format::require_complete(
-                &platform_io::fs_safety::PrivateDirectory::open_existing(&root)?,
-                &config, selection,
-            )?;
-        } else {
-            crate::authority_selection::require_legacy(&root)?;
-        }
+        locks.require_selected()?;
         let mut engine = Self {
             root,
             config,
@@ -931,6 +812,8 @@ impl Engine {
             blocked: false,
             move_completion: None,
             history_move_intent: None,
+            snapshot_initialization_intent: None,
+            directory_snapshots: BTreeMap::new(),
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -966,6 +849,7 @@ impl Engine {
                     })?);
         }
         engine.discover_file_history_move_choice()?;
+        engine.discover_snapshot_initialization()?;
         Ok(engine)
     }
     /// Explicit recovery after loss of the system disk. Never initializes data disks.
@@ -1519,6 +1403,7 @@ impl Engine {
     /// A selected move keeps the ordinary write fence while its original inputs
     /// are read or repaired. Independent unresolved decisions still block this.
     pub(crate) fn require_move_source_read(&self) -> Result<()> {
+        self.require_no_snapshot_initialization()?;
         self.require_no_commit_preparation()?;
         if self.blocked {
             return Err(Error::new(

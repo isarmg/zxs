@@ -83,6 +83,19 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
             "recognized disk seal differs from its held directory identity",
         ));
     }
+    let evidence = match &seal.format {
+        DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
+        DiskSealFormat::MembershipGeneration { authority_hash } => {
+            DiskRoleEvidence::MembershipGeneration {
+                authority_hash: authority_hash.clone(),
+            }
+        }
+        DiskSealFormat::UnifiedStorage { .. } => {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+            )));
+        }
+    };
     let config =
         crate::engine::membership_transition::pending::activation::read_local_disk_configuration(
             &path,
@@ -108,17 +121,7 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
         level: disk.level,
         upstream_slot_id: disk.upstream_slot_id.clone(),
         metadata_member: disk.metadata_member,
-        evidence: match seal.format {
-            DiskSealFormat::ManualContainerDrafts { .. } => {
-                return Err(crate::engine::container_drafts::format_error(
-                    crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
-                ));
-            }
-            DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
-            DiskSealFormat::MembershipGeneration { authority_hash } => {
-                DiskRoleEvidence::MembershipGeneration { authority_hash }
-            }
-        },
+        evidence,
     };
     if root.read_bytes(&path.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)? != bytes {
         return Err(Error::new(

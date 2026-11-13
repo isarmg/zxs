@@ -738,6 +738,24 @@ fn verify_held_genesis(
                 &held.disk.root.join("metadata/pool-membership/config.json"),
                 &mut |_| Ok(()),
             )?;
+            let stored = decode_seal(
+                &held
+                    .root
+                    .read_bytes(
+                        &held.disk.root.join(layout::DISK_IDENTITY.as_path()),
+                        MAX_METADATA,
+                    )?,
+            )?;
+            let saved = if projected.fresh_bootstrap().is_some() {
+                let selector = held.root.read_bytes(
+                    &held.disk.root.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_METADATA,
+                )?;
+                crate::engine::container_drafts::format::admit_saved_genesis(
+                    saved, projected, &stored, &selector,
+                )?
+            } else {
+                saved
+            };
             if !saved.permits_genesis_recovery_projection(projected)
                 || selected
                     .as_ref()
@@ -748,24 +766,6 @@ fn verify_held_genesis(
                     "genesis projection differs from fixed saved registration authority",
                 ));
             }
-            let stored = decode_seal(
-                &held
-                    .root
-                    .read_bytes(
-                        &held.disk.root.join(layout::DISK_IDENTITY.as_path()),
-                        MAX_METADATA,
-                    )?,
-            )?;
-            let saved = if projected.manual_selection().is_some() {
-                let selector = held.root.read_bytes(
-                    &held.disk.root.join(layout::MANUAL_DISK_SELECTION.as_path()), MAX_METADATA,
-                )?;
-                crate::engine::container_drafts::format::admit_saved_genesis(
-                    saved, projected, &stored, &selector,
-                )?
-            } else {
-                saved
-            };
             let disk = saved
                 .metadata_members()
                 .find(|disk| disk.disk_id == held.disk.disk_id)

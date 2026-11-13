@@ -64,6 +64,9 @@ pub(crate) struct SnapshotNodeBinding {
     worktrees_entity: LocalEntityIdentity,
 }
 impl SnapshotNodeBinding {
+    pub(crate) fn repository_entity(self) -> LocalEntityIdentity {
+        self.repository_entity
+    }
     pub(crate) fn reference(self) -> SnapshotReference {
         self.reference
     }

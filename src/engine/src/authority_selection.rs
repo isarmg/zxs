@@ -1,7 +1,11 @@
 //! One held SYSTEM directory lock serializes every authority-format selection.
 //! It is retained with writer ownership, never reconstructed from a cache.
 pub(crate) mod manual;
-
+mod fresh;
+pub use fresh::FreshBootstrapError;
+pub(crate) use fresh::{FreshSelection, has_fresh_selector};
+pub(crate) const FRESH_SELECTOR: &str = fresh::SELECTOR;
+pub(crate) const FRESH_DISK_SELECTOR: &str = "fresh-system-selection-v1.json";
 use crate::{Error, ErrorCode, Result};
 use platform_io::fs_safety::linux::{AdvisoryLock, MountPolicy, OpenAt2Root};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
@@ -13,14 +17,15 @@ pub(crate) const ONLINE_STATE: &str = "authority-online-state.json";
 pub(crate) struct SelectionGuard {
     directory: PrivateDirectory,
     _lock: AdvisoryLock,
-    manual: Option<manual::ManualSelection>,
-    manual_first_write: bool,
+    fresh: Option<FreshSelection>,
+    first_write: bool,
 }
 impl SelectionGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
         Self::acquire_held(PrivateDirectory::open_existing(path)?)
     }
     pub(crate) fn acquire_held(directory: PrivateDirectory) -> Result<Self> {
+        directory.verify_identity()?;
         let path = directory.path().to_owned();
         let root = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)?;
         let lock = AdvisoryLock::directory(root.directory()).map_err(|source| {
@@ -34,9 +39,12 @@ impl SelectionGuard {
         Ok(Self {
             directory,
             _lock: lock,
-            manual: None,
-            manual_first_write: false,
+            fresh: None,
+            first_write: false,
         })
+    }
+    pub(crate) fn allows_writer_creation(&self) -> bool {
+        self.first_write
     }
     pub(crate) fn legacy(path: &Path) -> Result<Self> {
         let guard = Self::acquire(path)?;
@@ -45,37 +53,6 @@ impl SelectionGuard {
     }
     pub(crate) fn require_legacy(&self) -> Result<()> {
         require_legacy_directory(&self.directory)
-    }
-    pub(crate) fn with_manual(mut self, selection: manual::ManualSelection) -> Self {
-        self.manual = Some(selection);
-        self.manual_first_write = true;
-        self
-    }
-    pub(crate) fn with_recovered_manual(mut self, selection: manual::ManualSelection) -> Self {
-        self.manual = Some(selection);
-        self.manual_first_write = false;
-        self
-    }
-    pub(crate) fn allows_writer_creation(&self) -> bool {
-        self.manual.is_none() || self.manual_first_write
-    }
-    pub(crate) fn selected_directory(&self) -> Result<PrivateDirectory> {
-        self.directory.verify_identity()?;
-        Ok(self.directory.try_clone()?)
-    }
-    pub(crate) fn require_selected(&self) -> Result<()> {
-        if let Some(expected) = &self.manual {
-            self.directory.verify_identity()?;
-            if manual::ManualSelection::read(&self.directory)
-                .map_err(crate::engine::container_drafts::format_error)?.as_ref() != Some(expected)
-            {
-                return Err(crate::engine::container_drafts::format_error(
-                    manual::ManualFormatError::Changed,
-                ));
-            }
-            return Ok(());
-        }
-        self.require_legacy()
     }
 }
 

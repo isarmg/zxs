@@ -159,6 +159,10 @@ impl WriterLocks {
         self.disks.len() + 1
     }
 
+    pub(crate) fn require_selected(&self) -> Result<()> {
+        self.selection.require_selected()
+    }
+
     pub(crate) fn system_identity(&self) -> Result<FileIdentity> {
         Ok(FileIdentity::from_fd(&*self.system)?)
     }
