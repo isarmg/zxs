@@ -29,7 +29,9 @@ fn deleted_child() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
 fn stage_remove(engine: &mut Engine, branch: &str) -> CommitRequest {
     let workspace = engine.create_workspace(branch, "alice").unwrap();
     engine.namespace_operation(&workspace.workspace_id,
-        storage_contract::NamespaceOperation::Delete { path: "folder".parse().unwrap() },
+        storage_contract::NamespaceOperation::Delete {
+            path: name_policy::LookupPath::parse("folder").unwrap(),
+        },
     ).unwrap();
     request(workspace)
 }
@@ -161,7 +163,9 @@ fn replaced_directory_entry_cannot_inherit_an_older_removal_request() {
         engine.commit_workspace(removal).unwrap();
         let next = engine.create_workspace(&branch, "alice").unwrap();
         engine.namespace_operation(&next.workspace_id,
-            storage_contract::NamespaceOperation::Mkdir { path: "folder".parse().unwrap() },
+            storage_contract::NamespaceOperation::Mkdir {
+                path: name_policy::PortablePath::parse("folder").unwrap(),
+            },
         ).unwrap();
         engine.commit_workspace(request(next)).unwrap();
         let before = engine.state().clone();
