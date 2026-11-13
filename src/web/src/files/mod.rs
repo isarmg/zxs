@@ -3,6 +3,7 @@ mod backup;
 mod batch;
 mod branch;
 mod content_matches;
+mod container_edit;
 mod deletion;
 mod detached_history;
 mod detail;

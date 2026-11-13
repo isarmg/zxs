@@ -70,3 +70,24 @@ pub(crate) fn expected_receipt(
         result: json_codec::to_value(decoded).map_err(codec)?,
     })
 }
+
+/// Native workspace digests bind explicit consumption independently of content.
+pub(crate) fn bind_workspace_input(
+    mut body: json_codec::Value,
+    binding: Option<&storage_contract::container_edit::DraftConsumption>,
+) -> crate::Result<json_codec::Value> {
+    if let Some(binding) = binding {
+        body.as_object_mut().ok_or_else(crate::engine::container_drafts::invalid)?
+            .insert("container_draft_commit".into(), json_codec::to_value(binding).map_err(codec)?);
+    }
+    Ok(body)
+}
+
+pub(crate) fn consumption(
+    receipt: &OperationResult,
+) -> crate::Result<Option<storage_contract::container_edit::DraftConsumption>> {
+    let Some(value) = receipt.result.get("container_draft_commit") else {
+        return Ok(None);
+    };
+    json_codec::from_value(value.clone()).map(Some).map_err(codec)
+}

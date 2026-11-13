@@ -124,6 +124,14 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_file_history_merge::submit),
         )
         .route(
+            "/api/file-manager/files/{file}/edit-mode",
+            get(http_container_drafts::read).post(http_container_drafts::set_mode),
+        )
+        .route(
+            "/api/file-manager/files/{file}/current-content",
+            get(http_container_drafts::content),
+        )
+        .route(
             "/api/file-manager/files/{file}/tags",
             get(http_file_tags::read).post(http_file_tags::submit),
         )

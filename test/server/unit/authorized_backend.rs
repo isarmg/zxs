@@ -807,6 +807,30 @@ impl Backend for RecordingBackend {
             "merge_file_history",
         ))
     }
+    fn read_container_edit(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+        self.record("read_container_edit", Some(identity), json!(request))?;
+        Ok(storage_contract::container_edit::ContainerEdit::initial())
+    }
+    fn set_container_commit_mode(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.record("set_container_commit_mode", Some(identity), json!(request))?;
+        Ok(recorded_operation(request.operation_id, "set_container_commit_mode"))
+    }
+    fn current_container_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+        self.record("current_container_content", Some(identity), json!(request))?;
+        Err(crate::ApiError::unsupported())
+    }
     fn replace_container_tags(
         &self,
         identity: &crate::auth::Identity,
@@ -3330,5 +3354,49 @@ fn shared_history_override_preserves_request_identity_and_revocation() {
             .status,
         401
     );
+    assert!(fixture.probe.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn container_edit_methods_preserve_identity_errors_and_revocation() {
+    let fixture = Fixture::new();
+    let request = crate::ReadContainerEdit {
+        file: storage_contract::FileId::from_random([11; 16]),
+        repository: storage_contract::RepositoryId::from_random([12; 16]),
+        path: name_policy::PortablePath::parse("file.txt").unwrap(),
+    };
+    let mode = crate::SetContainerCommitMode {
+        context: request.clone(),
+        expected_generation: storage_contract::Generation::new(7),
+        mode: storage_contract::container_edit::CommitMode::Manual,
+        operation_id: storage_contract::OperationId::from_random([13; 16]),
+    };
+    fixture.probe.fail.store(true, Ordering::SeqCst);
+    let errors = [
+        ("read_container_edit", fixture.backend
+            .read_container_edit(&fixture.identity, request.clone()).err().unwrap()),
+        ("set_container_commit_mode", fixture.backend
+            .set_container_commit_mode(&fixture.identity, mode.clone()).err().unwrap()),
+        ("current_container_content", fixture.backend
+            .current_container_content(&fixture.identity, request.clone()).err().unwrap()),
+    ];
+    for (method, error) in errors {
+        assert_error(error, method);
+    }
+    let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
+    assert_eq!(calls.len(), 3);
+    for call in &calls {
+        assert_identity(call.identity.as_ref(), &fixture.identity);
+    }
+    assert_eq!(calls[0].arguments, json!(request));
+    assert_eq!(calls[1].arguments, json!(mode));
+    assert_eq!(calls[2].arguments, json!(request));
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    assert_eq!(fixture.backend.read_container_edit(&fixture.identity, request.clone())
+        .err().unwrap().status, 401);
+    assert_eq!(fixture.backend.set_container_commit_mode(&fixture.identity, mode)
+        .err().unwrap().status, 401);
+    assert_eq!(fixture.backend.current_container_content(&fixture.identity, request)
+        .err().unwrap().status, 401);
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }

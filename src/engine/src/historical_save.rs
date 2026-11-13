@@ -267,6 +267,7 @@ impl Engine {
             ));
         }
         let workspace = Workspace {
+            container_draft_commit: None,
             workspace_id: new_id("ws")?,
             purpose: WorkspacePurpose::HistoricalBranch,
             branch_id: branch.into(),

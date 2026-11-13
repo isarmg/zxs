@@ -14,6 +14,8 @@ use storage_server::{
     auth::{AuthStore, Identity},
     engine_backend::EngineBackend,
 };
+#[path = "http_engine/container_drafts.rs"]
+mod container_drafts;
 #[path = "http_engine/backup_namespace.rs"]
 mod backup_namespace;
 #[path = "http_engine/branch_preview.rs"]

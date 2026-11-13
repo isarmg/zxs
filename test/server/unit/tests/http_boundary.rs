@@ -676,6 +676,27 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::file_container_tags::Snapshot, crate::ApiError> {
         panic!("private container tags read panic detail")
     }
+    fn read_container_edit(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn set_container_commit_mode(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
+    fn current_container_content(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
     fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,

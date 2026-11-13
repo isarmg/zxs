@@ -279,6 +279,7 @@ fn entry_view(state: RwSignal<State>, selection: Selection) -> impl IntoView {
                         {merge::view(state)}
                     </Show>
                 </section>
+                {super::container_edit::view(state)}
                 {tags::view(state)}
                 <section class="zxs-entry-section zxs-entry-version-history zxs-stack" aria-busy=move ||state.with(|s|s.files.history_loading).to_string()><h3 class="zxs-row">{t("版本历史","Version history")}</h3>
                     <div class="zxs-file-toolbar zxs-flow">

@@ -1,5 +1,6 @@
 //! Shared edit authority is selected by SYSTEM publication, never local bodies.
 pub(crate) mod store;
+pub(crate) mod commit;
 
 use crate::{Engine, Error, OperationId, OperationResult, State};
 use storage_contract::container_edit::{
@@ -247,12 +248,16 @@ impl Engine {
 /// Verify the complete state delta before either live publication or cold repair.
 /// An arbitrary mutation cannot add, remove or rewrite shared edit authority.
 pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result<()> {
+    let consumed = commit::consumption(previous, next)?;
     // The interaction with explicit directory commits remains a separately
     // reserved contract. This file-container feature does not redefine it.
     let directory_commit = next.events.last().is_some_and(|event| {
         event.sequence == next.sequence && event.kind == "directory.changes.commit"
     });
     for (file, edit) in &previous.container_edits {
+        if consumed == Some(*file) {
+            continue;
+        }
         let Some(draft) = edit.draft() else {
             continue;
         };
@@ -263,7 +268,17 @@ pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result
             previous.branches.get(&selected), next.branches.get(&selected),
         ) {
             (Some(before), Some(after)) => {
-                before.head_commit_id != after.head_commit_id
+                let selected_entry = |state: &State, head: &str| {
+                    state.commits.get(head).and_then(|commit| {
+                        commit.entries.iter().find(|entry| {
+                            entry.entry_id == draft.base.entry.to_string()
+                        }).map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
+                    })
+                };
+                (before.file_id.as_deref() == Some(key.as_str())
+                    && before.head_commit_id != after.head_commit_id)
+                    || selected_entry(previous, &before.head_commit_id)
+                        != selected_entry(next, &after.head_commit_id)
                     || before.file_node_id != after.file_node_id
                     || before.pending_file_versions.get(&key)
                         != after.pending_file_versions.get(&key)
@@ -330,7 +345,7 @@ pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result
         }
     }
     let Some(receipt) = receipt else {
-        if previous.container_edits != next.container_edits {
+        if consumed.is_none() && previous.container_edits != next.container_edits {
             return Err(invalid());
         }
         return Ok(());

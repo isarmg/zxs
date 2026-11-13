@@ -289,6 +289,27 @@ impl Backend for MonitorBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn read_container_edit(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn set_container_commit_mode(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn current_container_content(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,

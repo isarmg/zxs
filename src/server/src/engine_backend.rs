@@ -16,6 +16,7 @@ use application::Application;
 mod backup_transaction;
 mod branch;
 mod content;
+mod container_drafts;
 mod directory_deletion;
 mod directory_snapshot_source;
 mod directory_scopes;
@@ -999,6 +1000,21 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         let (mut engine, current) = self.lock_current(identity)?;
         application::Application::new(&mut engine, &current).merge_file_history(request)
+    }
+    fn read_container_edit(
+        &self, identity: &Identity, request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, ApiError> {
+        self.read_container_edit_admitted(identity, request)
+    }
+    fn set_container_commit_mode(
+        &self, identity: &Identity, request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.set_container_commit_mode_admitted(identity, request)
+    }
+    fn current_container_content(
+        &self, identity: &Identity, request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, ApiError> {
+        self.current_container_content_admitted(identity, request)
     }
     fn replace_container_tags(
         &self,

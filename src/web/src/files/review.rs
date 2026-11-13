@@ -19,6 +19,7 @@ use web_interface::tasks::spawn_local;
 pub(crate) enum Kind {
     Merge,
     Tags,
+    ContainerMode,
     Backup,
     Placement,
 }
@@ -62,6 +63,7 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
                         model.recursive_backup = None;
                     }
                     Kind::Placement => model.placement = None,
+                    Kind::ContainerMode => {},
                     Kind::Tags => {
                         let owns_draft = model.tag_submission.as_ref().is_none_or(|submission| {
                             model.tag_edit.as_ref().is_some_and(|draft| {

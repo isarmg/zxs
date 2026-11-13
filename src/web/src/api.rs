@@ -56,6 +56,8 @@ thread_local! { static MANAGEMENT_READS: read_queue::Queue = read_queue::Queue::
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid container edit response: {0}")]
+    ContainerEdit(#[source] json_codec::Error),
     #[error("invalid foreign plan input: {0}")]
     ForeignPlanInput(#[source] name_policy::Error),
     #[error("invalid authentication response: {0}")]

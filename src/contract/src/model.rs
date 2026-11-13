@@ -796,6 +796,7 @@ impl<'de> Deserialize<'de> for NamespaceOperation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Workspace {
+    pub container_draft_commit: Option<crate::container_edit::DraftConsumption>,
     pub workspace_id: String,
     pub purpose: WorkspacePurpose,
     pub branch_id: String,

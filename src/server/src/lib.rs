@@ -111,6 +111,11 @@ mod backend_file_merge;
 mod http_file_history_merge;
 mod http_file_merge;
 pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
+mod backend_container_drafts;
+mod http_container_drafts;
+pub use backend_container_drafts::{
+    CurrentContainerContent, ReadContainerEdit, SetContainerCommitMode,
+};
 mod backend_file_tags;
 mod http_file_metadata;
 mod http_file_tags;

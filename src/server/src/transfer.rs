@@ -692,6 +692,32 @@ pub(crate) async fn content(
     .map_err(|source| timeout_error().with_source(source))??;
     content_response_with_limits(content, method, headers, &limits, deadline)
 }
+/// Current container reads use the same bounded transfer/lease path as versions,
+/// but their authority is the admitted current draft or selected immutable base.
+pub(crate) async fn current_container_content(
+    state: AppState,
+    identity: Identity,
+    request: crate::ReadContainerEdit,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let limits = state.config.http_transfer_limits.clone();
+    let deadline = tokio::time::Instant::now() + limits.total_timeout;
+    let permit = state.read_slots.acquire()?;
+    let content = tokio::time::timeout_at(
+        deadline,
+        crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
+            move |backend, permit| {
+                let current = backend.current_container_content(&identity, request)?;
+                let mut content = current.content;
+                content.lease = Box::new((content.lease, permit));
+                Ok::<_, ApiError>(content)
+            },
+        ),
+    ).await.map_err(|source| timeout_error().with_source(source))??;
+    content_response_with_limits(content, method, headers, &limits, deadline)
+}
+
 pub(crate) async fn workspace_content(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,

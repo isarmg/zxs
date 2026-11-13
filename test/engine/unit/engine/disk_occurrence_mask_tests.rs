@@ -863,6 +863,7 @@ fn membership_registry_occurrence_every_required_page_is_authenticated_without_f
 
 fn workspace() -> Workspace {
     Workspace {
+            container_draft_commit: None,
         workspace_id: id("ws", 99),
         purpose: WorkspacePurpose::Normal,
         branch_id: id("br", 1),

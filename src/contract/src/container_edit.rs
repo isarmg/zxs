@@ -202,3 +202,15 @@ impl ContainerEdit {
         Ok(())
     }
 }
+
+/// Explicit file commit consumes exactly one admitted shared draft. This is
+/// persisted in its sealed workspace and permanent receipt, never inferred
+/// from the operation kind or from matching content bytes alone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DraftConsumption {
+    pub file: crate::FileId,
+    pub generation: Generation,
+    pub revision: DraftRevision,
+    pub operation: OperationId,
+}

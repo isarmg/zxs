@@ -4,6 +4,7 @@ use json_codec::{Value, json};
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
+mod container_edit;
 mod download_target;
 mod response;
 mod transfer;

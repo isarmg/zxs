@@ -299,6 +299,27 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn read_container_edit(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn set_container_commit_mode(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
+    fn current_container_content(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn replace_container_tags(
         &self,
         _identity: &crate::auth::Identity,
@@ -1564,6 +1585,27 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             request: crate::MergeFileBranches,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.merge_file_branches(identity, request)
+        }
+        fn read_container_edit(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadContainerEdit,
+        ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+            self.delegate.read_container_edit(identity, request)
+        }
+        fn set_container_commit_mode(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::SetContainerCommitMode,
+        ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+            self.delegate.set_container_commit_mode(identity, request)
+        }
+        fn current_container_content(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::ReadContainerEdit,
+        ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+            self.delegate.current_container_content(identity, request)
         }
         fn replace_container_tags(
             &self,

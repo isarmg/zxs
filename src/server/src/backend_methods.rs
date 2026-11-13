@@ -156,6 +156,24 @@ macro_rules! methods {
                     request: $crate::MergeFileBranches,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
 
+                fn read_container_edit(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: $crate::ReadContainerEdit,
+                ) -> Result<storage_contract::container_edit::ContainerEdit, $crate::ApiError>;
+
+                fn set_container_commit_mode(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: $crate::SetContainerCommitMode,
+                ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
+
+                fn current_container_content(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: $crate::ReadContainerEdit,
+                ) -> Result<$crate::CurrentContainerContent, $crate::ApiError>;
+
                 fn replace_container_tags(
                     &self,
                     identity: &$crate::Identity,

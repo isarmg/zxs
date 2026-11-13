@@ -173,7 +173,10 @@ fn workspace_commit_input(
     )?;
     let mut request = request.clone();
     request.request_digest = None;
-    Ok(json!({"request":request,"sealed_manifest_hash":sealed}))
+    crate::persist::container_edits::bind_workspace_input(
+        json!({"request":request,"sealed_manifest_hash":sealed}),
+        workspace.container_draft_commit.as_ref(),
+    )
 }
 
 pub(crate) fn native_commit_digest(
@@ -440,6 +443,7 @@ impl Engine {
                     ))
             }).collect();
         let w = Workspace {
+            container_draft_commit: None,
             workspace_id: new_id("ws")?,
             purpose: WorkspacePurpose::Normal,
             branch_id: branch_id.into(),
@@ -1326,6 +1330,14 @@ impl crate::engine::PlanningContext<'_> {
             });
         }
         let w = workspace;
+        if let Some(binding) = &w.container_draft_commit {
+            if wire.is_some() {
+                return Err(crate::engine::container_drafts::invalid());
+            }
+            crate::engine::container_drafts::commit::validate_workspace(
+                self.state, &w, &request, binding,
+            )?;
+        }
         if w.purpose == WorkspacePurpose::HistoricalBranch {
             return Err(Error::new(
                 storage_contract::ErrorCode::HistoricalSaveRequiresBranch,
@@ -1543,7 +1555,13 @@ impl crate::engine::PlanningContext<'_> {
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w, &entries)?; }
                 if entries.as_slice() == current_entries && deleted.is_empty() {
-                    return crate::persist::path_changes::attach(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}), path_changes);
+                    let result = crate::persist::path_changes::attach(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}), path_changes)?;
+                    if let Some(binding) = &w.container_draft_commit {
+                        crate::engine::container_drafts::commit::apply(state, binding)?;
+                    }
+                    return crate::persist::container_edits::bind_workspace_input(
+                        result, w.container_draft_commit.as_ref(),
+                    );
                 }
                 let live_files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)
                     .map(|entry| entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
@@ -1576,7 +1594,13 @@ impl crate::engine::PlanningContext<'_> {
                         .collect::<Vec<_>>();
                     super::directory::record_projected_directory_edits(state, &repo.repository_id, &changed_paths, None, engine.current_namespaces.map(std::sync::Arc::as_ref))?;
                 }
-                crate::persist::path_changes::attach(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id}), path_changes)
+                let result = crate::persist::path_changes::attach(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id}), path_changes)?;
+                if let Some(binding) = &w.container_draft_commit {
+                    crate::engine::container_drafts::commit::apply(state, binding)?;
+                }
+                crate::persist::container_edits::bind_workspace_input(
+                    result, w.container_draft_commit.as_ref(),
+                )
             },
         )?;
         Ok(WorkspaceMutation {

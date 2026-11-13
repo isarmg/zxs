@@ -340,6 +340,27 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.merge_file_branches(identity, request)
     }
+    fn read_container_edit(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContainerEdit,
+    ) -> Result<storage_contract::container_edit::ContainerEdit, crate::ApiError> {
+        self.inner.read_container_edit(identity, request)
+    }
+    fn set_container_commit_mode(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::SetContainerCommitMode,
+    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+        self.inner.set_container_commit_mode(identity, request)
+    }
+    fn current_container_content(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadContainerEdit,
+    ) -> Result<crate::CurrentContainerContent, crate::ApiError> {
+        self.inner.current_container_content(identity, request)
+    }
     fn replace_container_tags(
         &self,
         identity: &crate::auth::Identity,

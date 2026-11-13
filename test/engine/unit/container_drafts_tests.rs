@@ -88,17 +88,68 @@ fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
         ).is_err());
     }
     let dirty = engine.container_edit(file).unwrap();
-    let original = dirty.draft().unwrap().operation;
+    let draft = dirty.draft().unwrap().operation;
+    let workspace = engine.create_workspace(&repository.main_branch_id, principal.as_str())
+        .unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "note.txt", b"second draft").unwrap();
+    engine.seal_workspace(&workspace.workspace_id, principal.as_str()).unwrap();
+    let workspace = engine.workspace(&workspace.workspace_id).unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: OperationId::generate().unwrap(),
+        principal: principal.as_str().to_owned(),
+        expected_head: workspace.base_head.clone(),
+        fencing_token: workspace.fencing_token,
+        message: "explicit draft commit".into(),
+        request_digest: None,
+    };
+    // Matching bytes alone cannot turn a normal flush into an explicit commit.
+    assert!(engine.commit_workspace(request.clone()).is_err());
+    assert_eq!(engine.container_edit(file).unwrap(), dirty);
+    engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft).unwrap();
+    drop(engine);
+    let mut engine = Engine::open(&system).unwrap();
+    let published = engine.commit_workspace(request.clone()).unwrap();
+    assert!(engine.open_container_draft(file).unwrap().is_none());
+    assert_eq!(engine.container_edit(file).unwrap().mode(), CommitMode::Manual);
+    assert_eq!(engine.state().versions.len(), versions.len() + 1);
+    let committed_versions = engine.state().versions.clone();
+    let committed_branches = engine.state().branches.clone();
+    drop(engine);
+    let mut engine = Engine::open(&system).unwrap();
+    engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft).unwrap();
+    assert_eq!(engine.commit_workspace(request).unwrap(), published);
+    assert_eq!(engine.state().versions, committed_versions);
+    assert_eq!(engine.state().branches, committed_branches);
+    assert_installed_edit(
+        temporary.path().join("disk").as_path(), file, &engine.container_edit(file).unwrap(),
+    );
+    let mut original = engine.open_content(&entry.version_id).unwrap();
+    let mut historical = Vec::new();
+    original.file.read_to_end(&mut historical).unwrap();
+    assert_eq!(historical, b"original");
+    let source = temporary.path().join("discard-source");
+    fs::write(&source, b"discard this draft").unwrap();
+    let revision = DraftRevision {
+        operation: OperationId::generate().unwrap(),
+        expected_generation: engine.container_edit(file).unwrap().generation(),
+        principal: principal.clone(),
+        base: engine.current_container_draft_base(
+            file, repository.repository_id.parse().unwrap(), entry.entry_id.parse().unwrap(),
+        ).unwrap(),
+        content_hash: ContentHash::from_digest(blake3::hash(b"discard this draft")),
+        size: b"discard this draft".len() as u64,
+    };
+    engine.save_container_draft(file, &revision, fs::File::open(source).unwrap()).unwrap();
+    let dirty = engine.container_edit(file).unwrap();
     engine.discard_container_draft(
-        file, dirty.generation(), original, &principal, OperationId::generate().unwrap(),
+        file, dirty.generation(), revision.operation, &principal, OperationId::generate().unwrap(),
     ).unwrap();
     drop(engine);
     let engine = Engine::open(&system).unwrap();
     assert!(engine.open_container_draft(file).unwrap().is_none());
-    assert_eq!(engine.container_edit(file).unwrap().mode(), CommitMode::Manual);
-    assert_eq!(engine.state().versions, versions);
-    assert_eq!(engine.state().branches, branches);
-    assert_eq!(engine.state().commits, commits);
+    assert_eq!(engine.state().versions, committed_versions);
+    assert_eq!(engine.state().branches, committed_branches);
 }
 
 // Read the installed FILE bytes, not a fresh projection reconstructed from SYSTEM.
