@@ -3107,3 +3107,48 @@ class OrdinaryCurrentRemovalSelection(unittest.TestCase):
         self.assertIn('smb_rpc::tests::default_share_tests::', target['prefixes'])
         self.assertEqual((target['max_tests'], target['timeout_seconds']), (96, 900))
         self.assertEqual(target['features'], ['core'])
+
+
+class ManualWorkingBlockedServerCarryForward(unittest.TestCase):
+    def test_fixture_repair_carries_every_blocked_origin_without_budget_changes(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'manual-working-blocked-server-carry-forward'
+        # These are the exact origin slices of bf0445's failed core library
+        # configuration, followed by the separately blocked fault build.
+        origins = [
+            ('archive-http-boundary', 0),
+            ('container-current-name', 5),
+            ('container-manual-drafts-consumers', 0),
+            ('container-manual-recovery', 0),
+            ('container-tags-http', 0),
+            ('content-match-http-boundary', 0),
+            ('current-name-record-consumers', 1),
+            ('detached-history-http-boundary', 0),
+            ('directory-git-status-http-boundary', 0),
+            ('directory-history-http-boundary', 0),
+            ('directory-rename-http-retirement', 0),
+            ('directory-scope-http-boundary', 0),
+            ('historical-directory-runtime', 2),
+            ('history-source-http-boundary', 0),
+            ('history-visible-context', 1),
+            ('listing-http-boundary', 0),
+            ('note-http-boundary', 0),
+            ('note-target-consumers', 0),
+            ('operation-http-boundary', 0),
+            ('ordinary-conversion-name-budget', 1),
+            ('paged-deletion-review', 3),
+            ('portable-path-consumers', 6),
+            ('server-authorization', 0),
+            ('shared-history-http-boundary', 0),
+            ('typed-name-consumers', 3),
+            ('version-metadata-read', 2),
+            ('container-manual-recovery', 3),
+        ]
+        expected = [policy['groups'][name]['rust_targets'][index]
+                    for name, index in origins]
+        self.assertEqual(len(expected), 27)
+        self.assertEqual(policy['groups'][group]['rust_targets'], expected)
+        self.assertEqual(policy['groups'][group]['python_tests'], ['test_targeted_ci'])
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/smb_rpc/ordinary_rmdir_tests.rs',
+        ], ['container-manual-recovery'], [group])

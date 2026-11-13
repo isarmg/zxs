@@ -1,5 +1,470 @@
 {
   "groups": {
+    "manual-working-blocked-server-carry-forward": {
+      "reason": "Carry forward all 26 server core lib origin selections blocked by the ordinary-rmdir fixture compile errors in bf0445acf run 43431210851, plus its separate core,fault-injection retirement exact test. Preserve each original inventory budget and timeout; this is not whole-workspace or new-SHA engine evidence.",
+      "python_tests": [
+        "test_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_archive::tests::",
+            "backend_archive::tests::"
+          ],
+          "exact": [
+            "engine_backend::read_projection::tests::archive_tests::typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order",
+            "engine_backend::read_projection::tests::create_branch_tests::typed_creation_binds_digest_and_checks_scope_before_receipt",
+            "engine_backend::application::tests::creation_replays_keep_public_response_shapes_after_archive_binding_change_and_reopen",
+            "backend_admission_tests::archive_binding_precedes_capacity_while_command_parsing_waits_for_admission"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "history_window_encode::tests::"
+          ],
+          "max_tests": 32,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_container_drafts::tests::",
+            "smb_rpc::tests::manual_draft_tests::",
+            "backend_workspace::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "smb_rpc::tests::manual_recovery_tests::",
+            "smb_rpc::tests::close_tests::",
+            "smb_rpc::tests::snapshot_semantics_tests::",
+            "smb_rpc::tests::default_share_tests::",
+            "smb_rpc::tests::namespace_tests::",
+            "smb_rpc::tests::admission_tests::",
+            "smb_rpc::tests::binding_tests::",
+            "smb_rpc::tests::bounded_lifecycle_tests::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "http_file_tags::tests::",
+            "operation_wire::container_tags_tests::",
+            "engine_backend::file_manager::time_tests::",
+            "engine_backend::revocation_tests::",
+            "engine_backend::file_manager::history_nodes::tests::",
+            "backend_admission_tests::phase_one_write_admission::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900,
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backend_admission_tests::content_match_contract_errors_wait_for_capacity_but_query_errors_do_not",
+            "backend_admission_tests::content_match_only_admits_original_node_cursor_and_limit_domains",
+            "backend_admission_tests::content_matches_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::content_matches_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "backend_read::tests::",
+            "management::recovery_admission_tests::"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_detached_history::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::detached_history_query_errors_precede_capacity_admission",
+            "backend_admission_tests::detached_history_only_admits_valid_first_page_and_paired_cursor",
+            "backend_admission_tests::detached_history_cancellation_reaches_admitted_backend"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_directory_git::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::directory_git_status_input_errors_precede_capacity",
+            "backend_admission_tests::directory_git_status_only_admits_repository_and_lookup_path_domains",
+            "backend_admission_tests::directory_git_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backend_admission_tests::directory_history_contract_errors_follow_query_shape_and_capacity",
+            "backend_admission_tests::directory_history_retains_root_child_and_collection_domains",
+            "backend_admission_tests::directory_history_cancellation_reaches_both_collection_backends",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "http_default_directory::tests::selection_ingress_binds_path_and_parses_operation_once",
+            "engine_backend::read_projection::tests::default_directory_tests::typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_policy",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors",
+            "tests::http_boundary_tests::routing_failures_keep_status_allow_and_error_fields"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_directory_scopes::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::directory_scope_query_contract_errors_follow_capacity",
+            "backend_admission_tests::directory_scope_query_admits_only_valid_projection_and_path_combinations",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_disk_directory::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::historical_directory_branch_override_preserves_both_sources_and_revocation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_file_history_source::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::history_source_defers_contract_errors_until_after_query_and_capacity",
+            "backend_admission_tests::history_source_calls_backend_only_for_the_original_identifier_domain",
+            "backend_admission_tests::history_source_cancellation_reaches_the_admitted_backend",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
+            "authorized_backend_tests::historical_source_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::file_manager::history_query_tests::history_context_preserves_projection_and_current_admission"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_listing::tests::",
+            "backend_listing::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::listing_contract_errors_follow_query_shape_and_capacity",
+            "backend_admission_tests::listing_only_dispatches_valid_domain_requests",
+            "tests::listing_http_boundary_preserves_root_shape_and_rejects_invalid_queries",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation",
+            "backend_admission_tests::typed_jobs_hold_auth_owner_until_cancelled_worker_finishes",
+            "backend_admission_tests::queued_backend_job_keeps_auth_and_admission_after_cancellation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "authorized_backend_tests::revoked_sessions_never_reach_protected_backend_methods",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 17,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_note::tests::"
+          ],
+          "max_tests": 14,
+          "exact": [
+            "engine_backend::revocation_tests::version_note_lookup_preserves_revocation_and_replay_order",
+            "engine_backend::revocation_tests::file_note_lookup_preserves_revocation_and_replay_order",
+            "engine_backend::revocation_tests::node_note_lookup_preserves_receipt_write_fence_and_revocation_order"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::authorization_tests::retained_metadata::retained_metadata_d3_preserves_current_authorization_for_edits_and_receipts",
+            "smb_rpc::tests::default_share_tests::phase1_new_file_tests::phase1_primary_source_read_to_new_target_keeps_independent_history"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_operation::tests::",
+            "engine_backend::operations::tests::",
+            "operation_observation::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::operation_lookup_defers_id_errors_until_after_query_and_capacity",
+            "backend_admission_tests::operation_lookup_calls_backend_only_for_admitted_ids_and_queries",
+            "backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation"
+          ],
+          "max_tests": 18,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::ordinary_conversion::tests::"
+          ],
+          "max_tests": 20,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "http_file_deletion::projection::tests::"
+          ],
+          "max_tests": 80,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "max_tests": 160,
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "engine_backend::admission::tests::",
+            "engine_backend::file_manager::history_nodes::tests::",
+            "engine_backend::read_projection::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_disk_directory::tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::historical_directory_branch_override_preserves_both_sources_and_revocation",
+            "authorized_backend_tests::protected_overrides_preserve_identity_arguments_results_and_errors",
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_shared_history::tests::"
+          ],
+          "exact": [
+            "backend_admission_tests::shared_history_defers_contract_errors_until_after_query_and_capacity",
+            "backend_admission_tests::shared_history_calls_backend_only_for_original_file_and_root_domains",
+            "backend_admission_tests::shared_history_http_cancellation_reaches_the_authorized_backend",
+            "authorized_backend_tests::shared_history_override_preserves_request_identity_and_revocation",
+            "tests::http_boundary_tests::blocking_task_panics_are_internal_errors_not_client_errors"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "prefixes": [
+            "backend_listing::tests::",
+            "backend_object_move::tests::",
+            "engine_backend::foreign_plan::tests::",
+            "management::foreign_plan::tests::"
+          ],
+          "max_tests": 16,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "engine_backend::version_read_tests::"
+          ],
+          "exact": [
+            "engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions",
+            "engine_backend::revocation_tests::embedded_backend_without_protected_credentials_fails_closed",
+            "engine_backend::read_projection::tests::authorization_tests::narrow_authorization_matches_old_tree_metadata_decisions_and_error_precedence",
+            "engine_backend::read_projection::tests::authorization_tests::narrow_authorization_after_held_lock_binding_change_rechecks_current_generation"
+          ],
+          "max_tests": 7,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core",
+            "fault-injection"
+          ],
+          "exact": [
+            "smb_rpc::tests::manual_recovery_tests::retention::every_retirement_interruption_preserves_evidence_until_retry_and_cold_recovery"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "membership-initializer-directory-locks": {
       "reason": "Execute all membership reservation regressions, including initializer-versus-membership directory lock exclusion, original held roots, cancellation barriers and preserved conflict bytes.",
       "python_tests": [],
@@ -11382,6 +11847,12 @@
       "path": "test/server/unit/smb_rpc/ordinary_rmdir_tests.rs",
       "groups": [
         "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/ordinary_rmdir_tests.rs",
+      "groups": [
+        "manual-working-blocked-server-carry-forward"
       ]
     }
   ],
