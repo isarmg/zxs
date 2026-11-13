@@ -59,6 +59,7 @@ pub use engine::{
     VerifiedDirectorySnapshotSource,
 };
 pub use engine::FileHistoryMoveTargetReport;
+pub use engine::FilePathChange;
 pub use engine::ReadView;
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,

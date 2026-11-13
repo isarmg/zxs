@@ -164,14 +164,14 @@ fn content_matches_legal_renames_keep_version_candidates_and_invalidate_old_root
         (&peer.file_id, &peer.entry_id, &peer.version_id)
     );
     assert_eq!(pool.engine.state().versions.len(), 2);
-    let current_node = pool
+    let current_context = pool
         .engine
         .file_context(&pool.repository, "box/renamed")
-        .unwrap()
-        .node_id
         .unwrap();
+    assert_eq!(current_context, source_context);
+    let current_node = pool.engine.file_branch_head(&current_context.branch_id).unwrap();
     assert_eq!(current_node, source.version_id);
-    assert_eq!(pool.engine.file_branch_head(&source_context.branch_id).unwrap(), source_head);
+    assert_eq!(current_node, source_head);
     assert!(pool.engine.state().file_path_nodes.is_empty());
     let request = pool.request(&moved, &current_node, None, 64);
     let before_query = storage_contract::canonical_json(pool.engine.state()).unwrap();

@@ -28,20 +28,20 @@ fn metadata_node(pool: &mut Pool, entry: &Entry) -> String {
         OperationId::generate().unwrap(),
     ).unwrap();
     let labels = container_tags_fixture::tags(&pool.engine, &entry.file_id);
-    for (from, to) in [(entry.path(), "merge-source"), ("merge-source", entry.path())] {
-        pool.engine.file_namespace(
-            &pool.repository,
-            storage_engine::NamespaceOperation::parse(
-                storage_engine::NamespaceOperationKind::Rename, from, Some(to),
-            ).unwrap(),
-            "admin",
-            OperationId::generate().unwrap(),
-        ).unwrap();
-    }
-    let context = pool.engine.file_context(&pool.repository, entry.path()).unwrap();
-    let head = pool.engine.file_branch_head(&context.branch_id).unwrap();
+    // A name change is not a history node. Publish a distinct body so the
+    // merge has two real source nodes while adopting the original bytes.
+    pool.save(&[(entry.path(), b"metadata merge source")]);
+    let head = pool.entry(entry.path()).version_id;
+    assert_ne!(head, entry.version_id);
+    let branch = pool.engine.create_file_branch(
+        &entry.file_id,
+        &head,
+        &BranchName::parse("metadata source").unwrap(),
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap().branch_id.unwrap();
     let inputs = [&entry.version_id, &head].map(|node| storage_engine::FileHistoryMergeInput {
-        branch_id: context.branch_id.clone(),
+        branch_id: branch.clone(),
         source_node_id: node.clone(),
         expected_node_id: head.clone(),
     });

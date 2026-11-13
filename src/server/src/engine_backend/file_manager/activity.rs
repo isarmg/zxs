@@ -612,33 +612,46 @@ fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
 }
 
 fn path_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    for node in engine.state().file_path_nodes.values() {
-        if !history_sequence_may_fit(events, node.sequence) {
-            continue;
-        }
-        let repo = repo_for_history(engine, &node.history_tree_id)?;
+    // Select globally once: reading one lifecycle per file would repeatedly
+    // scan the same ledger and allocate unrelated retained deletion frontiers.
+    let mut selected = BTreeMap::new();
+    engine.visit_file_path_changes(
+        &storage_engine::HistoryWindowCancellation::new(),
+        |fact| {
+            if history_sequence_may_fit(events, fact.sequence.get()) {
+                selected.insert((Reverse(fact.sequence.get()), fact.event_id), fact);
+                if selected.len() > HISTORY_LIMIT {
+                    selected.pop_last();
+                }
+            }
+        },
+    ).map_err(crate::engine_backend::error)?;
+    for (_, fact) in selected {
+        let repo = repo_for_history(engine, &fact.history_tree_id.to_string())?;
         let display = if repo.file_manager_root {
-            node.path.clone()
+            fact.after.path.as_str().to_owned()
         } else {
-            format!("{}/{}", repo.name, node.path)
+            format!("{}/{}", repo.name, fact.after.path)
         };
         record_event(
             events,
-            node.sequence,
-            node.node_id.clone(),
+            fact.sequence.get(),
+            fact.event_id.to_string(),
             PendingEvent {
-                timestamp: Timestamp::Seconds(node.created_at),
+                timestamp: Timestamp::Seconds(fact.occurred_at.unix_seconds()),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
                 action: "file.path.rename".into(),
-                principal: Some(node.author.clone()),
-                file_id: node.file_id.clone(),
+                principal: Some(fact.author.to_string()),
+                file_id: fact.file_id.to_string(),
                 message: String::new(),
                 detail: PendingDetail::Captured(ActivityDetailSnapshot::Path {
-                    version_id: node.version_id.clone(),
-                    node_id: node.node_id.clone(),
-                    previous_path: node.previous_path.clone(),
-                    branch_id: node.branch_id.clone(),
+                    version_id: fact.after_version_id.to_string(),
+                    // A path fact is not a content-history node. Retain the wire
+                    // field using its real body node, never the event identity.
+                    node_id: fact.after_version_id.to_string(),
+                    previous_path: fact.before.path.as_str().to_owned(),
+                    branch_id: fact.branch_id.to_string(),
                 }),
             },
         );

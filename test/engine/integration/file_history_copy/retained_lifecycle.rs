@@ -244,21 +244,17 @@ fn retained_copy_of_copy_flattens_its_own_receipt_prefix_and_later_native_d() {
 }
 
 #[test]
-fn retained_copy_refuses_to_upgrade_old_graph_only_copy_receipts() {
-    let Fixture {
-        temp: _temp,
-        mut engine,
-        source,
-        target,
-    } = Fixture::new(true);
+fn ordinary_history_copy_preserves_retained_audit_through_recopy_and_cold_replay() {
+    let Fixture { temp, mut engine, source, target } = Fixture::new(true);
     let original = entry(&engine, &source, "source.txt");
     delete_undo(&mut engine, &source, &original);
     let first = request(&engine, &source, &target);
-    let legacy = engine.copy_file_history(&first, "admin", op()).unwrap();
-    assert!(legacy.result.get("retained_lifecycle").is_none());
+    let copied = engine.copy_file_history(&first, "admin", op()).unwrap();
+    assert_eq!(copied.kind, "file.history.copy");
+    assert_eq!(copied.result["retained_lifecycle"]["events"].as_array().unwrap().len(), 2);
     let destination = engine
         .create_repository(
-            &RepositoryName::parse("no-upgrade").unwrap(),
+            &RepositoryName::parse("retained-recopy").unwrap(),
             "P01",
             1,
             "admin",
@@ -267,16 +263,23 @@ fn retained_copy_refuses_to_upgrade_old_graph_only_copy_receipts() {
         .unwrap();
     let mut second = request(&engine, &target, &destination);
     second.source_path = "copied.txt".into();
-    let before = engine.state().clone();
-    assert_eq!(
-        engine
-            .copy_retained_file_history(&second, "admin", op())
-            .unwrap_err()
-            .code(),
-        ErrorCode::UnsupportedOperation
-    );
-    assert_eq!(engine.state(), &before);
-    assert_eq!(engine.operation(legacy.operation_id).unwrap(), legacy);
+    let receipt = engine.copy_retained_file_history(&second, "admin", op()).unwrap();
+    let final_file = entry(&engine, &destination, "copied.txt");
+    let db = database(&engine, &destination, &final_file.file_id, "P01", "copied.txt");
+    let imported = audit(&db);
+    assert_eq!(imported.len(), 2);
+    assert_eq!(json_codec::json!(imported), receipt.result["retained_lifecycle"]["events"]);
+    assert!(imported.iter().all(|event| event["node"]["file_id"] == final_file.file_id));
+    assert!(engine.file_deletion(&final_file.file_id).is_none());
+    let source_bytes = bytes(&engine, &original.version_id);
+    assert_eq!(bytes(&engine, &final_file.version_id), source_bytes);
+    assert_eq!(engine.operation(copied.operation_id).unwrap(), copied);
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(audit(&db), imported);
+    assert_eq!(bytes(&engine, &final_file.version_id), source_bytes);
+    assert_eq!(engine.operation(copied.operation_id).unwrap(), copied);
+    assert_eq!(engine.operation(receipt.operation_id).unwrap(), receipt);
 }
 
 #[test]

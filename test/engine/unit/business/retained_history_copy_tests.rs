@@ -1,5 +1,6 @@
 //! Allocation-free encoded-length counting and pre-decode event count fences.
 use super::*;
+use crate::ErrorCode;
 
 #[test]
 fn retained_history_copy_budget_counts_exact_encoded_bytes_without_a_value_copy() {
@@ -156,4 +157,24 @@ fn retained_prefix_requires_path_field_and_one_shared_event_budget_before_decode
     });
     assert_eq!(require_event_budget(&combined).unwrap_err().code(), ErrorCode::ResourceLimit);
     require_event_budget(&json!({"events": [], "path_changes": []})).unwrap();
+}
+
+#[test]
+fn graph_only_copy_receipt_cannot_supply_a_retained_prefix() {
+    let receipt = OperationResult {
+        operation_id: OperationId::generate().unwrap(),
+        kind: KIND.into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: crate::CommitState::Published,
+        protection_at_publish: crate::ProtectionAtPublish::TargetMet,
+        current_health: crate::CurrentHealth::Healthy,
+        request_digest: "missing-retained-envelope".into(),
+        sequence: 1,
+        result: json!({}),
+    };
+    let before = storage_contract::canonical_json(&receipt).unwrap();
+    assert_eq!(read(&receipt, "not-decoded").unwrap_err().code(), ErrorCode::PublicationInvalid);
+    assert_eq!(storage_contract::canonical_json(&receipt).unwrap(), before);
 }

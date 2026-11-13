@@ -152,6 +152,10 @@ fn shared_history_discovers_transitive_files_without_folding_revisited_bytes_or_
             OperationId::generate().unwrap(),
         )
         .unwrap();
+    let renamed = pool.entry("renamed");
+    assert_eq!(renamed.file_id, latest_a.file_id);
+    assert_eq!(renamed.version_id, latest_a.version_id);
+    assert!(pool.engine.namespace_tree(&pool.branch).unwrap().get("a").is_none());
     let before = storage_contract::canonical_json(pool.engine.state()).unwrap();
     let joined = graph(&pool, &c.file_id);
     assert_eq!(
@@ -163,7 +167,7 @@ fn shared_history_discovers_transitive_files_without_folding_revisited_bytes_or_
         joined
             .nodes
             .iter()
-            .any(|node| node.kind == SharedHistoryNodeKind::Rename)
+            .all(|node| node.kind != SharedHistoryNodeKind::Rename)
     );
     let shared_x = joined
         .shared_contents

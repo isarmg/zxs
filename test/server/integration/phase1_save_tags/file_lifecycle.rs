@@ -173,7 +173,16 @@ async fn file_lifecycle_real_router_delete_undo_auth_current_root_and_read_only(
     }
     assert_eq!(status(&fixture, &url, true).await, StatusCode::CONFLICT);
     let after_rename = fixture.history(file).await;
-    assert_eq!(after_rename["nodes"], before_rename["nodes"]);
+    let mut expected_nodes = before_rename["nodes"].clone();
+    for node in expected_nodes.as_array_mut().unwrap() {
+        let old = node["storage_name"].as_str().unwrap();
+        let (identity, name) = old.split_once('-').unwrap();
+        assert_eq!(identity.len(), 15);
+        assert_eq!(name, "a");
+        node["storage_name"] = format!("{identity}-final-name").into();
+        node["download_name"] = "final-name".into();
+    }
+    assert_eq!(after_rename["nodes"], expected_nodes);
     assert_eq!(
         after_rename["identity"]["context"]["current_node_id"],
         before_rename["identity"]["context"]["current_node_id"],

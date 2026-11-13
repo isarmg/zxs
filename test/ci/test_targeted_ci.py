@@ -2641,3 +2641,26 @@ class ContainerCurrentNameSelection(unittest.TestCase):
                             for target in targets))
         self.assertTrue(all(target.get('name') != 'recursive_backup_paths'
                             for target in targets))
+
+
+class PathFactActivitySelection(unittest.TestCase):
+    def test_path_fact_activity_keeps_engine_admission_and_real_http_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        paths = [
+            'src/engine/src/engine/path_history.rs',
+            'test/engine/unit/engine/path_history_tests.rs',
+            'src/server/src/engine_backend/file_manager/activity.rs',
+            'test/server/integration/http_engine/history_alias_operations.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(policy, [path], shardable=True)
+                self.assertIn('path-fact-activity', plan['groups'])
+                self.assertCountEqual(origin_selections(plan, 'path-fact-activity'),
+                                      policy['groups']['path-fact-activity']['rust_targets'])
+        targets = policy['groups']['path-fact-activity']['rust_targets']
+        self.assertEqual(targets[0]['prefixes'], ['engine::path_history::tests::'])
+        self.assertEqual(targets[1]['prefixes'], ['history_alias_operations::'])
+        self.assertEqual(targets[1]['name'], 'http_engine')
+        self.assertEqual(targets[2]['mode'], 'check')
+        self.assertIs(targets[2]['default_features'], False)

@@ -473,7 +473,16 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
     let renamed = history(&app, &token, file).await;
     assert_eq!(renamed["identity"]["context"]["current_node_id"], base);
-    assert_eq!(renamed["nodes"], initial["nodes"]);
+    let mut expected_nodes = initial["nodes"].clone();
+    for node in expected_nodes.as_array_mut().unwrap() {
+        let old = node["storage_name"].as_str().unwrap();
+        let (identity, name) = old.split_once('-').unwrap();
+        assert_eq!(identity.len(), 15);
+        assert_eq!(name, "report.txt");
+        node["storage_name"] = format!("{identity}-renamed.txt").into();
+        node["download_name"] = "renamed.txt".into();
+    }
+    assert_eq!(renamed["nodes"], expected_nodes);
     assert_retained_path_change(
         &app, &token, file, &renamed, repo, "report.txt", "renamed.txt",
     ).await;

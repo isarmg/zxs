@@ -441,7 +441,36 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
             OperationId::generate().unwrap(),
         ).unwrap();
     }
-    let retained_node = engine.file_branch_head(&review).unwrap();
+    // Namespace renames no longer manufacture metadata nodes. Retain a real
+    // merge node, chosen from two distinct content revisions, for note coverage.
+    let review_head = write_history_content(&mut engine, &review, "A.txt", b"review bytes");
+    let inputs = [&a.version_id, &review_head].map(|node| {
+        storage_contract::FileHistoryMergeInput {
+            branch_id: review.clone(),
+            source_node_id: node.clone(),
+            expected_node_id: review_head.clone(),
+        }
+    });
+    let merged = engine.merge_file_history(storage_engine::FileHistoryMergeRequest {
+        file_id: &a.file_id,
+        inputs: &inputs,
+        chosen_node_id: &a.version_id,
+        name: &storage_contract::BranchName::parse("retained metadata").unwrap(),
+        location: None,
+        principal: "alice",
+        operation_id: OperationId::generate().unwrap(),
+    }).unwrap();
+    let retained_node = merged.result["node_id"].as_str().unwrap().to_owned();
+    let retained_branch = merged.result["branch_id"].as_str().unwrap().to_owned();
+    let expected_heads = engine.state().branches.values()
+        .filter(|branch| branch.file_id.as_deref() == Some(a.file_id.as_str()))
+        .map(|branch| {
+            (branch.branch_id.clone(), engine.file_branch_head(&branch.branch_id).unwrap())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(expected_heads.len(), 4);
+    let expected_parents = expected_heads.values().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(expected_parents.len(), 3);
     engine.select_file_branch(
         &a.file_id, &original_branch, "alice", OperationId::generate().unwrap(),
     ).unwrap();
@@ -533,9 +562,9 @@ fn public_backend_soft_delete_preserves_frontier_and_freezes_only_deleted_identi
         .current_file_deletion(&management, &file)
         .unwrap()
         .unwrap();
-    assert_eq!(d.branch_heads.len(), 2);
-    assert_eq!(d.parent_node_ids.len(), 2);
-    assert_eq!(d.branch_heads[&review], retained_node);
+    assert_eq!(d.branch_heads, expected_heads);
+    assert_eq!(d.parent_node_ids.iter().cloned().collect::<BTreeSet<_>>(), expected_parents);
+    assert_eq!(d.branch_heads[&retained_branch], retained_node);
     assert!(d.parent_node_ids.contains(&a.version_id));
     assert!(backend.authorize_version(&smb, &a.version_id).is_err());
     assert!(

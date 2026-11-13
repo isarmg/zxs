@@ -110,11 +110,8 @@ fn file_history_matches_container_tag_free_graph_json() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    let renamed = engine
-        .file_context(&repo.repository_id, "after.txt")
-        .unwrap()
-        .node_id
-        .unwrap();
+    assert_eq!(engine.file_branch_head(&branch).unwrap(), first.version_id);
+    assert!(engine.state().file_path_nodes.is_empty());
     let second = save(
         &mut engine,
         &repo.main_branch_id,
@@ -143,12 +140,11 @@ fn file_history_matches_container_tag_free_graph_json() {
             (first.file_id.as_str(), "file"),
             (first.version_id.as_str(), "body-old"),
             (second.version_id.as_str(), "body-new"),
-            (renamed.as_str(), "renamed"),
             (branch.as_str(), "branch"),
         ]),
     );
-    // The container-tag contract removes the label row and label fields from
-    // the prior graph fixture. Content and rename facts retain their sequence.
+    // Labels and namespace renames leave content ancestry unchanged. Original
+    // paths remain evidence; every body uses the container's current name.
     let expected: Value = json_codec::from_str(include_str!("history_nodes_golden.json")).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(json_codec::to_vec(engine.state()).unwrap(), before);

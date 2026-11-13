@@ -3178,6 +3178,42 @@
           "default_features": false
         }
       ]
+    },
+    "path-fact-activity": {
+      "reason": "Expose admitted permanent path facts to bounded activity without inventing content nodes; preserve real alias occurrences, exact event identity, cancellation, full-ledger refusal and cold replay.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::path_history::tests::"
+          ],
+          "max_tests": 12,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "prefixes": [
+            "history_alias_operations::"
+          ],
+          "max_tests": 40,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -8938,6 +8974,30 @@
       "path": "docs/adr/container-current-name.md",
       "groups": [
         "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/path_history.rs",
+      "groups": [
+        "path-fact-activity"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/path_history_tests.rs",
+      "groups": [
+        "path-fact-activity"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/activity.rs",
+      "groups": [
+        "path-fact-activity"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/history_alias_operations.rs",
+      "groups": [
+        "path-fact-activity"
       ]
     }
   ],

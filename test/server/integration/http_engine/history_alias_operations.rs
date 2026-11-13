@@ -11,8 +11,13 @@ async fn prepare_alias_composition(
     token: &str,
     retain_occurrence: bool,
 ) -> (Value, Value) {
-    manager_upload(app, token, "b/first.txt", b"shared body").await;
+    manager_upload(app, token, "b/first/data.txt", b"shared body").await;
     manager_upload(app, token, "b/stay.txt", b"unrelated body").await;
+    for directory in ["b/second", "b/retained", "b/renamed"] {
+        success(app, token, "POST", "/api/file-manager/disks/P01/namespace", Some(json!({
+            "kind":"mkdir", "path":directory, "operation_id":new_id("op").unwrap()
+        }))).await;
+    }
     let listing = alias_listing(app, token).await;
     let repository = listing["context"]["repository_id"].as_str().unwrap();
     // Each branch belongs to the same initialized owner. A branch move can
@@ -21,19 +26,19 @@ async fn prepare_alias_composition(
     let target = manager_prepare_directory_branch(app, token, "b", "target").await;
     if retain_occurrence {
         let retained = manager_prepare_directory_branch(app, token, "b", "retained").await;
-        introduce_alias(app, token, repository, &retained, &target, "b/retained.txt").await;
+        introduce_alias(app, token, repository, &retained, &target, "b/retained/data.txt").await;
     }
-    introduce_alias(app, token, repository, &first, &target, "b/second.txt").await;
+    introduce_alias(app, token, repository, &first, &target, "b/second/data.txt").await;
     // The source view is now empty. Select it so both target aliases are
     // introduced by the next checkout, without constructing synthetic state.
     manager_checkpoint_and_select(app, token, repository, &first).await;
     let selected = manager_checkpoint_and_select(app, token, repository, &target).await;
     let listing = alias_listing(app, token).await;
-    let first = alias_entry(&listing, "first.txt");
-    let second = alias_entry(&listing, "second.txt");
+    let first = alias_entry(&listing, "b/first/data.txt");
+    let second = alias_entry(&listing, "b/second/data.txt");
     assert_same_file(first, second);
     if retain_occurrence {
-        assert_same_file(first, alias_entry(&listing, "retained.txt"));
+        assert_same_file(first, alias_entry(&listing, "b/retained/data.txt"));
     }
     (first.clone(), selected)
 }
@@ -57,7 +62,7 @@ async fn introduce_alias(
         "/api/file-manager/disks/P01/namespace-batch",
         Some(json!({
             "kind":"move", "operation_id":new_id("op").unwrap(), "items":[{
-                "source":manager_batch_source(&source, "b/first.txt"),
+                "source":manager_batch_source(&source, "b/first/data.txt"),
                 "target":manager_batch_target(&target, destination)
             }]
         })),
@@ -66,23 +71,50 @@ async fn introduce_alias(
 }
 
 async fn alias_listing(app: &Router, token: &str) -> Value {
-    success(
-        app,
-        token,
-        "GET",
-        "/api/file-manager/disks/P01/entries?path=b",
-        None,
-    )
-    .await
+    let mut listing = success(
+        app, token, "GET", "/api/file-manager/disks/P01/entries?path=b", None,
+    ).await;
+    // Aggregate only these real HTTP listings for assertions. No synthetic
+    // identity or spelling is introduced; aliases share a leaf, not a parent.
+    let mut entries = Vec::new();
+    for entry in listing["entries"].as_array().unwrap() {
+        if entry["file_id"].as_str().unwrap().is_empty() {
+            let query = url_encoding::form::Serializer::new(String::new())
+                .append_pair("path", entry["path"].as_str().unwrap()).finish();
+            let child = success(app, token, "GET", &format!(
+                "/api/file-manager/disks/P01/entries?{query}"
+            ), None).await;
+            entries.extend(child["entries"].as_array().unwrap().iter().cloned());
+        } else {
+            entries.push(entry.clone());
+        }
+    }
+    listing["entries"] = entries.into();
+    listing
 }
 
 fn alias_entry<'a>(listing: &'a Value, name: &str) -> &'a Value {
-    listing["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["name"] == name)
-        .unwrap()
+    let path = name;
+    listing["entries"].as_array().unwrap().iter().find(|entry| {
+        if path.contains('/') { entry["path"] == path } else { entry["name"] == path }
+    }).unwrap()
+}
+
+async fn alias_namespace_request(
+    app: &Router, token: &str, kind: &str, path: &str, destination: Option<&str>,
+) -> Value {
+    let listing = alias_listing(app, token).await;
+    let repository = listing["context"]["repository_id"].as_str().unwrap();
+    let scopes = success(app, token, "GET", &format!(
+        "/api/repositories/{repository}/directory-branches?path=b"
+    ), None).await;
+    let scope = scopes["directory_branches"].as_array().unwrap().iter()
+        .find(|scope| scope["current"] == true).unwrap();
+    let mut item = json!({"source":manager_batch_source(scope, path)});
+    if let Some(destination) = destination {
+        item["target"] = manager_batch_target(scope, destination);
+    }
+    json!({"kind":kind,"operation_id":new_id("op").unwrap(),"items":[item]})
 }
 
 fn assert_same_file(first: &Value, second: &Value) {
@@ -97,7 +129,7 @@ async fn workspace_namespace(app: &Router, token: &str, changes: &[Value]) -> Va
         token,
         "POST",
         "/api/file-manager/disks/P01/write-sessions",
-        Some(json!({"path":"b/first.txt"})),
+        Some(json!({"path":"b/first/data.txt"})),
     )
     .await;
     let workspace = workspace["workspace_id"].as_str().unwrap();
@@ -177,6 +209,14 @@ fn assert_paths(events: &[Value], action: &str, expected: &[&str]) {
         .collect::<Vec<_>>();
     for row in &rows {
         assert_eq!(row["principal"], "admin");
+        if action == "file.path.rename" {
+            row["event_id"].as_str().unwrap()
+                .parse::<storage_contract::FilePathEventId>().unwrap();
+            let body = row["node_id"].as_str().unwrap()
+                .parse::<storage_contract::VersionId>().unwrap();
+            assert_eq!(body.to_string(), row["version_id"]);
+            assert_ne!(row["event_id"], row["node_id"]);
+        }
     }
     let paths = rows
         .iter()
@@ -223,7 +263,7 @@ async fn selection_history_keeps_two_introduced_alias_paths() {
     assert_paths(
         &events,
         "directory_git_checkout",
-        &["b/first.txt", "b/second.txt"],
+        &["b/first/data.txt", "b/second/data.txt"],
     );
 }
 
@@ -264,19 +304,12 @@ async fn workspace_history_keeps_both_deleted_alias_paths_with_retained_occurren
         &app,
         &token,
         &[
-            json!({"kind":"delete","path":"b/first.txt"}),
-            json!({"kind":"delete","path":"b/second.txt"}),
+            json!({"kind":"delete","path":"b/first/data.txt"}),
+            json!({"kind":"delete","path":"b/second/data.txt"}),
         ],
     )
     .await;
-    let listing = success(
-        &app,
-        &token,
-        "GET",
-        "/api/file-manager/disks/P01/entries?path=b",
-        None,
-    )
-    .await;
+    let listing = alias_listing(&app, &token).await;
     let aliases = listing["entries"]
         .as_array()
         .unwrap()
@@ -284,16 +317,16 @@ async fn workspace_history_keeps_both_deleted_alias_paths_with_retained_occurren
         .filter(|entry| entry["file_id"] == file["file_id"])
         .collect::<Vec<_>>();
     assert_eq!(aliases.len(), 1);
-    assert_eq!(aliases[0]["name"], "retained.txt");
+    assert_eq!(aliases[0]["path"], "b/retained/data.txt");
     assert_same_file(&file, aliases[0]);
-    assert_visible_alias_history(&app, &token, aliases[0], "b/retained.txt").await;
+    assert_visible_alias_history(&app, &token, aliases[0], "b/retained/data.txt").await;
     let events = operation_events(&app, &token, &deleted, &file).await;
-    assert_paths(&events, "delete", &["b/first.txt", "b/second.txt"]);
+    assert_paths(&events, "delete", &["b/first/data.txt", "b/second/data.txt"]);
 }
 
 #[tokio::test]
 async fn workspace_alias_rename_is_not_reported_as_deletion() {
-    for destination in ["b/renamed.txt", "b/FIRST.txt"] {
+    for destination in ["b/renamed/data.txt", "b/first/DATA.txt"] {
         let root = tempfile::tempdir().unwrap();
         let app = application(root.path());
         let token = login(&app, "admin", "integration-test-password").await;
@@ -301,24 +334,29 @@ async fn workspace_alias_rename_is_not_reported_as_deletion() {
         let renamed = workspace_namespace(
             &app,
             &token,
-            &[json!({"kind":"rename","path":"b/first.txt","destination":destination})],
+            &[json!({"kind":"rename","path":"b/first/data.txt","destination":destination})],
         )
         .await;
         let events = operation_events(&app, &token, &renamed, &file).await;
         assert_paths(&events, "delete", &[]);
-        assert_paths(&events, "file.path.rename", &[destination]);
+        let expected = if destination == "b/first/DATA.txt" {
+            vec![destination, "b/second/DATA.txt"]
+        } else {
+            vec![destination]
+        };
+        assert_paths(&events, "file.path.rename", &expected);
         assert!(
             events
                 .iter()
                 .any(|event| event["action"] == "file.path.rename"
-                    && event["previous_path"] == "b/first.txt")
+                    && event["previous_path"] == "b/first/data.txt")
         );
     }
 }
 
 #[tokio::test]
 async fn workspace_history_records_each_single_alias_deletion() {
-    for path in ["b/first.txt", "b/second.txt"] {
+    for path in ["b/first/data.txt", "b/second/data.txt"] {
         let root = tempfile::tempdir().unwrap();
         let app = application(root.path());
         let token = login(&app, "admin", "integration-test-password").await;
@@ -333,8 +371,8 @@ async fn workspace_history_records_each_single_alias_deletion() {
 #[tokio::test]
 async fn workspace_history_keeps_deletion_when_survivor_reuses_path() {
     for (removed, survivor) in [
-        ("b/first.txt", "b/second.txt"),
-        ("b/second.txt", "b/first.txt"),
+        ("b/first/data.txt", "b/second/data.txt"),
+        ("b/second/data.txt", "b/first/data.txt"),
     ] {
         let root = tempfile::tempdir().unwrap();
         let app = application(root.path());
@@ -365,13 +403,13 @@ async fn workspace_history_records_deleted_path_after_rename() {
         &app,
         &token,
         &[
-            json!({"kind":"rename","path":"b/first.txt","destination":"b/renamed.txt"}),
-            json!({"kind":"delete","path":"b/renamed.txt"}),
+            json!({"kind":"rename","path":"b/first/data.txt","destination":"b/renamed/data.txt"}),
+            json!({"kind":"delete","path":"b/renamed/data.txt"}),
         ],
     )
     .await;
     let events = operation_events(&app, &token, &operation, &file).await;
-    assert_paths(&events, "delete", &["b/renamed.txt"]);
+    assert_paths(&events, "delete", &["b/renamed/data.txt"]);
 }
 
 #[tokio::test]
@@ -386,14 +424,14 @@ async fn workspace_history_keeps_repeated_removal_of_same_path() {
         &app,
         &token,
         &[
-            json!({"kind":"delete","path":"b/first.txt"}),
-            json!({"kind":"rename","path":"b/second.txt","destination":"b/first.txt"}),
-            json!({"kind":"delete","path":"b/first.txt"}),
+            json!({"kind":"delete","path":"b/first/data.txt"}),
+            json!({"kind":"rename","path":"b/second/data.txt","destination":"b/first/data.txt"}),
+            json!({"kind":"delete","path":"b/first/data.txt"}),
         ],
     )
     .await;
     let events = operation_events(&app, &token, &operation, &file).await;
-    assert_paths(&events, "delete", &["b/first.txt", "b/first.txt"]);
+    assert_paths(&events, "delete", &["b/first/data.txt", "b/first/data.txt"]);
     let ids = events
         .iter()
         .filter(|event| event["action"] == "delete")
@@ -425,7 +463,7 @@ fn assert_deleted_alias(deleted: &Value, file: &Value, path: &str) -> Value {
 
 fn alias_move_request(listing: &Value, source: &str, destination: &str) -> Value {
     let repository = &listing["context"]["repository_id"];
-    let entry = alias_entry(listing, source.rsplit('/').next().unwrap());
+    let entry = alias_entry(listing, source);
     json!({
         "operation_id":new_id("op").unwrap(),
         "movement":{
@@ -518,7 +556,7 @@ async fn restore_alias_batch(app: &Router, token: &str, deleted: &Value, file: &
     )
     .await;
     let listing = alias_listing(app, token).await;
-    for name in ["first.txt", "second.txt"] {
+    for name in ["b/first/data.txt", "b/second/data.txt"] {
         assert_same_file(file, alias_entry(&listing, name));
     }
     for node in deleted["result"]["deletion_nodes"].as_array().unwrap() {
@@ -528,12 +566,12 @@ async fn restore_alias_batch(app: &Router, token: &str, deleted: &Value, file: &
 
 #[tokio::test]
 async fn namespace_batch_alias_deletion_retains_one_lifecycle_and_exact_replay() {
-    for path in ["b/first.txt", "b/second.txt"] {
+    for path in ["b/first/data.txt", "b/second/data.txt"] {
         let root = tempfile::tempdir().unwrap();
         let app = application(root.path());
         let token = login(&app, "admin", "integration-test-password").await;
         let (file, _) = prepare_aliases(&app, &token).await;
-        let request = manager_prepare_namespace_request(&app, &token, "delete", path, None).await;
+        let request = alias_namespace_request(&app, &token, "delete", path, None).await;
         let route = "/api/file-manager/disks/P01/namespace-batch";
         let deleted = success(&app, &token, "POST", route, Some(request.clone())).await;
         let node = assert_deleted_alias(&deleted, &file, path);
@@ -546,7 +584,7 @@ async fn namespace_batch_alias_deletion_retains_one_lifecycle_and_exact_replay()
                 .iter()
                 .all(|entry| entry["file_id"] != file["file_id"])
         );
-        for reserved in ["b/first.txt", "b/second.txt"] {
+        for reserved in ["b/first/data.txt", "b/second/data.txt"] {
             assert_reserved_alias_path(&app, &token, reserved).await;
         }
         recreate_beside_deleted_aliases(&app, &token, &file).await;
@@ -555,7 +593,8 @@ async fn namespace_batch_alias_deletion_retains_one_lifecycle_and_exact_replay()
             success(&app, &token, "POST", route, Some(request.clone())).await,
             deleted
         );
-        let repeated = manager_namespace(&app, &token, "delete", path, None).await;
+        let repeated_request = alias_namespace_request(&app, &token, "delete", path, None).await;
+        let repeated = success(&app, &token, "POST", route, Some(repeated_request)).await;
         let second = assert_deleted_alias(&repeated, &file, path);
         lifecycle_events(&app, &token, &repeated, &second).await;
         assert_eq!(lifecycle_events(&app, &token, &deleted, &node).await, events);
@@ -588,7 +627,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
         &route,
         Some(json!({
             "repository_id":listing["context"]["repository_id"],
-            "path":"b/first.txt", "operation_id":new_id("op").unwrap()
+            "path":"b/first/data.txt", "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -607,7 +646,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
     let undo_events = lifecycle_events(&app, &token, &restored, node).await;
     assert_ne!(deletion_events[0]["event_id"], undo_events[0]["event_id"]);
     let listing = alias_listing(&app, &token).await;
-    let request = alias_move_request(&listing, "b/first.txt", "b/renamed.txt");
+    let request = alias_move_request(&listing, "b/first/data.txt", "b/renamed/data.txt");
     let moved = success(
         &app,
         &token,
@@ -617,7 +656,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
     )
     .await;
     let events = operation_events(&app, &token, &moved, &file).await;
-    assert_paths(&events, "file.path.rename", &["b/renamed.txt"]);
+    assert_paths(&events, "file.path.rename", &["b/renamed/data.txt"]);
     assert_paths(&events, "delete", &[]);
     assert_eq!(
         lifecycle_events(&app, &token, &deleted, node).await,
@@ -646,7 +685,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
             .unwrap()
             .paths
             .iter()
-            .any(|deleted| deleted.path == "b/first.txt")
+            .any(|deleted| deleted.path == "b/first/data.txt")
     );
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend.open_auth(&system).unwrap();
@@ -664,7 +703,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
     assert_eq!(replay, moved);
     assert_eq!(operation_events(&app, &token, &replay, &file).await, events);
     let listing = alias_listing(&app, &token).await;
-    let mut replacement = alias_move_request(&listing, "b/renamed.txt", "b/stay.txt");
+    let mut replacement = alias_move_request(&listing, "b/renamed/data.txt", "b/stay.txt");
     replacement["movement"]["replace"] = json!(true);
     replacement["movement"]["target_entry_id"] = alias_entry(&listing, "stay.txt")["entry_id"].clone();
     let replaced = success(
@@ -676,7 +715,7 @@ async fn single_file_lifecycle_history_keeps_original_path_after_object_move() {
     )
     .await;
     let events = operation_events(&app, &token, &replaced, &file).await;
-    assert_paths(&events, "file.path.rename", &["b/stay.txt"]);
+    assert_paths(&events, "file.path.rename", &["b/stay.txt", "b/second/stay.txt"]);
     assert_paths(&events, "delete", &["b/stay.txt"]);
 }
 
@@ -686,15 +725,15 @@ async fn namespace_batch_history_keeps_each_deleted_file_and_its_restore() {
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let (file, _) = prepare_aliases(&app, &token).await;
-    let mut request = manager_prepare_namespace_request(
+    let mut request = alias_namespace_request(
         &app,
         &token,
         "delete",
-        "b/first.txt",
+        "b/first/data.txt",
         None,
     )
     .await;
-    let sibling = manager_prepare_namespace_request(
+    let sibling = alias_namespace_request(
         &app,
         &token,
         "delete",
@@ -802,10 +841,10 @@ async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_rep
     config.disks[1].upstream_slot_id = None;
     let app = configured_application(root.path(), config);
     let token = login(&app, "admin", "integration-test-password").await;
-    manager_upload(&app, &token, "b/first.txt", b"cross-owner body").await;
+    manager_upload(&app, &token, "b/first/data.txt", b"cross-owner body").await;
     let listing = alias_listing(&app, &token).await;
-    let source = alias_entry(&listing, "first.txt").clone();
-    let mut request = alias_move_request(&listing, "b/first.txt", "moved.txt");
+    let source = alias_entry(&listing, "b/first/data.txt").clone();
+    let mut request = alias_move_request(&listing, "b/first/data.txt", "moved.txt");
     request["movement"]["target_slot_id"] = json!("B01");
     request["movement"]["target_repository_id"] = Value::Null;
     let moved = success(
@@ -831,8 +870,8 @@ async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_rep
         target_listing["context"]["repository_id"]
     );
     let events = operation_events(&app, &token, &moved, &target).await;
-    assert_paths(&events, "delete", &["b/first.txt"]);
-    assert_paths(&events, "file.path.rename", &["moved.txt"]);
+    assert_paths(&events, "delete", &["b/first/data.txt"]);
+    assert_paths(&events, "object_move", &["moved.txt"]);
     assert_eq!(
         events
             .iter()
@@ -853,7 +892,7 @@ async fn cross_repository_move_keeps_source_deletion_and_target_rename_after_rep
         commit.operation_id.to_string() == operation
             && &commit.history_tree_id == source_history
             && commit.namespace_deletions.as_ref().is_some_and(|deletions| {
-                deletions.paths.iter().any(|deleted| deleted.path == "b/first.txt")
+                deletions.paths.iter().any(|deleted| deleted.path == "b/first/data.txt")
             })
     }));
     // This move creates a distinct target container, not a same-container
