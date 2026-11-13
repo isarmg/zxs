@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use storage_contract::working_tree::{
     MaterialCommitment, SnapshotNodeId, SnapshotRepositoryId,
 };
-use storage_contract::{ContentHash, FileId, OperationId, VersionId, VersionStorageId};
+use storage_contract::{
+    BranchId, ContentHash, FileId, FileNodeId, OperationId, VersionId, VersionStorageId,
+};
 
 pub(crate) const MAX_ENTRIES: usize = 2048;
 pub(crate) const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
@@ -33,6 +35,8 @@ pub(crate) enum SnapshotManifestError {
     Management,
     #[error("directory snapshot version has conflicting immutable file identities")]
     Version,
+    #[error("directory snapshot selected version node differs from its file material")]
+    SourceVersion,
     #[error("directory snapshot payload mappings do not exactly close the file inventory")]
     Payloads,
     #[error("directory snapshot short storage identities collide")]
@@ -67,11 +71,23 @@ pub(crate) struct SnapshotFile {
     pub(crate) content_hash: ContentHash,
 }
 
+/// Frozen per-occurrence provenance, not proof of current physical presence.
+/// Different aliases of the same version can select different FILE branches.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serialization(tag = "kind", content = "file", rename_all = "snake_case", deny_unknown_fields)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum SnapshotFileSource {
+    Container { branch: BranchId, node: FileNodeId },
+    /// A previously associated container is authoritatively absent. Unknown
+    /// imports instead receive a new independent container after write sealing;
+    /// matching bytes, names or versions can never associate their original.
+    SnapshotOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SnapshotEntryContent {
     Directory {},
-    File(SnapshotFile),
+    File { material: SnapshotFile, source: SnapshotFileSource },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -132,7 +148,7 @@ impl AdmittedSnapshotManifest {
         }
         let mut payloads = BTreeMap::new();
         for entry in &entries {
-            if let SnapshotEntryContent::File(file) = entry.content {
+            if let SnapshotEntryContent::File { material: file, .. } = entry.content {
                 payloads.entry(file.version_id).or_insert_with(|| SnapshotPayload {
                     version_id: file.version_id,
                     storage_id: VersionStorageId::from_version(file.version_id),
@@ -256,7 +272,14 @@ fn admit_entries(
                 return Err(SnapshotManifestError::Parent);
             }
         }
-        if let SnapshotEntryContent::File(file) = entry.content {
+        if let SnapshotEntryContent::File { material: file, source } = entry.content {
+            if let SnapshotFileSource::Container {
+                node: FileNodeId::Version(version), ..
+            } = source {
+                if version != file.version_id {
+                    return Err(SnapshotManifestError::SourceVersion);
+                }
+            }
             logical_bytes = logical_bytes.checked_add(file.size)
                 .filter(|total| *total <= MAX_LOGICAL_BYTES)
                 .ok_or(SnapshotManifestError::Budget)?;
@@ -280,7 +303,7 @@ fn admit_payloads(
     }
     let mut origins = BTreeMap::new();
     for entry in &record.entries {
-        if let SnapshotEntryContent::File(file) = entry.content {
+        if let SnapshotEntryContent::File { material: file, .. } = entry.content {
             origins.entry(file.version_id).or_insert(&entry.path);
         }
     }

@@ -20,7 +20,7 @@ fn manifest() -> AdmittedSnapshotManifest {
             },
             SnapshotEntry {
                 path: PortablePath::parse("original.txt").unwrap(),
-                content: SnapshotEntryContent::File(SnapshotFile {
+                content: content(SnapshotFile {
                     file_id: FileId::from_random([4; 16]),
                     version_id: VersionId::from_random([5; 16]),
                     size: BODY.len() as u64,
@@ -155,4 +155,11 @@ fn payloads_are_independent_single_link_copies_and_new_reads_verify_every_time()
         .join(layout::file(&node.manifest().payloads()[&version()]).as_path());
     fs::write(&payload, b"changed after admission").unwrap();
     assert!(matches!(node.open_payload(version()), Err(SnapshotStoreError::Payload(_))));
+}
+
+fn content(material: SnapshotFile) -> SnapshotEntryContent {
+    SnapshotEntryContent::File {
+        material,
+        source: crate::working_tree::snapshot::SnapshotFileSource::SnapshotOnly,
+    }
 }

@@ -22,11 +22,11 @@ fn source() -> AdmittedSnapshotManifest {
     manifest(2, vec![
         SnapshotEntry {
             path: PortablePath::parse("A.txt").unwrap(),
-            content: SnapshotEntryContent::File(file(3, b"original A")),
+            content: content(file(3, b"original A")),
         },
         SnapshotEntry {
             path: PortablePath::parse("B.txt").unwrap(),
-            content: SnapshotEntryContent::File(file(4, b"original B")),
+            content: content(file(4, b"original B")),
         },
         SnapshotEntry {
             path: PortablePath::parse("Empty").unwrap(),
@@ -78,6 +78,8 @@ fn modified_files_move_and_untouched_files_copy_without_creating_untouched_file_
         container: ContainerPublication::Update {
             file: changed.material.file.file_id,
             source_version: VersionId::from_random([3; 16]),
+            source_branch: storage_contract::BranchId::from_random([70; 16]),
+            source_node: storage_contract::FileNodeId::Version(VersionId::from_random([3; 16])),
             entity,
         },
     });
@@ -133,9 +135,9 @@ fn published_view_keeps_logical_paths_but_routes_all_files_to_the_new_node() {
     let changed = edit(b"edited A");
     let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
     let mut entries = source.entries().to_vec();
-    entries[0].content = SnapshotEntryContent::File(changed.material.file);
+    entries[0].content = content(changed.material.file);
     let published = manifest(9, entries);
-    assert_eq!(view.published_view(&published).unwrap(), published.reference());
+    assert_eq!(view.published_view(&published, &published_sources(&changed)).unwrap(), published.reference());
     let after = SparseProjection::admit(&published, vec![]).unwrap();
     assert_eq!(route(&after, "A.txt"), ReadRoute::Original { file: changed.material.file });
     assert_eq!(route(&after, "B.txt"), ReadRoute::Original { file: file(4, b"original B") });
@@ -147,9 +149,9 @@ fn incomplete_or_stale_published_snapshot_does_not_replace_the_worktree_view() {
     let source = source();
     let view = SparseProjection::admit(&source, vec![edit(b"edited A")]).unwrap();
     let stale = manifest(9, source.entries().to_vec());
-    assert!(matches!(view.published_view(&stale), Err(ProjectionError::PublishedView)));
+    assert!(matches!(view.published_view(&stale, &published_sources(&edit(b"edited A"))), Err(ProjectionError::PublishedView)));
     let incomplete = manifest(9, vec![source.entries()[0].clone()]);
-    assert!(matches!(view.published_view(&incomplete), Err(ProjectionError::PublishedView)));
+    assert!(matches!(view.published_view(&incomplete, &published_sources(&edit(b"edited A"))), Err(ProjectionError::PublishedView)));
 }
 
 #[test]
@@ -170,4 +172,68 @@ fn overlay_rejects_duplicate_paths_foreign_file_identity_and_mutated_old_version
     assert!(matches!(
         SparseProjection::admit(&source, vec![mutation]), Err(ProjectionError::Version),
     ));
+}
+
+fn content(material: SnapshotFile) -> SnapshotEntryContent {
+    SnapshotEntryContent::File {
+        material,
+        source: SnapshotFileSource::Container {
+            branch: storage_contract::BranchId::from_random([70; 16]),
+            node: storage_contract::FileNodeId::Version(material.version_id),
+        },
+    }
+}
+
+fn published_sources(edit: &FileEdit) -> Vec<PublishedFileSource> {
+    vec![PublishedFileSource {
+        path: edit.path.clone(),
+        source: SnapshotFileSource::Container {
+            branch: storage_contract::BranchId::from_random([70; 16]),
+            node: storage_contract::FileNodeId::Version(edit.material.file.version_id),
+        },
+    }]
+}
+
+#[test]
+fn snapshot_only_edits_never_query_or_guess_a_container_even_when_identity_matches() {
+    let mut entries = source().entries().to_vec();
+    entries[0].content = SnapshotEntryContent::File {
+        material: file(3, b"original A"), source: SnapshotFileSource::SnapshotOnly,
+    };
+    let source = manifest(2, entries);
+    let changed = edit(b"edited A");
+    let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
+    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
+        panic!("snapshot-only provenance must never invoke a container locator")
+    }).unwrap();
+    assert_eq!(plan[0].transfer, Transfer::MoveWorking {
+        material: &changed.material,
+        container: ContainerPublication::SnapshotOnly { file: changed.material.file.file_id },
+    });
+    let mut result = source.entries().to_vec();
+    result[0].content = content(changed.material.file);
+    let forged = manifest(9, result);
+    assert!(matches!(view.published_view(&forged, &published_sources(&changed)),
+        Err(ProjectionError::PublishedView)));
+}
+
+#[test]
+fn alias_edits_use_the_frozen_selected_branch_and_node_not_a_current_default() {
+    let body = file(3, b"original A");
+    let selected = SnapshotFileSource::Container {
+        branch: storage_contract::BranchId::from_random([90; 16]),
+        node: storage_contract::FileNodeId::Metadata(storage_contract::Id::from_random([91; 16])),
+    };
+    let source = manifest(2, vec![SnapshotEntry {
+        path: PortablePath::parse("A.txt").unwrap(),
+        content: SnapshotEntryContent::File { material: body, source: selected },
+    }]);
+    let view = SparseProjection::admit(&source, vec![edit(b"changed")]).unwrap();
+    let plan = view.plan(|_| Ok::<_, ()>(ContainerPresence::Present {
+        entity: LocalEntityIdentity::new(1, 2),
+    })).unwrap();
+    let Transfer::MoveWorking { container: ContainerPublication::Update {
+        source_branch, source_node, ..
+    }, .. } = plan[0].transfer else { panic!("expected known-container change") };
+    assert_eq!(SnapshotFileSource::Container { branch: source_branch, node: source_node }, selected);
 }

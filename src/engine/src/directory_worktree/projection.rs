@@ -1,11 +1,12 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 use crate::working_tree::snapshot::{
-    AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotReference,
+    AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotFileSource,
+    SnapshotReference,
 };
 use name_policy::{LookupPath, PortablePath};
 use platform_io::fs_safety::EntryName;
 use std::collections::BTreeMap;
-use storage_contract::{FileId, VersionId};
+use storage_contract::{BranchId, FileId, FileNodeId, VersionId};
 use storage_contract::working_tree::LocalEntityIdentity;
 
 /// Complete bytes already admitted from this instance's held sparse directory.
@@ -38,6 +39,8 @@ pub(crate) enum ContainerPublication {
     Update {
         file: FileId,
         source_version: VersionId,
+        source_branch: BranchId,
+        source_node: FileNodeId,
         entity: LocalEntityIdentity,
     },
     SnapshotOnly { file: FileId },
@@ -58,6 +61,11 @@ pub(crate) enum Transfer<'a> {
         material: &'a WorkingFile,
         container: ContainerPublication,
     },
+}
+#[derive(Debug, PartialEq)]
+pub(crate) struct PublishedFileSource {
+    pub(crate) path: PortablePath,
+    pub(crate) source: SnapshotFileSource,
 }
 #[derive(Debug, PartialEq)]
 pub(crate) struct PlannedEntry<'a> {
@@ -95,7 +103,7 @@ impl<'a> SparseProjection<'a> {
                 entry.path.key().cmp(edit.path.key())
             }).map_err(|_| ProjectionError::Source)?;
             let entry = &source.entries()[index];
-            let SnapshotEntryContent::File(original) = entry.content else {
+            let SnapshotEntryContent::File { material: original, .. } = entry.content else {
                 return Err(ProjectionError::Source);
             };
             if entry.path != edit.path || original.file_id != edit.material.file.file_id {
@@ -117,7 +125,7 @@ impl<'a> SparseProjection<'a> {
         }).ok()?;
         Some(match self.source.entries()[index].content {
             SnapshotEntryContent::Directory {} => ReadRoute::Directory,
-            SnapshotEntryContent::File(file) => match self.edits.get(&index) {
+            SnapshotEntryContent::File { material: file, .. } => match self.edits.get(&index) {
                 Some(material) => ReadRoute::Working { material },
                 None => ReadRoute::Original { file },
             },
@@ -135,16 +143,29 @@ impl<'a> SparseProjection<'a> {
         for (index, entry) in self.source.entries().iter().enumerate() {
             let transfer = match entry.content {
                 SnapshotEntryContent::Directory {} => Transfer::Directory,
-                SnapshotEntryContent::File(file) => match self.edits.get(&index) {
+                SnapshotEntryContent::File {
+                    material: file, source,
+                } => match self.edits.get(&index) {
                     Some(material) => {
-                        let container = match locate(file.file_id)? {
-                            ContainerPresence::Present { entity } => ContainerPublication::Update {
-                                file: file.file_id,
-                                source_version: file.version_id,
-                                entity,
-                            },
-                            ContainerPresence::Absent => {
+                        let container = match source {
+                            SnapshotFileSource::SnapshotOnly => {
                                 ContainerPublication::SnapshotOnly { file: file.file_id }
+                            }
+                            SnapshotFileSource::Container { branch, node } => {
+                                match locate(file.file_id)? {
+                                    ContainerPresence::Present { entity } => {
+                                        ContainerPublication::Update {
+                                            file: file.file_id,
+                                            source_version: file.version_id,
+                                            source_branch: branch,
+                                            source_node: node,
+                                            entity,
+                                        }
+                                    }
+                                    ContainerPresence::Absent => {
+                                        ContainerPublication::SnapshotOnly { file: file.file_id }
+                                    }
+                                }
                             }
                         };
                         Transfer::MoveWorking { material, container }
@@ -162,8 +183,10 @@ impl<'a> SparseProjection<'a> {
     pub(crate) fn published_view(
         &self,
         node: &AdmittedSnapshotManifest,
+        published_sources: &[PublishedFileSource],
     ) -> Result<SnapshotReference, ProjectionError> {
-        if node.repository_id() != self.source.repository_id()
+        if published_sources.len() != self.edits.len()
+            || node.repository_id() != self.source.repository_id()
             || node.node_id() == self.source.node_id()
             || node.entries().len() != self.source.entries().len()
         {
@@ -173,7 +196,7 @@ impl<'a> SparseProjection<'a> {
             .zip(node.entries()).enumerate()
         {
             if original.path != published.path
-                || self.final_content(index, original) != published.content
+                || self.final_content(index, original, published_sources)? != published.content
             {
                 return Err(ProjectionError::PublishedView);
             }
@@ -181,19 +204,35 @@ impl<'a> SparseProjection<'a> {
         Ok(node.reference())
     }
 
-    fn final_content(&self, index: usize, original: &SnapshotEntry) -> SnapshotEntryContent {
-        match original.content {
+    fn final_content(
+        &self,
+        index: usize,
+        entry: &SnapshotEntry,
+        published_sources: &[PublishedFileSource],
+    ) -> Result<SnapshotEntryContent, ProjectionError> {
+        Ok(match entry.content {
             SnapshotEntryContent::Directory {} => SnapshotEntryContent::Directory {},
-            SnapshotEntryContent::File(file) => match self.edits.get(&index) {
+            SnapshotEntryContent::File { material: file, source } => match self.edits.get(&index) {
                 Some(material) => {
-                    SnapshotEntryContent::File(material.file)
+                    let mut selected = published_sources.iter()
+                        .filter(|item| item.path == entry.path);
+                    let published_source = selected.next()
+                        .ok_or(ProjectionError::PublishedView)?.source;
+                    if selected.next().is_some() {
+                        return Err(ProjectionError::PublishedView);
+                    }
+                    if source == SnapshotFileSource::SnapshotOnly
+                        && published_source != SnapshotFileSource::SnapshotOnly
+                    {
+                        return Err(ProjectionError::PublishedView);
+                    }
+                    SnapshotEntryContent::File { material: material.file, source: published_source }
                 }
-                None => SnapshotEntryContent::File(file),
+                None => SnapshotEntryContent::File { material: file, source },
             },
-        }
+        })
     }
 }
-
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/directory_worktree/projection.rs"]

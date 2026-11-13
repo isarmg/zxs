@@ -26,7 +26,7 @@ fn entries() -> Vec<SnapshotEntry> {
     vec![
         entry("empty", SnapshotEntryContent::Directory {}),
         entry("folder", SnapshotEntryContent::Directory {}),
-        entry("folder/file.txt", SnapshotEntryContent::File(file(b"snapshot"))),
+        entry("folder/file.txt", content(file(b"snapshot"))),
     ]
 }
 
@@ -65,10 +65,10 @@ fn independent_commitment_and_selected_node_identity_cannot_be_self_attested() {
 
 #[test]
 fn complete_parent_closure_rejects_omission_files_and_case_aliases() {
-    let item = entry("folder/file.txt", SnapshotEntryContent::File(file(b"data")));
+    let item = entry("folder/file.txt", content(file(b"data")));
     assert!(matches!(prepare(vec![item.clone()]), Err(SnapshotManifestError::Parent)));
     assert!(matches!(prepare(vec![
-        entry("folder", SnapshotEntryContent::File(file(b"data"))), item.clone(),
+        entry("folder", content(file(b"data"))), item.clone(),
     ]), Err(SnapshotManifestError::Parent)));
     assert!(matches!(prepare(vec![
         entry("FOLDER", SnapshotEntryContent::Directory {}), item,
@@ -98,25 +98,25 @@ fn protected_management_never_becomes_snapshot_user_content() {
 fn version_aliases_share_one_full_payload_but_count_every_logical_occurrence() {
     let common = file(b"same version");
     let admitted = prepare(vec![
-        entry("a", SnapshotEntryContent::File(common)),
-        entry("b", SnapshotEntryContent::File(common)),
+        entry("a", content(common)),
+        entry("b", content(common)),
     ]).unwrap();
     assert_eq!(admitted.entries().len(), 2);
     assert_eq!(admitted.files().len(), 1);
     let mut conflicting = common;
     conflicting.file_id = FileId::from_random([9; 16]);
     assert!(matches!(prepare(vec![
-        entry("a", SnapshotEntryContent::File(common)),
-        entry("b", SnapshotEntryContent::File(conflicting)),
+        entry("a", content(common)),
+        entry("b", content(conflicting)),
     ]), Err(SnapshotManifestError::Version)));
     let mut large = common;
     large.size = MAX_LOGICAL_BYTES;
     assert!(matches!(prepare(vec![
-        entry("a", SnapshotEntryContent::File(large)),
-        entry("b", SnapshotEntryContent::File(large)),
+        entry("a", content(large)),
+        entry("b", content(large)),
     ]), Err(SnapshotManifestError::Budget)));
     large.size = u64::MAX;
-    assert!(matches!(prepare(vec![entry("a", SnapshotEntryContent::File(large))]),
+    assert!(matches!(prepare(vec![entry("a", content(large))]),
         Err(SnapshotManifestError::Budget)));
 }
 
@@ -147,8 +147,8 @@ fn short_ids_are_bound_addresses_and_collision_cannot_merge_full_version_identit
     let mut second = file(b"two");
     second.version_id = VersionId::from_random([6; 16]);
     let admitted = prepare(vec![
-        entry("one.txt", SnapshotEntryContent::File(first)),
-        entry("two.txt", SnapshotEntryContent::File(second)),
+        entry("one.txt", content(first)),
+        entry("two.txt", content(second)),
     ]).unwrap();
     let one = &admitted.payloads()[&first.version_id];
     assert_eq!(one.storage_id.as_str().len(), 15);
@@ -166,8 +166,8 @@ fn short_ids_are_bound_addresses_and_collision_cannot_merge_full_version_identit
 fn payload_mapping_requires_full_inventory_and_original_alias_spelling() {
     let common = file(b"shared");
     let admitted = prepare(vec![
-        entry("first.txt", SnapshotEntryContent::File(common)),
-        entry("second.txt", SnapshotEntryContent::File(common)),
+        entry("first.txt", content(common)),
+        entry("second.txt", content(common)),
     ]).unwrap();
     assert_eq!(admitted.payloads().len(), 1);
     assert_eq!(admitted.payloads()[&common.version_id].source_path.as_str(), "first.txt");
@@ -182,6 +182,47 @@ fn payload_mapping_requires_full_inventory_and_original_alias_spelling() {
         AdmittedSnapshotManifest::admit(record), Err(SnapshotManifestError::Payloads),
     ));
     let long = "a".repeat(240);
-    assert!(matches!(prepare(vec![entry(&long, SnapshotEntryContent::File(common))]),
+    assert!(matches!(prepare(vec![entry(&long, content(common))]),
         Err(SnapshotManifestError::Filename)));
+}
+
+fn content(material: SnapshotFile) -> SnapshotEntryContent {
+    SnapshotEntryContent::File {
+        material,
+        source: crate::working_tree::snapshot::SnapshotFileSource::SnapshotOnly,
+    }
+}
+
+#[test]
+fn per_occurrence_provenance_survives_cold_decode_without_splitting_shared_payloads() {
+    let material = file(b"one immutable version");
+    let source = SnapshotFileSource::Container {
+        branch: BranchId::from_random([7; 16]),
+        node: FileNodeId::Version(material.version_id),
+    };
+    let another_branch = SnapshotFileSource::Container {
+        branch: BranchId::from_random([8; 16]),
+        node: FileNodeId::Version(material.version_id),
+    };
+    let original = vec![
+        entry("a", SnapshotEntryContent::File { material, source }),
+        entry("b", SnapshotEntryContent::File { material, source: another_branch }),
+        entry("c", content(material)),
+    ];
+    let admitted = prepare(original.clone()).unwrap();
+    let recovered = AdmittedSnapshotManifest::decode(admitted.bytes(), admitted.reference()).unwrap();
+    assert_eq!(recovered.entries(), original);
+    assert_eq!(recovered.files().len(), 1);
+    assert_eq!(recovered.payloads().len(), 1);
+}
+
+#[test]
+fn version_source_node_must_identify_the_exact_body_not_another_version() {
+    assert!(matches!(prepare(vec![entry("a", SnapshotEntryContent::File {
+        material: file(b"content"),
+        source: SnapshotFileSource::Container {
+            branch: BranchId::from_random([7; 16]),
+            node: FileNodeId::Version(VersionId::from_random([8; 16])),
+        },
+    })]), Err(SnapshotManifestError::SourceVersion)));
 }

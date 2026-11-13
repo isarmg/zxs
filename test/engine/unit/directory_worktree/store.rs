@@ -35,7 +35,7 @@ impl Fixture {
             vec![
                 SnapshotEntry {
                     path: PortablePath::parse("A.txt").unwrap(),
-                    content: SnapshotEntryContent::File(file),
+                    content: content(file),
                 },
                 SnapshotEntry {
                     path: PortablePath::parse("Empty").unwrap(),
@@ -160,4 +160,11 @@ fn another_snapshot_cannot_authorize_reopening_this_worktree() {
         Err(WorktreeStoreError::Source),
     ));
     assert!(names(worktree.directory()).is_empty());
+}
+
+fn content(material: SnapshotFile) -> SnapshotEntryContent {
+    SnapshotEntryContent::File {
+        material,
+        source: crate::working_tree::snapshot::SnapshotFileSource::SnapshotOnly,
+    }
 }
