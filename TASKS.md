@@ -22,7 +22,7 @@
 
 - [ ] GitHub 定向 CI 验证文件容器备份镜像的完整条目预算：预备图与普通图补父目录后不越过 100,000 项，文件与 locator 的精确上限、已有父目录及完整原生 Backup 冷重放；未本地编译或测试，见[验证范围](docs/validation/backup-entity-entry-budget.md)。
 
-- [ ] 删除后同名重建的旧分支身份拒绝仍待新可逆生命周期接线后补验；已初始化仓库的 workspace delete_tree 拒绝及原状态不变已由定向 CI 验证，不能用该禁令或普通 rename 替代身份消失场景。
+- [ ] 删除后同名重建的旧分支身份拒绝仍待新可逆生命周期接线后补验；已初始化仓库的 workspace delete_tree 拒绝及原状态不变已由定向 CI 验证，不能用该禁令或普通 rename 替代身份消失场景。 selected-batch 新回归仅验证直接重建拒绝、精确 undo、显式移走后路径复用；目录标签另验证已准入 Current projection 撤下整个旧目录后的同路径新身份，不将两者冒充直接 delete→recreate 或 D3 持久激活验收。
 
 - [ ] 定向 CI 验证历史目录节点建分支的 Web 接线：可写目录加载节点与冻结干净审阅、原请求字节／摘要／会话与边界预算、未知结果只查原 operation ID、显式原请求重试、不自动 checkout。原生行为选择与 WASM 编译须分别取得证据，真实浏览器仍待验；新增原请求摘要／HTTP 正文边界使 web json_value +2、api_path_literal +1，显式导入替换 glob_super -1，其余指标不变。
 
@@ -46,6 +46,8 @@
 - [ ] GitHub CI 验证 #1164 原批次撤销清单的 WASM HTML `open=""` 属性，保持默认展开与用户折叠。
 - [ ] GitHub CI 验证登录前安装浏览观察器后的首次主盘浏览：磁盘身份、空根、重读、浏览无变更；验证当前四个管理入口、八项主导航、双语只读动作与反馈生命周期。
 - [ ] 复验待验的格式／Clippy／类型及接线修复，覆盖 SQLite 新来源与特性图、安全公告、依赖／许可材料、CLI golden、私有目录夹具、独立 mount namespace、helper publication 故障与真实 SDK 编译诊断。
+
+- [ ] 闭环历史包永久路径审计：manifest/export/restore 当前尚未完整携带 path_changes，不能用空 file_path_nodes 相等宣称恢复审计。新增必填 typed 审计封装、原事件／操作／主体证明、完整批次、identity-preserving restore 与扁平再导出待远端验证；无法证明完整包外批次时明确拒绝导出，foreign remap 的非空审计在显式映射来源证明完成前 fail-closed，不改写原 receipt／digest、不静默丢字段。跨来源复制与导入的完整正向支持须单独取得证据。
 
 ## 新版规范的底层重构
 

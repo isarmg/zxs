@@ -311,8 +311,10 @@ fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
         admitted.selected_tree_id(),
         state.directory_tree_selections[&fixture.repo.repository_id]
     );
-    assert_ne!(
-        admitted.selected_tree_id(),
+    // A source keeps the named HEAD for CAS even when its rows come from a
+    // different selected tree. The child below exercises that distinction.
+    assert_eq!(
+        admitted.branch().head_tree_id,
         state.directory_branches[&fixture.root].head_tree_id
     );
     assert!(admitted.branch().entries.contains(&fixture.original_child));
@@ -332,6 +334,14 @@ fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
     );
     assert!(sources.scope.is_none());
     assert_eq!(sources.get(&fixture.root).unwrap().branch(), &expected);
+    let child = selected_branch(&fixture.engine, &fixture.repo, "dir/child");
+    let selected_child = sources.get(&child).unwrap();
+    assert_ne!(
+        selected_child.selected_tree_id(),
+        state.directory_branches[&child].head_tree_id
+    );
+    assert!(selected_child.branch().entries.contains(&fixture.original_child));
+    assert!(!selected_child.branch().entries.contains(&fixture.later_child));
 }
 
 #[test]
@@ -421,7 +431,7 @@ fn disk_exit_selected_projection_batch_moves_historical_child_not_its_newer_file
         context.inherited_from.as_deref(),
         Some(fixture.root.as_str())
     );
-    let request = DirectoryNamespaceBatch {
+    let mut request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Move,
         items: vec![mapping(
             &fixture.engine,
@@ -431,8 +441,23 @@ fn disk_exit_selected_projection_batch_moves_historical_child_not_its_newer_file
             Some((&destination, "dest/moved")),
         )],
     };
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let refused = op();
+    assert_eq!(
+        apply(&mut fixture.engine, &fixture.repo, &request, refused).unwrap_err().code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert!(!fixture.engine.state.operations.contains_key(&refused));
+    // Moving across committed owners requires its independent history-export
+    // protocol. Exercise an ordinary move inside the admitted historical owner.
+    request.items[0].target = Some(DirectoryNamespaceTarget {
+        directory_branch_id: child.clone(),
+        expected_tree_id: fixture.engine.state.directory_branches[&child].head_tree_id.clone(),
+        path: "dir/child/moved".into(),
+    });
     apply(&mut fixture.engine, &fixture.repo, &request, op()).unwrap();
-    let moved = entry(&fixture.engine, &fixture.repo, "dest/moved");
+    let moved = entry(&fixture.engine, &fixture.repo, "dir/child/moved");
     assert_eq!(moved.entry_id, fixture.original_child.entry_id);
     assert_eq!(moved.file_id, fixture.original_child.file_id);
     assert_eq!(moved.version_id, fixture.original_child.version_id);
@@ -440,7 +465,7 @@ fn disk_exit_selected_projection_batch_moves_historical_child_not_its_newer_file
     assert_eq!(
         fixture
             .engine
-            .file_context(&fixture.repo.repository_id, "dest/moved")
+            .file_context(&fixture.repo.repository_id, "dir/child/moved")
             .unwrap()
             .inherited_from,
         context.inherited_from
@@ -460,7 +485,7 @@ fn disk_exit_selected_projection_batch_moves_historical_child_not_its_newer_file
     );
     drop(fixture.engine);
     let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
-    assert_eq!(entry(&engine, &fixture.repo, "dest/moved"), moved);
+    assert_eq!(entry(&engine, &fixture.repo, "dir/child/moved"), moved);
     assert_eq!(body(&engine, &moved), b"selected original body");
 }
 
@@ -515,7 +540,8 @@ fn disk_exit_selected_projection_batch_rename_reuses_hidden_name_not_identity_an
 }
 
 #[test]
-fn disk_exit_selected_projection_batch_delete_tree_and_recreate_never_readmits_old_directory() {
+fn disk_exit_selected_projection_batch_delete_undo_then_move_allows_explicit_path_reuse()
+{
     let mut fixture = Fixture::new();
     fixture.exit_and_select(MembershipExitAction::Deregister);
     let old_directory = entry(&fixture.engine, &fixture.repo, "dir/child");
@@ -531,9 +557,67 @@ fn disk_exit_selected_projection_batch_delete_tree_and_recreate_never_readmits_o
         )],
     };
     let receipt = apply(&mut fixture.engine, &fixture.repo, &request, op()).unwrap();
-    let commit = &fixture.engine.state.commits[receipt.result["commit_id"].as_str().unwrap()];
-    let deleted = &commit.namespace_deletions.as_ref().unwrap().paths;
-    assert!(deleted.iter().all(|entry| entry.path != "dir/child/hidden"));
+    let marker: storage_contract::directory_git::DirectoryDeletionNode =
+        json_codec::from_value(receipt.result["directory_deletion"].clone()).unwrap();
+    assert!(marker.files.contains_key(&fixture.original_child.file_id));
+    assert!(!marker.files.contains_key(&fixture.hidden[1].file_id));
+    assert!(
+        fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+            .get("dir/child").is_none()
+    );
+    // Direct delete/recreate is not supported by the reversible lifecycle:
+    // the deleted directory still reserves its identity and frozen subtree.
+    let workspace = fixture.engine
+        .create_workspace(&fixture.repo.main_branch_id, "admin").unwrap();
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let refused = op();
+    let recreation = fixture.engine.stage_bytes(
+        &workspace.workspace_id, "dir/child/new", b"refused direct recreation",
+    ).and_then(|_| fixture.engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id.clone(),
+        operation_id: refused,
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "refused direct directory recreation".into(),
+        request_digest: None,
+    }).map(|_| ()));
+    assert_eq!(recreation.unwrap_err().code(), ErrorCode::BranchNotActive);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert!(!fixture.engine.state.operations.contains_key(&refused));
+    fixture.engine.abort_workspace(&workspace.workspace_id, "admin").unwrap();
+    fixture.engine.undo_directory_deletion(
+        &fixture.repo.repository_id,
+        &storage_contract::directory_git::UndoDirectoryDeletionBody {
+            owner_directory_id: marker.owner_directory_id,
+            directory_id: marker.directory_id,
+            deletion_node_id: marker.node_id,
+            operation_id: op(),
+        },
+        "admin",
+    ).unwrap();
+    assert_eq!(
+        entry(&fixture.engine, &fixture.repo, "dir/child").entry_id,
+        old_directory.entry_id
+    );
+    assert_eq!(body(&fixture.engine, &fixture.original_child), b"selected original body");
+    // This verifies delete/undo plus explicit relocation and path reuse only,
+    // not direct delete/recreate. The old directory remains at retained-child.
+    let move_restored = DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Rename,
+        items: vec![mapping(
+            &fixture.engine,
+            &fixture.repo,
+            &fixture.root,
+            "dir/child",
+            Some((&fixture.root, "retained-child")),
+        )],
+    };
+    apply(&mut fixture.engine, &fixture.repo, &move_restored, op()).unwrap();
+    assert_eq!(
+        entry(&fixture.engine, &fixture.repo, "retained-child").entry_id,
+        old_directory.entry_id
+    );
     save(
         &mut fixture.engine,
         &fixture.repo,
@@ -619,7 +703,8 @@ fn disk_exit_selected_projection_batch_rejects_inactive_hidden_and_unselected_tr
         )
         .unwrap_err()
         .code(),
-        ErrorCode::EntryNotFound
+        // Native whole-file deletion binds an exact selected composition.
+        ErrorCode::DirectoryBranchConflict
     );
     let mut wrong_baseline = mapping(&fixture.engine, &fixture.repo, &fixture.root, "dir/b", None);
     let unselected_tree = fixture.engine.state.directory_branches[&fixture.inactive]

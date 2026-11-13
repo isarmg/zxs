@@ -79,11 +79,37 @@ fn membership_registry_current_directory_label_reuses_the_exact_owned_projection
 #[test]
 fn membership_registry_current_directory_label_rejects_reused_path_identity() {
     let mut fixture = Fixture::new(true);
-    let branch_id = directory_branch(&mut fixture);
+    let rule = new_id("rule").unwrap();
+    fixture.engine.update_placement_rule(PlacementRuleUpdate {
+        rule_id: &rule,
+        repository_id: &fixture.repo.repository_id,
+        path_prefix: "retired/only",
+        primary_slot_id: "P01",
+        expected_generation: 0,
+        principal: "admin",
+        operation_id: op(),
+    }).unwrap();
+    save(
+        &mut fixture.engine,
+        &fixture.repo.main_branch_id,
+        "retired/only",
+        b"old scope",
+    );
+    let branch_id = crate::directory_git_fixture::checkpoint(
+        &mut fixture.engine, &fixture.repo, "retired",
+    ).directory_branch_id.unwrap();
+    fixture.engine.update_placement_rule(PlacementRuleUpdate {
+        rule_id: &rule,
+        repository_id: &fixture.repo.repository_id,
+        path_prefix: "retired/only",
+        primary_slot_id: "D04",
+        expected_generation: 1,
+        principal: "admin",
+        operation_id: op(),
+    }).unwrap();
     let old_directory = fixture.engine.state.directory_branches[&branch_id]
         .directory_id
         .clone();
-    fixture.project(false);
     let name = BranchName::parse("Before removal").unwrap();
     let operation = op();
     let receipt = fixture
@@ -96,19 +122,20 @@ fn membership_registry_current_directory_label_rejects_reused_path_identity() {
             operation,
         )
         .unwrap();
-    fixture
-        .engine
-        .file_namespace(
-            &fixture.repo.repository_id,
-            NamespaceOperation::parse(NamespaceOperationKind::DeleteTree, "dir", None).unwrap(),
-            "admin",
-            op(),
-        )
-        .unwrap();
+    let old_branch = fixture.engine.state.directory_branches[&branch_id].clone();
+    let old_tree = fixture.engine.state.directory_trees[&old_branch.head_tree_id].clone();
+    // The admitted Current projection omits the old directory because all its
+    // occurrences live on P01. This checks projection identity, not D3 durability
+    // or physical retirement, and does not delete an initialized repository.
+    fixture.project(false);
+    assert!(
+        fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+            .get("retired").is_none()
+    );
     save(
         &mut fixture.engine,
         &fixture.repo.main_branch_id,
-        "dir/new",
+        "retired/new",
         b"new scope",
     );
     assert_ne!(
@@ -116,7 +143,7 @@ fn membership_registry_current_directory_label_rejects_reused_path_identity() {
             .engine
             .namespace_tree(&fixture.repo.main_branch_id)
             .unwrap()
-            .get("dir")
+            .get("retired")
             .unwrap()
             .entry_id,
         old_directory
@@ -150,6 +177,8 @@ fn membership_registry_current_directory_label_rejects_reused_path_identity() {
         receipt
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state);
+    assert_eq!(fixture.engine.state.directory_branches[&branch_id], old_branch);
+    assert_eq!(fixture.engine.state.directory_trees[&old_tree.tree_id], old_tree);
 }
 
 #[test]
