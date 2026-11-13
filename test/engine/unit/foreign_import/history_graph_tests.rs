@@ -174,7 +174,12 @@ fn real_path_audit_rejects_foreign_remap_without_rewriting_source_evidence() {
 
 #[test]
 fn restored_path_audit_is_not_treated_as_an_empty_foreign_graph() {
+    use std::os::unix::fs::PermissionsExt;
+
     let mut fixture = crate::foreign_import::tests::fixture();
+    std::fs::set_permissions(
+        fixture._temp.path(), std::fs::Permissions::from_mode(0o700),
+    ).unwrap();
     let repository = fixture.engine.state().repositories.values().next().unwrap().clone();
     let renamed = fixture.engine.file_namespace(
         &repository.repository_id,
