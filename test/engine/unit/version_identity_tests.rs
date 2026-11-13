@@ -1,4 +1,4 @@
-//! Local identities survive publication, replay, split, and package restoration.
+//! Existing identities survive replay and restoration; split copies are independent.
 use super::*;
 
 #[test]
@@ -160,18 +160,24 @@ fn mixed_split_and_package_restore_preserve_local_storage_identities() {
         .main_branch_id
         .clone()
         .unwrap();
-    let mut split_ids = engine
+    let split_versions = engine
         .state
         .versions
         .values()
         .filter(|version| version.history_tree_id == history)
-        .map(|version| version.storage_id)
+        .cloned()
         .collect::<Vec<_>>();
-    split_ids.sort();
-    let mut original_ids = old_versions.values().map(|version| version.storage_id)
-        .collect::<Vec<_>>();
-    original_ids.sort();
-    assert_eq!(split_ids, original_ids);
+    let split_ids = split_versions.iter().map(|version| version.storage_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(split_versions.len(), old_versions.len());
+    assert_eq!(split_ids.len(), split_versions.len());
+    // A split creates new FileId/VersionId records for retained bodies. Their
+    // local IDs are allocations, not the old sequential names copied verbatim.
+    // The purged record has no new body and retains its admitted identity below.
+    for version in &split_versions {
+        assert!(!old_versions.contains_key(&version.version_id));
+        assert!(old_versions.values().all(|old| old.file_id != version.file_id));
+    }
     for (id, version) in old_versions.iter() {
         assert_eq!(&engine.state.versions[id], version);
     }
@@ -197,6 +203,11 @@ fn mixed_split_and_package_restore_preserve_local_storage_identities() {
         tombstone.created_at,
         old_versions[&second.version_id].created_at
     );
+    drop(engine);
+    let mut engine = Engine::open(&source.root).unwrap();
+    for version in &split_versions {
+        assert_eq!(&engine.state.versions[&version.version_id], version);
+    }
     save(&mut engine, &branch, "file.txt", b"fourth");
     let latest = engine.list_tree(&branch).unwrap()[0].clone();
     assert!(!split_ids.contains(&engine.state.versions[&latest.version_id].storage_id));
