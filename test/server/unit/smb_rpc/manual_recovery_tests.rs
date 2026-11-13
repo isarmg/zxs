@@ -112,6 +112,11 @@ fn frozen_unsent_request_survives_service_restart_and_later_live_descriptor_chan
         _ => panic!("writable open owns its original source"),
     };
     let revision = manual_recovery::freeze(&shared, &identity(&shared), writer, 4096).unwrap();
+    // Real active Flush persists this reference before it calls Backend save.
+    if let Handle::Write(writer, _) = client.handles.get_mut(&opened.handle).unwrap() {
+        writer.container.as_mut().unwrap().revision = Some(revision.clone());
+        recovery_record(writer, "alice", &branch).unwrap();
+    }
     file.write_all_at(b"later", 0).unwrap();
     file.sync_all().unwrap();
     drop(file);
@@ -211,6 +216,10 @@ fn unresolved_request_cannot_resume_after_mode_change_and_legacy_bytes_are_retai
     };
     let revision = manual_recovery::freeze(&shared, &identity(&shared), writer, 4096).unwrap();
     let file_id = writer.container.as_ref().unwrap().context.file;
+    if let Handle::Write(writer, _) = client.handles.get_mut(&opened.handle).unwrap() {
+        writer.container.as_mut().unwrap().revision = Some(revision.clone());
+        recovery_record(writer, "alice", &branch).unwrap();
+    }
     let record = shared.spool.join(format!("manual-{}.work.json", revision.operation));
     let frozen = shared.spool.join(format!("manual-{}", revision.operation));
     let record_bytes = fs::read(&record).unwrap();
@@ -237,3 +246,118 @@ fn unresolved_request_cannot_resume_after_mode_change_and_legacy_bytes_are_retai
     assert_eq!(fs::read(&frozen).unwrap(), b"first");
     backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &before));
 }
+
+fn wire_working(
+    shared: Arc<Shared>, operation: OperationId, record: String, resume: bool,
+) -> Value {
+    let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+    let worker = std::thread::spawn(move || {
+        run_connection(FrameStream::new(server).unwrap(), shared).unwrap();
+    });
+    let mut wire = FrameStream::new(client).unwrap();
+    wire.send(&Request::<String>::HelloDefault {
+        protocol: PROTOCOL.into(),
+        capabilities: REQUIRED_CAPABILITIES.iter().map(|value| (*value).into()).collect(),
+        username: "alice".into(),
+    }, None).unwrap();
+    let (hello, descriptor) = wire.receive::<Response>().unwrap();
+    assert!(matches!(hello, Response::Ok { .. }) && descriptor.is_none());
+    wire.send(&Request::RecoverManualWorking {
+        operation_id: operation.to_string(), record, resume,
+    }, None).unwrap();
+    let (response, descriptor) = wire.receive::<Response>().unwrap();
+    assert!(descriptor.is_none());
+    let Response::Ok { result } = response else {
+        panic!("authenticated working recovery RPC failed: {response:?}");
+    };
+    drop(wire);
+    worker.join().unwrap();
+    result
+}
+
+#[test]
+fn working_bytes_before_first_flush_survive_restart_and_require_explicit_freeze() {
+    let (root, shared, backend, branch) = fresh();
+    let head = shared.backend.branch_snapshot(&identity(&shared), &branch).unwrap().head_commit_id;
+    let mut client = session(shared.clone(), &branch);
+    let (opened, descriptor) = client.open("report.txt".into(), true, false, false, false, false)
+        .unwrap();
+    let file = File::from(descriptor);
+    client.prepare_write(opened.handle, 5, 5).unwrap();
+    file.write_all_at(b"first", 0).unwrap();
+    client.dirty(opened.handle).unwrap();
+    // No Flush was attempted: no immutable Save body or digest yet exists.
+    file.write_all_at(b"later", 0).unwrap();
+    file.sync_all().unwrap();
+    let (operation, locator) = match client.handles.get(&opened.handle).unwrap() {
+        Handle::Write(writer, _) => (
+            writer.operation_id,
+            writer.source.with_extension("work.json").file_name().unwrap()
+                .to_str().unwrap().to_owned(),
+        ),
+        _ => panic!("manual writable handle retains its working source"),
+    };
+    let source_record = fs::read(shared.spool.join(&locator)).unwrap();
+    let record: Value = json_codec::from_slice(&source_record).unwrap();
+    assert_eq!(record["format"], "smb-manual-working-before-save-v1");
+    assert_eq!(record["phase"]["state"], "working");
+    assert!(!shared.spool.join(format!("manual-{operation}.work.json")).exists());
+    drop(file);
+    drop(client);
+    drop(backend);
+    drop(shared);
+    let shared = reopen(&root);
+    let query = wire_working(shared.clone(), operation, locator.clone(), false);
+    assert_eq!(query["unfrozen_working"], true);
+    assert!(!shared.spool.join(format!("manual-{operation}.work.json")).exists());
+    assert_eq!(fs::read(shared.spool.join(&locator)).unwrap(), source_record);
+    let saved = wire_working(shared.clone(), operation, locator.clone(), true);
+    assert_eq!(saved["draft_persisted"], true);
+    assert_eq!(saved["original_receipt"]["commit_id"], Value::Null);
+    assert_eq!(wire_working(shared.clone(), operation, locator, true)["original_receipt"],
+        saved["original_receipt"]);
+    let mut client = session(shared.clone(), &branch);
+    let (opened, descriptor) = client.open("report.txt".into(), false, false, false, false, false)
+        .unwrap();
+    drop(descriptor);
+    assert_eq!(client.read(opened.handle, 0, 5).unwrap().as_ref(), b"later");
+    assert_eq!(
+        shared.backend.branch_snapshot(&identity(&shared), &branch).unwrap().head_commit_id,
+        head,
+    );
+}
+
+#[test]
+fn working_reader_rejects_legacy_and_traversal_without_rewriting_original_material() {
+    let (_root, shared, backend, branch) = fresh();
+    let mut client = session(shared.clone(), &branch);
+    let (opened, descriptor) = client.open("report.txt".into(), true, false, false, false, false)
+        .unwrap();
+    let file = File::from(descriptor);
+    client.prepare_write(opened.handle, 5, 5).unwrap();
+    file.write_all_at(b"first", 0).unwrap();
+    client.dirty(opened.handle).unwrap();
+    let (operation, record, source) = match client.handles.get(&opened.handle).unwrap() {
+        Handle::Write(writer, _) => (
+            writer.operation_id, writer.source.with_extension("work.json"), writer.source.clone(),
+        ),
+        _ => panic!("manual writer owns retained material"),
+    };
+    let legacy = br#"{"format":"smb-protocol-work","published":false}"#;
+    fs::write(&record, legacy).unwrap();
+    let before = backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    for locator in [record.file_name().unwrap().to_str().unwrap(), "../outside.work.json"] {
+        assert!(client.dispatch_admitted(Request::RecoverManualWorking {
+            operation_id: operation, record: locator.into(), resume: true,
+        }).is_err());
+    }
+    assert_eq!(fs::read(&record).unwrap(), legacy);
+    assert_eq!(fs::read(&source).unwrap(), b"first");
+    backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &before));
+}
+
+#[path = "manual_recovery_safety.rs"]
+mod safety;
+
+#[path = "manual_retention_tests.rs"]
+mod retention;

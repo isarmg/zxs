@@ -33,7 +33,7 @@
       ]
     },
     "container-manual-recovery": {
-      "reason": "Frozen original manual-save query/resume across daemon restart and real RPC, bounded helper online CLI, and the complete SMB protocol library. Preserve default-share, close, namespace, admission, binding and captured snapshot consumers; this excludes the later Working/partial-freeze design.",
+      "reason": "Frozen and Working manual-save recovery, permanent-receipt retirement and interruption recovery across real RPC/cold reopen. Preserve every original SMB consumer, helper and complete protocol target.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -73,6 +73,20 @@
           "kind": "lib",
           "whole": true,
           "max_tests": 192,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core",
+            "fault-injection"
+          ],
+          "exact": [
+            "smb_rpc::tests::manual_recovery_tests::retention::every_retirement_interruption_preserves_evidence_until_retry_and_cold_recovery"
+          ],
+          "max_tests": 1,
           "timeout_seconds": 900
         }
       ]
@@ -11279,6 +11293,48 @@
       "path": "test/ci/test_rust_toolchain.py",
       "groups": [
         "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "src/server/Cargo.toml",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/budget.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/budget/retention.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/manual_retention.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/working_recovery.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_recovery_safety.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_retention_tests.rs",
+      "groups": [
+        "container-manual-recovery"
       ]
     }
   ],

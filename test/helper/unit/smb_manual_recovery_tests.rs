@@ -48,3 +48,13 @@ fn online_recovery_requires_original_typed_operation_socket_and_account() {
         "--username", "alice", "--operation", "new-operation", "resume",
     ]).is_err());
 }
+
+#[test]
+fn working_material_is_an_explicit_locator_and_remains_query_only_by_default() {
+    let args = parse(&["--working-record", "retained-upload.work.json"]);
+    let crate::Command::SmbManualRecovery(options) = args.command.unwrap() else {
+        panic!("explicit online working recovery command");
+    };
+    assert!(!options.resumes());
+    assert_eq!(options.working_record.as_deref(), Some("retained-upload.work.json"));
+}

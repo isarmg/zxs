@@ -2977,6 +2977,13 @@ class FrozenManualRecoverySelection(unittest.TestCase):
         policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
         group = 'container-manual-recovery'
         paths = [
+            'src/server/Cargo.toml',
+            'src/server/src/smb_rpc/budget.rs',
+            'src/server/src/smb_rpc/budget/retention.rs',
+            'src/server/src/smb_rpc/manual_retention.rs',
+            'src/server/src/smb_rpc/working_recovery.rs',
+            'test/server/unit/smb_rpc/manual_recovery_safety.rs',
+            'test/server/unit/smb_rpc/manual_retention_tests.rs',
             'helper/src/main.rs',
             'helper/src/smb_manual_recovery.rs',
             'helper/Cargo.toml',
@@ -3003,7 +3010,7 @@ class FrozenManualRecoverySelection(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path], None, [group])
-        server, helper, protocol = policy['groups'][group]['rust_targets']
+        server, helper, protocol, interruptions = policy['groups'][group]['rust_targets']
         self.assertEqual(server['features'], ['core'])
         self.assertEqual(server['prefixes'], [
             'smb_rpc::tests::manual_recovery_tests::',
@@ -3024,6 +3031,16 @@ class FrozenManualRecoverySelection(unittest.TestCase):
                          ('smb-protocol', 'src/smb/Cargo.toml', 'lib'))
         self.assertTrue(protocol['whole'])
         self.assertEqual((protocol['max_tests'], protocol['timeout_seconds']), (192, 900))
+
+        self.assertEqual(interruptions, {
+            'package': 'storage-server', 'manifest': 'src/server/Cargo.toml',
+            'kind': 'lib', 'features': ['core', 'fault-injection'],
+            'exact': [
+                'smb_rpc::tests::manual_recovery_tests::retention::'
+                'every_retirement_interruption_preserves_evidence_until_retry_and_cold_recovery',
+            ],
+            'max_tests': 1, 'timeout_seconds': 900,
+        })
 
 
 class CurrentBackupPublicationAttackSelection(unittest.TestCase):

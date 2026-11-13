@@ -44,6 +44,11 @@ fn write_recovery_record(
     branch: &str,
     detached: Option<(&ApiError, bool)>,
 ) -> Result<(), ApiError> {
+    if writer.container.as_ref().is_some_and(|container|
+        container.edit.mode() == storage_contract::container_edit::CommitMode::Manual)
+    {
+        return working_recovery::write(writer, principal, detached);
+    }
     // `published` describes the last reconciled operation, not all bytes
     // currently reachable through the live writable descriptor. Recovery must
     // reconcile these bytes even when no Dirty request was received.

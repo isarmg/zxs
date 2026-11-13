@@ -33,6 +33,7 @@ mod directory;
 mod handles;
 mod metadata;
 pub(crate) mod manual_recovery;
+mod manual_retention;
 mod namespace;
 mod object_move;
 mod path_reservation;
@@ -41,6 +42,7 @@ mod recovery_record;
 mod session;
 mod transport;
 mod workers;
+mod working_recovery;
 use publication::recovery_record;
 use session::Session;
 #[cfg(all(test, feature = "core"))]

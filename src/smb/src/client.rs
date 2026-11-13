@@ -579,7 +579,8 @@ impl Client {
                 *connection = None;
                 return Err(match request {
                     Request::Namespace { operation_id, .. }
-                    | Request::RecoverManualDraft { operation_id, .. } => io::Error::new(
+                    | Request::RecoverManualDraft { operation_id, .. }
+                    | Request::RecoverManualWorking { operation_id, .. } => io::Error::new(
                         error.kind(),
                         RemoteError {
                             code: RemoteErrorCode::RpcOutcomeUnknown,
@@ -614,6 +615,18 @@ impl Client {
                 result,
                 descriptor.expect("invariant: successful open response has a descriptor"),
             ))
+        })
+    }
+
+    /// Query or explicitly resume the original retained working request.
+    pub fn recover_manual_working(
+        &self,
+        operation: storage_contract::OperationId,
+        record: String,
+        resume: bool,
+    ) -> io::Result<Value> {
+        self.call(Request::RecoverManualWorking {
+            operation_id: operation, record, resume,
         })
     }
 
