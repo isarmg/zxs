@@ -139,8 +139,11 @@ fn note(value: &str) -> Result<(), ApiError> {
 }
 
 fn installed_name(stored: &str, download: &str) -> Result<(), ApiError> {
-    storage_contract::validate_installed_version_name(stored, download)
-        .map_err(|source| invalid("history summary has an invalid installed name").with_source(source))
+    storage_contract::validate_installed_version_name(stored, download).map_err(|source| {
+        invalid("history summary has an invalid installed name").with_source(
+            crate::http_boundary::ApiErrorSource::InstalledVersionName(source),
+        )
+    })
 }
 
 fn node(node: &HistoryNodeSummary, identity: &HistoryPageIdentity) -> Result<(), ApiError> {

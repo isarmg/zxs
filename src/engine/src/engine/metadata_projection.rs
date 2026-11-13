@@ -95,7 +95,9 @@ impl BusinessMetadataProjection {
             file_node_parents: file_node_parents.clone(),
             file_path_notes: file_path_notes.clone(),
             directory_tree_selections: fields.business_only(directory_tree_selections),
-            file_locations: fields.business_only(file_locations),
+            // Download names need the captured authoritative location, not the
+            // optional name mirror. TrackedMap cloning shares read-only storage.
+            file_locations: file_locations.clone(),
             file_backup_paths: fields.business_only(file_backup_paths),
             file_backup_policies: fields.business_only(file_backup_policies),
             directory_selections: fields.business_only(directory_selections),
