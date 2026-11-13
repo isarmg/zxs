@@ -8447,6 +8447,13 @@
       ]
     },
     {
+      "path": "test/engine/unit/engine/current_namespace_batch_tests.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
       "path": "test/engine/unit/engine/current_namespace_rename_tests.rs",
       "groups": [
         "container-path-facts-engine",

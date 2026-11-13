@@ -2490,6 +2490,7 @@ class ContainerPathFactSelection(unittest.TestCase):
                 'test/engine/unit/path_changes_tests.rs',
                 'test/engine/unit/business/file_paths_tests.rs',
                 'test/engine/unit/business/retained_history_copy_tests.rs',
+                'test/engine/unit/engine/current_namespace_batch_tests.rs',
                 'test/engine/unit/engine/current_namespace_rename_tests.rs',
                 'test/engine/unit/engine/current_namespace_workspace_overlap_tests.rs',
                 'test/engine/unit/engine/current_path_note_tests.rs',
