@@ -152,14 +152,16 @@ fn directory_registration_reuses_nodes_and_lazy_first_write_forks_one_public_fil
     assert_eq!(e.state().file_selections[&after["a/one.txt"].file_id], fork);
 }
 #[test]
-fn selecting_old_directory_restores_names_membership_and_hierarchy() {
-    let (_t, mut e, r) = fixture();
+fn selecting_old_directory_restores_membership_and_hierarchy_with_current_file_names() {
+    let (temporary, mut e, r) = fixture();
     save(&mut e, &r, "folder/old.txt", b"old");
+    let original = entries(&e, &r)["folder/old.txt"].clone();
     let draft = create(&mut e, &r, "folder", "snapshot");
     let directory = e.state().directory_branches[&draft].directory_id.clone();
     let old = e.state().directory_git_repositories[&directory].branches[&draft]
         .head_tree_id
         .clone();
+    let frozen = e.state().directory_trees[&old].clone();
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation::parse(
@@ -175,13 +177,23 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
     save(&mut e, &r, "folder/nested/added.txt", b"added");
     select(&mut e, &r, "folder", "snapshot");
     let view = entries(&e, &r);
-    assert!(view.contains_key("folder/old.txt"));
-    assert!(!view.contains_key("folder/new.txt"));
+    assert!(!view.contains_key("folder/old.txt"));
+    let current = &view["folder/new.txt"];
+    assert_eq!(current.file_id, original.file_id);
+    assert_eq!(current.version_id, original.version_id);
+    assert_eq!(body(&e, &current.version_id), b"old");
+    assert_eq!(e.state().directory_trees[&old], frozen);
+    assert!(frozen.entries.iter().any(|entry| entry.path() == "folder/old.txt"));
     assert!(!view.contains_key("folder/nested"));
     assert_eq!(
         e.state().directory_git_repositories[&directory].branches[&draft].head_tree_id,
         old
     );
+    drop(e);
+    let reopened = Engine::open(&temporary.path().join("system")).unwrap();
+    assert_eq!(entries(&reopened, &r), view);
+    assert_eq!(reopened.state().directory_trees[&old], frozen);
+    assert_eq!(body(&reopened, &original.version_id), b"old");
 }
 #[test]
 fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() {

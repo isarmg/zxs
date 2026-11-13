@@ -212,7 +212,6 @@ fn hundred_thousand_shared_parent_writes_reuse_parent_slots() {
 }
 
 #[test]
-#[should_panic(expected = "invariant: admitted namespace lookup keys are unique")]
 fn workspace_commit_exposes_corrupted_admitted_source() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
@@ -263,15 +262,28 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
         .get_mut(&workspace.base_head)
         .unwrap();
     source.entries.push(source.entries[0].clone());
-    engine
+    let before = storage_contract::canonical_json(engine.state()).unwrap();
+    let base_head = workspace.base_head.clone();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let error = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate().unwrap(),
+            operation_id: operation,
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
             message: "must not publish".into(),
             request_digest: None,
         })
-        .unwrap();
+        .unwrap_err();
+    // The path-fact admission now rejects the corrupted source before a draft
+    // can be constructed. It must not silently repair or publish that source.
+    assert_eq!(error.code(), storage_contract::ErrorCode::PublicationInvalid);
+    assert!(matches!(error, crate::Error::PathChange(crate::PathChangeError::Publication)));
+    assert_eq!(storage_contract::canonical_json(engine.state()).unwrap(), before);
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert_eq!(engine.state().branches[&repo.main_branch_id].head_commit_id, base_head);
+    let entries = &engine.state().commits[&base_head].entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0], entries[1]);
 }
