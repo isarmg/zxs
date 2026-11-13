@@ -627,3 +627,38 @@ fn missing_body_cannot_mask_corrupt_or_absent_checksum_proof() {
     assert_eq!(fs::read(&checksum).unwrap(), original_checksum);
     assert!(!body.exists());
 }
+
+#[test]
+fn fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection() {
+    let f = fixture();
+    let seal_path = f.source.join("disk.json");
+    let config_path = f.source.join("metadata/pool-membership/config.json");
+    let original_config = fs::read(&config_path).unwrap();
+    let mut seal = decode_seal(&fs::read(&seal_path).unwrap()).unwrap();
+    // This is a typed reader-boundary fixture, not bootstrap authority. Even
+    // retained usable old history must not grant the new format a legacy role.
+    seal.format = DiskSealFormat::FreshDirectorySnapshot {
+        bootstrap: storage_contract::working_tree::MaterialCommitment::from_digest(
+            blake3::hash(b"fresh foreign reader boundary"),
+        ),
+    };
+    write_json(&seal_path, &seal, false).unwrap();
+    let fresh_bytes = fs::read(&seal_path).unwrap();
+    let marker = f.source.join("metadata/pool-membership/generation.json");
+    fs::write(&marker, b"retained generation evidence, not JSON").unwrap();
+    let error = inspect(&f.source).err().expect("fresh format is not a foreign legacy source");
+    assert_eq!(error.code(), ErrorCode::FormatUnsupported);
+    assert!(matches!(error, Error::FreshBootstrap(source)
+        if matches!(*source, crate::authority_selection::FreshBootstrapError::UnsupportedReader)));
+    assert_eq!(fs::read(&seal_path).unwrap(), fresh_bytes);
+    assert_eq!(fs::read(&config_path).unwrap(), original_config);
+    assert_eq!(fs::read(&marker).unwrap(), b"retained generation evidence, not JSON");
+
+    // Preserve the source binding validation that precedes format dispatch.
+    seal.binding_generation = 0;
+    write_json(&seal_path, &seal, false).unwrap();
+    let invalid_bytes = fs::read(&seal_path).unwrap();
+    assert_eq!(inspect(&f.source).err().unwrap().code(), ErrorCode::HistoryPackageInvalid);
+    assert_eq!(fs::read(&seal_path).unwrap(), invalid_bytes);
+    assert_eq!(fs::read(&config_path).unwrap(), original_config);
+}

@@ -232,3 +232,43 @@ fn ordinary_unknown_and_rebound_roots_are_rejected_without_changes() {
     assert_eq!(std::fs::read(root.join("disk.json")).unwrap(), seal);
     drop(engine);
 }
+
+#[test]
+fn fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("disk");
+    let engine = Engine::initialize(
+        &temp.path().join("system"), Config::development([root.clone()]).unwrap(),
+    ).unwrap();
+    drop(engine);
+    let seal_path = root.join("disk.json");
+    let config_path = root.join("metadata/pool-membership/config.json");
+    let original_config = std::fs::read(&config_path).unwrap();
+    let mut seal = decode_seal(&std::fs::read(&seal_path).unwrap()).unwrap();
+    // Reader-boundary fixture only, not an admitted fresh bootstrap. The new
+    // seal format must never fall through to the retained old configuration.
+    seal.format = DiskSealFormat::FreshDirectorySnapshot {
+        bootstrap: storage_contract::working_tree::MaterialCommitment::from_digest(
+            blake3::hash(b"fresh reader boundary"),
+        ),
+    };
+    write_json(&seal_path, &seal, false).unwrap();
+    let fresh_bytes = std::fs::read(&seal_path).unwrap();
+    let marker = root.join("metadata/pool-membership/generation.json");
+    std::fs::write(&marker, b"retained unpromoted bytes, not JSON").unwrap();
+    let error = recognize(&root).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::FormatUnsupported);
+    assert!(matches!(error, Error::FreshBootstrap(source)
+        if matches!(*source, crate::authority_selection::FreshBootstrapError::UnsupportedReader)));
+    assert_eq!(std::fs::read(&seal_path).unwrap(), fresh_bytes);
+    assert_eq!(std::fs::read(&config_path).unwrap(), original_config);
+    assert_eq!(std::fs::read(&marker).unwrap(), b"retained unpromoted bytes, not JSON");
+
+    // Existing held-identity rejection still precedes unsupported-reader status.
+    seal.inode ^= 1;
+    write_json(&seal_path, &seal, false).unwrap();
+    let stale_bytes = std::fs::read(&seal_path).unwrap();
+    assert_eq!(recognize(&root).unwrap_err().code(), ErrorCode::DiskIdentityMismatch);
+    assert_eq!(std::fs::read(&seal_path).unwrap(), stale_bytes);
+    assert_eq!(std::fs::read(&config_path).unwrap(), original_config);
+}

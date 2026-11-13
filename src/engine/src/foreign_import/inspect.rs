@@ -129,6 +129,7 @@ impl ForeignImportPreview {
             seal,
             disk,
             source_level,
+            role_evidence,
             journal_path,
             config_anchors,
             config: _,
@@ -205,14 +206,7 @@ impl ForeignImportPreview {
                     binding_generation: seal.binding_generation,
                 },
                 seal_digest,
-                role_evidence: match &seal.format {
-                    DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
-                    DiskSealFormat::MembershipGeneration { authority_hash } => {
-                        DiskRoleEvidence::MembershipGeneration {
-                            authority_hash: authority_hash.clone(),
-                        }
-                    }
-                },
+                role_evidence,
             },
             local,
             source_level,
@@ -277,6 +271,7 @@ struct OpenedSource {
     seal: DiskSeal,
     disk: DiskConfig,
     source_level: u32,
+    role_evidence: DiskRoleEvidence,
     journal_path: PathBuf,
     config_anchors: BTreeMap<PathBuf, ForeignEvidenceDigest>,
     config: ValidatedConfig,
@@ -302,6 +297,19 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
     if seal.binding_generation == 0 {
         return Err(invalid("source binding generation is zero"));
     }
+    let role_evidence = match &seal.format {
+        DiskSealFormat::FreshDirectorySnapshot { .. } => {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+            )));
+        }
+        DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
+        DiskSealFormat::MembershipGeneration { authority_hash } => {
+            DiskRoleEvidence::MembershipGeneration {
+                authority_hash: authority_hash.clone(),
+            }
+        }
+    };
     let mut config_anchors = BTreeMap::new();
     let config = activation::read_local_disk_configuration(root.path(), &seal, &mut |path| {
         let bytes = root.read_bytes_observed(path, MAX_METADATA, &mut |n| budget.observe(n))?;
@@ -323,8 +331,8 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
     let mut disk = recorded.clone();
     disk.root = root.path().to_owned();
     let marker = root.path().join("metadata/pool-membership/generation.json");
-    let journal_path = match &seal.format {
-        DiskSealFormat::ManagedDirectory => {
+    let journal_path = match &role_evidence {
+        DiskRoleEvidence::InitialConfiguration => {
             if root.open_optional_read_regular(&marker)?.is_some() {
                 return Err(invalid(
                     "unpromoted generation is not a stable source checkpoint",
@@ -332,7 +340,7 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
             }
             log_path(&disk)
         }
-        DiskSealFormat::MembershipGeneration { authority_hash } => {
+        DiskRoleEvidence::MembershipGeneration { authority_hash } => {
             authority_hash
                 .parse::<ForeignEvidenceDigest>()
                 .map_err(|error| Error::from(std::io::Error::other(error)))?;
@@ -346,6 +354,7 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
         seal,
         disk,
         source_level,
+        role_evidence,
         journal_path,
         config_anchors,
         config,
