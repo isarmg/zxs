@@ -100,26 +100,39 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     )
     .unwrap();
     let nodes = history["nodes"].as_array().unwrap();
-    for kind in ["content", "rename"] {
-        assert!(nodes.iter().any(|node| node["kind"] == kind));
-    }
+    assert_eq!(nodes.len(), 1);
+    assert!(engine.state().file_path_nodes.is_empty());
     for node in nodes {
+        assert_eq!(node["kind"], "content");
         let id = node["node_id"].as_str().unwrap();
-        let expected = match node["kind"].as_str().unwrap() {
-            "content" => engine.state().versions[id].created_at.clone(),
-            "rename" => utc_timestamp(engine.state().file_path_nodes[id].created_at).unwrap(),
-            _ => unreachable!(),
-        };
-        assert_eq!(node["created_at"], expected);
+        let expected = &engine.state().versions[id].created_at;
+        assert_eq!(node["created_at"], expected.as_str());
         assert_eq!(expected.len(), 20);
         assert!(expected.ends_with('Z'));
     }
+    let mut path_facts = Vec::new();
+    engine.visit_file_path_changes(
+        &storage_engine::HistoryWindowCancellation::new(),
+        |fact| path_facts.push(fact),
+    ).unwrap();
+    assert_eq!(path_facts.len(), 1);
+    let path_fact = &path_facts[0];
     let snapshot = activity::read(&engine).unwrap();
     let activity = json_codec::to_value(
         crate::backend_activity::ActivityHistoryResponse::try_from(snapshot).unwrap(),
     )
     .unwrap();
     let events = activity["events"].as_array().unwrap();
+    let rename = events.iter().find(|event| {
+        event["event_id"] == path_fact.event_id.to_string()
+    }).unwrap();
+    assert_eq!(rename["action"], "file.path.rename");
+    assert_eq!(rename["file_id"], entry.file_id);
+    assert_eq!(rename["timestamp"], utc_timestamp(path_fact.occurred_at.unix_seconds()).unwrap());
+    assert_eq!(rename["path"], "UTC/after.txt");
+    assert_eq!(rename["previous_path"], "before.txt");
+    assert_eq!(rename["node_id"], entry.version_id);
+    assert_ne!(rename["event_id"], rename["node_id"]);
     assert!(events.iter().any(|event| {
         event["action"] == storage_contract::file_container_tags::KIND
             && event["file_id"] == entry.file_id

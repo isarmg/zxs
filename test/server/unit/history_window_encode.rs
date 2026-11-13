@@ -602,9 +602,10 @@ fn invalid_installed_names_preserve_typed_sources_and_state_invalid_status() {
         let error = encode(&nodes_page(vec![value], Vec::new(), 1)).unwrap_err();
         assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, ErrorCode::StateInvalid);
-        let boundary = error.source().unwrap();
-        assert!(boundary.is::<crate::http_boundary::ApiErrorSource>());
-        let cause = boundary.source().unwrap();
+        let mut cause = error.source().unwrap();
+        while !cause.is::<InvalidInstalledVersionName>() {
+            cause = cause.source().expect("typed installed-name cause must survive API mapping");
+        }
         let installed = cause.downcast_ref::<InvalidInstalledVersionName>().unwrap();
         assert_eq!(
             std::mem::discriminant(installed),

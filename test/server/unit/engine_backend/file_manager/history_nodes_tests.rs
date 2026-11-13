@@ -192,16 +192,23 @@ fn projected_version(id: &str, sequence: u64) -> HistoryVersion {
 #[test]
 fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
     let root = crate::tests::private_tempdir();
-    let engine = Engine::initialize(
+    let mut engine = Engine::initialize(
         &root.path().join("system"),
         Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
-    let versions = [projected_version("missing", 10)];
+    let repo = engine.create_disk_root(
+        "P01", "owner", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let entry = save(&mut engine, &repo.main_branch_id, "file.txt", b"body", "original");
+    let missing = storage_contract::VersionId::generate().unwrap().to_string();
+    let mut projected = projected_version(&missing, 10);
+    std::sync::Arc::get_mut(&mut projected.data).unwrap().file_id = entry.file_id.clone();
+    let versions = [projected];
     let error = unified_history(
         &engine.metadata_view(),
-        "file",
-        "history",
+        &entry.file_id,
+        &repo.history_tree_id,
         &versions,
         &BTreeMap::new(),
         None,
