@@ -2,6 +2,10 @@ use super::*;
 use storage_contract::{ContentHash, OperationId};
 use storage_contract::working_tree::{SnapshotNodeId, SnapshotRepositoryId};
 
+fn disk() -> DiskId {
+    DiskId::from_random([80; 16])
+}
+
 fn file(id: u8, body: &[u8]) -> SnapshotFile {
     SnapshotFile {
         file_id: FileId::from_random([id; 16]),
@@ -68,15 +72,17 @@ fn modified_files_move_and_untouched_files_copy_without_creating_untouched_file_
     assert_eq!(route(&view, "A.txt"), ReadRoute::Working { material: &changed.material });
     let mut looked_up = Vec::new();
     let entity = LocalEntityIdentity::new(30, 40);
-    let plan = view.plan(|identity| {
+    let plan = view.plan(disk(), |selected_disk, identity| {
+        assert_eq!(selected_disk, disk());
         looked_up.push(identity);
-        Ok::<_, ()>(ContainerPresence::Present { entity })
+        Ok::<_, ()>(ContainerPresence::Present { disk: disk(), entity })
     }).unwrap();
     assert_eq!(looked_up, [changed.material.file.file_id]);
     assert_eq!(plan[0].transfer, Transfer::MoveWorking {
         material: &changed.material,
         container: ContainerPublication::Update {
             file: changed.material.file.file_id,
+            disk: disk(),
             source_version: VersionId::from_random([3; 16]),
             source_branch: storage_contract::BranchId::from_random([70; 16]),
             source_node: storage_contract::FileNodeId::Version(VersionId::from_random([3; 16])),
@@ -94,7 +100,7 @@ fn absent_container_keeps_snapshot_only_and_never_requests_a_recreated_container
     let source = source();
     let changed = edit(b"edited A");
     let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
-    let plan = view.plan(|_| Ok::<_, ()>(ContainerPresence::Absent)).unwrap();
+    let plan = view.plan(disk(), |_, _| Ok::<_, ()>(ContainerPresence::Absent)).unwrap();
     assert_eq!(plan[0].transfer, Transfer::MoveWorking {
         material: &changed.material,
         container: ContainerPublication::SnapshotOnly { file: changed.material.file.file_id },
@@ -106,8 +112,8 @@ fn temporary_disk_failure_is_an_error_not_a_missing_container() {
     let source = source();
     let changed = edit(b"edited A");
     let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
-    let failed = view.plan(|_| Err("source disk temporarily offline"));
-    assert_eq!(failed.unwrap_err(), "source disk temporarily offline");
+    let failed = view.plan(disk(), |_, _| Err("source disk temporarily offline"));
+    assert_eq!(failed.unwrap_err(), PlanError::Locate("source disk temporarily offline"));
     assert_eq!(route(&view, "A.txt"), ReadRoute::Working { material: &changed.material });
 }
 
@@ -117,7 +123,8 @@ fn matching_bytes_do_not_erase_an_explicit_write_or_infer_its_source() {
     let changed = edit(b"original A");
     let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
     let mut identities = Vec::new();
-    let plan = view.plan(|identity| {
+    let plan = view.plan(disk(), |selected_disk, identity| {
+        assert_eq!(selected_disk, disk());
         identities.push(identity);
         Ok::<_, ()>(ContainerPresence::Absent)
     }).unwrap();
@@ -203,7 +210,7 @@ fn snapshot_only_edits_never_query_or_guess_a_container_even_when_identity_match
     let source = manifest(2, entries);
     let changed = edit(b"edited A");
     let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
-    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
+    let plan = view.plan(disk(), |_, _| -> Result<ContainerPresence, ()> {
         panic!("snapshot-only provenance must never invoke a container locator")
     }).unwrap();
     assert_eq!(plan[0].transfer, Transfer::MoveWorking {
@@ -229,7 +236,8 @@ fn alias_edits_use_the_frozen_selected_branch_and_node_not_a_current_default() {
         content: SnapshotEntryContent::File { material: body, source: selected },
     }]);
     let view = SparseProjection::admit(&source, vec![edit(b"changed")]).unwrap();
-    let plan = view.plan(|_| Ok::<_, ()>(ContainerPresence::Present {
+    let plan = view.plan(disk(), |_, _| Ok::<_, ()>(ContainerPresence::Present {
+        disk: disk(),
         entity: LocalEntityIdentity::new(1, 2),
     })).unwrap();
     let Transfer::MoveWorking { container: ContainerPublication::Update {
@@ -261,7 +269,8 @@ fn a_later_write_uses_the_last_confirmed_file_branch_node_and_version() {
     let mut later = edit(b"second explicit write");
     later.material.file.version_id = VersionId::from_random([92; 16]);
     let view = SparseProjection::admit_with_results(&source, vec![later], &[result.clone()]).unwrap();
-    let plan = view.plan(|_| Ok::<_, ()>(ContainerPresence::Present {
+    let plan = view.plan(disk(), |_, _| Ok::<_, ()>(ContainerPresence::Present {
+        disk: disk(),
         entity: LocalEntityIdentity::new(9, 10),
     })).unwrap();
     let Transfer::MoveWorking { container: ContainerPublication::Update {
@@ -284,7 +293,7 @@ fn a_saved_version_moves_into_directory_snapshot_without_another_file_node_or_lo
         },
     };
     let view = SparseProjection::admit_with_results(&source, vec![saved], &[result.clone()]).unwrap();
-    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
+    let plan = view.plan(disk(), |_, _| -> Result<ContainerPresence, ()> {
         panic!("the recorded FILE version must not be recreated")
     }).unwrap();
     assert!(matches!(plan[0].transfer, Transfer::MoveWorking {
@@ -317,4 +326,47 @@ fn invalid_file_result_occurrence_material_or_version_node_cannot_rebind_a_sourc
             &source, vec![saved.clone()], &[wrong],
         ), Err(ProjectionError::FileResult)));
     }
+}
+
+#[test]
+fn another_disk_is_rejected_even_when_the_observed_local_entity_matches() {
+    let source = source();
+    let changed = edit(b"edited A");
+    let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
+    let foreign_disk = DiskId::from_random([81; 16]);
+    let error = view.plan(disk(), |selected_disk, identity| {
+        assert_eq!(selected_disk, disk());
+        assert_eq!(identity, changed.material.file.file_id);
+        Ok::<_, ()>(ContainerPresence::Present {
+            disk: foreign_disk,
+            entity: changed.material.entity,
+        })
+    }).unwrap_err();
+    assert_eq!(error, PlanError::ContainerDisk(ContainerDiskError {
+        repository_disk: disk(),
+        file: changed.material.file.file_id,
+        container_disk: foreign_disk,
+    }));
+    assert_eq!(route(&view, "A.txt"), ReadRoute::Working { material: &changed.material });
+}
+
+#[test]
+fn historical_a_reference_updates_a_deleted_container_not_independent_b_identity() {
+    let source = source();
+    let changed = edit(b"edited A after explicit A to B move");
+    let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
+    let retained_a = LocalEntityIdentity::new(10, 30);
+    let independent_b = file(81, b"original A");
+    assert_ne!(independent_b.file_id, changed.material.file.file_id);
+    let plan = view.plan(disk(), |selected_disk, identity| {
+        assert_eq!(selected_disk, disk());
+        assert_eq!(identity, changed.material.file.file_id);
+        assert_ne!(identity, independent_b.file_id);
+        // The owner resolves this exact A identity in A/deleted-data. No B
+        // inventory or matching spelling/body is consulted by the planner.
+        Ok::<_, ()>(ContainerPresence::Present { disk: disk(), entity: retained_a })
+    }).unwrap();
+    assert!(matches!(plan[0].transfer, Transfer::MoveWorking {
+        container: ContainerPublication::Update { file, disk: selected_disk, entity, .. }, ..
+    } if file == changed.material.file.file_id && selected_disk == disk() && entity == retained_a));
 }

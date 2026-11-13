@@ -405,9 +405,12 @@ fn files_only_results_survive_restore_and_allow_new_explicit_edits_and_directory
     assert_eq!(recovered.file_results(), files);
     assert!(recovered.dirty_edits().is_empty());
     let view = recovered.projection().unwrap();
-    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
-        panic!("a verified saved version must not republish a FILE node")
-    }).unwrap();
+    let plan = view.plan(
+        storage_contract::DiskId::from_random([80; 16]),
+        |_, _| -> Result<ContainerPresence, ()> {
+            panic!("a verified saved version must not republish a FILE node")
+        },
+    ).unwrap();
     assert!(matches!(plan[0].transfer, Transfer::MoveWorking {
         container: ContainerPublication::Retained { .. }, ..
     }));
@@ -517,9 +520,10 @@ fn cold_file_baseline_preserves_selected_branch_and_excludes_saved_siblings_from
     }, trusted).unwrap();
     assert_eq!(recovered.dirty_edits().len(), 1);
     let view = recovered.projection().unwrap();
-    let plan = view.plan(|file| {
+    let plan = view.plan(storage_contract::DiskId::from_random([80; 16]), |disk, file| {
         assert_eq!(file, first.material.file_id);
         Ok::<_, ()>(ContainerPresence::Present {
+            disk,
             entity: storage_contract::working_tree::LocalEntityIdentity::new(80, 81),
         })
     }).unwrap();

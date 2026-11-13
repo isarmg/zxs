@@ -2,12 +2,12 @@
 use data_serialization::{Deserialize, Serialize};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotFileSource,
-    SnapshotManifestError, SnapshotReference,
+    SnapshotManifestError, SnapshotReference, ContainerDiskError, require_container_disk,
 };
 use name_policy::{LookupPath, PortablePath};
 use platform_io::fs_safety::EntryName;
 use std::collections::BTreeMap;
-use storage_contract::{BranchId, FileId, FileNodeId, VersionId};
+use storage_contract::{BranchId, DiskId, FileId, FileNodeId, VersionId};
 use storage_contract::working_tree::LocalEntityIdentity;
 
 /// Complete bytes already admitted from this instance's held sparse directory.
@@ -29,7 +29,7 @@ pub(crate) struct FileEdit {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ContainerPresence {
-    Present { entity: LocalEntityIdentity },
+    Present { disk: DiskId, entity: LocalEntityIdentity },
     /// Only the current admitted disk inventory can establish this state.
     /// Offline, revoked, corrupt or unreadable locations are errors, not absence.
     Absent,
@@ -39,6 +39,7 @@ pub(crate) enum ContainerPresence {
 pub(crate) enum ContainerPublication {
     Update {
         file: FileId,
+        disk: DiskId,
         source_version: VersionId,
         source_branch: BranchId,
         source_node: FileNodeId,
@@ -99,6 +100,12 @@ pub(crate) enum ProjectionError {
     Material(#[source] SnapshotManifestError),
     #[error("published file baseline is not bound to this sparse occurrence or version")]
     FileResult,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum PlanError<E> {
+    Locate(E),
+    ContainerDisk(ContainerDiskError),
 }
 
 pub(crate) struct SparseProjection<'a> {
@@ -192,12 +199,14 @@ impl<'a> SparseProjection<'a> {
     }
 
     /// Resolve stable container identity only for explicit modification facts. The
-    /// owner performs these observations at commit admission; arbitrary path
-    /// NotFound or disk failure must not be converted into ContainerPresence::Absent.
+    /// owner performs these observations at commit admission on the repository's
+    /// stable disk, including common-data and deleted-data. It must never search
+    /// another disk or convert an offline/unreadable disk into proven absence.
     pub(crate) fn plan<E>(
         &self,
-        mut locate: impl FnMut(FileId) -> Result<ContainerPresence, E>,
-    ) -> Result<Vec<PlannedEntry<'_>>, E> {
+        repository_disk: DiskId,
+        mut locate: impl FnMut(DiskId, FileId) -> Result<ContainerPresence, E>,
+    ) -> Result<Vec<PlannedEntry<'_>>, PlanError<E>> {
         let mut result = Vec::with_capacity(self.source.entries().len());
         for (index, entry) in self.source.entries().iter().enumerate() {
             let transfer = match entry.content {
@@ -221,10 +230,16 @@ impl<'a> SparseProjection<'a> {
                                     ContainerPublication::SnapshotOnly { file: file.file_id }
                                 }
                                 SnapshotFileSource::Container { branch, node } => {
-                                    match locate(file.file_id)? {
-                                        ContainerPresence::Present { entity } => {
+                                    match locate(repository_disk, file.file_id)
+                                        .map_err(PlanError::Locate)?
+                                    {
+                                        ContainerPresence::Present { disk, entity } => {
+                                            require_container_disk(
+                                                repository_disk, file.file_id, disk,
+                                            ).map_err(PlanError::ContainerDisk)?;
                                             ContainerPublication::Update {
                                                 file: file.file_id,
+                                                disk,
                                                 source_version: file.version_id,
                                                 source_branch: branch,
                                                 source_node: node,
