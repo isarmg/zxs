@@ -349,7 +349,8 @@ impl<'a> HeldWorktreeLedger<'a> {
             if name.as_os_str().to_str() != Some(edit.leaf.as_str()) {
                 return Err(LedgerError::Binding);
             }
-            let file = instance.open_material(&edit.file_edit()?)
+            let edit = edit.file_edit()?;
+            let file = instance.open_material(&edit.material)
                 .map_err(LedgerError::Instance)?;
             if matches!(access, EditAccess::Seal) {
                 file.sync_all().map_err(LedgerError::Io)?;
