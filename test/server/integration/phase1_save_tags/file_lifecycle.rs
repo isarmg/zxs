@@ -210,7 +210,7 @@ async fn file_lifecycle_real_router_delete_undo_auth_current_root_and_read_only(
     }
     let fixture = fixture.reopen().await;
     assert_eq!(lifecycle_pages(&fixture, file).await, events);
-    assert_eq!(fixture.history(file).await["nodes"], before_rename["nodes"]);
+    assert_eq!(fixture.history(file).await["nodes"], expected_nodes);
     assert_eq!(fixture.body(entry["version_id"].as_str().unwrap()).await, b"retained");
     for (body, receipt) in receipts {
         assert_exact_receipt(&fixture.json("POST", write_route, Some(body)).await, &receipt);
