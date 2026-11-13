@@ -3080,7 +3080,8 @@
             "directory_worktree::lifecycle::tests::",
             "directory_worktree::names::tests::",
             "disk::owned::worktree_io::tests::",
-            "directory_worktree::store::tests::"
+            "directory_worktree::store::tests::",
+            "directory_worktree::projection::tests::"
           ],
           "max_tests": 48,
           "timeout_seconds": 900

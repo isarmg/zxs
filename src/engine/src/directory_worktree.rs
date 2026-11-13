@@ -6,3 +6,4 @@
 pub(crate) mod lifecycle;
 pub(crate) mod names;
 pub(crate) mod store;
+pub(crate) mod projection;

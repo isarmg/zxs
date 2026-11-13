@@ -1,6 +1,7 @@
 use super::*;
 use crate::working_tree::snapshot::{
-    AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotNodeBinding,
+    AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile,
+    SnapshotNodeBinding,
 };
 use name_policy::PortablePath;
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
