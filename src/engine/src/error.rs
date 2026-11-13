@@ -16,6 +16,8 @@ pub enum Error {
     #[error(transparent)]
     SnapshotInitialization(Box<crate::engine::snapshot_initialization::SnapshotInitializationError>),
     #[error(transparent)]
+    FreshBootstrap(Box<crate::authority_selection::FreshBootstrapError>),
+    #[error(transparent)]
     VersionNames(crate::container_storage::VersionNameError),
     #[error(transparent)]
     ContainerName(crate::business::namespace::container_name::RenameError),
@@ -115,6 +117,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
+            | Self::FreshBootstrap(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)
@@ -151,6 +154,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
+            | Self::FreshBootstrap(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)
@@ -181,6 +185,7 @@ impl Error {
             Self::ContainerTags(error) => error.code(),
             Self::PathChange(error) => error.code(),
             Self::SnapshotInitialization(error) => error.code(),
+            Self::FreshBootstrap(error) => error.code(),
             Self::VersionNames(error) => error.code(),
             Self::ContainerName(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
@@ -238,6 +243,7 @@ impl Error {
             Self::ContainerTags(error) => error.to_string().into(),
             Self::PathChange(error) => error.to_string().into(),
             Self::SnapshotInitialization(error) => error.to_string().into(),
+            Self::FreshBootstrap(error) => error.to_string().into(),
             Self::VersionNames(error) => error.to_string().into(),
             Self::ContainerName(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
@@ -298,6 +304,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
+            | Self::FreshBootstrap(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)

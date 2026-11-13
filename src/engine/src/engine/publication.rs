@@ -1269,6 +1269,16 @@ mod omission_tests;
 mod io_tail_tests;
 
 impl crate::engine::PlanningContext<'_> {
+    pub(in crate::engine) fn prepare_directory_snapshot_publication(
+        &self,
+        next: State,
+        result: OperationResult,
+        material: super::snapshot_initialization::registration::DirectoryInitializationBinding,
+        maximum: usize,
+    ) -> Result<DetachedPublication> {
+        self.prepare_publication_bounded(next, Vec::new(), result, maximum, maximum, Some(material))
+    }
+
     pub(crate) fn prepare_publication(
         &self,
         next: State,
@@ -1276,7 +1286,7 @@ impl crate::engine::PlanningContext<'_> {
         result: OperationResult,
         maximum: usize,
     ) -> Result<DetachedPublication> {
-        self.prepare_publication_bounded(next, prepared, result, maximum, maximum)
+        self.prepare_publication_bounded(next, prepared, result, maximum, maximum, None)
     }
 }
 
@@ -1288,6 +1298,7 @@ impl crate::engine::PlanningContext<'_> {
         result: OperationResult,
         maximum: usize,
         cache_maximum: usize,
+        directory_material: Option<super::snapshot_initialization::registration::DirectoryInitializationBinding>,
     ) -> Result<DetachedPublication> {
         crate::business::reject_unclosed_file_history_move(self.state, &next, &result)?;
         let next_current_namespaces = match self.current_namespaces {
@@ -1473,11 +1484,12 @@ impl crate::engine::PlanningContext<'_> {
             metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
             history_roots: history_basis.reference().clone(),
         };
-        let candidate = match self
-            .config
-            .generation()
-            .and_then(|generation| generation.registry())
-        {
+        let registry = self.config.generation().and_then(|generation| generation.registry());
+        let candidate = if let Some(material) = directory_material {
+            Candidate::new_directory_snapshot(
+                candidate_data, self.config.generation_hash(), registry, material,
+            )?
+        } else { match registry {
             Some(registry) => Candidate::new_with_registry(
                 candidate_data,
                 self.config
@@ -1486,7 +1498,7 @@ impl crate::engine::PlanningContext<'_> {
                 registry,
             ),
             None => Candidate::new(candidate_data, self.config.generation_hash()),
-        };
+        }};
         crate::metadata_budget::preflight_publication_prepared(
             self,
             &candidate,

@@ -663,10 +663,6 @@ impl Engine {
         disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
         write_json(&root.join("config.json"), &config, false)?;
         private_dir(&root.join("workspaces"))?;
-        let state = State {
-            topology_generation: 1,
-            ..State::default()
-        };
         let journals = config
             .disks
             .iter()
@@ -681,6 +677,22 @@ impl Engine {
                 ))
             })
             .collect::<Result<_>>()?;
+        Self::assemble_initialized(root, config, disk_resources, locks, journals)
+    }
+
+    /// Called only after fresh initialization has admitted all durable inputs.
+    /// A partial initializer must not use this to adopt or rebuild unknown data.
+    fn assemble_initialized(
+        root: PathBuf,
+        config: ValidatedConfig,
+        disk_resources: Arc<DiskResources>,
+        locks: WriterLocks,
+        journals: BTreeMap<String, crate::journal::JournalWriter>,
+    ) -> Result<Self> {
+        let state = State {
+            topology_generation: 1,
+            ..State::default()
+        };
         let engine = Self {
             root,
             config,
@@ -804,8 +816,34 @@ impl Engine {
         mode: RecoveryMode,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        let (root, config) = Self::recovery_projection(root, workspace_limits)?;
-        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
+        let (engine, warnings) = if crate::authority_selection::has_fresh_selector(root)? {
+            let root = existing_private_dir(root)?.path().to_path_buf();
+            let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
+                .with_workspace_limits(workspace_limits)?;
+            let selection = crate::authority_selection::SelectionGuard::acquire(&root)?
+                .recover_fresh(&config)
+                .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
+            let selected = selection.fresh_selection()
+                .ok_or_else(|| Error::FreshBootstrap(Box::new(
+                    crate::authority_selection::FreshBootstrapError::Changed,
+                )))?;
+            let config = config.with_fresh_bootstrap(selected)?;
+            snapshot_initialization::bootstrap::require_complete(&root, &config)?;
+            let resources = Arc::new(DiskResources::open(&config, true)?);
+            let locks = config::acquire_locks_selected(&root, &resources, selection)?;
+            (Self::recovery_resources_with_locks(root, config, resources, locks)?, Vec::new())
+        } else {
+            let (root, config) = Self::recovery_projection(root, workspace_limits)?;
+            Self::prepare_workspace_recovery(root, config)?
+        };
+        Self::finish_open(engine, warnings, mode)
+    }
+
+    fn finish_open(
+        mut engine: Self,
+        warnings: Vec<RecoverySealFailure>,
+        mode: RecoveryMode,
+    ) -> Result<Self> {
         let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         engine.recover_prepared(mode, prepared)?;
@@ -877,7 +915,7 @@ impl Engine {
         disk_resources: Arc<DiskResources>,
         locks: crate::disk::WriterLocks,
     ) -> Result<Self> {
-        crate::authority_selection::require_legacy(&root)?;
+        locks.require_selected()?;
         let mut engine = Self {
             root,
             config,

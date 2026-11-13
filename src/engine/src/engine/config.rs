@@ -32,6 +32,7 @@ pub struct ValidatedConfig {
 #[derive(Clone, Debug)]
 struct AdmittedConfig {
     config: Config,
+    fresh_bootstrap: Option<storage_contract::working_tree::MaterialCommitment>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -57,6 +58,7 @@ impl TryFrom<Config> for ValidatedConfig {
         Ok(Self {
             admitted: Arc::new(AdmittedConfig {
                 config,
+                fresh_bootstrap: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -86,6 +88,22 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// Admission-only format proof. Serialized Config never upgrades a root.
+    pub(crate) fn with_fresh_bootstrap(
+        mut self,
+        selection: &crate::authority_selection::FreshSelection,
+    ) -> Result<Self> {
+        selection.require_config(&self)?;
+        Arc::make_mut(&mut self.admitted).fresh_bootstrap = Some(selection.commitment()?);
+        Ok(self)
+    }
+
+    pub(crate) fn fresh_bootstrap(
+        &self,
+    ) -> Option<storage_contract::working_tree::MaterialCommitment> {
+        self.admitted.fresh_bootstrap
+    }
+
     /// A deterministic configuration projection of the exact admitted Backup
     /// choice, not a Genesis admission of the new targets. Only the native
     /// Backup verifier supplies this closed projection. Original I/O and voter
@@ -242,18 +260,19 @@ impl ValidatedConfig {
     /// Context equality only. Authentication still belongs to Genesis admission
     /// or the verified successor; neither schema validity nor equal voters suffice.
     pub(crate) fn same_genesis_io_authority(&self, other: &Self) -> bool {
-        Arc::ptr_eq(
-            &self.admitted.genesis_io_authority,
-            &other.admitted.genesis_io_authority,
-        ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority
+        self.admitted.fresh_bootstrap == other.admitted.fresh_bootstrap
+            && (Arc::ptr_eq(
+                &self.admitted.genesis_io_authority,
+                &other.admitted.genesis_io_authority,
+            ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority)
     }
 
     /// The fixed saved Genesis authority permits only tighter local retained
     /// limits. This is a recovery projection check, not I/O-context equality.
     pub(crate) fn permits_genesis_recovery_projection(&self, projected: &Self) -> bool {
-        self.admitted
-            .genesis_io_authority
-            .permits_recovery_projection(&projected.admitted.genesis_io_authority)
+        self.admitted.fresh_bootstrap == projected.admitted.fresh_bootstrap
+            && self.admitted.genesis_io_authority
+                .permits_recovery_projection(&projected.admitted.genesis_io_authority)
     }
 
     pub(crate) fn verify_candidate_membership(
@@ -296,6 +315,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
+        }
         if generation.portable.is_foreign() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -415,7 +439,7 @@ pub(super) fn acquire_locks_selected(
     disks: &DiskResources,
     selection: crate::authority_selection::SelectionGuard,
 ) -> Result<WriterLocks> {
-    selection.require_legacy()?;
+    selection.require_selected()?;
     let system = File::from(
         rustix::fs::open(
             root.join(layout::CONTROL_WRITER_LOCK.as_path()),
@@ -429,7 +453,7 @@ pub(super) fn acquire_locks_selected(
         .map_err(std::io::Error::from)?,
     );
     acquire_writer(&system)?;
-    selection.require_legacy()?;
+    selection.require_selected()?;
     let mut locks = WriterLocks::new(system, selection);
     for disk in disks.handles() {
         let file = disk.root.lock_file()?;

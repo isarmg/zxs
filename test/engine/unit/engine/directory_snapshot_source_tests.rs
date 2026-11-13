@@ -498,3 +498,27 @@ fn directory_snapshot_global_slots_stop_at_two_distinct_engines() {
     drop(capture_third().unwrap());
     drop(two);
 }
+
+#[test]
+fn directory_snapshot_initialization_retains_leases_and_requires_exact_current_inventory() {
+    let mut fixture = Fixture::new();
+    fixture.save("one.txt", b"first");
+    let verified = verify(fixture.capture(None, DirectorySnapshotLimits::default()).unwrap());
+    let frozen = fixture.engine.freeze_snapshot_initialization_source(verified).unwrap();
+    assert_eq!(frozen.entries().len(), 1);
+    assert!(!fixture.engine.reads.lock().unwrap().counts().unwrap().is_empty());
+    drop(frozen);
+    fixture.no_leases();
+
+    let verified = verify(fixture.capture(None, DirectorySnapshotLimits::default()).unwrap());
+    fixture.save("one.txt", b"changed after verification");
+    assert!(matches!(fixture.engine.freeze_snapshot_initialization_source(verified),
+        Err(DirectorySnapshotSourceError::SourceChanged)));
+    fixture.no_leases();
+
+    let verified = verify(fixture.capture(None, DirectorySnapshotLimits::default()).unwrap());
+    fixture.save("added.txt", b"not in the captured full inventory");
+    assert!(matches!(fixture.engine.freeze_snapshot_initialization_source(verified),
+        Err(DirectorySnapshotSourceError::SourceChanged)));
+    fixture.no_leases();
+}

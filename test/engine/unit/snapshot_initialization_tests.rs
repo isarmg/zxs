@@ -220,3 +220,58 @@ fn retained_intent_cold_discovery_denies_ordinary_writes_without_adopting_materi
     assert_eq!(image(&held), before);
     assert!(!system.join(".zxs").exists());
 }
+
+#[test]
+fn directory_candidate_binds_original_registration_without_changing_legacy_candidate_bytes() {
+    use super::registration::{RegistrationRecord, INITIALIZE_KIND};
+    use crate::journal::{Candidate, CandidateData};
+    use crate::working_tree::snapshot::HeldSnapshotNode;
+    let (_temp, repository) = root();
+    let original = admitted();
+    let node = HeldSnapshotNode::prepare(&repository, original.manifest().unwrap(),
+        |_| Ok(std::io::Cursor::new(b"body"))).unwrap();
+    let (record, binding) = RegistrationRecord::prepare(&original, node.binding()).unwrap();
+    let data = CandidateData {
+        pool_id: original.record().root.registration.pool_id.clone(),
+        sequence: 2,
+        transaction_id: "snapshot-test".into(),
+        operation_id: original.record().operation,
+        request_digest: binding.intent.hash().to_string(),
+        previous_snapshot: Some(original.record().source.publication.hash().to_string()),
+        snapshot_hash: blake3::hash(b"original state").to_hex().to_string(),
+        versions: vec![],
+        metadata_disk_ids: vec![original.record().metadata_members[0].disk_id.clone()],
+        history_roots: crate::metadata_map::Encoder::new(16 * 1024 * 1024)
+            .map(json_codec::Map::new()).unwrap(),
+    };
+    let legacy = Candidate::new(data.clone(), None);
+    let legacy_bytes = storage_contract::canonical_json(&legacy).unwrap();
+    assert_eq!(legacy_bytes, storage_contract::canonical_json(&data).unwrap());
+    let candidate = Candidate::new_directory_snapshot(data, None, None, binding).unwrap();
+    let bytes = storage_contract::canonical_json(&candidate).unwrap();
+    let candidate: Candidate = storage_contract::decode_strict(&bytes).unwrap();
+    assert!(candidate.generation().is_none());
+    assert!(candidate.registry().is_none());
+    let mut result = crate::OperationResult {
+        operation_id: candidate.operation_id,
+        kind: INITIALIZE_KIND.into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: crate::CommitState::Published,
+        protection_at_publish: crate::ProtectionAtPublish::NotApplicable,
+        current_health: crate::CurrentHealth::Healthy,
+        request_digest: candidate.request_digest.clone(),
+        sequence: candidate.sequence,
+        result: record.result_value().unwrap(),
+    };
+    assert_eq!(RegistrationRecord::from_candidate_result(&candidate, &result).unwrap(), record);
+    result.result["intent"]["principal"] = json_codec::json!("different actor");
+    assert!(RegistrationRecord::from_candidate_result(&candidate, &result).is_err());
+    let mut missing: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
+    missing.as_object_mut().unwrap().remove("directory_material");
+    assert!(storage_contract::decode_strict::<Candidate>(
+        &storage_contract::canonical_json(&missing).unwrap(),
+    ).is_err());
+    assert_eq!(storage_contract::canonical_json(&legacy).unwrap(), legacy_bytes);
+}

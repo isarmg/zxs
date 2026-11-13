@@ -1,5 +1,23 @@
 {
   "groups": {
+    "directory-storage-bootstrap": {
+      "reason": "Explicit fresh SYSTEM selection precedes writer sidecars; new disk format, exact completed cold admission, original-byte preservation and refusal by legacy discovery/import. Partial unclaimed material is fenced, not adopted.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": ["engine::snapshot_initialization::bootstrap::tests::"],
+          "exact": [
+            "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
+            "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "directory-snapshot-initialization": {
       "reason": "Fresh-only typed initialization intent, exact original bytes and source plan, cold observation and deny fence. Does not yet prove final directory registration, material recovery or SMB activation.",
       "python_tests": [],
@@ -3601,6 +3619,82 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/authority_selection.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/disk/fencing.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/local.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "test/engine/unit/fresh_directory_bootstrap_tests.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/disk/discovery.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/foreign_import/inspect.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "test/engine/unit/disk/discovery_tests.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/tests.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": ["directory-storage-bootstrap"]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/registration.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/material.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/journal/candidate.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/engine/directory_snapshot_source.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/store.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
     {
       "path": "src/engine/src/engine/publication.rs",
       "groups": ["directory-snapshot-initialization"]

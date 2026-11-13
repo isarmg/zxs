@@ -4,8 +4,10 @@
 
 2026-11-13，基于 `e641a9b3e` 的隔离实施分支。已授权采用明确新格式，
 拒绝旧材料且不自动迁移，只允许显式全新根启动。新格式必须阻止旧 writer 继续写入。
-目前仅落实 typed 原始初始化意图、fresh-only 意图存储和 Engine 冷发现写围栏；
-尚无首节点发布、SYSTEM/DISK 同决定登记恢复或真实冷读入口。不得将本阶段视为 A 段
+目前隔离实现已加入显式 fresh 存储初始化、先于 writer sidecar 的 SYSTEM 格式选择、
+新 DISK seal、三根身份记录及完成标记、完整初始化的冷开准入；另有 typed 原始
+快照意图、fresh-only 意图存储、Engine 冷发现写围栏、目录 Candidate/材料机制。
+这些代码尚未通过 GitHub 编译或测试；尚无首节点发布、同决定节点登记恢复或真实冷读入口。不得将本阶段视为 A 段
 完成或目录 worktree 上线。以下字段仍是实施约束，不代表已验证的持久协议。
 依据 `TASKS.md` 的目录仓库/worktree 顺序及《工程规范》§2–§7，保留类型证明、
 真实准入边界、永久收据和故障行为，不通过兼容默认值、路径扫描或旧目录 Git 接口接管。
@@ -162,3 +164,20 @@ A、B、C 各阶段只有真实 producer、持久决定、冷恢复与消费者�
   不使用 synthetic 根声明生产授权。定向组保留 8 项/300 秒预算。
 - 未运行本机编译、测试、格式化或 selector。后续仍须实现新格式 writer 排斥、
   真实 fresh-root producer、typed 决定材料、恢复与只读 consumer，并增加真实故障回归。
+
+### 首轮编译检查点
+
+- `Engine::initialize_directory_storage` 仅消费调用者明确选择的既有空私有根。
+  SYSTEM `initialized.json` 使用新严格格式，旧 writer 本来就拒绝该槽；在任何
+  writer sidecar 前先以 exclusive create 建立它，半写入拒绝而不自动修复。
+- 新 DISK seal 绑定原 selector commitment；本地 FILE proof 必须核对其原 selector
+  副本与 Config/实体绑定，不能将新格式降级成 ManagedDirectory。
+- 三根绑定和完整标记一致时可冷读原根；selector-only 可同操作重试。任何无完整
+  身份证据的部分初始化保留原字节并拒绝，不宣称所有故障点都可自动完成。
+- 原始 Config 序列化不携带运行时 fresh 准入；普通 decode 不授予新 seal 权威。
+  新根暂拒绝与 membership generation 混用，未扩展备份或拓扑变更。
+- 新目录 Candidate envelope 保留 Genesis/Membership/Registry 各自已有权限域，
+  完整哈希绑定 typed directory material；这仍需后继真正决定与 DISK proof 接线，
+  不能只凭候选或 OperationResult 中的 JSON 开放读取。
+- 初始化专用 source 冻结保留租约并要求完整当前清单与原捕获严格一致；preview
+  原先允许保留冻结旧版本的语义不变。所有测试仅已编写，未本机运行。

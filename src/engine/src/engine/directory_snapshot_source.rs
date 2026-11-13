@@ -213,6 +213,87 @@ pub struct VerifiedDirectorySnapshotSource {
     progress: Progress,
 }
 
+/// Keeps every source lease and the admission reservation alive until the
+/// initialization decision has consumed the complete frozen source.
+pub(crate) struct FrozenInitializationSource {
+    verified: VerifiedDirectorySnapshotSource,
+}
+impl FrozenInitializationSource {
+    pub(crate) fn entries(&self) -> &[DirectorySnapshotEntry] {
+        &self.verified.entries
+    }
+    pub(crate) fn repository(&self) -> RepositoryId { self.verified.scope.repository }
+    pub(crate) fn branch(&self) -> BranchId { self.verified.scope.branch }
+    pub(crate) fn root(&self) -> Option<&PortablePath> {
+        self.verified.scope.root.as_ref().map(|(_, path)| path)
+    }
+    pub(crate) fn checkpoint(&self) -> Result<()> {
+        self.verified.progress.checkpoint()
+    }
+}
+
+impl Engine {
+    /// Unlike preview, initialization binds a complete current namespace at one
+    /// source head. Saves, path spelling changes and added/removed occurrences
+    /// after capture all require a new capture; no omitted files are inferred.
+    pub(crate) fn freeze_snapshot_initialization_source(
+        &self,
+        mut verified: VerifiedDirectorySnapshotSource,
+    ) -> Result<FrozenInitializationSource> {
+        verified.progress.checkpoint()?;
+        if !verified.reservation.owner.ptr_eq(&Arc::downgrade(&self.reads))
+            || verified.scope.topology != self.state.topology_generation
+        {
+            return Err(DirectorySnapshotSourceError::SourceChanged);
+        }
+        let branch = verified.scope.branch.to_string();
+        let repository = self.repository_for_branch(&branch)
+            .map_err(DirectorySnapshotSourceError::Source)?;
+        if repository.repository_id != verified.scope.repository.to_string()
+            || repository.main_branch_id != branch
+        {
+            return Err(DirectorySnapshotSourceError::SourceChanged);
+        }
+        let snapshot = self.namespace_snapshot(&branch)
+            .map_err(DirectorySnapshotSourceError::Source)?;
+        recheck_occurrences(self, &snapshot, &mut verified)?;
+        let captured: BTreeMap<_, _> = verified.entries.iter()
+            .map(|entry| (entry.path.key(), entry)).collect();
+        let mut count = 0usize;
+        for (index, current) in snapshot.entries().iter().enumerate() {
+            verified.progress.work(1)?;
+            let Some(path) = relative_path(current, &verified.scope) else { continue; };
+            if snapshot.tree().visible_entry(index).is_none() { continue; }
+            let expected = captured.get(path.key())
+                .ok_or(DirectorySnapshotSourceError::SourceChanged)?;
+            if expected.path != path || current.entry_id != expected.entry_id.to_string() {
+                return Err(DirectorySnapshotSourceError::SourceChanged);
+            }
+            match expected.content {
+                DirectorySnapshotContent::Directory => {
+                    if current.kind != NamespaceEntryKind::Directory {
+                        return Err(DirectorySnapshotSourceError::SourceChanged);
+                    }
+                }
+                DirectorySnapshotContent::File { file_id, version_id, .. } => {
+                    if current.kind != NamespaceEntryKind::File
+                        || current.file_id != file_id.to_string()
+                        || current.version_id != version_id.to_string()
+                    {
+                        return Err(DirectorySnapshotSourceError::SourceChanged);
+                    }
+                }
+            }
+            count += 1;
+        }
+        if count != verified.entries.len() {
+            return Err(DirectorySnapshotSourceError::SourceChanged);
+        }
+        verified.progress.checkpoint()?;
+        Ok(FrozenInitializationSource { verified })
+    }
+}
+
 impl Engine {
     /// The caller must authorize this branch under the same Engine guard.
     /// This never creates a repository and rejects every `.zxs` component.

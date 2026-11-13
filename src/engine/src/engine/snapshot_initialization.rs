@@ -1,7 +1,10 @@
 //! Fresh directory initialization transaction. Intent admission is not publication.
 //! The original intent must be retained before any repository material is created.
 mod intent;
+pub(crate) mod bootstrap;
+pub(crate) mod registration;
 mod store;
+mod material;
 
 use super::Engine;
 use crate::disk::DiskRoot;
@@ -11,6 +14,18 @@ use intent::AdmittedIntent;
 
 #[derive(Debug, error_definition::Error)]
 pub enum SnapshotInitializationError {
+    #[error("directory snapshot source admission failed")]
+    Source(#[source] super::directory_snapshot_source::DirectorySnapshotSourceError),
+    #[error("directory snapshot material admission failed")]
+    Material(#[source] material::MaterialError),
+    #[error("directory snapshot registration admission failed")]
+    Record(#[source] registration::RegistrationError),
+    #[error("directory snapshot original intent admission failed")]
+    Intent(#[source] intent::IntentError),
+    #[error("directory snapshot identifier or metadata admission failed")]
+    Contract(#[source] storage_contract::Error),
+    #[error("directory snapshot publication does not close its original initialization")]
+    Publication,
     #[error("a retained directory initialization fences ordinary writes: {0}")]
     Pending(OperationId),
     #[error("directory initialization intent belongs to a different current pool or disk")]
@@ -31,7 +46,9 @@ impl SnapshotInitializationError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::Pending(_) | Self::Store(_) | Self::System(_) => ErrorCode::RecoveryRequired,
-            Self::Registration | Self::Writer | Self::Replicas | Self::Identity(_) => {
+            Self::Registration | Self::Writer | Self::Replicas | Self::Identity(_)
+            | Self::Source(_) | Self::Material(_) | Self::Record(_) | Self::Intent(_)
+            | Self::Contract(_) | Self::Publication => {
                 ErrorCode::PublicationInvalid
             }
         }
