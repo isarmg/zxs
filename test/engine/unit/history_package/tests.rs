@@ -2428,7 +2428,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         &mut engine, &entry.file_id, &["release".into(), "中文".into()], &[],
         "alice", storage_contract::OperationId::generate().unwrap(),
     ).unwrap();
-    // Real path facts provide an independently annotatable historical node.
+    // Rename facts remain outside the graph; only a real merge below supplies a metadata node.
     for (from, to) in [("file.txt", "renamed.txt"), ("renamed.txt", "file.txt")] {
         engine.file_namespace(
             &repo.repository_id,
@@ -2438,21 +2438,14 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             "alice", storage_contract::OperationId::generate().unwrap(),
         ).unwrap();
     }
-    let tagged = engine.file_branch_head(&branch).unwrap();
-    engine
-        .set_file_node_note(
-            &entry.file_id,
-            &tagged,
-            &storage_contract::Note::parse("tag note".into()).unwrap(),
-            "alice",
-            storage_contract::OperationId::generate().unwrap(),
-        )
-        .unwrap();
+    let source_node = engine.file_branch_head(&branch).unwrap();
+    assert_eq!(source_node, entry.version_id);
+    assert!(engine.state.file_path_nodes.is_empty());
     let left = engine
         .create_file_branch_from_node(
             &entry.file_id,
             &entry.version_id,
-            &tagged,
+            &source_node,
             &storage_contract::BranchName::parse("left").unwrap(),
             "alice",
             storage_contract::OperationId::generate().unwrap(),
@@ -2466,7 +2459,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .create_file_branch_from_node(
             &entry.file_id,
             &entry.version_id,
-            &tagged,
+            &source_node,
             &storage_contract::BranchName::parse("right").unwrap(),
             "alice",
             storage_contract::OperationId::generate().unwrap(),
@@ -2502,6 +2495,17 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .unwrap()
         .to_owned();
     assert_ne!(merged, chosen);
+    engine
+        .set_file_node_note(
+            &entry.file_id,
+            &merged,
+            &storage_contract::Note::parse("merge note".into()).unwrap(),
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(engine.state.file_path_notes[&merged], "merge note");
+
     let versions = canonical_json(&engine.state.versions).unwrap();
     engine
         .configure_backups(crate::BackupConfigurationRequest {
@@ -2555,8 +2559,8 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     assert_eq!(manifest.file_branch_aliases[&right], left);
     let mut cycle = manifest.clone();
     cycle
-        .file_path_nodes
-        .get_mut(&tagged)
+        .file_metadata_nodes
+        .get_mut(&merged)
         .unwrap()
         .parent_node_ids = vec![merged.clone()];
     assert!(cycle.validate().is_err());

@@ -263,6 +263,9 @@ fn fixture() -> State {
             operation_id: storage_contract::OperationId::generate().unwrap(),
         },
     );
+    // Index-only legacy evidence: the oracle must not silently drop old or
+    // malformed rows. This State is never admitted as a current FILE database;
+    // physical publication separately rejects these obsolete path nodes.
     state.file_path_nodes.insert(
         "path-a".into(),
         record(json!({
@@ -276,7 +279,7 @@ fn fixture() -> State {
         "meta-a".into(),
         record(json!({
             "node_id":"meta-a", "history_tree_id":"h2", "file_id":"file-a", "version_id":"v-a3",
-            "parent_node_ids":[], "branch_id":"b-a", "kind":"tags", "tags":["tag"],
+            "parent_node_ids":["v-a3"], "branch_id":"b-a", "kind":"merge",
             "operation_id":"op_00000000000000000000000000000000", "author":"author",
             "sequence":"1", "created_at":"1"
         })),

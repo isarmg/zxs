@@ -261,12 +261,14 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
-        std::sync::Arc::make_mut(&mut engine.state)
-            .branches
-            .get_mut(&branch)
-            .unwrap()
-            .state = state;
+        let mut changed_state = engine.state.as_ref().clone();
+        changed_state.branches.get_mut(&branch).unwrap().state = state;
+        // Simulate an installed owner-state change, not a stale name-cache source.
+        engine.named_namespaces.install_state(
+            &mut engine.state, std::sync::Arc::new(changed_state),
+        );
         let before = engine.state.branches[&branch].head_commit_id.clone();
+        let source_before = canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine
                 .stage_bytes(&workspace.workspace_id, "report.txt", b"must not publish")
@@ -274,6 +276,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
                 .code(),
             storage_contract::ErrorCode::BranchNotActive
         );
+        assert_eq!(canonical_json(engine.state()).unwrap(), source_before);
         let current = engine.state.commits[&workspace.base_head].clone();
         let mut changed = current.clone();
         changed.commit_id = new_id("commit").unwrap();

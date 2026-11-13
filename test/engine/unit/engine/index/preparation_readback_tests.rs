@@ -143,12 +143,17 @@ fn every_present_global_family_and_exact_original_principal_must_survive() {
         connection.close().await.unwrap();
         kinds
     });
-    for kind in [0, 1, 2, 17, 36, 37, 38] {
+    for kind in [0, 2, 17, 36, 37, 38] {
         assert!(
             kinds.contains(&kind),
             "fixture must actually contain family {kind}"
         );
     }
+    assert!(!kinds.contains(&1), "rename facts must not manufacture path nodes");
+    assert_eq!(engine.state().operations.values().filter(|receipt| {
+        receipt.result.get("path_changes").and_then(|facts| facts.as_array())
+            .is_some_and(|facts| !facts.is_empty())
+    }).count(), 1);
     for kind in kinds {
         reject(
             &change(
@@ -158,6 +163,21 @@ fn every_present_global_family_and_exact_original_principal_must_survive() {
             engine.state(),
         );
     }
+    // The permanent rename fact is inside its original operation payload.
+    reject(
+        &change(
+            &bytes,
+            "UPDATE system_changes SET payload=replace(payload,'before.txt','forged.txt') WHERE kind=0",
+        ),
+        engine.state(),
+    );
+    reject(
+        &change(
+            &bytes,
+            "INSERT INTO system_changes VALUES(1,'unexpected',X'0000000000000000','{}')",
+        ),
+        engine.state(),
+    );
     // Same-length, valid JSON and unchanged primary/sequence keys are not
     // sufficient when the original operation owner has been rewritten.
     reject(

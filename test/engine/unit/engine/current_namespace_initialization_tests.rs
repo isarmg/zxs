@@ -213,7 +213,7 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
                 expected_tree_id: fixture.engine.state.directory_branches[&target]
                     .head_tree_id
                     .clone(),
-                path: "alias/c".into(),
+                path: "alias/b".into(),
             }),
         }],
     };
@@ -239,7 +239,7 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
         .engine
         .select_file_branch_at(
             &fixture.repo.repository_id,
-            &name_policy::PortablePath::parse("alias/c").unwrap(),
+            &name_policy::PortablePath::parse("alias/b").unwrap(),
             &fixture.retained.file_id,
             &branch,
             "admin",
@@ -249,10 +249,10 @@ fn membership_registry_current_initialize_preserves_alias_versions_and_path_cont
     save(
         &mut fixture.engine,
         &fixture.repo.main_branch_id,
-        "alias/c",
+        "alias/b",
         b"independent alias version",
     );
-    let expected = ["dir/b", "alias/c"].map(|path| {
+    let expected = ["dir/b", "alias/b"].map(|path| {
         (
             fixture
                 .engine

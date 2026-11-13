@@ -148,6 +148,13 @@ impl Fixture {
             .state
             .directory_selections
             .insert(id("dir", 1), id("dbr", 1));
+        // These metadata vectors explicitly bind the canonical current names.
+        // Frozen occurrence paths remain independent evidence, including aliases.
+        for (file, path) in [(1, "a"), (2, "dir/b"), (3, "c"), (4, "unrelated")] {
+            let path = name_policy::PortablePath::parse(path).unwrap();
+            fixture.state.file_names.insert(id("file", file), path.file_name().into());
+            fixture.state.file_locations.insert(id("file", file), path.as_str().into());
+        }
         fixture
     }
     fn add_version(&mut self, n: usize, file: usize, route: &[&str]) {

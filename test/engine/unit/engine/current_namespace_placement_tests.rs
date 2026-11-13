@@ -60,7 +60,9 @@ fn project_slot(engine: &mut Engine, slot: &str, disable: bool) {
     } else {
         mask.prepare_current_namespaces(&successor).unwrap()
     };
-    engine.current_namespaces = Some(Arc::new(prepared.view));
+    engine.named_namespaces.install_current(
+        &mut engine.current_namespaces, Some(Arc::new(prepared.view)),
+    );
     engine.workspace_namespace_baselines.clear();
 }
 
