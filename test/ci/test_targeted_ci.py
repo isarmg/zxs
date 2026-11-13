@@ -3055,7 +3055,7 @@ class CurrentBackupPublicationAttackSelection(unittest.TestCase):
             'manifest': 'src/engine/Cargo.toml',
             'kind': 'lib',
             'prefixes': ['engine::disk_registry::current::backup_configuration::tests::'],
-            'max_tests': 16,
+            'max_tests': 29,
             'timeout_seconds': 900,
         }])
 

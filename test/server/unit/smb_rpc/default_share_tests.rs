@@ -321,26 +321,36 @@ fn default_share_preserves_named_repository_beside_new_disk_root() {
         .unwrap();
     assert_eq!(after.len(), before.len() + 1);
     assert!(after.contains(&before[0]));
-    let (reply, _) = binding_tests::exchange(
+    let operation = OperationId::generate().unwrap();
+    let (published, descriptor) = okay(
         &mut stream,
         Request::Namespace {
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "p/new.txt".into(),
             destination: Some("p/资料/moved.txt".into()),
             replace: false,
-            operation_id: new_id("op").unwrap(),
+            operation_id: operation.to_string(),
         },
     );
-    assert!(
-        matches!(
-            reply,
-            Response::Error {
-                code: storage_contract::ErrorCode::UnsupportedOperation,
-                ..
-            }
-        ),
-        "{reply:?}"
+    assert!(descriptor.is_none());
+    assert_eq!(published["operation_id"], operation.to_string());
+    assert_eq!(published["operation_kind"], "object.move");
+    assert_eq!(published["commit_state"], "PUBLISHED");
+    let movement = &published["result"]["movement"];
+    assert_eq!(movement["principal"], "alice");
+    assert_eq!(movement["target_repository_id"], before[0].repository_id);
+    assert_eq!(movement["request"]["target_path"], "moved.txt");
+    assert_eq!(directory(&mut stream, "p"), vec!["资料"]);
+    assert_eq!(directory(&mut stream, "p/资料"), vec!["moved.txt", "report.txt"]);
+    let (moved, _fd) = open(&mut stream, "p/资料/moved.txt", false, false);
+    assert_eq!(read_rpc(&mut stream, moved.handle, 0, 3), b"new");
+    let (missing, descriptor) = binding_tests::exchange(
+        &mut stream, Request::Stat { path: "p/new.txt".into() },
     );
+    assert!(descriptor.is_none());
+    assert!(matches!(missing, Response::Error {
+        code: storage_contract::ErrorCode::NotFound, ..
+    }), "{missing:?}");
     assert_eq!(read_rpc(&mut stream, old.handle, 0, 3), b"old");
     close_wire(stream, worker);
 }

@@ -27,7 +27,7 @@
           "prefixes": [
             "engine::disk_registry::current::backup_configuration::tests::"
           ],
-          "max_tests": 16,
+          "max_tests": 29,
           "timeout_seconds": 900
         }
       ]

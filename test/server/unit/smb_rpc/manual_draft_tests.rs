@@ -178,7 +178,13 @@ fn writing_shared_draft_through_another_occurrence_retains_original_source_proof
     let original = entries.iter().find(|entry| entry.path() == "a/report.txt").unwrap();
     let alias = entries.iter().find(|entry| entry.path() == "b/report.txt").unwrap();
     assert_eq!(original.file_id, alias.file_id);
-    assert_ne!(original.entry_id, alias.entry_id);
+    // Moving one retained branch occurrence preserves its entry identity.
+    // The two current occurrences are distinguished by their path as well.
+    assert_eq!(original.entry_id, alias.entry_id);
+    assert_ne!(
+        (&original.entry_id, original.path()),
+        (&alias.entry_id, alias.path()),
+    );
     let context = crate::ReadContainerEdit {
         file: original.file_id.parse().unwrap(), repository: repository(&shared).parse().unwrap(),
         path: original.path.clone(),

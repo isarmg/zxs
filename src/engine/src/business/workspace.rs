@@ -1359,8 +1359,12 @@ impl crate::engine::PlanningContext<'_> {
         let w = workspace;
         if let Some(binding) = &w.container_draft_commit {
             crate::engine::container_drafts::commit::validate_workspace(
-                self.state, self.current_namespaces.map(std::sync::Arc::as_ref),
-                &w, &request, binding,
+                self.state,
+                self.current_namespaces.map(std::sync::Arc::as_ref),
+                self.current_branch_entries(&w.branch_id)?,
+                &w,
+                &request,
+                binding,
             )?;
         }
         if w.purpose == WorkspacePurpose::HistoricalBranch {
