@@ -155,21 +155,22 @@ fn missing_barrier_foreign_root_and_older_prefix_cannot_authorize_recovery() {
 
 #[test]
 fn prior_unified_reader_format_is_rejected_without_migration() {
+    for prior in ["v1", "v2"] {
     let (temp, system, config) = fixture();
     drop(Engine::initialize_storage(
         &system, config.clone(), OperationId::generate().unwrap(),
     ).unwrap());
     let marker = system.join("initialized.json");
     let bytes = fs::read_to_string(&marker).unwrap();
-    assert!(bytes.contains("unified-storage-system-v2"));
-    fs::write(&marker, bytes.replace("unified-storage-system-v2", "unified-storage-system-v1"))
+    assert!(bytes.contains("unified-storage-system-v3"));
+    fs::write(&marker, bytes.replace("unified-storage-system-v3", &format!("unified-storage-system-{prior}")))
         .unwrap();
     let seal = config.disks[0].root.join(crate::persist::layout::DISK_IDENTITY.as_path());
     let bytes = fs::read_to_string(&seal).unwrap();
-    assert!(bytes.contains("unified-storage-managed-directory-v2"));
+    assert!(bytes.contains("unified-storage-managed-directory-v3"));
     fs::set_permissions(&seal, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&seal, bytes.replace(
-        "unified-storage-managed-directory-v2", "unified-storage-managed-directory-v1",
+        "unified-storage-managed-directory-v3", &format!("unified-storage-managed-directory-{prior}"),
     )).unwrap();
     let before = image(temp.path());
     assert!(Engine::open(&system).is_err());
@@ -177,4 +178,5 @@ fn prior_unified_reader_format_is_rejected_without_migration() {
         .map(|disk| PrivateDirectory::open_existing(&disk.root).unwrap()).collect();
     assert!(Engine::admit_storage_recovery(handles).is_err());
     assert_eq!(image(temp.path()), before);
+}
 }

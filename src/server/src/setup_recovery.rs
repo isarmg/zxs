@@ -243,6 +243,21 @@ impl SetupRecovery {
         })
     }
 
+    /// A no-disk control reader that retains the caller's original directory owner.
+    pub(crate) fn from_held_control(
+        control_directory: platform_io::fs_safety::PrivateDirectory,
+        management_root: PathBuf,
+    ) -> Result<Self, ApiError> {
+        control_directory.verify_identity().map_err(control_publication_error)?;
+        let management_root = checked_directory(&management_root)?;
+        Ok(Self {
+            data_root: control_directory.path().to_owned(), control_directory, management_root,
+            disks: BTreeMap::new(), identities: BTreeMap::new(),
+            discovery_root: Default::default(), allow_development: false,
+            presets: BTreeMap::new(), retained_workspace_limits: None,
+        })
+    }
+
     /// Immutable trusted-local host policy; never derive these limits from a request.
     pub fn with_workspace_limits(
         mut self,
@@ -669,9 +684,13 @@ impl SetupRecovery {
     /// A previous create/rename may be visible after its directory barrier
     /// failed. Re-admit the exact bytes only after file and held-parent sync.
     fn read_durable_control<T: data_serialization::de::DeserializeOwned>(
-        &self,
-        name: &str,
+        &self, name: &str,
     ) -> Result<T, ApiError> {
+        storage_contract::decode_strict(&self.read_durable_control_bytes(name)?)
+            .map_err(ApiError::invalid_source)
+    }
+
+    fn read_durable_control_bytes(&self, name: &str) -> Result<Vec<u8>, ApiError> {
         use platform_io::fs_safety::{EntryName, linux::open_private_regular};
         let directory = self.control_directory.try_clone().map_err(control_publication_error)?;
         let name = EntryName::new(name).map_err(ApiError::invalid_source)?;
@@ -693,11 +712,10 @@ impl SetupRecovery {
         if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
             return Err(ApiError::invalid("setup control record exceeds limit"));
         }
-        let value = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?;
         file.sync_all()
             .map_err(|error| control_publication_error(error.into()))?;
         directory.sync().map_err(control_publication_error)?;
-        Ok(value)
+        Ok(bytes)
     }
 
     fn write_control<T: Serialize>(&self, name: &str, value: &T) -> Result<(), ApiError> {
@@ -1197,10 +1215,10 @@ fn read_preset(path: &Path) -> Result<ValidatedConfig, ApiError> {
     ValidatedConfig::try_from(config).map_err(engine_error)
 }
 
-/// Deterministic test-only interruption after durable disk recovery.
-#[cfg(test)]
+/// Restricted fault seam after durable disk recovery and before final authorization.
+#[cfg(feature = "fault-injection")]
 pub(crate) fn after_next_restore(action: impl FnOnce() + 'static) {
-    tests::after_next_restore(action);
+    recovery::fault::after_next_restore(action);
 }
 
 /// Deterministic test-only interruption before a new recovery action is admitted.

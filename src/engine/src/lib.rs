@@ -7,7 +7,7 @@
 pub use storage_contract::offline_maintenance;
 mod error;
 pub use error::{
-    ContainerTagsError, PathChangeError,
+    ContainerTagsError, InvalidRecoveryDiskSelection, PathChangeError,
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
     RecoveryReconciliationStage,
 };
@@ -67,6 +67,8 @@ pub use engine::FileHistoryMoveTargetReport;
 pub use engine::FilePathChange;
 pub use engine::ReadView;
 pub use engine::StorageRecoveryAdmission;
+pub use engine::{StorageRecoveryControl, RecoveryDiskSelection};
+pub use engine::{StorageControlBinding, StorageControlOwner, StorageOwnerEvidence, StorageRecoveryPredecessor};
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

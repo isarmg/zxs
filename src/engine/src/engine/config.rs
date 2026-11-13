@@ -35,6 +35,9 @@ struct AdmittedConfig {
     config: Config,
     fresh_bootstrap: Option<storage_contract::working_tree::MaterialCommitment>,
     fresh_completion: Option<Arc<CompletionProof>>,
+    unified_successor: Option<Arc<
+        super::snapshot_initialization::bootstrap::successor::UnifiedSuccessorAdmission,
+    >>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -62,6 +65,7 @@ impl TryFrom<Config> for ValidatedConfig {
                 config,
                 fresh_bootstrap: None,
                 fresh_completion: None,
+                unified_successor: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -91,6 +95,36 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(in crate::engine) fn with_unified_successor(
+        mut self,
+        proof: super::snapshot_initialization::bootstrap::successor::UnifiedSuccessorAdmission,
+    ) -> Result<Self> {
+        if self.generation_hash() != Some(proof.generation().hash().to_string().as_str()) {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
+        }
+        let bootstrap = proof.bootstrap()?;
+        let admitted = Arc::make_mut(&mut self.admitted);
+        admitted.fresh_bootstrap = Some(bootstrap);
+        admitted.fresh_completion = Some(Arc::new(proof.completion().clone()));
+        admitted.unified_successor = Some(Arc::new(proof));
+        Ok(self)
+    }
+
+    pub(crate) fn unified_successor(&self) -> Option<&
+        super::snapshot_initialization::bootstrap::successor::UnifiedSuccessorAdmission
+    > {
+        self.admitted.unified_successor.as_deref()
+    }
+
+    pub(in crate::engine) fn original_storage_configuration(&self) -> Result<Self> {
+        match self.unified_successor() {
+            Some(proof) => proof.origin().configuration(),
+            None => Ok(self.clone()),
+        }
+    }
+
     /// Admission-only format proof. Serialized Config never upgrades a root.
     pub(crate) fn with_fresh_bootstrap(
         mut self,

@@ -68,6 +68,25 @@ def assert_path_group_extension(case, policy, paths, retained, added):
     return plan
 
 
+V3_ORIGIN_EXTENSIONS = [
+    'directory-storage-bootstrap',
+    'container-manual-fresh-format',
+    'container-manual-drafts',
+    'container-manual-drafts-consumers',
+    'container-manual-recovery',
+    'directory-snapshot-initialization',
+    'storage-setup-system-binding',
+    'storage-system-product-consumers',
+    'storage-system-recovery-admission',
+    'storage-system-recovery-execution',
+    'membership-initializer-directory-locks',
+    'container-tags-format',
+    'held-directory-layout',
+    'unified-membership-successor',
+    'unified-membership-origin-consumers',
+]
+
+
 class TargetedSelection(unittest.TestCase):
 
     def test_cache_budget_fixture_routes_full_fault_module_without_production_scope_changes(self):
@@ -609,7 +628,7 @@ class TargetedSelection(unittest.TestCase):
             'directory-snapshot-initialization', 'directory-storage-bootstrap',
             'storage-system-recovery-admission', 'storage-system-recovery-execution',
             'storage-setup-system-binding', 'storage-system-product-consumers',
-        ])
+        ] + V3_ORIGIN_EXTENSIONS)
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
             'held-directory-layout', 'ordinary-conversion-name-budget', 'paged-deletion-review',
@@ -624,7 +643,7 @@ class TargetedSelection(unittest.TestCase):
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'directory-snapshot-initialization'])
+            'directory-snapshot-initialization'] + V3_ORIGIN_EXTENSIONS)
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -1344,7 +1363,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
             'directory-snapshot-initialization',
-        ])
+        ] + V3_ORIGIN_EXTENSIONS)
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',
                                          'portable-path-consumers', 'typed-name-consumers'])
@@ -3178,7 +3197,7 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
                                                 ['storage-setup-system-binding',
                                                  'storage-system-product-consumers',
                                                  'storage-system-recovery-admission',
-                                                 'storage-system-recovery-execution']
+                                                 'storage-system-recovery-execution'] + V3_ORIGIN_EXTENSIONS
                                                 if source == 'runtime.rs' else []))
 
 
@@ -3196,7 +3215,7 @@ class DirectoryBootstrapDecisionSelection(unittest.TestCase):
                                              'storage-system-product-consumers',
                                              'storage-system-recovery-admission',
                                              'storage-system-recovery-execution',
-                                             'container-manual-fresh-format'])
+                                             'container-manual-fresh-format'] + V3_ORIGIN_EXTENSIONS)
 
 
 class StorageSystemProductSelection(unittest.TestCase):
@@ -3272,7 +3291,7 @@ class StorageSystemRecoveryAdmissionSelection(unittest.TestCase):
             group, 'directory-storage-bootstrap', 'storage-setup-system-binding',
             'storage-system-product-consumers', 'container-manual-fresh-format',
             'storage-system-recovery-execution',
-        ])
+        ] + V3_ORIGIN_EXTENSIONS)
         assert_path_group_extension(self, policy, [fixture], [], [group])
         self.assertEqual(policy['groups'][group]['rust_targets'], [{
             'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
@@ -3298,7 +3317,7 @@ class StorageSystemRecoveryExecutionSelection(unittest.TestCase):
             'directory-storage-bootstrap', 'container-manual-fresh-format',
             'storage-setup-system-binding', 'storage-system-product-consumers',
             'storage-system-recovery-admission', 'storage-system-recovery-execution',
-        ]
+        ] + V3_ORIGIN_EXTENSIONS
         for path in [
             'src/engine/src/authority_selection/carrier.rs',
             'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs',
@@ -3306,7 +3325,9 @@ class StorageSystemRecoveryExecutionSelection(unittest.TestCase):
             'src/server/src/setup_recovery/recovery.rs',
         ]:
             with self.subTest(path=path):
-                assert_path_group_extension(self, policy, [path], [], closed)
+                assert_path_group_extension(self, policy, [path], [], closed + (
+                    ['storage-restore-authorization-faults']
+                    if path.startswith('src/server/') else []))
         group = 'storage-system-recovery-execution'
         assert_path_group_extension(self, policy, [
             'test/engine/unit/system_recovery_execution_tests.rs',
@@ -3368,3 +3389,373 @@ class OrdinaryCurrentRemovalSelection(unittest.TestCase):
         self.assertIn('smb_rpc::tests::default_share_tests::', target['prefixes'])
         self.assertEqual((target['max_tests'], target['timeout_seconds']), (96, 900))
         self.assertEqual(target['features'], ['core'])
+
+
+class UnifiedV3OriginSelection(unittest.TestCase):
+    def test_all_changed_producers_preserve_original_and_complete_origin_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        cases = [
+            ('src/engine/src/authority_selection/carrier.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/authority_selection/fresh.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/disk.rs', [
+                'container-manual-drafts',
+                'container-manual-fresh-format',
+                'container-tags-format',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/disk/discovery.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine.rs', [
+                'container-manual-drafts',
+                'container-manual-fresh-format',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'historical-directory-runtime',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/config.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/membership_transition.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/archive.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/archive/persistent.rs', [
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/activation/authority.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/activation/local.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/activation/publication.rs', [
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/activation/recovery.rs', [
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/activation/recovery/restricted.rs', [
+                'container-manual-fresh-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/membership_transition/pending/joint/store.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/successor.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/control.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/execute.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/engine/src/foreign_import/inspect.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+            ]),
+            ('src/engine/src/lib.rs', [
+                'container-lifecycle-engine',
+                'container-path-facts-engine',
+                'directory-snapshot-initialization',
+                'held-directory-layout',
+                'ordinary-conversion-name-budget',
+                'typed-name-consumers',
+            ]),
+            ('src/server/src/management.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/management/storage_lifecycle/exclusive.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/management/storage_readmission/exclusive.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/offline/disk_readmission/worker.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/offline/disk_removal/worker.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/offline/managed_pool.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/setup_recovery.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/setup_recovery/activation.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/setup_recovery/recovery.rs', [
+                'container-manual-fresh-format',
+                'directory-storage-bootstrap',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ]),
+            ('src/server/src/setup_recovery/recovery/fault.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/server/src/setup_recovery/recovery/predecessor.rs', [
+                'directory-storage-bootstrap',
+                'container-manual-fresh-format',
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-recovery',
+                'directory-snapshot-initialization',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'membership-initializer-directory-locks',
+                'container-tags-format',
+                'held-directory-layout',
+            ]),
+            ('src/server/src/setup_recovery/storage_system.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+            ('src/server/src/startup_admission.rs', [
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+            ]),
+        ]
+        for path, retained in cases:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], retained,
+                                            V3_ORIGIN_EXTENSIONS + (
+                                                ['storage-restore-authorization-faults']
+                                                if path.startswith('src/server/') else []))
+        successor, = policy['groups']['unified-membership-successor']['rust_targets']
+        self.assertEqual(successor['prefixes'],
+                         ['engine::snapshot_initialization::bootstrap::successor::tests::'])
+        self.assertEqual((successor['max_tests'], successor['timeout_seconds']), (4, 900))
+        membership = policy['groups']['unified-membership-origin-consumers']['rust_targets']
+        self.assertEqual([target['max_tests'] for target in membership], [75, 123])
+        self.assertTrue(all(target['timeout_seconds'] == 900 for target in membership))
+        self.assertEqual(membership[0]['prefixes'], [
+            'engine::membership_transition::archive::',
+            'engine::membership_transition::pending::joint::',
+            'engine::membership_transition::tests::',
+            'engine::membership_transition::missing_exit_tests::',
+        ])
+        self.assertEqual(membership[1]['prefixes'],
+                         ['engine::membership_transition::pending::activation::'])
+
+    def test_restore_fault_moves_keep_all_three_real_authorization_cases(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'storage-restore-authorization-faults'
+        for path in ['test/server/unit/setup_recovery_tests.rs',
+                     'test/server/unit/management_authority_tests.rs']:
+            assert_path_group_extension(self, policy, [path], None, [group])
+        target, = policy['groups'][group]['rust_targets']
+        self.assertEqual(target['features'], ['core', 'fault-injection'])
+        self.assertEqual((target['max_tests'], target['timeout_seconds']), (3, 900))
+        self.assertEqual(target['exact'], [
+            'setup_recovery::tests::bootstrap_restore_rechecks_authorization_after_disk_recovery',
+            'management::authority_tests::rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart',
+            'management::authority_tests::authenticated_restore_rechecks_revocation_before_authority_publication',
+        ])
+
+    def test_binary_fence_is_only_explicit_three_path_github_acceptance(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'storage-format-binary-fence'
+        paths = [
+            'test/ci/test_storage_format_binary_fence.py',
+            'test/ci/fixtures/storage-format-fence/reader.rs',
+            'test/ci/fixtures/storage-format-fence/recover.rs',
+        ]
+        self.assertEqual([rule for rule in policy['rules'] if group in rule['groups']],
+                         [{'path': path, 'groups': [group]} for path in paths])
+        for path in paths:
+            plan = CI.select_plan(policy, [path])
+            self.assertEqual(plan['groups'], [group])
+            self.assertEqual(plan['rust_targets'], [])
+            self.assertEqual(plan['python_tests'], ['test_storage_format_binary_fence'])
+            self.assertEqual(plan['python_timeouts']['test_storage_format_binary_fence'], 900)
+
+
+    def test_exclusive_owner_fixture_keeps_full_product_domain_budget(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'storage-system-product-consumers'
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/management/exclusive_terminal_readmission.rs',
+        ], None, [group])
+        domain = policy['groups'][group]['rust_targets'][1]
+        self.assertIn('management::storage_readmission::', domain['prefixes'])
+        self.assertEqual((domain['max_tests'], domain['timeout_seconds']), (192, 900))

@@ -298,7 +298,7 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
         return Err(invalid("source binding generation is zero"));
     }
     let role_evidence = match &seal.format {
-        DiskSealFormat::UnifiedStorage { .. } => {
+        DiskSealFormat::UnifiedStorage { .. } | DiskSealFormat::UnifiedStorageSuccessor { .. } => {
             return Err(Error::FreshBootstrap(Box::new(
                 crate::authority_selection::FreshBootstrapError::UnsupportedReader,
             )));

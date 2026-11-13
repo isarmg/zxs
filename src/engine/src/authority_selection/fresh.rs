@@ -48,7 +48,7 @@ type Result<T> = std::result::Result<T, FreshBootstrapError>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "unified-storage-system-v2")]
+    #[serialization(rename = "unified-storage-system-v3")]
     UnifiedStorage,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -266,7 +266,7 @@ impl SelectionGuard {
             let verify = || -> Result<()> {
                 expected.require_directory(&self.directory)?;
                 if crate::authority_selection::carrier::RecoverySelection::read(&self.directory)?
-                    .as_ref() != Some(expected)
+                    .map(|actual| actual.bytes()).transpose()? != Some(expected.bytes()?)
                 {
                     return Err(FreshBootstrapError::Changed);
                 }
@@ -402,5 +402,24 @@ impl FreshSelection {
     }
     pub(crate) fn canonical_bytes(&self) -> crate::Result<Vec<u8>> {
         self.bytes().map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))
+    }
+}
+
+impl SelectionGuard {
+    /// Select only the already completed SYSTEM carrier. Member and successor
+    /// authority is deliberately not granted by this SYSTEM-only step.
+    pub(crate) fn recover_carrier(
+        mut self,
+    ) -> crate::Result<(Self, crate::engine::snapshot_initialization::bootstrap::CompletionProof)> {
+        let (proof, origin) = crate::engine::snapshot_initialization::bootstrap
+            ::admit_carrier_system(&self.directory)?;
+        if let Some(recovery) = crate::authority_selection::carrier::RecoverySelection
+            ::read(&self.directory).map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?
+        {
+            return Ok((self.admit_recovery(recovery)?, proof));
+        }
+        self.fresh = Some(origin);
+        self.first_write = false;
+        Ok((self, proof))
     }
 }

@@ -617,7 +617,7 @@ impl CurrentNamespaces {
             return Ok(view);
         }
         crate::file_deletion::publication::verify(previous, next, Some(self))?;
-        crate::file_deletion::freeze::verify(previous, next)?;
+        crate::file_deletion::freeze::verify_current(previous, next, Some(self))?;
         self.verify_path_notes(previous, next)?;
         self.verify_smb_bindings(previous, next)?;
         self.verify_plan_cancellations(previous, next)?;

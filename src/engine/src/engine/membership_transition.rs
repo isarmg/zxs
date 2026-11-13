@@ -72,6 +72,17 @@ fn changes_registered_membership(config: &ValidatedConfig, target: &ValidatedCon
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "kind", deny_unknown_fields)]
 enum Origin {
+    #[serialization(rename = "unified-genesis-v3")]
+    UnifiedGenesis {
+        config: ValidatedConfig,
+        evidence: Box<crate::engine::snapshot_initialization::bootstrap::successor::UnifiedOriginEvidence>,
+    },
+    #[serialization(rename = "unified-successor-v3")]
+    UnifiedSuccessor {
+        config: ValidatedConfig,
+        evidence: Box<crate::engine::snapshot_initialization::bootstrap::successor::UnifiedOriginEvidence>,
+        predecessor_authority_hash: String,
+    },
     Genesis {
         config: ValidatedConfig,
     },
@@ -95,9 +106,27 @@ enum Origin {
     },
 }
 impl Origin {
+    fn retained_seal_format(&self) -> Result<DiskSealFormat> {
+        match self {
+            Self::UnifiedGenesis { evidence, .. } => return evidence.original_seal_format(),
+            Self::UnifiedSuccessor { evidence, predecessor_authority_hash, .. } => {
+                return evidence.successor_seal_format(predecessor_authority_hash);
+            }
+            _ => {}
+        }
+        Ok(match self.predecessor() {
+            Some(hash) => DiskSealFormat::MembershipGeneration {
+                authority_hash: hash.to_owned(),
+            },
+            None => DiskSealFormat::ManagedDirectory,
+        })
+    }
+
     fn config(&self) -> &ValidatedConfig {
         match self {
-            Self::Genesis { config }
+            Self::UnifiedGenesis { config, .. }
+            | Self::UnifiedSuccessor { config, .. }
+            | Self::Genesis { config }
             | Self::Successor { config, .. }
             | Self::TerminalResume { config, .. }
             | Self::Readmission { config, .. }
@@ -106,8 +135,9 @@ impl Origin {
     }
     fn predecessor(&self) -> Option<&str> {
         match self {
-            Self::Genesis { .. } | Self::BackupCutover { .. } => None,
-            Self::Successor {
+            Self::UnifiedGenesis { .. } | Self::Genesis { .. } | Self::BackupCutover { .. } => None,
+            Self::UnifiedSuccessor { predecessor_authority_hash, .. }
+            | Self::Successor {
                 predecessor_authority_hash,
                 ..
             }
@@ -169,6 +199,11 @@ impl TransitionIntent {
         }
     }
     fn verify_target(&self) -> Result<()> {
+        match &self.origin {
+            Origin::UnifiedGenesis { config, evidence } => evidence.require_genesis(config)?,
+            Origin::UnifiedSuccessor { config, evidence, .. } => evidence.require_pool(config)?,
+            _ => {}
+        }
         if let Some(recipe) = &self.foreign {
             if self.effect.is_some()
                 || self.fence_scope.is_some()
@@ -523,9 +558,18 @@ impl Engine {
                 )
             })?;
             let origin = match self.config.generation_hash() {
+                Some(hash) if self.config.unified_successor().is_some() => Origin::UnifiedSuccessor {
+                    config: self.config.clone(),
+                    evidence: Box::new(self.capture_unified_origin()?),
+                    predecessor_authority_hash: hash.to_owned(),
+                },
                 Some(hash) => Origin::Successor {
                     config: self.config.clone(),
                     predecessor_authority_hash: hash.to_owned(),
+                },
+                None if self.config.fresh_bootstrap().is_some() => Origin::UnifiedGenesis {
+                    config: self.config.clone(),
+                    evidence: Box::new(self.capture_unified_origin()?),
                 },
                 None => Origin::Genesis {
                     config: self.config.clone(),

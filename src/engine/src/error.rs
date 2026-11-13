@@ -8,7 +8,13 @@ pub use published::{
 };
 
 #[derive(Debug, error_definition::Error)]
+#[error("invalid local recovery inventory selection")]
+pub struct InvalidRecoveryDiskSelection;
+
+#[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    RecoveryDiskSelection(InvalidRecoveryDiskSelection),
     #[error(transparent)]
     ContainerDrafts(crate::engine::container_drafts::DraftError),
     #[error(transparent)]
@@ -121,6 +127,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::ContainerEdit(_)
             | Self::ContainerDrafts(_)
+            | Self::RecoveryDiskSelection(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
             | Self::FreshBootstrap(_)
@@ -160,6 +167,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::ContainerEdit(_)
             | Self::ContainerDrafts(_)
+            | Self::RecoveryDiskSelection(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
             | Self::FreshBootstrap(_)
@@ -193,6 +201,7 @@ impl Error {
             Self::ContainerTags(error) => error.code(),
             Self::ContainerEdit(error) => error.code(),
             Self::ContainerDrafts(error) => error.code(),
+            Self::RecoveryDiskSelection(_) => ErrorCode::InvalidId,
             Self::PathChange(error) => error.code(),
             Self::SnapshotInitialization(error) => error.code(),
             Self::FreshBootstrap(error) => error.code(),
@@ -253,6 +262,7 @@ impl Error {
             Self::ContainerTags(error) => error.to_string().into(),
             Self::ContainerEdit(error) => error.to_string().into(),
             Self::ContainerDrafts(error) => error.to_string().into(),
+            Self::RecoveryDiskSelection(error) => error.to_string().into(),
             Self::PathChange(error) => error.to_string().into(),
             Self::SnapshotInitialization(error) => error.to_string().into(),
             Self::FreshBootstrap(error) => error.to_string().into(),
@@ -316,6 +326,7 @@ impl Error {
             | Self::ContainerTags(_)
             | Self::ContainerEdit(_)
             | Self::ContainerDrafts(_)
+            | Self::RecoveryDiskSelection(_)
             | Self::PathChange(_)
             | Self::SnapshotInitialization(_)
             | Self::FreshBootstrap(_)

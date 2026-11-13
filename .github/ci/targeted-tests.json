@@ -1,5 +1,82 @@
 {
   "groups": {
+    "storage-format-binary-fence": {
+      "reason": "Explicit GitHub-only two real revision binaries, v2/v3 writer refusal and no-write byte/identity evidence. Heavy builds run only when one of the three acceptance files changes.",
+      "python_tests": [
+        "test_storage_format_binary_fence"
+      ],
+      "python_timeouts": {
+        "test_storage_format_binary_fence": 900
+      },
+      "rust_targets": []
+    },
+    "storage-restore-authorization-faults": {
+      "reason": "Preserve all three real AFTER_RESTORE authorization races after their feature-gated move out of ordinary core builds.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core",
+            "fault-injection"
+          ],
+          "exact": [
+            "setup_recovery::tests::bootstrap_restore_rechecks_authorization_after_disk_recovery",
+            "management::authority_tests::rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart",
+            "management::authority_tests::authenticated_restore_rechecks_revocation_before_authority_publication"
+          ],
+          "max_tests": 3,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "unified-membership-origin-consumers": {
+      "reason": "Full archive, Joint portable evidence, original membership and activation consumers of unified origin. Budgets follow prior CI inventory; this does not claim runtime success.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::membership_transition::archive::",
+            "engine::membership_transition::pending::joint::",
+            "engine::membership_transition::tests::",
+            "engine::membership_transition::missing_exit_tests::"
+          ],
+          "max_tests": 75,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::membership_transition::pending::activation::"
+          ],
+          "max_tests": 123,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "unified-membership-successor": {
+      "reason": "Complete original-to-successor unified membership ancestry admission.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::snapshot_initialization::bootstrap::successor::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "publication-cache-budget": {
       "reason": "Fixture-only route for the complete publication cache budget module, including explicit fault-injection recovery; production consumer routes remain unchanged.",
       "python_tests": [],
@@ -12672,6 +12749,815 @@
       "path": "test/server/unit/smb_rpc/ordinary_rmdir_tests.rs",
       "groups": [
         "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/carrier.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/discovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/archive.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/archive/persistent.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/authority.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/local.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/publication.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/recovery/restricted.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/joint/store.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/successor.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/control.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/execute.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/inspect.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_lifecycle/exclusive.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_readmission/exclusive.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_readmission/worker.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_removal/worker.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/managed_pool.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/recovery/fault.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/recovery/predecessor.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/storage_system.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "src/server/src/startup_admission.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "container-manual-drafts",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery",
+        "directory-snapshot-initialization",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution",
+        "membership-initializer-directory-locks",
+        "container-tags-format",
+        "held-directory-layout",
+        "unified-membership-successor",
+        "unified-membership-origin-consumers",
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "test/engine/unit/unified_membership_ancestor_tests.rs",
+      "groups": [
+        "unified-membership-successor"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery_tests.rs",
+      "groups": [
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_authority_tests.rs",
+      "groups": [
+        "storage-restore-authorization-faults"
+      ]
+    },
+    {
+      "path": "test/ci/test_storage_format_binary_fence.py",
+      "groups": [
+        "storage-format-binary-fence"
+      ]
+    },
+    {
+      "path": "test/ci/fixtures/storage-format-fence/reader.rs",
+      "groups": [
+        "storage-format-binary-fence"
+      ]
+    },
+    {
+      "path": "test/ci/fixtures/storage-format-fence/recover.rs",
+      "groups": [
+        "storage-format-binary-fence"
       ]
     }
   ],

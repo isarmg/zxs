@@ -1205,23 +1205,22 @@ fn verify_member(
     let saved: ValidatedConfig = decode_strict(&config_bytes)?;
     epoch.genesis.verify_saved_metadata_membership(&saved)?;
     let seal = decode_seal(&seal_bytes)?;
-    verify_archived_member_identity(config, epoch.authority_hash.as_deref(), disk, member, &seal)
+    if let Origin::UnifiedGenesis { evidence, .. } = epoch.origin {
+        evidence.require_original_seal(&seal)?;
+    }
+    verify_archived_member_identity(
+        config, &epoch.origin.retained_seal_format()?, disk, member, &seal,
+    )
 }
 
 fn verify_archived_member_identity(
     config: &ValidatedConfig,
-    generation: Option<&str>,
+    expected_format: &DiskSealFormat,
     disk: &DiskConfig,
     member: &ArchivedMember,
     seal: &DiskSeal,
 ) -> Result<()> {
-    let expected_format = match generation {
-        Some(hash) => DiskSealFormat::MembershipGeneration {
-            authority_hash: hash.to_owned(),
-        },
-        None => DiskSealFormat::ManagedDirectory,
-    };
-    if seal.format != expected_format {
+    if &seal.format != expected_format {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
             "archived seal belongs to another generation",

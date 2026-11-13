@@ -581,7 +581,10 @@ fn verify_held_generation_from(
             let config = config
                 .as_ref()
                 .expect("invariant: independently verified archive installed");
-            let expected = identity_at(config, &disk, &held.root.directory(held.root.path())?)?;
+            let mut expected = identity_at(config, &disk, &held.root.directory(held.root.path())?)?;
+            if let Some(origin) = portable.unified_origin()? {
+                expected.format = origin.successor_seal_format(&hash)?;
+            }
             let seal = held
                 .root
                 .read_bytes(&disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_METADATA)?;

@@ -261,7 +261,8 @@ fn marker_path_at(
                 return Ok(None);
             }
             let seal = decode_seal(&bytes)?;
-            if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
+            if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }
+                | DiskSealFormat::UnifiedStorageSuccessor { .. }) {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
                     "active seal lacks its generation marker",
@@ -379,7 +380,8 @@ pub(crate) fn restore_anchor(
 ) -> Result<ValidatedConfig> {
     let root = DiskRoot::open(path)?;
     let Some(file) = root.open_optional_read_regular(&path.join(GENERATION_FILE))? else {
-        if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
+        if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }
+                | DiskSealFormat::UnifiedStorageSuccessor { .. }) {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "active seal lacks generation authority",

@@ -15,6 +15,17 @@ fn read_generation_configuration(
             "local authority differs from active seal",
         ));
     }
+    if let DiskSealFormat::UnifiedStorageSuccessor { .. } = &seal.format {
+        let origin = portable.unified_origin()?.ok_or_else(|| {
+            Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Changed))
+        })?;
+        origin.require_genesis(saved)?;
+        if seal.format != origin.successor_seal_format(authority_hash)? {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
+        }
+    }
     let effective = portable.effective_config()?;
     portable
         .genesis_config()?
@@ -38,6 +49,9 @@ pub(crate) fn read_local_disk_configuration(
         &root.join("metadata/pool-membership/config.json"),
     )?)?)?;
     let config = match &seal.format {
+        DiskSealFormat::UnifiedStorageSuccessor { generation, .. } => {
+            read_generation_configuration(root, seal, &generation.hash().to_string(), &saved, read)?.1
+        }
         DiskSealFormat::UnifiedStorage { .. } => {
             crate::authority_selection::FreshSelection::admit_disk(saved, seal, &read(
                 &root.join(crate::authority_selection::FRESH_DISK_SELECTOR),
@@ -80,6 +94,11 @@ pub(crate) fn verify_local_membership(
         )?)?)
     })();
     match &seal.format {
+        DiskSealFormat::UnifiedStorageSuccessor { generation, .. } => {
+            verify_generation_membership(
+                root, candidate, seal, &generation.hash().to_string(), saved, read, metadata,
+            )
+        }
         DiskSealFormat::UnifiedStorage { .. } => {
             let admitted = (|| {
                 let config = crate::authority_selection::FreshSelection::admit_disk(
@@ -103,43 +122,57 @@ pub(crate) fn verify_local_membership(
             Ok(saved)
         }
         DiskSealFormat::MembershipGeneration { authority_hash } => {
-            let authority = (|| {
-                let saved = saved?;
-                read_generation_configuration(root, seal, authority_hash, &saved, read)
-            })();
-            // These files describe the shared root authority. Failed reads or
-            // decode must revoke the same epoch as mismatched membership did.
-            let (portable, effective) = match metadata {
-                Some(metadata) => metadata.observe(authority)?,
-                None => authority?,
-            };
-            match candidate.generation() {
-                Some(hash) if hash == authority_hash => {
-                    portable.verify_candidate(candidate)?;
-                }
-                _ => {
-                    let (archive, fence_sequence) = portable.frozen_archive(candidate)?;
-                    let hash = object_hash("candidate", candidate)?;
-                    let proof: crate::metadata_map::InclusionProof = decode_strict(&read(
-                        &root
-                            .join("metadata/membership-history")
-                            .join(format!("{hash}.json")),
-                    )?)?;
-                    let value = proof.verify(&archive.publication_seals, &hash)?;
-                    if value.as_ref().and_then(json_codec::Value::as_str).is_none()
-                        || candidate.sequence >= fence_sequence
-                    {
-                        return Err(Error::new(
-                            ErrorCode::PublicationInvalid,
-                            "local candidate is outside exact frozen archive",
-                        ));
-                    }
-                }
-            }
-            if let Some(metadata) = metadata {
-                metadata.generation_candidate(authority_hash, candidate)?;
-            }
-            Ok(effective)
+            verify_generation_membership(root, candidate, seal, authority_hash, saved, read, metadata)
         }
     }
+}
+
+fn verify_generation_membership(
+    root: &Path,
+    candidate: &Candidate,
+    seal: &DiskSeal,
+    authority_hash: &str,
+    saved: Result<ValidatedConfig>,
+    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+    metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
+) -> Result<ValidatedConfig> {
+
+    let authority = (|| {
+        let saved = saved?;
+        read_generation_configuration(root, seal, authority_hash, &saved, read)
+    })();
+    // These files describe the shared root authority. Failed reads or
+    // decode must revoke the same epoch as mismatched membership did.
+    let (portable, effective) = match metadata {
+        Some(metadata) => metadata.observe(authority)?,
+        None => authority?,
+    };
+    match candidate.generation() {
+        Some(hash) if hash == authority_hash => {
+            portable.verify_candidate(candidate)?;
+        }
+        _ => {
+            let (archive, fence_sequence) = portable.frozen_archive(candidate)?;
+            let hash = object_hash("candidate", candidate)?;
+            let proof: crate::metadata_map::InclusionProof = decode_strict(&read(
+                &root
+                    .join("metadata/membership-history")
+                    .join(format!("{hash}.json")),
+            )?)?;
+            let value = proof.verify(&archive.publication_seals, &hash)?;
+            if value.as_ref().and_then(json_codec::Value::as_str).is_none()
+                || candidate.sequence >= fence_sequence
+            {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "local candidate is outside exact frozen archive",
+                ));
+            }
+        }
+    }
+    if let Some(metadata) = metadata {
+        metadata.generation_candidate(authority_hash, candidate)?;
+    }
+    Ok(effective)
+
 }

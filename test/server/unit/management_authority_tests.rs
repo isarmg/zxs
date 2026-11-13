@@ -24,9 +24,15 @@ impl Fixture {
         let mut source_auth =
             AuthStore::initialize(&root.path().join("source-auth"), "admin", PASSWORD).unwrap();
         let old_session = source_auth.login("admin", PASSWORD).unwrap().token;
-        let mut engine = storage_engine::Engine::initialize(
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        for path in [&source, &data, &disk] {
+            fs::create_dir(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut engine = storage_engine::Engine::initialize_storage(
             &source,
             storage_contract::Config::development(vec![disk.clone()]).unwrap(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
         engine
@@ -82,6 +88,7 @@ impl Fixture {
     }
 }
 
+#[cfg(feature = "fault-injection")]
 #[test]
 fn rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart() {
     for change in ["delete", "rotate", "expire", "revoke"] {
@@ -110,7 +117,7 @@ fn rejected_bootstrap_restore_cannot_publish_credentials_on_retry_or_restart() {
                 )
                 .is_err()
         );
-        assert!(f.data.join("config.json").exists());
+        assert!(f.data.join("storage-system/config.json").exists());
         assert!(!f.data.join("management-authority.json").exists());
         assert!(!f.management.join("management-auth.json").exists());
         for _ in 0..2 {
@@ -285,7 +292,7 @@ fn protected_management_rejects_missing_forged_and_revoked_sessions_before_stora
             storage_contract::ErrorCode::Unauthorized
         );
     }
-    assert!(!f.data.join("config.json").exists());
+    assert!(!f.data.join("storage-system/config.json").exists());
     assert_eq!(
         fs::read(f.data.join("management-authority.json")).unwrap(),
         authority_before
@@ -294,6 +301,7 @@ fn protected_management_rejects_missing_forged_and_revoked_sessions_before_stora
     assert!(auth.lock().unwrap().authenticate(&token).is_err());
 }
 
+#[cfg(feature = "fault-injection")]
 #[test]
 fn authenticated_restore_rechecks_revocation_before_authority_publication() {
     const CURRENT_PASSWORD: &str = "current-management-password";
@@ -325,7 +333,7 @@ fn authenticated_restore_rechecks_revocation_before_authority_publication() {
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
-    assert!(f.data.join("config.json").exists());
+    assert!(f.data.join("storage-system/config.json").exists());
     assert_eq!(
         fs::read(f.data.join("management-authority.json")).unwrap(),
         authority_before

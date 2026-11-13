@@ -3,7 +3,7 @@ use super::*;
 use std::collections::BTreeMap;
 mod draft;
 mod query;
-mod current_removal;
+pub(crate) mod current_removal;
 pub(crate) use current_removal::apply_current_workspace_namespace;
 pub(crate) mod container_name;
 pub(crate) use draft::NamespaceDraft;

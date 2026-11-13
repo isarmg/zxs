@@ -63,6 +63,7 @@ impl VerifiedFrozenPrefix<'_> {
 }
 
 struct FrozenEpoch<'a> {
+    origin: &'a Origin,
     config: &'a ValidatedConfig,
     genesis: ValidatedConfig,
     authority_hash: Option<String>,
@@ -75,6 +76,7 @@ impl<'a> FrozenEpoch<'a> {
         let config = intent.origin.config();
         match intent.origin.predecessor() {
             None => Ok(Self {
+                origin: &intent.origin,
                 config,
                 genesis: config.clone(),
                 authority_hash: None,
@@ -107,6 +109,7 @@ impl<'a> FrozenEpoch<'a> {
                     source.predecessor_object(kind, hash)
                 })?;
                 Ok(Self {
+                    origin: &intent.origin,
                     config,
                     genesis: predecessor.genesis_config()?,
                     authority_hash: Some(hash.to_owned()),

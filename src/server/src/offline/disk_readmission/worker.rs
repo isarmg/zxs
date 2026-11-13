@@ -24,6 +24,7 @@ impl Target {
             PreparedService::open(Path::new(layout::STATE), Path::new(layout::MANAGEMENT))?;
         let auth = AuthStore::open_system_management_directory(layout.management()?)?;
         let control = ExclusiveTerminalReadmission::open(
+            prepared.control_directory()?,
             prepared.system_directory()?,
             layout.management()?,
             auth.reader(),

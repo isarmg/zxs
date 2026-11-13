@@ -61,6 +61,10 @@ mod disk_lifecycle;
 pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
 pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
 pub use snapshot_initialization::bootstrap::system_recovery::StorageRecoveryAdmission;
+pub use snapshot_initialization::bootstrap::system_recovery::control::{
+    StorageRecoveryControl, RecoveryDiskSelection, StorageControlBinding, StorageControlOwner,
+    StorageOwnerEvidence, StorageRecoveryPredecessor,
+};
 pub(crate) use disk_lifecycle::terminal::VerifiedTerminalStop;
 pub use disk_lifecycle::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
@@ -720,23 +724,40 @@ impl Engine {
         let saved: Config = storage_contract::decode_strict(
             &system.read_bounded(&layout::SYSTEM_CONFIG, crate::disk::MAX_METADATA)?,
         )?;
-        let config = ValidatedConfig::try_from(saved)?.with_workspace_limits(workspace_limits)?;
-        let selection = crate::authority_selection::SelectionGuard::acquire_held(system)?
-            .recover_fresh(&config)
-            .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
+        let projected = ValidatedConfig::try_from(saved)?.with_workspace_limits(workspace_limits)?;
+        let (selection, proof) = crate::authority_selection::SelectionGuard::acquire_held(system)?
+            .recover_carrier()?;
         let selected = selection.fresh_selection().ok_or_else(|| {
             Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Changed))
         })?;
-        let config = config.with_fresh_bootstrap(selected)?;
         let system = selection.selected_directory()?;
-        let proof = snapshot_initialization::bootstrap::require_complete_resources(
-            &system, &config, None,
+        let bootstrap = disk_lifecycle::bootstrap::runtime::open_store_with_completion(
+            &system, &proof,
         )?;
-        let config = config.with_fresh_completion(proof);
-        let bootstrap = disk_lifecycle::bootstrap::runtime::open_store_for_config(&root, &config)?;
-        bootstrap.reload(&config.pool_id)
-            .map_err(disk_lifecycle::bootstrap::runtime::management_error)?;
+        let original = snapshot_initialization::bootstrap::successor::read_original_configuration(
+            &bootstrap, &projected, selected,
+        )?.with_workspace_limits(workspace_limits)?.with_fresh_completion(proof.clone());
+        let discovered = membership_transition::pending::activation::discover_startup_in_store(
+            &bootstrap, original.clone(),
+        )?;
+        let config = match discovered.generation().cloned() {
+            Some(generation) => {
+                let origin = generation.portable.unified_origin()?.ok_or_else(|| {
+                    Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Changed))
+                })?;
+                origin.require_genesis(&original)?;
+                discovered.with_unified_successor(
+                    snapshot_initialization::bootstrap::successor::UnifiedSuccessorAdmission::new(
+                        origin, &generation, proof,
+                    )?,
+                )?
+            }
+            None => discovered,
+        };
         let resources = Arc::new(DiskResources::open(&config, true)?);
+        snapshot_initialization::bootstrap::require_complete_resources(
+            &system, &config, Some(&resources),
+        )?;
         let locks = config::acquire_locks_selected(&root, &resources, selection)?;
         let engine = Self::recovery_resources_with_locks(root, config, resources, locks)?;
         let result = Self::finish_open(engine, Vec::new(), mode);

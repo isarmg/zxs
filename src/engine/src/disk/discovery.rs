@@ -90,7 +90,7 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
                 authority_hash: authority_hash.clone(),
             }
         }
-        DiskSealFormat::UnifiedStorage { .. } => {
+        DiskSealFormat::UnifiedStorage { .. } | DiskSealFormat::UnifiedStorageSuccessor { .. } => {
             return Err(Error::FreshBootstrap(Box::new(
                 crate::authority_selection::FreshBootstrapError::UnsupportedReader,
             )));

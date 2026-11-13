@@ -772,12 +772,10 @@ fn verify_target(
     }
     match (&enrollment.origin, &dependency.seal) {
         (EnrollmentOrigin::Retained { original_seal_hash }, MemberSeal::Retained { seal }) => {
-            let expected_format = match intent.origin.predecessor() {
-                Some(hash) => DiskSealFormat::MembershipGeneration {
-                    authority_hash: hash.to_owned(),
-                },
-                None => DiskSealFormat::ManagedDirectory,
-            };
+            if let Origin::UnifiedGenesis { evidence, .. } = &intent.origin {
+                evidence.require_original_seal(seal)?;
+            }
+            let expected_format = intent.origin.retained_seal_format()?;
             if object_hash("membership-original-seal", seal)? != *original_seal_hash
                 || seal.format != expected_format
                 || seal.pool_id != identity.pool_id

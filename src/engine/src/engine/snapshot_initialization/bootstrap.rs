@@ -17,6 +17,7 @@ use storage_contract::Generation;
 
 mod decision;
 mod pending;
+pub(crate) mod successor;
 pub(in crate::engine) mod system_recovery;
 
 const ROOTS: &str = "fresh-directory-roots-v1.json";
@@ -113,8 +114,16 @@ pub(crate) fn admit_bootstrap_handle(
     system: &PrivateDirectory, config: &ValidatedConfig,
     bootstrap: platform_io::fs_safety::linux::FileIdentity,
 ) -> crate::Result<LocalEntityIdentity> {
+    let proof = config.fresh_completion().ok_or_else(|| failure(FreshBootstrapError::Incomplete))?;
+    admit_bootstrap_handle_proof(system, proof, bootstrap)
+}
+
+pub(in crate::engine) fn admit_bootstrap_handle_proof(
+    system: &PrivateDirectory,
+    proof: &CompletionProof,
+    bootstrap: platform_io::fs_safety::linux::FileIdentity,
+) -> crate::Result<LocalEntityIdentity> {
     let inspect = || -> Result<LocalEntityIdentity> {
-        let proof = config.fresh_completion().ok_or(FreshBootstrapError::Incomplete)?;
         let root = opened(system.try_clone().map_err(FreshBootstrapError::Filesystem)?)?;
         let bytes = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
@@ -498,11 +507,26 @@ fn verify_roots(
     config: &ValidatedConfig, record: &RootRecord, selector_bytes: &[u8],
     resources: Option<&DiskResources>,
 ) -> Result<()> {
-    verify_scoped_roots(config, record, selector_bytes, resources, &config.disks.iter().collect::<Vec<_>>())
+    let original = config.original_storage_configuration().map_err(engine_error)?;
+    verify_scoped_roots_with_seal(
+        &original, config, record, selector_bytes, resources,
+        &original.disks.iter().collect::<Vec<_>>(),
+    )
 }
 
 fn verify_scoped_roots(
     config: &ValidatedConfig,
+    record: &RootRecord,
+    selector_bytes: &[u8],
+    resources: Option<&DiskResources>,
+    scope: &[&crate::DiskConfig],
+) -> Result<()> {
+    verify_scoped_roots_with_seal(config, config, record, selector_bytes, resources, scope)
+}
+
+fn verify_scoped_roots_with_seal(
+    config: &ValidatedConfig,
+    effective: &ValidatedConfig,
     record: &RootRecord,
     selector_bytes: &[u8],
     resources: Option<&DiskResources>,
@@ -556,7 +580,7 @@ fn verify_scoped_roots(
         let seal = crate::disk::decode_seal(&root.read_bytes(
             &disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_BYTES,
         ).map_err(engine_error)?).map_err(engine_error)?;
-        let expected = crate::disk::identity_at(config, disk, &directory).map_err(engine_error)?;
+        let expected = crate::disk::identity_at(effective, disk, &directory).map_err(engine_error)?;
         crate::disk::validate_stored_seal(&seal, &expected).map_err(engine_error)?;
         if root.read_bytes(
             &disk.root.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_BYTES,
@@ -605,7 +629,8 @@ fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
         let selector = crate::authority_selection::FreshSelection::read(&system)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         selector.require_directory(&system)?;
-        selector.require_config(&engine.config).map_err(engine_error)?;
+        selector.require_config(&engine.config.original_storage_configuration().map_err(engine_error)?)
+            .map_err(engine_error)?;
         let bytes = system.read_bounded(&name(ROOTS)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
@@ -747,7 +772,8 @@ pub(in crate::engine) fn require_complete_resources(
         let selector = crate::authority_selection::FreshSelection::read(&system)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         selector.require_directory(&system)?;
-        selector.require_config(config).map_err(engine_error)?;
+        selector.require_config(&config.original_storage_configuration().map_err(engine_error)?)
+            .map_err(engine_error)?;
         let record = RootRecord::decode(&bytes)?;
         let decision = decision::BootstrapDecision::decode(&complete, &record)
             .map_err(engine_error)?;
@@ -798,15 +824,43 @@ pub(in crate::engine) fn admit_system_completion(
     system: &PrivateDirectory,
     config: &ValidatedConfig,
 ) -> crate::Result<CompletionProof> {
-    let selected = crate::authority_selection::FreshSelection::read(system).map_err(failure)?
-        .ok_or_else(|| failure(FreshBootstrapError::Incomplete))?;
-    selected.require_directory(system).map_err(failure)?;
+    let (proof, selected) = admit_original_carrier_system(system)?;
     selected.require_config(config)?;
     let roots = system.read_bounded(&name(ROOTS).map_err(failure)?, MAX_BYTES)?;
     let complete = system.read_bounded(&name(COMPLETE).map_err(failure)?, MAX_BYTES)?;
+    if completion_commitment(&complete) != proof.commitment {
+        return Err(failure(FreshBootstrapError::Changed));
+    }
     let record = RootRecord::decode(&roots).map_err(failure)?;
-    let decision = decision::BootstrapDecision::decode(&complete, &record)?;
-    decision.verify_membership(config)?;
+    decision::BootstrapDecision::decode(&complete, &record)?.verify_membership(config)?;
+    Ok(proof)
+}
+
+/// SYSTEM-only evidence grants inspection of the original locator, not access
+/// to any member root or permission to install a decoded configuration. Callers
+/// must independently admit the original config and any permanent successor.
+pub(crate) fn admit_carrier_system(
+    system: &PrivateDirectory,
+) -> crate::Result<(CompletionProof, crate::authority_selection::FreshSelection)> {
+    if crate::authority_selection::carrier::RecoverySelection::read(system)
+        .map_err(failure)?.is_some()
+    {
+        system_recovery::admit_carrier_system(system)
+    } else {
+        admit_original_carrier_system(system)
+    }
+}
+
+pub(in crate::engine) fn admit_original_carrier_system(
+    system: &PrivateDirectory,
+) -> crate::Result<(CompletionProof, crate::authority_selection::FreshSelection)> {
+    let selected = crate::authority_selection::FreshSelection::read(system).map_err(failure)?
+        .ok_or_else(|| failure(FreshBootstrapError::Incomplete))?;
+    selected.require_directory(system).map_err(failure)?;
+    let roots = system.read_bounded(&name(ROOTS).map_err(failure)?, MAX_BYTES)?;
+    let complete = system.read_bounded(&name(COMPLETE).map_err(failure)?, MAX_BYTES)?;
+    let record = RootRecord::decode(&roots).map_err(failure)?;
+    decision::BootstrapDecision::decode(&complete, &record)?;
     if record.operation != selected.operation || record.selection != selected.commitment()? {
         return Err(failure(FreshBootstrapError::Changed));
     }
@@ -820,10 +874,10 @@ pub(in crate::engine) fn admit_system_completion(
     {
         return Err(failure(FreshBootstrapError::Changed));
     }
-    Ok(CompletionProof {
+    Ok((CompletionProof {
         commitment: completion_commitment(&complete), system: selected.system,
         bootstrap_root, bootstrap_writer,
-    })
+    }, selected))
 }
 
 impl Engine {

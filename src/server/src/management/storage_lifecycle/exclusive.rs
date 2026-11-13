@@ -30,6 +30,7 @@ pub struct TerminalBoundary {
 /// No Engine reference/clone is exposed, so a terminal commit has a unique owner.
 pub struct ExclusiveExit {
     source: Source,
+    control: PrivateDirectory,
     system: PrivateDirectory,
     management: PrivateDirectory,
     auth: AuthReader,
@@ -40,6 +41,7 @@ impl ExclusiveExit {
     /// Missing/corrupt/pending metadata-resume authority fails without fallback.
     /// Existing native recovery may synchronize its original evidence here.
     pub fn open(
+        control: PrivateDirectory,
         system: PrivateDirectory,
         management: PrivateDirectory,
         auth: AuthReader,
@@ -49,6 +51,7 @@ impl ExclusiveExit {
         if identity.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
+        control.verify_identity().map_err(storage_error)?;
         system.verify_identity().map_err(storage_error)?;
         let _owner = acquire_owner(&management)?;
         let source = if TerminalManagement::requires_management(system.path())
@@ -61,12 +64,18 @@ impl ExclusiveExit {
             let engine = Engine::open_storage_held(
                 system.try_clone().map_err(storage_error)?, None,
             ).map_err(crate::engine_backend::error)?;
+            crate::setup_recovery::SetupRecovery::from_held_control(
+                control.try_clone().map_err(storage_error)?,
+                management.path().to_owned(),
+            )?
+            .require_recovered_engine(&engine)?;
             let backend = EngineBackend::new(engine);
             backend.set_management_auth(auth.clone())?;
             Source::Active(Box::new(backend))
         };
         let owner = Self {
             source,
+            control,
             system,
             management,
             auth,
@@ -77,6 +86,7 @@ impl ExclusiveExit {
     }
     fn check(&self) -> Result<(), ApiError> {
         self.auth.revalidate_identity(&self.identity)?;
+        self.control.verify_identity().map_err(storage_error)?;
         self.system.verify_identity().map_err(storage_error)?;
         self.management.verify_identity().map_err(storage_error)?;
         if let Source::Active(backend) = &self.source

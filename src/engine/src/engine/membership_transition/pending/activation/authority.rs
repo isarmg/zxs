@@ -1183,6 +1183,21 @@ impl PortableAuthority {
             .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "membership epoch exhausted"))
     }
 
+    pub(in crate::engine) fn unified_origin(&self) -> Result<Option<
+        crate::engine::snapshot_initialization::bootstrap::successor::UnifiedOriginEvidence
+    >> {
+        let origin = &self.lineage().first().ok_or_else(|| {
+            Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Changed))
+        })?.1.origin;
+        match origin {
+            Origin::UnifiedGenesis { evidence, .. } => {
+                evidence.verify()?;
+                Ok(Some((**evidence).clone()))
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub(in crate::engine::membership_transition) fn genesis_config(
         &self,
     ) -> Result<ValidatedConfig> {

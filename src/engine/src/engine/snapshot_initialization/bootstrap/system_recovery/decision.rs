@@ -110,7 +110,8 @@ pub(super) fn require_complete(
 ) -> crate::Result<(CompletionProof, RootRecord)> {
     let selected = RecoverySelection::read(system).map_err(failure)?.ok_or_else(refused)?;
     selected.require_directory(system).map_err(failure)?;
-    selected.origin.require_config(config)?;
+    let original = config.original_storage_configuration()?;
+    selected.origin.require_config(&original)?;
     let bytes = system.read_bounded(&name(COMPLETE).map_err(failure)?, MAX_BYTES)?;
     let completed = RecoveryCompletion::decode(&bytes)?;
     completed.require_selection(&selected)?;
@@ -139,7 +140,8 @@ pub(super) fn require_complete(
     {
         return Err(refused());
     }
-    let members = config.metadata_members().cloned().collect::<Vec<_>>();
+    config.verify_candidate_membership(&completed.candidate)?;
+    let members = original.metadata_members().cloned().collect::<Vec<_>>();
     for disk in &members {
         let root = &resources.get(disk)?.root;
         let seal = root.read_json_observed(

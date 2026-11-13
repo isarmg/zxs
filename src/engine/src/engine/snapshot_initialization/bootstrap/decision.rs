@@ -48,6 +48,28 @@ fn initial_result(record: &RootRecord) -> crate::Result<OperationResult> {
 }
 
 impl BootstrapDecision {
+    /// A membership archive may carry the original decision forward, never
+    /// replace its operation result or principal with a newly synthesized one.
+    pub(super) fn require_retained_operation(&self, state: &State) -> crate::Result<()> {
+        let operation = self.candidate.operation_id;
+        if state.operations.get(&operation) != Some(&self.publication.result)
+            || state.operation_principals.get(&operation).map(String::as_str) != Some(PRINCIPAL)
+        {
+            return Err(rejected());
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_generation_ancestor(
+        &self,
+        generation: &crate::engine::membership_transition::pending::activation::Generation,
+    ) -> crate::Result<()> {
+        // Generation verifies the exact candidate hash in its authenticated
+        // frozen history, not merely a matching operation ID in a State map.
+        generation.verify_candidate(&self.candidate)?;
+        self.require_retained_operation(&generation.base)
+    }
+
     pub(super) fn require_initial_candidate(&self, candidate: &Candidate) -> crate::Result<()> {
         if storage_contract::canonical_json(&self.candidate)?
             != storage_contract::canonical_json(candidate)?
@@ -173,7 +195,8 @@ impl BootstrapDecision {
     ) -> crate::Result<()> {
         self.verify(record)?;
         config.verify_candidate_membership(&self.candidate)?;
-        for disk in &config.disks {
+        let original = config.original_storage_configuration()?;
+        for disk in &original.disks {
             let handle = resources.get(disk)?;
             let actual = handle.root.read_bytes(
                 &disk.root.join(crate::persist::layout::STORAGE_INITIALIZATION_PROOF.as_path()),
@@ -223,7 +246,7 @@ impl Engine {
         let selector = crate::authority_selection::FreshSelection::read(&system)
             .map_err(failure)?.ok_or_else(rejected)?;
         selector.require_directory(&system).map_err(failure)?;
-        selector.require_config(&self.config)?;
+        selector.require_config(&self.config.original_storage_configuration()?)?;
         if record.selection != selector.commitment()? || record.operation != selector.operation {
             return Err(rejected());
         }
@@ -351,7 +374,7 @@ impl Engine {
         let selector = crate::authority_selection::FreshSelection::read(&system)
             .map_err(failure)?.ok_or_else(rejected)?;
         selector.require_directory(&system).map_err(failure)?;
-        selector.require_config(&self.config)?;
+        selector.require_config(&self.config.original_storage_configuration()?)?;
         if selector.operation != record.operation || selector.commitment()? != record.selection {
             return Err(rejected());
         }

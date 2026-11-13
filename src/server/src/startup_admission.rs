@@ -119,7 +119,7 @@ impl PreparedService {
                 source,
             })
     }
-    pub(crate) fn control_directory(&self) -> Result<PrivateDirectory, Error> {
+    pub fn control_directory(&self) -> Result<PrivateDirectory, Error> {
         self.recheck()?;
         self.control.try_clone().map_err(|source| Error::Directory {
             path: self.control.path().to_owned(), source,
@@ -132,6 +132,15 @@ impl PreparedService {
             path: self.system.path().to_owned(),
             source,
         })
+    }
+    /// Validate the same durable control lineage against the fully opened Engine.
+    pub fn require_engine(&self, engine: &storage_engine::Engine) -> Result<(), Error> {
+        self.recheck()?;
+        let setup = SetupRecovery::from_held_control(
+            self.control_directory()?, self.management.path().to_owned(),
+        )
+        .map_err(|source| Error::Activation { source })?;
+        setup.require_recovered_engine(engine).map_err(|source| Error::Activation { source })
     }
     pub(crate) fn require_current_authority(&self) -> Result<(), Error> {
         self.recheck()?;

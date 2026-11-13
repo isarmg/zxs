@@ -136,7 +136,15 @@ pub(in crate::engine::membership_transition) fn install_marker(
             false
         } else {
             let seal = decode_seal(&seal_bytes)?;
-            matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == &generation.hash)
+            match &seal.format {
+                DiskSealFormat::MembershipGeneration { authority_hash } => {
+                    authority_hash == &generation.hash
+                }
+                DiskSealFormat::UnifiedStorageSuccessor { generation: hash, .. } => {
+                    hash.hash().to_string() == generation.hash
+                }
+                DiskSealFormat::ManagedDirectory | DiskSealFormat::UnifiedStorage { .. } => false,
+            }
         };
         let journal = directory.join(layout::JOURNAL.as_path());
         if root.open_optional_read_regular(&journal)?.is_none() {
@@ -209,12 +217,7 @@ pub(crate) fn predecessor_seal_matches(
             return validate_stored_seal(&stored, &predecessor);
         }
         let mut predecessor = expected.clone();
-        predecessor.format = match generation.intent.origin.predecessor() {
-            Some(hash) => DiskSealFormat::MembershipGeneration {
-                authority_hash: hash.to_owned(),
-            },
-            None => DiskSealFormat::ManagedDirectory,
-        };
+        predecessor.format = generation.intent.origin.retained_seal_format()?;
         generation
             .intent
             .origin
@@ -487,6 +490,7 @@ impl Engine {
             base: Arc::new(base),
         });
         generation.next_state()?;
+        self.require_unified_membership_ancestor(&generation)?;
         if generation.registry().is_some() {
             generation.portable.prepare_namespace_activation(
                 &generation.base,
@@ -503,6 +507,18 @@ impl Engine {
             .clone()
             .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
             .with_generation(Arc::clone(&generation))?;
+        let config = if self.config.fresh_bootstrap().is_some() {
+            let origin = self.capture_unified_origin()?;
+            let completion = self.config.fresh_completion().cloned().ok_or_else(|| {
+                Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Incomplete))
+            })?;
+            config.with_unified_successor(
+                crate::engine::snapshot_initialization::bootstrap::successor
+                    ::UnifiedSuccessorAdmission::new(origin, &generation, completion)?,
+            )?
+        } else {
+            config
+        };
         let config = generation.portable.restrict_io(config)?;
         let mut handles = self
             .disk_resources

@@ -14,12 +14,12 @@ type Result<T> = std::result::Result<T, FreshBootstrapError>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "unified-storage-system-v2")]
+    #[serialization(rename = "unified-storage-system-v3")]
     UnifiedStorage,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Carrier {
-    #[serialization(rename = "recovery")]
+    #[serialization(rename = "bound-control-recovery")]
     Recovery,
 }
 
@@ -35,18 +35,19 @@ pub(crate) struct RecoveryRequest {
     pub(crate) system: LocalEntityIdentity,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct RecoverySelection {
     format: Format,
     carrier: Carrier,
     pub(crate) origin: FreshSelection,
     pub(crate) request: RecoveryRequest,
+    pub(crate) control: crate::StorageRecoveryControl,
 }
 
 impl RecoverySelection {
-    pub(crate) fn new(origin: FreshSelection, request: RecoveryRequest) -> Self {
-        Self { format: Format::UnifiedStorage, carrier: Carrier::Recovery, origin, request }
+    pub(crate) fn new(origin: FreshSelection, request: RecoveryRequest, control: crate::StorageRecoveryControl) -> Self {
+        Self { format: Format::UnifiedStorage, carrier: Carrier::Recovery, origin, request, control }
     }
 
     pub(crate) fn bytes(&self) -> Result<Vec<u8>> {
@@ -78,10 +79,28 @@ impl RecoverySelection {
         if selected.bytes()? != bytes {
             return Err(FreshBootstrapError::Format);
         }
+        selected.require_control()?;
         Ok(Some(selected))
     }
 
+    fn require_control(&self) -> Result<()> {
+        self.control.require_origin(&self.origin)
+            .map_err(|source| FreshBootstrapError::Engine(Box::new(source)))?;
+        let commitment = self.control.commitment()
+            .map_err(|source| FreshBootstrapError::Engine(Box::new(source)))?;
+        if self.control.binding.operation != self.request.operation
+            || self.control.binding.system != self.request.system
+            || self.control.principal != self.request.principal
+            || self.control.source_evidence != self.request.source_evidence
+            || commitment != self.request.control_intent
+        {
+            return Err(FreshBootstrapError::Changed);
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_directory(&self, directory: &PrivateDirectory) -> Result<()> {
+        self.require_control()?;
         directory.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
         let held = OpenAt2Root::from_private_directory(
             directory.try_clone().map_err(FreshBootstrapError::Filesystem)?, MountPolicy::SameMount,
@@ -127,7 +146,8 @@ impl SelectionGuard {
             file.sync_all().map_err(|error| FreshBootstrapError::Filesystem(error.into()))?;
             self.directory.verify_payload(&name, &file).map_err(FreshBootstrapError::Filesystem)?;
             self.directory.sync().map_err(FreshBootstrapError::Filesystem)?;
-            if RecoverySelection::read(&self.directory)?.as_ref() != Some(&expected) {
+            if RecoverySelection::read(&self.directory)?.map(|actual| actual.bytes()).transpose()?
+                != Some(expected.bytes()?) {
                 return Err(FreshBootstrapError::Changed);
             }
             Ok(())
@@ -143,8 +163,10 @@ impl SelectionGuard {
         expected.require_directory(&self.directory)
             .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?;
         if RecoverySelection::read(&self.directory)
-            .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?.as_ref()
-            != Some(&expected)
+            .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?
+            .map(|actual| actual.bytes()).transpose()
+            .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?
+            != Some(expected.bytes().map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?)
         {
             return Err(crate::Error::FreshBootstrap(Box::new(FreshBootstrapError::Changed)));
         }

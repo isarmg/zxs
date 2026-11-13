@@ -14,6 +14,7 @@ use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 mod decision;
+pub mod control;
 mod execute;
 use storage_contract::working_tree::{LocalEntityIdentity, MaterialCommitment};
 
@@ -54,6 +55,17 @@ impl StorageRecoveryAdmission {
             || storage_contract::canonical_json(config)?
                 != storage_contract::canonical_json(&self.config)?
         {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
+    /// Bind the retained control owner to the source's original SYSTEM entity.
+    pub fn require_initialization_binding(
+        &self, operation: crate::OperationId, config: &Config, system: LocalEntityIdentity,
+    ) -> crate::Result<()> {
+        self.require_initialization_origin(operation, config)?;
+        if self.origin.system != system {
             return Err(refused());
         }
         Ok(())
@@ -345,4 +357,79 @@ pub(in crate::engine) fn verify_original_publication(
         return Err(refused());
     }
     Ok(())
+}
+
+/// SYSTEM-only evidence. This does not admit member I/O or confer write authority.
+pub(in crate::engine) fn admit_carrier_system(
+    system: &PrivateDirectory,
+) -> crate::Result<(super::CompletionProof, FreshSelection)> {
+    use crate::authority_selection::carrier::RecoverySelection;
+    let selected = RecoverySelection::read(system).map_err(failure)?.ok_or_else(refused)?;
+    selected.require_directory(system).map_err(failure)?;
+    let bytes = system.read_bounded(&super::name(super::COMPLETE).map_err(failure)?, MAX_BYTES)?;
+    let completed = decision::RecoveryCompletion::decode(&bytes)?;
+    completed.require_selection(&selected)?;
+    let origin_bytes = storage_contract::canonical_json(&completed.binding.origin)?;
+    let (_, original) = bootstrap_decision::BootstrapDecision::admit_source(&origin_bytes)?;
+    if original.selection != selected.origin.commitment()?
+        || system.read_bounded(&super::name(super::ROOTS).map_err(failure)?, MAX_BYTES)?
+            != original.bytes().map_err(failure)?
+    { return Err(refused()); }
+    let writer = system.open_payload(&crate::persist::layout::CONTROL_WRITER_LOCK,
+        platform_io::fs_safety::PayloadOpenMode::Existing)?;
+    let identity = platform_io::fs_safety::linux::FileIdentity::from_fd(&writer)?;
+    let (bootstrap_root, bootstrap_writer) = super::bootstrap_identity(system).map_err(failure)?;
+    if writer.metadata()?.len() != 0
+        || completed.binding.system_writer != LocalEntityIdentity::new(identity.device, identity.inode)
+        || completed.binding.bootstrap_root != bootstrap_root
+        || completed.binding.bootstrap_writer != bootstrap_writer
+    { return Err(refused()); }
+    Ok((super::CompletionProof {
+        commitment: super::completion_commitment(&bytes), system: selected.request.system,
+        bootstrap_root, bootstrap_writer,
+    }, selected.origin))
+}
+
+impl Engine {
+    /// Recheck the exact control lineage under this Engine's original held SYSTEM.
+    pub fn require_recovery_control(&self, control: Option<&crate::StorageRecoveryControl>) -> crate::Result<()> {
+        self._locks.require_selected()?;
+        let system = self._locks.selected_directory()?;
+        let selected = crate::authority_selection::carrier::RecoverySelection::read(&system)
+            .map_err(failure)?;
+        let Some(control) = control else {
+            if selected.is_some() { return Err(refused()); }
+            let original = FreshSelection::read(&system).map_err(failure)?.ok_or_else(refused)?;
+            original.require_directory(&system).map_err(failure)?;
+            if self.config.fresh_bootstrap() != Some(original.commitment()?) {
+                return Err(refused());
+            }
+            return Ok(());
+        };
+        Self::probe_recovery_control(&system, control)?;
+        let result = self.state.operations.get(&control.binding.operation).ok_or_else(refused)?;
+        let selected = crate::authority_selection::carrier::RecoverySelection::read(&system)
+            .map_err(failure)?.ok_or_else(refused)?;
+        let binding: decision::RecoveryBinding = storage_contract::decode_strict(
+            &storage_contract::canonical_json(&result.result)?,
+        )?;
+        if binding.request != selected.request || result != &binding.result(result.sequence)?
+            || self.state.operation_principals.get(&control.binding.operation)
+                != Some(&control.principal.as_str().to_owned())
+        { return Err(refused()); }
+        Ok(())
+    }
+
+    /// Control/SYSTEM-only preflight; ordinary Engine opening still verifies members.
+    pub fn probe_recovery_control(
+        system: &PrivateDirectory, control: &crate::StorageRecoveryControl,
+    ) -> crate::Result<()> {
+        admit_carrier_system(system)?;
+        let selected = crate::authority_selection::carrier::RecoverySelection::read(system)
+            .map_err(failure)?.ok_or_else(refused)?;
+        if storage_contract::canonical_json(&selected.control)?
+            != storage_contract::canonical_json(control)?
+        { return Err(refused()); }
+        Ok(())
+    }
 }

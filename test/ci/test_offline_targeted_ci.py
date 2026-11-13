@@ -3,7 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
-from test_targeted_ci import assert_path_group_extension
+from test_targeted_ci import assert_path_group_extension, V3_ORIGIN_EXTENSIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -17,7 +17,12 @@ class OfflineTargetedCi(unittest.TestCase):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
     def test_engine_export_keeps_original_selections_and_adds_conversion_budget(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
+        plan = assert_path_group_extension(self, self.policy, ['src/engine/src/lib.rs'],
+                                           ['container-lifecycle-engine', 'container-path-facts-engine',
+                                            'directory-snapshot-initialization',
+                                            'held-directory-layout',
+                                            'ordinary-conversion-name-budget',
+                                            'typed-name-consumers'], V3_ORIGIN_EXTENSIONS)
         self.assertEqual(plan['groups'], ['container-lifecycle-engine',
                                          'container-path-facts-engine',
                                          'directory-snapshot-initialization',
@@ -43,7 +48,11 @@ class OfflineTargetedCi(unittest.TestCase):
         )
         self.assertEqual(previous['groups'], ['portable-path-consumers'])
         # The unrelated engine export retains its existing conversion coverage.
-        export = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
+        export = assert_path_group_extension(
+            self, self.policy, ['src/engine/src/lib.rs'],
+            ['container-lifecycle-engine', 'container-path-facts-engine',
+             'directory-snapshot-initialization', 'held-directory-layout',
+             'ordinary-conversion-name-budget', 'typed-name-consumers'], V3_ORIGIN_EXTENSIONS)
         self.assertNotIn('container-manual-drafts', export['groups'])
         self.assertNotIn('container-manual-drafts-consumers', export['groups'])
 

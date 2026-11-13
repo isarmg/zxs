@@ -46,6 +46,20 @@ pub(crate) fn open_store_for_config(
     BootstrapStore::hold_existing(directory, root.join(DIRECTORY), writer).map_err(management_error)
 }
 
+/// Consume only a previously verified carrier proof and its original held SYSTEM.
+pub(in crate::engine) fn open_store_with_completion(
+    system: &platform_io::fs_safety::PrivateDirectory,
+    proof: &crate::engine::snapshot_initialization::bootstrap::CompletionProof,
+) -> crate::Result<BootstrapStore> {
+    let anchor = OpenAt2Root::from_private_directory(system.try_clone()?, MountPolicy::SameMount)?;
+    let directory = anchor.open_directory(&EntryName::new(DIRECTORY)?.as_relative())?;
+    let writer = crate::engine::snapshot_initialization::bootstrap::admit_bootstrap_handle_proof(
+        system, proof, platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)?,
+    )?;
+    BootstrapStore::hold_existing(directory, system.path().join(DIRECTORY), writer)
+        .map_err(management_error)
+}
+
 fn create_store(root: &Path) -> crate::Result<BootstrapStore> {
     let system = existing_private_dir(root)?;
     let child = system.create_child(&EntryName::new(DIRECTORY)?)?;

@@ -10,15 +10,36 @@ fn namespace(kind: smb_protocol::protocol::NamespaceOperation, path: &str) -> Re
 }
 
 fn deleted_child() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
+    deleted_child_with_renames(false)
+}
+
+fn deleted_child_with_renames(
+    rename: bool,
+) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
     let (root, shared, backend) = empty_fixture(false);
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     use smb_protocol::protocol::NamespaceOperation as Kind;
     okay(&mut stream, namespace(Kind::Mkdir, "p/folder"));
     let (opened, file) = open(&mut stream, "p/folder/file.txt", true, true);
     save(&mut stream, &opened, &file, b"retained bytes");
-    okay(&mut stream, Request::Close { handle: opened.handle });
+    // save already flushes and closes the handle; retain only its returned FD here.
     drop(file);
-    okay(&mut stream, namespace(Kind::Unlink, "p/folder/file.txt"));
+    if rename {
+        let (opened, file) = open(&mut stream, "p/outside.txt", true, true);
+        save(&mut stream, &opened, &file, b"retained bytes");
+        drop(file);
+        for (source, destination) in [
+            ("p/folder/file.txt", "p/folder/renamed.txt"),
+            ("p/outside.txt", "p/outside-renamed.txt"),
+        ] {
+            okay(&mut stream, Request::Namespace {
+                kind: Kind::Rename, path: source.into(), destination: Some(destination.into()),
+                replace: false, operation_id: new_id("op").unwrap(),
+            });
+        }
+    }
+    let path = if rename { "p/folder/renamed.txt" } else { "p/folder/file.txt" };
+    okay(&mut stream, namespace(Kind::Unlink, path));
     assert!(directory(&mut stream, "p/folder").is_empty());
     close_wire(stream, worker);
     let branch = shared.backend.repositories_snapshot(&identity(&shared)).unwrap()[0]
@@ -46,8 +67,34 @@ fn request(workspace: storage_contract::Workspace) -> CommitRequest {
 
 #[test]
 fn current_empty_rmdir_keeps_all_old_history_and_deletion_facts_after_cold_open() {
-    let (root, shared, backend, branch) = deleted_child();
+    for rename in [false, true] {
+        cold_removal_round_trip(rename);
+    }
+}
+
+fn cold_removal_round_trip(rename: bool) {
+    let (root, shared, backend, branch) = deleted_child_with_renames(rename);
     let before = backend.inner.test_with_engine_locked(|engine| engine.state().clone());
+    assert!(before.branches[&branch].file_id.is_none());
+    if rename {
+        let source = &before.commits[&before.branches[&branch].head_commit_id];
+        assert!(source.entries.iter().any(|entry| entry.path() == "folder/file.txt"));
+        assert!(source.entries.iter().any(|entry| entry.path() == "outside.txt"));
+        backend.inner.test_with_engine_locked(|engine| {
+            assert!(engine.namespace_tree(&branch).unwrap().get("outside-renamed.txt").is_some());
+        });
+    }
+    for deletion in before.file_deletions.values() {
+        assert!(!deletion.branch_heads.is_empty());
+        for file_branch in deletion.branch_heads.keys() {
+            assert_ne!(file_branch, &branch);
+            assert_eq!(before.branches[file_branch].file_id.as_deref(),
+                Some(deletion.file_id.as_str()));
+        }
+        if let Some(selected) = before.file_selections.get(&deletion.file_id) {
+            assert_ne!(selected, &branch);
+        }
+    }
     let (mut stream, worker, _) = wire(shared.clone(), "alice");
     let operation = OperationId::generate().unwrap();
     let removal = || Request::Namespace {
@@ -77,7 +124,8 @@ fn current_empty_rmdir_keeps_all_old_history_and_deletion_facts_after_cold_open(
     }), "{reply:?}");
     backend.inner.test_with_engine_locked(|engine| assert_eq!(engine.state(), &published));
     assert_eq!(shared.backend.operation_outcome(&actor, operation).unwrap(), outcome);
-    assert!(directory(&mut stream, "p").is_empty());
+    let expected = if rename { vec!["outside-renamed.txt"] } else { vec![] };
+    assert_eq!(directory(&mut stream, "p"), expected);
     close_wire(stream, worker);
     let receipt = backend.inner.test_with_engine_locked(|engine| {
         for (id, commit) in before.commits.iter() {
@@ -85,12 +133,19 @@ fn current_empty_rmdir_keeps_all_old_history_and_deletion_facts_after_cold_open(
         }
         assert_eq!(engine.state().versions, before.versions);
         assert_eq!(engine.state().file_deletions, before.file_deletions);
+        assert_eq!(engine.state().file_selections, before.file_selections);
+        assert_eq!(engine.state().file_write_origins, before.file_write_origins);
         assert_eq!(engine.state().directory_git_repositories, before.directory_git_repositories);
+        for (id, branch) in before.branches.iter().filter(|(_, branch)| branch.file_id.is_some()) {
+            assert_eq!(engine.state().branches.get(id), Some(branch));
+        }
         engine.state().operations.get(&operation).unwrap().clone()
     });
     drop((backend, shared));
-    let engine = Engine::open(&root.path().join("state")).unwrap();
-    assert!(engine.namespace_tree(&branch).unwrap().visible_entries().next().is_none());
+    let mut engine = Engine::open(&root.path().join("state")).unwrap();
+    let visible = engine.namespace_tree(&branch).unwrap().visible_entries()
+        .map(|entry| entry.path().to_owned()).collect::<Vec<_>>();
+    assert_eq!(visible, expected);
     assert_eq!(engine.state().operations.get(&operation), Some(&receipt));
     assert_eq!(engine.state().file_deletions, before.file_deletions);
     for (version, _) in before.versions.iter() {
@@ -102,6 +157,15 @@ fn current_empty_rmdir_keeps_all_old_history_and_deletion_facts_after_cold_open(
     for (id, commit) in before.commits.iter() {
         assert_eq!(engine.state().commits.get(id), Some(commit));
     }
+    let retained = engine.state().clone();
+    let deletion = retained.file_deletions.values().next().unwrap();
+    let file = storage_contract::history_window::HistoryFileId::parse(&deletion.file_id)
+        .unwrap();
+    assert_eq!(engine.undo_file_deletion(storage_engine::UndoFileDeletionRequest {
+        file_id: &file, deletion_node_id: &deletion.node_id,
+        principal: "alice", operation_id: OperationId::generate().unwrap(),
+    }).unwrap_err().code(), storage_contract::ErrorCode::UnsupportedOperation);
+    assert_eq!(engine.state(), &retained);
     let cold = EngineBackend::new(engine);
     cold.set_management_auth(crate::lock(&root.auth).reader()).unwrap();
     for _ in 0..2 {
