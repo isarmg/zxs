@@ -14,6 +14,8 @@ pub enum Error {
     #[error(transparent)]
     PathChange(PathChangeError),
     #[error(transparent)]
+    SnapshotInitialization(Box<crate::engine::snapshot_initialization::SnapshotInitializationError>),
+    #[error(transparent)]
     VersionNames(crate::container_storage::VersionNameError),
     #[error(transparent)]
     ContainerName(crate::business::namespace::container_name::RenameError),
@@ -112,6 +114,7 @@ impl Error {
             source @ (Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)
+            | Self::SnapshotInitialization(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)
@@ -147,6 +150,7 @@ impl Error {
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)
+            | Self::SnapshotInitialization(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)
@@ -176,6 +180,7 @@ impl Error {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
             Self::PathChange(error) => error.code(),
+            Self::SnapshotInitialization(error) => error.code(),
             Self::VersionNames(error) => error.code(),
             Self::ContainerName(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
@@ -232,6 +237,7 @@ impl Error {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
             Self::PathChange(error) => error.to_string().into(),
+            Self::SnapshotInitialization(error) => error.to_string().into(),
             Self::VersionNames(error) => error.to_string().into(),
             Self::ContainerName(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
@@ -291,6 +297,7 @@ impl Error {
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
             | Self::PathChange(_)
+            | Self::SnapshotInitialization(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
             | Self::BatchUndo(_)

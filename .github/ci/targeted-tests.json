@@ -1,5 +1,20 @@
 {
   "groups": {
+    "directory-snapshot-initialization": {
+      "reason": "Fresh-only typed initialization intent, exact original bytes and source plan, cold observation and deny fence. Does not yet prove final directory registration, material recovery or SMB activation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::snapshot_initialization::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 300
+        }
+      ]
+    },
     "history-package-audit-guard": {
       "reason": "Preserve native and retained permanent path audit through package export/restore; reject unrepresentable partial original batches before any output writes while retaining audit-free package support.",
       "python_tests": [],
@@ -3586,6 +3601,62 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/engine/recovery_checkpoint.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/intent.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/store.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/snapshot_init.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_initialization_tests.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
     {
       "path": "src/engine/src/history_package/audit_guard.rs",
       "groups": [

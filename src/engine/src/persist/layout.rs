@@ -4,6 +4,7 @@ use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
 
 pub(crate) mod snapshot;
+pub(crate) mod snapshot_init;
 
 /// Physical roots of the unified working-tree layout. These names do not by
 /// themselves admit a directory or authorize adoption of existing material.

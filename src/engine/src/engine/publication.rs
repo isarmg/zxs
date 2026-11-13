@@ -350,6 +350,7 @@ impl Engine {
             .prepare_publication(next, prepared, result, maximum)
     }
     fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
+        self.require_no_snapshot_initialization()?;
         if self.blocked
             || self.move_is_retained()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)

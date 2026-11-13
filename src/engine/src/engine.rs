@@ -88,6 +88,7 @@ pub use disk_catalog::{
     inspect_disk_database_material, reconstruct_disk_database_material,
 };
 mod history_move_recovery;
+pub(crate) mod snapshot_initialization;
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub(crate) mod move_execution;
 pub(crate) use move_execution::PublishedMove;
@@ -267,6 +268,7 @@ pub struct Engine {
     pub(crate) blocked: bool,
     move_completion: Option<move_execution::CompletionBinding>,
     history_move_intent: Option<OperationId>,
+    snapshot_initialization_intent: Option<OperationId>,
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
@@ -693,6 +695,7 @@ impl Engine {
             blocked: false,
             move_completion: None,
             history_move_intent: None,
+            snapshot_initialization_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -818,7 +821,10 @@ impl Engine {
         engine.load_workspaces()?;
         engine.verify_selected_move_prepare()?;
         engine.rebuild_index()?;
-        if mode == RecoveryMode::CompletePending && !engine.move_is_retained() {
+        if mode == RecoveryMode::CompletePending
+            && !engine.move_is_retained()
+            && engine.snapshot_initialization_intent.is_none()
+        {
             engine.refresh_published_disk_catalogs(None);
             engine.restore_published_disk_histories();
             engine.resume_backup_preparation()?;
@@ -889,6 +895,7 @@ impl Engine {
             blocked: false,
             move_completion: None,
             history_move_intent: None,
+            snapshot_initialization_intent: None,
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -924,6 +931,7 @@ impl Engine {
                     })?);
         }
         engine.discover_file_history_move_choice()?;
+        engine.discover_snapshot_initialization()?;
         Ok(engine)
     }
     /// Explicit recovery after loss of the system disk. Never initializes data disks.
@@ -1477,6 +1485,7 @@ impl Engine {
     /// A selected move keeps the ordinary write fence while its original inputs
     /// are read or repaired. Independent unresolved decisions still block this.
     pub(crate) fn require_move_source_read(&self) -> Result<()> {
+        self.require_no_snapshot_initialization()?;
         self.require_no_commit_preparation()?;
         if self.blocked {
             return Err(Error::new(
