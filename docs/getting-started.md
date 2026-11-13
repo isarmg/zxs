@@ -5,7 +5,7 @@
 以下命令在仓库根目录执行，用目录模拟数据盘来验证开发流程。生产部署见[初始化与维护](17-lifecycle-and-maintenance.md)及[配置规范](21-configuration.md)。
 
 
-需要 Linux amd64 构建宿主和 `rust-toolchain.toml` 指定的 Rust 1.99.0，当前验收目标为 `x86_64-unknown-linux-gnu`。Web 的 `wasm32-unknown-unknown` 目标不扩展原生平台支持范围。先构建守护进程与离线救援入口，再通过受保护 Web 引导初始化；没有默认密码，也不接受明文密码命令行参数。
+需要 Linux amd64 构建宿主和 `rust-toolchain.toml` 指定的 Rust 1.100.0，当前验收目标为 `x86_64-unknown-linux-gnu`。Web 的 `wasm32-unknown-unknown` 目标不扩展原生平台支持范围。先构建守护进程与离线救援入口，再通过受保护 Web 引导初始化；没有默认密码，也不接受明文密码命令行参数。
 
 ```sh
 cargo build --locked --offline --target-dir target/native -p storage-server -p storage-helper
