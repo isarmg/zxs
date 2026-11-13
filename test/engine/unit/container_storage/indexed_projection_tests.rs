@@ -284,6 +284,10 @@ impl Fixture {
                 .insert(version.version_id.clone(), content_state);
             state.versions.insert(version.version_id.clone(), version);
         }
+        // Every retained file needs an authoritative current location, including
+        // the unrelated owner that physical preparation admits alongside ours.
+        state.file_locations.insert(other.clone(), "other/seed.txt".into());
+        state.file_names.insert(other.clone(), "seed.txt".into());
         state.file_names.insert(file.clone(), "current.txt".into());
         state
             .file_locations
@@ -358,16 +362,17 @@ impl Fixture {
         state
             .file_metadata_nodes
             .insert(metadata.node_id.clone(), metadata);
+        // Current names are not ancestry nodes. Exercise retained node notes and
+        // parent edges with supported metadata merges, never legacy rename nodes.
         for (number, sequence) in [(1, 30), (2, 20)] {
-            let node = FilePathNode {
-                node_id: id("fnode", number),
+            let node = FileMetadataNode {
+                node_id: id("fmeta", number + 1),
                 history_tree_id: h1.clone(),
                 file_id: file.clone(),
                 version_id: id("ver", 1),
                 parent_node_ids: vec![id("fmeta", 1)],
                 branch_id: id("br", 2),
-                path: format!("new-{number}.txt"),
-                previous_path: "seed.txt".into(),
+                kind: FileMetadataKind::Merge,
                 operation_id: OperationId::generate().unwrap(),
                 author: "author".into(),
                 sequence,
@@ -375,12 +380,12 @@ impl Fixture {
             };
             state
                 .file_path_notes
-                .insert(node.node_id.clone(), format!("path note {number}"));
-            state.file_path_nodes.insert(node.node_id.clone(), node);
+                .insert(node.node_id.clone(), format!("merge note {number}"));
+            state.file_metadata_nodes.insert(node.node_id.clone(), node);
         }
         state
             .file_node_parents
-            .insert(id("ver", 2), vec![id("fnode", 2)]);
+            .insert(id("ver", 2), vec![id("fmeta", 3)]);
         for number in [2, 1] {
             let event = FileBranchMerge {
                 merge_id: id("fmerge", number),
@@ -392,7 +397,7 @@ impl Fixture {
                 result_node_id: id("ver", 2),
                 surviving_branch_id: id("br", 3),
                 reused_node: true,
-                parent_node_ids: vec![id("ver", 1), id("fnode", number)],
+                parent_node_ids: vec![id("ver", 1), id("fmeta", number + 1)],
                 operation_id: OperationId::generate().unwrap(),
                 sequence: 31 + number,
             };
