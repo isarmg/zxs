@@ -453,6 +453,7 @@ impl Writes {
     }
     fn file(&mut self, key: &str) {
         for field in [
+            Field::ContainerTags,
             Field::FileWriteOrigins,
             Field::FileLocations,
             Field::FileBackupPaths,
