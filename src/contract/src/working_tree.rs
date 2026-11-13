@@ -42,12 +42,18 @@ pub mod kind {
     impl IdKind for SnapshotRepository {
         const PREFIX: &'static str = "snapshot_repo";
     }
+    pub enum SnapshotNode {}
+    impl IdKind for SnapshotNode {
+        const PREFIX: &'static str = "snapshot_node";
+    }
 }
 
 pub type RootId = Id<kind::Root>;
 pub type DirectoryId = Id<kind::Directory>;
 pub type ReplicaId = Id<kind::Replica>;
 pub type SnapshotRepositoryId = Id<kind::SnapshotRepository>;
+/// Immutable full snapshot identity, independent of the retired directory Git trees.
+pub type SnapshotNodeId = Id<kind::SnapshotNode>;
 
 /// The existing exact registration tuple, shared with the engine registry.
 /// Its historical wire spelling is unchanged by moving the type to contract.
