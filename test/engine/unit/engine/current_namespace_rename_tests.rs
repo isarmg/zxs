@@ -726,8 +726,9 @@ fn membership_registry_current_staged_rename_conflicts_with_a_changed_source() {
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
     assert!(!fixture.engine.state().operations.contains_key(&operation));
-    assert_eq!(fixture.engine.workspace_recovery_hint(&workspace.workspace_id)
-        .unwrap().namespace_operations, staged);
+    let retained = fixture.engine.workspace_recovery_hint(&workspace.workspace_id)
+        .unwrap().namespace_operations;
+    assert_eq!(canonical_json(&retained).unwrap(), canonical_json(&staged).unwrap());
     assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
         .get("staged").is_none());
     assert_eq!(current(&fixture, "other").file_id, fixture.retained.file_id);
