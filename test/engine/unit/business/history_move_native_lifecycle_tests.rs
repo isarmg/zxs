@@ -79,6 +79,7 @@ impl Fixture {
             history_tree_id: target.history_tree_id.clone(),
             events: Vec::new(),
             path_changes: Vec::new(),
+            path_audit: BTreeMap::new(),
         };
         let versions = [(source_version, target_version.clone())].into();
         let branches = [(

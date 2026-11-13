@@ -44,7 +44,7 @@ impl ForeignAdmissionRecipe {
             audit.rewrite(&mut mapped)?;
             bind_route(&mut mapped, &target_chain, &slots, next.topology_generation)?;
             mapped.validate()?;
-            merge::include(&mut next, mapped);
+            merge::include(&mut next, mapped)?;
         }
         // The complete target is checked, not just selected history projections.
         // This is an in-memory transformation boundary, not a codec round trip.

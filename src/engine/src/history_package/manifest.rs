@@ -24,6 +24,7 @@ use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryManifest {
+    pub path_audit: BTreeMap<storage_contract::OperationId, super::path_audit::PathAuditCarrier>,
     pub container_tags: BTreeMap<
         storage_contract::FileId,
         storage_contract::file_container_tags::ContainerTags,
@@ -163,6 +164,7 @@ impl HistoryManifest {
             .map(|version| version.file_id.as_str())
             .collect::<BTreeSet<_>>();
         let manifest = Self {
+            path_audit: super::path_audit::project(state, history_id)?,
             repository,
             history,
             file_names: state
@@ -861,6 +863,7 @@ impl HistoryManifest {
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        super::path_audit::validate_manifest(self)?;
         if !self.file_path_nodes.is_empty() {
             return Err(crate::persist::path_changes::invalid());
         }

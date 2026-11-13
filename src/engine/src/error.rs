@@ -503,6 +503,8 @@ impl ContainerTagsError {
 pub enum PathChangeError {
     #[error("history package cannot preserve permanent path audit; no package was written")]
     PackageAuditUnsupported,
+    #[error("mixed path provenance cannot be copied without its complete source proof")]
+    SourceAuditUnsupported,
     #[error("foreign admission cannot preserve path/copy audit; original records were not changed")]
     ForeignSource,
     #[error("file workspace occurrence changed; staged bytes are preserved")]
@@ -522,7 +524,9 @@ impl PathChangeError {
         match self {
             Self::Limit => ErrorCode::ResourceLimit,
             Self::WorkspaceLocation => ErrorCode::FileBranchConflict,
-            Self::ForeignSource | Self::PackageAuditUnsupported => ErrorCode::UnsupportedOperation,
+            Self::ForeignSource | Self::PackageAuditUnsupported | Self::SourceAuditUnsupported => {
+                ErrorCode::UnsupportedOperation
+            }
             Self::Publication | Self::Encoding(_) | Self::Principal(_) => ErrorCode::PublicationInvalid,
         }
     }

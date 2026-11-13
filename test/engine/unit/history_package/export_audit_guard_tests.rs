@@ -1,8 +1,8 @@
-//! Temporary export safety fence, not evidence that portable audit is implemented.
+//! Complete path-evidence roundtrips and explicit unsupported-scope export fences.
 use super::*;
 use storage_contract::OperationId;
 
-fn disk_image(root: &Path) -> BTreeMap<PathBuf, (u64, u32, Vec<u8>)> {
+pub(super) fn disk_image(root: &Path) -> BTreeMap<PathBuf, (u64, u32, Vec<u8>)> {
     fn visit(root: &Path, path: &Path, rows: &mut BTreeMap<PathBuf, (u64, u32, Vec<u8>)>) {
         let metadata = fs::symlink_metadata(path).unwrap();
         let bytes = if metadata.is_dir() {
@@ -48,8 +48,51 @@ fn assert_refused_without_writes(engine: &Engine, history: &str, root: &Path) {
     }
 }
 
+fn assert_audit_roundtrip(engine: &Engine, history: &str, root: &Path) {
+    let package = root.join("audited-package");
+    let expected = crate::history_package::path_audit::portable(
+        &HistoryManifest::from_state(engine.state(), history).unwrap(),
+        engine.state().sequence,
+    ).unwrap();
+    assert!(!expected.is_empty());
+    let before = canonical_json(engine.state()).unwrap();
+    engine.export_history_package(history, &package).unwrap();
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    let mut restored = initialize(&root.join("audit-restored"));
+    let receipt = restored.restore_history_package(
+        &package, "P01", 3, "restoration-manager", OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(crate::history_package::path_audit::restored(&receipt).unwrap(), expected);
+    assert!(receipt.sequence > engine.state().sequence);
+    for id in expected.keys() {
+        assert!(!restored.state.operations.contains_key(id));
+    }
+    let mut native = Vec::new();
+    restored.visit_file_path_changes(
+        &crate::HistoryWindowCancellation::new(), |fact| native.push(fact),
+    ).unwrap();
+    assert!(native.is_empty(), "imported source facts are not local native events");
+    let projected = HistoryManifest::from_state(restored.state(), history).unwrap();
+    assert_eq!(
+        crate::history_package::path_audit::portable(&projected, restored.state.sequence).unwrap(),
+        expected
+    );
+    let second = root.join("audited-again");
+    restored.export_history_package(history, &second).unwrap();
+    let mut twice = initialize(&root.join("twice-restored"));
+    let again = twice.restore_history_package(
+        &second, "P01", 3, "second-manager", OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(crate::history_package::path_audit::restored(&again).unwrap(), expected);
+    assert_eq!(
+        canonical_json(&crate::history_package::path_audit::restored(&again).unwrap()).unwrap(),
+        canonical_json(&expected).unwrap(),
+        "normalized evidence must not grow by nesting previous restore receipts"
+    );
+}
+
 #[test]
-fn native_rename_export_refuses_before_writes_but_audit_free_packages_still_restore() {
+fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = initialize(&temporary.path().join("source"));
     let repo = engine.create_disk_root("P01", "alice", OperationId::generate().unwrap()).unwrap();
@@ -80,7 +123,7 @@ fn native_rename_export_refuses_before_writes_but_audit_free_packages_still_rest
     let renamed_body = engine.valid_replica(&entry.version_id).unwrap().0.path().to_owned();
     assert_eq!(fs::metadata(&renamed_body).unwrap().ino(), inode);
     assert_eq!(fs::read(&renamed_body).unwrap(), b"immutable body");
-    assert_refused_without_writes(&engine, &repo.history_tree_id, temporary.path());
+    assert_audit_roundtrip(&engine, &repo.history_tree_id, temporary.path());
 }
 
 #[test]
@@ -131,5 +174,41 @@ fn retained_copy_path_audit_is_not_mistaken_for_an_audit_free_history() {
     assert_eq!(retained.path_changes.len(), 1);
     assert_ne!(retained.path_changes[0].source.history_tree_id.to_string(), copied.history_tree_id);
     assert_eq!(retained.path_changes[0].history_tree_id.to_string(), copied.history_tree_id);
-    assert_refused_without_writes(&engine, &copied.history_tree_id, temporary.path());
+    assert_audit_roundtrip(&engine, &copied.history_tree_id, temporary.path());
+}
+
+#[test]
+fn copied_subset_of_directory_rename_batch_refuses_without_output_or_source_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut config = Config::development(
+        (0..4).map(|index| temporary.path().join(format!("disk-{index}"))),
+    ).unwrap();
+    config.disks[3].level = 1;
+    config.disks[3].upstream_slot_id = None;
+    config.disks[3].metadata_member = false;
+    let mut engine = Engine::initialize(&temporary.path().join("state"), config).unwrap();
+    let source = engine.create_disk_root("P01", "alice", OperationId::generate().unwrap()).unwrap();
+    let target = engine.create_disk_root("D04", "alice", OperationId::generate().unwrap()).unwrap();
+    save_path(&mut engine, &source.main_branch_id, "folder/one.txt", b"one");
+    save_path(&mut engine, &source.main_branch_id, "folder/two.txt", b"two");
+    let renamed = engine.file_namespace(
+        &source.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "folder", Some("renamed"),
+        ).unwrap(),
+        "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    assert_eq!(crate::persist::path_changes::read(&renamed).unwrap().len(), 2);
+    let request = crate::FileHistoryCopyRequest {
+        source_repository_id: source.repository_id.clone(),
+        source_path: "renamed/one.txt".into(),
+        expected_source_head: engine.state.branches[&source.main_branch_id].head_commit_id.clone(),
+        target_repository_id: target.repository_id.clone(),
+        target_name: "one.txt".into(),
+        expected_target_head: engine.state.branches[&target.main_branch_id].head_commit_id.clone(),
+    };
+    engine.copy_file_history(&request, "alice", OperationId::generate().unwrap()).unwrap();
+    // The original two-member native receipt is preserved, not sliced into a
+    // forged one-member rename. Exporting only its copied member must fail.
+    assert_refused_without_writes(&engine, &target.history_tree_id, temporary.path());
 }

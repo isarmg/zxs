@@ -138,6 +138,61 @@ pub(crate) fn history_copy_owner(receipt: &OperationResult) -> DeletionOwner<'_>
         Some(_) | None => DeletionOwner::Malformed,
     }
 }
+/// Receipt-derived ownership only. Parsing failures remain scoped to every
+/// history so the fallible field materializer cannot silently omit bad evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AuditOwner {
+    Histories(std::collections::BTreeSet<storage_contract::HistoryTreeId>),
+    Malformed,
+}
+
+fn audit_owner(state: &State, id: OperationId) -> Option<AuditOwner> {
+    state.operations.get(&id)?;
+    match crate::history_package::path_audit::carrier(state, id) {
+        Ok(Some(carrier)) => Some(AuditOwner::Histories(carrier.histories())),
+        Ok(None) => None,
+        Err(_) => Some(AuditOwner::Malformed),
+    }
+}
+
+impl DerivedOwners {
+    pub(super) fn path_audit_histories(
+        &self,
+        state: &State,
+        key: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let Ok(id) = key.parse::<OperationId>() else {
+            return state.histories.keys().cloned().collect();
+        };
+        match self.path_audit_owners.get(&id) {
+            Some(AuditOwner::Histories(histories)) => {
+                histories.iter().map(ToString::to_string).collect()
+            }
+            Some(AuditOwner::Malformed) => state.histories.keys().cloned().collect(),
+            None => std::collections::BTreeSet::new(),
+        }
+    }
+
+    fn update_audit_owner(&mut self, state: &State, id: OperationId) {
+        let next = audit_owner(state, id);
+        if self.path_audit_owners.get(&id) == next.as_ref() {
+            return;
+        }
+        self.unscoped_path_audit.remove_discard(&id);
+        match next {
+            Some(owner) => {
+                if owner == AuditOwner::Malformed {
+                    self.unscoped_path_audit.insert(id, ());
+                }
+                self.path_audit_owners.insert(id, owner);
+            }
+            None => {
+                self.path_audit_owners.remove_discard(&id);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Membership {
     Deletion,
@@ -153,6 +208,16 @@ pub(crate) enum PathOwner {
 }
 
 pub(crate) fn path_owner(receipt: &OperationResult) -> PathOwner {
+    if receipt.kind == crate::history_package::path_audit::RESTORE_KIND {
+        return match crate::history_package::path_audit::restored(receipt) {
+            Ok(sources) => PathOwner::Files(
+                sources.values()
+                    .flat_map(|source| source.projections.iter().map(|row| row.file_id))
+                    .collect(),
+            ),
+            Err(_) => PathOwner::Malformed,
+        };
+    }
     if !crate::persist::path_changes::is_kind(&receipt.kind) {
         return PathOwner::Other;
     }
@@ -250,6 +315,7 @@ impl DerivedOwners {
     }
     pub(super) fn build_deletion_rows(&mut self, state: &State) {
         for (id, receipt) in state.operations.iter() {
+            self.update_audit_owner(state, *id);
             self.path_member(*id, &path_owner(receipt), true);
             self.receipt_member(*id, &owner(receipt), Membership::Deletion, true);
             self.receipt_member(
@@ -262,6 +328,7 @@ impl DerivedOwners {
     }
     pub(super) fn update_deletion_rows(&mut self, before: &State, after: &State, writes: &Writes) {
         for id in &writes.operations {
+            self.update_audit_owner(after, *id);
             let previous_paths = before.operations.get(id).map_or(PathOwner::Other, path_owner);
             let next_paths = after.operations.get(id).map_or(PathOwner::Other, path_owner);
             if previous_paths != next_paths {

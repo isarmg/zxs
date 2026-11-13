@@ -41,7 +41,9 @@ fn full_graph_identity_remap_is_lossless_and_keeps_source_audit_domains() {
     let mapper = remap::Remap::new(&names);
     let back = remap::Remap::new(&reverse);
     for original in source.histories() {
+        assert!(original.manifest().path_audit.is_empty());
         let mapped = mapper.manifest(original.manifest()).unwrap();
+        assert!(mapped.path_audit.is_empty());
         mapped.validate().unwrap();
         assert_ne!(
             mapped.history.history_tree_id,
@@ -138,4 +140,70 @@ fn graph_budget_counts_before_allocating_output() {
         encoded_length(&value, expected - 1).unwrap_err().code(),
         ErrorCode::ResourceLimit
     );
+}
+
+#[test]
+fn real_path_audit_rejects_foreign_remap_without_rewriting_source_evidence() {
+    let mut fixture = crate::foreign_import::tests::fixture();
+    let repository = fixture.engine.state().repositories.values().next().unwrap().clone();
+    let receipt = fixture.engine.file_namespace(
+        &repository.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "document.txt", Some("renamed.txt"),
+        ).unwrap(),
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let source = HistoryManifest::from_state(
+        fixture.engine.state(), &repository.history_tree_id,
+    ).unwrap();
+    source.validate().unwrap();
+    assert!(!source.path_audit.is_empty());
+    let before = canonical_json(&source).unwrap();
+    let state_before = canonical_json(fixture.engine.state()).unwrap();
+    let names = names(fixture.engine.state());
+    let names_before = names.clone();
+    let error = remap::Remap::new(&names).manifest(&source).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+    assert!(matches!(error, Error::PathChange(crate::PathChangeError::ForeignSource)));
+    assert_eq!(canonical_json(&source).unwrap(), before);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state_before);
+    assert_eq!(names, names_before);
+    assert_eq!(fixture.engine.state().operations[&receipt.operation_id], receipt);
+}
+
+#[test]
+fn restored_path_audit_is_not_treated_as_an_empty_foreign_graph() {
+    let mut fixture = crate::foreign_import::tests::fixture();
+    let repository = fixture.engine.state().repositories.values().next().unwrap().clone();
+    let renamed = fixture.engine.file_namespace(
+        &repository.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "document.txt", Some("renamed.txt"),
+        ).unwrap(),
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let package = fixture._temp.path().join("audit-package");
+    fixture.engine.export_history_package(&repository.history_tree_id, &package).unwrap();
+    let mut restored = Engine::initialize(
+        &fixture._temp.path().join("restored-system"),
+        Config::development([fixture._temp.path().join("restored-disk")]).unwrap(),
+    ).unwrap();
+    restored.restore_history_package(
+        &package, "P01", 1, "restorer", OperationId::generate().unwrap(),
+    ).unwrap();
+    assert!(!restored.state().operations.contains_key(&renamed.operation_id));
+    let source = HistoryManifest::from_state(
+        restored.state(), &repository.history_tree_id,
+    ).unwrap();
+    source.validate().unwrap();
+    assert!(!source.path_audit.is_empty());
+    let source_before = canonical_json(&source).unwrap();
+    let state_before = canonical_json(restored.state()).unwrap();
+    let names = names(restored.state());
+    let error = remap::Remap::new(&names).manifest(&source).unwrap_err();
+    assert!(matches!(error, Error::PathChange(crate::PathChangeError::ForeignSource)));
+    assert_eq!(canonical_json(&source).unwrap(), source_before);
+    assert_eq!(canonical_json(restored.state()).unwrap(), state_before);
 }

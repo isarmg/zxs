@@ -20,10 +20,12 @@ pub(crate) fn visit(
     mut path: impl FnMut(PathChanged) -> Result<()>,
 ) -> Result<()> {
     let mut references = References::new(state);
+    let mut collisions = crate::history_package::path_audit::CollisionIndex::new(state);
     for (id, receipt) in state.operations.iter() {
         checkpoint()?;
         let copies = history_copy_owner(receipt);
-        if !is_kind(&receipt.kind) && matches!(copies, DeletionOwner::Other) {
+        let imported = receipt.kind == crate::history_package::path_audit::RESTORE_KIND;
+        if !is_kind(&receipt.kind) && !imported && matches!(copies, DeletionOwner::Other) {
             continue;
         }
         if receipt.operation_id != *id
@@ -35,6 +37,21 @@ pub(crate) fn visit(
         let principal = state.operation_principals.get(id).ok_or_else(invalid)?;
         let principal = Principal::new(principal.clone().into())
             .map_err(|source| crate::Error::PathChange(crate::PathChangeError::Principal(source)))?;
+        if imported {
+            let sources = crate::history_package::path_audit::restored(receipt)?;
+            collisions.admit(&sources)?;
+            for source in sources.values() {
+                for fact in &source.projections {
+                    references.check(
+                        fact.file_id, fact.history_tree_id, fact.branch_id,
+                        [fact.before_version_id, fact.after_version_id],
+                        Sequence::new(receipt.sequence), &mut checkpoint,
+                    )?;
+                }
+            }
+            // Imported provenance is permanent but not a new native path event.
+            continue;
+        }
         let facts = if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
             // The move decoder admits each required retained-copy envelope too.
             let movement = object_move::read_result(receipt)?;
@@ -43,6 +60,7 @@ pub(crate) fn visit(
             }
             validate_receipt_facts(receipt, &movement.path_changes)?;
             for copied in &movement.retained_lifecycle {
+                collisions.admit(&copied.path_audit)?;
                 for fact in &copied.path_changes {
                     references.check(
                         fact.file_id,
@@ -59,6 +77,7 @@ pub(crate) fn visit(
             match copies {
                 DeletionOwner::File(file) => {
                     let copied = history_copy::retained::read(receipt, file)?;
+                    collisions.admit(&copied.path_audit)?;
                     for fact in &copied.path_changes {
                         references.check(
                             fact.file_id,

@@ -6,6 +6,8 @@ use super::*;
 mod directory_contents;
 #[path = "export_audit_guard_tests.rs"]
 mod export_audit_guard;
+#[path = "path_audit_tests.rs"]
+mod path_audit;
 use crate::journal::RecordType;
 use std::{
     io::Read,
@@ -107,6 +109,16 @@ fn save_path(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Str
         .unwrap()
         .commit_id
         .unwrap()
+}
+
+fn permanent_path_facts(
+    engine: &Engine,
+    history: &str,
+) -> Vec<crate::business::history_copy::retained::RetainedPathChange> {
+    let manifest = HistoryManifest::from_state(engine.state(), history).unwrap();
+    crate::history_package::path_audit::facts(
+        &crate::history_package::path_audit::portable(&manifest, engine.state.sequence).unwrap(),
+    )
 }
 
 #[test]
@@ -845,14 +857,14 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
-    assert_eq!(engine.state.file_path_nodes.len(), 2);
-    for node in engine.state.file_path_nodes.values() {
-        assert!(node.previous_path.starts_with("folder/"));
-        assert!(node.path.starts_with("renamed/"));
-        assert_eq!(
-            canonical_json(&engine.state.versions[&node.version_id]).unwrap(),
-            body_proofs[&node.version_id]
-        );
+    let path_facts = permanent_path_facts(&engine, &repo.history_tree_id);
+    assert_eq!(path_facts.len(), 2);
+    assert!(engine.state.file_path_nodes.is_empty());
+    for fact in &path_facts {
+        assert!(fact.source.before.path.as_str().starts_with("folder/"));
+        assert!(fact.source.after.path.as_str().starts_with("renamed/"));
+        let version = fact.after_version_id.to_string();
+        assert_eq!(canonical_json(&engine.state.versions[&version]).unwrap(), body_proofs[&version]);
     }
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
     assert_eq!(manifest.directory_branches[&id].directory_id, directory);
@@ -885,6 +897,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    drop(restored);
+    let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
     assert_eq!(
         canonical_json(&restored.state.directory_branches).unwrap(),
         canonical_json(&manifest.directory_branches).unwrap()
@@ -906,10 +920,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
         manifest.directory_tree_selections
     );
     assert_eq!(restored.state.file_contexts, manifest.file_contexts);
-    assert_eq!(
-        canonical_json(&restored.state.file_path_nodes).unwrap(),
-        canonical_json(&manifest.file_path_nodes).unwrap()
-    );
+    assert!(restored.state.file_path_nodes.is_empty());
+    assert_eq!(permanent_path_facts(&restored, &repo.history_tree_id), path_facts);
     assert_eq!(restored.state.file_node_parents, manifest.file_node_parents);
     assert_eq!(restored.state.file_path_notes, manifest.file_path_notes);
     assert_eq!(restored.state.file_locations, manifest.file_locations);
@@ -1246,21 +1258,41 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             inode
         );
     }
-    assert_eq!(engine.state.file_path_nodes.len(), 2);
+    let path_facts = permanent_path_facts(&engine, &repo.history_tree_id);
+    assert_eq!(path_facts.len(), 2);
+    assert!(engine.state.file_path_nodes.is_empty());
+    assert_eq!(path_facts[0].source.before.path.as_str(), "a/f.txt");
+    assert_eq!(path_facts[0].source.after.path.as_str(), "a/g.txt");
+    assert_eq!(path_facts[1].source.before.path.as_str(), "a/g.txt");
+    assert_eq!(path_facts[1].source.after.path.as_str(), "b/g.txt");
     let context = &engine.state.file_contexts[&format!("{}/b/g.txt", repo.repository_id)];
-    let node = context.node_id.clone().unwrap();
-    let parent = engine.state.file_path_nodes[&node].parent_node_ids[0].clone();
-    assert_eq!(
-        engine.state.file_path_nodes[&parent].parent_node_ids,
-        vec![old.version_id.clone()]
-    );
-    assert_eq!(engine.state.file_path_nodes[&node].previous_path, "a/g.txt");
-    assert_eq!(engine.state.file_path_nodes[&node].path, "b/g.txt");
+    let branch = context.branch_id.clone();
+    assert_eq!(engine.file_branch_head(&branch).unwrap(), old.version_id);
+    let other = engine.create_file_branch_from_node(
+        &old.file_id, &old.version_id, &old.version_id,
+        &storage_contract::BranchName::parse("merge-input").unwrap(),
+        "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap().result["branch_id"].as_str().unwrap().to_owned();
+    save_path(&mut engine, "b/g.txt", b"main merge input");
+    let other_path = engine.list_tree(&other).unwrap().into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File).unwrap().path.to_string();
+    self::save_path(&mut engine, &other, &other_path, b"other merge input");
+    let inputs = [branch.as_str(), other.as_str()].into_iter().map(|id| FileMergeInput {
+        branch_id: id.into(), expected_node_id: engine.file_branch_head(id).unwrap(),
+    }).collect::<Vec<_>>();
+    // Rename remains path-only. A real content-branch merge supplies the
+    // annotatable metadata node and mixed lineage used by this graph test.
+    let node = engine.merge_file_branches(crate::FileBranchMergeRequest {
+        file_id: &old.file_id, inputs: &inputs, chosen_node_id: &old.version_id,
+        surviving_branch_id: &branch, location: None, principal: "alice",
+        operation_id: storage_contract::OperationId::generate().unwrap(),
+    }).unwrap().result["node_id"].as_str().unwrap().to_owned();
+    assert_ne!(node, old.version_id);
     engine
         .set_file_node_note(
             &old.file_id,
             &node,
-            &storage_contract::Note::parse("目录改名，正文未变".into()).unwrap(),
+            &storage_contract::Note::parse("合并采用旧正文，路径审计独立".into()).unwrap(),
             "alice",
             storage_contract::OperationId::generate().unwrap(),
         )
@@ -1276,15 +1308,16 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             .join("container.json"),
     )
     .unwrap();
-    assert_eq!(cache["versions"].as_array().unwrap().len(), 1);
-    assert_eq!(cache["path_nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(cache["versions"].as_array().unwrap().len(), 3);
+    assert!(cache["path_nodes"].as_array().unwrap().is_empty());
+    assert_eq!(cache["metadata_nodes"].as_array().unwrap().len(), 1);
     assert!(
-        cache["path_nodes"]
+        cache["metadata_nodes"]
             .as_array()
             .unwrap()
             .iter()
             .any(|record| record["node"]["node_id"] == node
-                && record["note"] == "目录改名，正文未变")
+                && record["note"] == "合并采用旧正文，路径审计独立")
     );
     save_path(&mut engine, "b/g.txt", b"new content after both renames");
     let latest = engine
@@ -1318,8 +1351,8 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     );
     let mut cyclic = manifest.clone();
     cyclic
-        .file_path_nodes
-        .get_mut(&parent)
+        .file_metadata_nodes
+        .get_mut(&node)
         .unwrap()
         .parent_node_ids = vec![node.clone()];
     assert_eq!(
@@ -1328,7 +1361,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     );
     let mut wrong_body = manifest.clone();
     wrong_body
-        .file_path_nodes
+        .file_metadata_nodes
         .get_mut(&node)
         .unwrap()
         .version_id = latest.version_id.clone();
@@ -1348,7 +1381,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     let report = engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    assert_eq!(report.full_files, 1);
+    assert_eq!(report.full_files, 3);
     assert_eq!(report.tombstones, 1);
     let mut restored = initialize(&temporary.path().join("restored"));
     restored
@@ -1360,9 +1393,13 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
+    drop(restored);
+    let restored = Engine::open(&temporary.path().join("restored/state")).unwrap();
+    assert!(restored.state.file_path_nodes.is_empty());
+    assert_eq!(permanent_path_facts(&restored, &repo.history_tree_id), path_facts);
     assert_eq!(
-        canonical_json(&restored.state.file_path_nodes).unwrap(),
-        canonical_json(&manifest.file_path_nodes).unwrap()
+        canonical_json(&restored.state.file_metadata_nodes).unwrap(),
+        canonical_json(&manifest.file_metadata_nodes).unwrap()
     );
     assert_eq!(restored.state.file_node_parents, manifest.file_node_parents);
     assert_eq!(restored.state.file_path_notes, manifest.file_path_notes);
