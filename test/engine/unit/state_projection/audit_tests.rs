@@ -250,5 +250,11 @@ fn mutable_graph_owner_changes_do_not_retarget_immutable_audit_sources() {
     assert!(index.path_audit_owners.shares_storage_with(&delta.owners.path_audit_owners));
     assert_eq!(delta.owners.rows(&history).unwrap().values(Field::PathAudit, &after).unwrap(),
         full_audit(&before, &history));
+    let file = fact.file_id.to_string();
+    assert_eq!(delta.histories[&history].maps[&Field::ContainerTags][&file], None);
+    assert_eq!(
+        delta.histories[other].maps[&Field::ContainerTags][&file],
+        Field::ContainerTags.value(&after, &file).unwrap(),
+    );
     assert!(!delta.histories.values().any(|edits| edits.maps.contains_key(&Field::PathAudit)));
 }
