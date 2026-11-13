@@ -217,3 +217,6 @@ fn writing_shared_draft_through_another_occurrence_retains_original_source_proof
     current.file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"second!!");
 }
+
+#[path = "manual_capacity_tests.rs"]
+mod capacity;

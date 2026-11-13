@@ -1,5 +1,24 @@
 {
   "groups": {
+    "container-manual-retained-capacity": {
+      "reason": "Real retained-engine-body capacity and quota refusal across manual rewrites; no production quota or timeout relaxation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "smb_rpc::tests::manual_draft_tests::capacity::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "membership-initializer-directory-locks": {
       "reason": "Execute all membership reservation regressions, including initializer-versus-membership directory lock exclusion, original held roots, cancellation barriers and preserved conflict bytes.",
       "python_tests": [],
@@ -3742,7 +3761,7 @@
           "exact": [
             "authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation"
           ],
-          "max_tests": 9,
+          "max_tests": 11,
           "timeout_seconds": 900
         },
         {
@@ -11382,6 +11401,12 @@
       "path": "test/server/unit/smb_rpc/ordinary_rmdir_tests.rs",
       "groups": [
         "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_capacity_tests.rs",
+      "groups": [
+        "container-manual-retained-capacity"
       ]
     }
   ],

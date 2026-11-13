@@ -2927,7 +2927,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
         self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
                          ('storage-server', 'test', 'http_engine', ['core']))
         self.assertEqual(http['prefixes'], ['container_drafts::'])
-        self.assertEqual((native['max_tests'], native['timeout_seconds']), (9, 900))
+        self.assertEqual((native['max_tests'], native['timeout_seconds']), (11, 900))
         self.assertEqual((http['max_tests'], http['timeout_seconds']), (8, 900))
         self.assertEqual((no_core['package'], no_core['kind'], no_core['mode']),
                          ('storage-server', 'lib', 'check'))
@@ -3107,3 +3107,21 @@ class OrdinaryCurrentRemovalSelection(unittest.TestCase):
         self.assertIn('smb_rpc::tests::default_share_tests::', target['prefixes'])
         self.assertEqual((target['max_tests'], target['timeout_seconds']), (96, 900))
         self.assertEqual(target['features'], ['core'])
+
+
+class ManualRetainedCapacitySelection(unittest.TestCase):
+    def test_capacity_fixture_executes_full_real_module_without_removing_parent_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'container-manual-retained-capacity'
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/smb_rpc/manual_capacity_tests.rs',
+        ], [], [group])
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/smb_rpc/manual_draft_tests.rs',
+        ], ['container-manual-drafts-consumers'], ['container-manual-recovery'])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-server', 'manifest': 'src/server/Cargo.toml',
+            'kind': 'lib', 'features': ['core'],
+            'prefixes': ['smb_rpc::tests::manual_draft_tests::capacity::'],
+            'max_tests': 2, 'timeout_seconds': 900,
+        }])
