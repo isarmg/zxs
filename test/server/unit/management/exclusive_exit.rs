@@ -2,10 +2,12 @@
 use super::*;
 use crate::auth::AuthStore;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 struct Fixture {
     auth: AuthStore,
     config: Config,
+    control: tempfile::TempDir,
     system: PathBuf,
     management: PathBuf,
     _temp: tempfile::TempDir,
@@ -19,8 +21,16 @@ impl Fixture {
             Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
         for (index, disk) in config.disks.iter_mut().enumerate() {
             disk.metadata_member = index == 0;
+            disk.level = 1;
+            disk.upstream_slot_id = None;
         }
-        let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+        for path in std::iter::once(&system).chain(config.disks.iter().map(|disk| &disk.root)) {
+            fs::create_dir(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut engine = Engine::initialize_storage(
+            &system, config.clone(), OperationId::generate().unwrap(),
+        ).unwrap();
         engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("terminal-native").unwrap(),
@@ -37,6 +47,7 @@ impl Fixture {
         Self {
             auth,
             config,
+            control: crate::tests::private_tempdir(),
             system,
             management,
             _temp: temp,
@@ -46,6 +57,7 @@ impl Fixture {
         let identity = self.auth.sole_identity()?;
         assert!(identity.admission_session.is_none());
         ExclusiveExit::open(
+            PrivateDirectory::open_existing(self.control.path()).unwrap(),
             PrivateDirectory::open_existing(&self.system).unwrap(),
             PrivateDirectory::open_existing(&self.management).unwrap(),
             self.auth.reader(),

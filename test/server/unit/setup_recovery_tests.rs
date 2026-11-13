@@ -1043,20 +1043,8 @@ fn single_disk_interrupted_setup_still_requires_bound_completion_proof() {
 }
 
 thread_local! {
-    static AFTER_RESTORE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
     static AFTER_RECOVERY_OPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
-}
-
-pub(super) fn after_next_restore(action: impl FnOnce() + 'static) {
-    AFTER_RESTORE.with(|hook| *hook.borrow_mut() = Some(Box::new(action)));
-}
-
-pub(super) fn after_restore() {
-    if let Some(action) = AFTER_RESTORE.with(|hook| hook.borrow_mut().take()) {
-        action();
-    }
 }
 
 pub(super) fn after_next_recovery_open(action: impl FnOnce() + 'static) {
@@ -1069,6 +1057,7 @@ pub(super) fn after_recovery_open() {
     }
 }
 
+#[cfg(feature = "fault-injection")]
 #[test]
 fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
     for change in ["delete", "rotate", "expire", "revoke"] {
@@ -1076,8 +1065,7 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
         let recovery = &f.service;
         let authorization = permit(recovery);
         let key = recovery.management_root.join("bootstrap.key");
-        AFTER_RESTORE.with(|hook| {
-            *hook.borrow_mut() = Some(Box::new(move || match change {
+        after_next_restore(move || match change {
                 "delete" => fs::remove_file(key).unwrap(),
                 "rotate" => fs::write(key, "f".repeat(64)).unwrap(),
                 "expire" => fs::File::open(key)
@@ -1088,7 +1076,6 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
                     .unwrap(),
                 "revoke" => fs::set_permissions(key, fs::Permissions::from_mode(0o644)).unwrap(),
                 _ => unreachable!(),
-            }));
         });
         let result = recovery.restore_system(
             &authorization,
@@ -1109,7 +1096,7 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
                 .join("management-auth.json")
                 .exists()
         );
-        assert!(AFTER_RESTORE.with(|hook| hook.borrow().is_none()));
+        assert!(!recovery::fault::pending());
     }
 }
 
@@ -1596,6 +1583,22 @@ fn bound_setup_system_loss_preserves_owner_and_cold_reopens_exact_successor() {
     prepared.require_engine(&engine).unwrap();
     assert!(engine.auth_state().is_some());
     drop(engine);
+    let auth = crate::auth::AuthStore::open_system_management_directory(
+        platform_io::fs_safety::PrivateDirectory::open_existing(&f.service.management_root).unwrap(),
+    ).unwrap();
+    let exclusive = || crate::management::storage_lifecycle::ExclusiveExit::open(
+        f.service.control_directory.try_clone().unwrap(), prepared.system_directory().unwrap(),
+        platform_io::fs_safety::PrivateDirectory::open_existing(&f.service.management_root).unwrap(),
+        auth.reader(), auth.sole_identity().unwrap(),
+    );
+    drop(exclusive().unwrap());
+    let recovery_intent = f.service.data_root.join(recovery::RECOVERY_INTENT);
+    let retained_intent = f.service.data_root.join("preserved-recovery-intent");
+    fs::rename(&recovery_intent, &retained_intent).unwrap();
+    let absent_intent = tree_digest(&f.service.data_root).unwrap();
+    assert!(exclusive().is_err());
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), absent_intent);
+    fs::rename(retained_intent, recovery_intent).unwrap();
     let before = tree_digest(&f.service.data_root).unwrap();
     assert!(f.service.complete_initialization(&permit(&f.service), CompleteSetupRequest {
         username: "admin".into(), password: "long-valid-password".into(),
@@ -1608,4 +1611,24 @@ fn bound_setup_system_loss_preserves_owner_and_cold_reopens_exact_successor() {
     assert!(crate::startup_admission::PreparedService::open(
         &f.service.data_root, &f.service.management_root).is_err());
     assert_eq!(tree_digest(&f.service.data_root).unwrap(), changed);
+}
+
+#[test]
+fn recovered_engine_rejects_missing_control_intent_before_exposure() {
+    let f = recoverable_fixture();
+    f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |_| Ok(())).unwrap();
+    let engine = Engine::open_storage_held(f.service.storage_system().unwrap(), None).unwrap();
+    let intent = f.service.data_root.join(recovery::RECOVERY_INTENT);
+    let retained = f.service.data_root.join("retained-original-recovery-intent");
+    fs::rename(intent, retained).unwrap();
+    let before = tree_digest(&f.service.data_root).unwrap();
+    assert!(f.service.require_recovered_engine(&engine).is_err());
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), before);
+    let selector = engine.root().join("initialized.json");
+    fs::rename(&selector, engine.root().join("retained-recovery-selector")).unwrap();
+    let both_missing = tree_digest(&f.service.data_root).unwrap();
+    assert!(f.service.require_recovered_engine(&engine).is_err());
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), both_missing);
 }

@@ -243,6 +243,21 @@ impl SetupRecovery {
         })
     }
 
+    /// A no-disk control reader that retains the caller's original directory owner.
+    pub(crate) fn from_held_control(
+        control_directory: platform_io::fs_safety::PrivateDirectory,
+        management_root: PathBuf,
+    ) -> Result<Self, ApiError> {
+        control_directory.verify_identity().map_err(control_publication_error)?;
+        let management_root = checked_directory(&management_root)?;
+        Ok(Self {
+            data_root: control_directory.path().to_owned(), control_directory, management_root,
+            disks: BTreeMap::new(), identities: BTreeMap::new(),
+            discovery_root: Default::default(), allow_development: false,
+            presets: BTreeMap::new(), retained_workspace_limits: None,
+        })
+    }
+
     /// Immutable trusted-local host policy; never derive these limits from a request.
     pub fn with_workspace_limits(
         mut self,
@@ -1200,10 +1215,10 @@ fn read_preset(path: &Path) -> Result<ValidatedConfig, ApiError> {
     ValidatedConfig::try_from(config).map_err(engine_error)
 }
 
-/// Deterministic test-only interruption after durable disk recovery.
-#[cfg(test)]
+/// Restricted fault seam after durable disk recovery and before final authorization.
+#[cfg(feature = "fault-injection")]
 pub(crate) fn after_next_restore(action: impl FnOnce() + 'static) {
-    tests::after_next_restore(action);
+    recovery::fault::after_next_restore(action);
 }
 
 /// Deterministic test-only interruption before a new recovery action is admitted.

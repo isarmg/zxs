@@ -88,9 +88,13 @@ impl SetupRecovery {
     }
 
     pub(crate) fn require_recovered_engine(&self, engine: &Engine) -> Result<(), ApiError> {
-        if !activation::present(&self.data_root.join(RECOVERY_INTENT))? { return Ok(()); }
+        if !activation::present(&self.data_root.join(RECOVERY_INTENT))? {
+            return engine.require_recovery_control(None).map_err(engine_error);
+        }
         let intent: StorageRecoveryIntent = self.read_durable_control(RECOVERY_INTENT)?;
         self.require_recovery_predecessor(&intent.control.predecessor)?;
-        engine.require_recovery_control(&intent.control).map_err(engine_error)
+        let system = StorageSystemBinding::from_evidence(&intent.control.binding).open(&self.data_root)?;
+        if system.path() != engine.root() { return Err(refused()); }
+        engine.require_recovery_control(Some(&intent.control)).map_err(engine_error)
     }
 }

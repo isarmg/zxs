@@ -62,7 +62,7 @@ pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
 pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
 pub use snapshot_initialization::bootstrap::system_recovery::StorageRecoveryAdmission;
 pub use snapshot_initialization::bootstrap::system_recovery::control::{
-    StorageRecoveryControl, StorageControlBinding, StorageControlOwner,
+    StorageRecoveryControl, RecoveryDiskSelection, StorageControlBinding, StorageControlOwner,
     StorageOwnerEvidence, StorageRecoveryPredecessor,
 };
 pub(crate) use disk_lifecycle::terminal::VerifiedTerminalStop;

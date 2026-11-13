@@ -10,6 +10,8 @@ use storage_engine::Engine;
 pub(super) const RECOVERY_INTENT: &str = "storage-recovery-intent.json";
 
 mod predecessor;
+#[cfg(feature = "fault-injection")]
+pub(super) mod fault;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -31,12 +33,14 @@ impl SetupRecovery {
         if request.disk_ids.is_empty() || request.disk_ids.len() > 32 {
             return Err(ApiError::invalid("restore requires authorized metadata members"));
         }
+        let selections = request.disk_ids.iter().map(|id| storage_engine::RecoveryDiskSelection::parse(id))
+            .collect::<storage_engine::Result<Vec<_>>>().map_err(engine_error)?;
         self.control_directory.verify_identity().map_err(control_publication_error)?;
         let predecessor = self.capture_recovery_predecessor()?;
         let existing = if super::activation::present(&self.data_root.join(RECOVERY_INTENT))? {
             let intent: StorageRecoveryIntent = self.read_durable_control(RECOVERY_INTENT)?;
             self.require_recovery_predecessor(&intent.control.predecessor)?;
-            if intent.control.principal != principal || intent.control.disk_ids != request.disk_ids {
+            if intent.control.principal != principal || intent.control.disk_ids != selections {
                 return Err(refused());
             }
             Some(intent)
@@ -78,7 +82,7 @@ impl SetupRecovery {
                 let intent = StorageRecoveryIntent {
                     control: storage_engine::StorageRecoveryControl::new(
                         storage_system.evidence(), admission.evidence_commitment(), principal.clone(),
-                        request.disk_ids, predecessor,
+                        selections, predecessor,
                     ),
                 };
                 self.write_control(RECOVERY_INTENT, &intent)?;
@@ -97,8 +101,8 @@ impl SetupRecovery {
             return Err(ApiError::conflict(storage_contract::ErrorCode::AuthRecoveryRequired,
                 "restored storage has no authoritative credentials; explicit recovery remains required"));
         }
-        #[cfg(test)]
-        super::tests::after_restore();
+        #[cfg(feature = "fault-injection")]
+        fault::after_restore();
         revalidate()?;
         restore(engine)
     }

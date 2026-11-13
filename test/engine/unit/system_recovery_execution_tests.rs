@@ -15,7 +15,7 @@ fn control(system: &std::path::Path, operation: OperationId, source: MaterialCom
         operation,
         control: storage_contract::working_tree::LocalEntityIdentity::new(parent.dev(), parent.ino()),
         system: storage_contract::working_tree::LocalEntityIdentity::new(child.dev(), child.ino()),
-    }, source, "recovery-owner".parse().unwrap(), vec!["selected-members".into()],
+    }, source, "recovery-owner".parse().unwrap(), vec![crate::RecoveryDiskSelection::parse("selected-members").unwrap()],
         crate::StorageRecoveryPredecessor::NewControl)
 }
 
@@ -60,6 +60,12 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         PrivateDirectory::open_existing(&system).unwrap(), operation, "recovery-owner".parse().unwrap(),
         admitted, intent, control.clone(), None,
     ).unwrap();
+    engine.require_recovery_control(Some(&control)).unwrap();
+    let mut changed_control = control.clone();
+    changed_control.disk_ids.push(crate::RecoveryDiskSelection::parse("changed-selection").unwrap());
+    let control_before = image(temp.path());
+    assert!(engine.require_recovery_control(Some(&changed_control)).is_err());
+    assert_eq!(image(temp.path()), control_before);
     assert_eq!(engine.state().versions, original.versions);
     assert_eq!(engine.state().commits, original.commits);
     assert_eq!(engine.state().branches, original.branches);
@@ -223,4 +229,14 @@ fn recovery_refuses_existing_destination_before_source_publication() {
         control.commitment().unwrap(), control, None,
     ).is_err());
     assert_eq!(image(temp.path()), before);
+}
+
+#[test]
+fn recovery_inventory_labels_require_the_local_selection_contract() {
+    for value in ["", "../disk", "/srv/disk", "disk one"] {
+        assert!(crate::RecoveryDiskSelection::parse(value).is_err());
+        let bytes = storage_contract::canonical_json(&value).unwrap();
+        assert!(storage_contract::decode_strict::<crate::RecoveryDiskSelection>(&bytes).is_err());
+    }
+    assert!(crate::RecoveryDiskSelection::parse("local-disk_1").is_ok());
 }

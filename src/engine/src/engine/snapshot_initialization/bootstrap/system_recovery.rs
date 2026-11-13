@@ -392,8 +392,20 @@ pub(in crate::engine) fn admit_carrier_system(
 
 impl Engine {
     /// Recheck the exact control lineage under this Engine's original held SYSTEM.
-    pub fn require_recovery_control(&self, control: &crate::StorageRecoveryControl) -> crate::Result<()> {
+    pub fn require_recovery_control(&self, control: Option<&crate::StorageRecoveryControl>) -> crate::Result<()> {
+        self._locks.require_selected()?;
         let system = self._locks.selected_directory()?;
+        let selected = crate::authority_selection::carrier::RecoverySelection::read(&system)
+            .map_err(failure)?;
+        let Some(control) = control else {
+            if selected.is_some() { return Err(refused()); }
+            let original = FreshSelection::read(&system).map_err(failure)?.ok_or_else(refused)?;
+            original.require_directory(&system).map_err(failure)?;
+            if self.config.fresh_bootstrap() != Some(original.commitment()?) {
+                return Err(refused());
+            }
+            return Ok(());
+        };
         Self::probe_recovery_control(&system, control)?;
         let result = self.state.operations.get(&control.binding.operation).ok_or_else(refused)?;
         let selected = crate::authority_selection::carrier::RecoverySelection::read(&system)

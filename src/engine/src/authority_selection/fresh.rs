@@ -266,7 +266,7 @@ impl SelectionGuard {
             let verify = || -> Result<()> {
                 expected.require_directory(&self.directory)?;
                 if crate::authority_selection::carrier::RecoverySelection::read(&self.directory)?
-                    .as_ref() != Some(expected)
+                    .map(|actual| actual.bytes()).transpose()? != Some(expected.bytes()?)
                 {
                     return Err(FreshBootstrapError::Changed);
                 }

@@ -5,6 +5,33 @@ use crate::Config;
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::{OperationId, Principal, working_tree::{LocalEntityIdentity, MaterialCommitment}};
 
+/// A trusted-local inventory selection label, not a persistent storage DiskId.
+/// Its exact text remains part of the explicit recovery control commitment.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct RecoveryDiskSelection(Box<str>);
+impl RecoveryDiskSelection {
+    pub fn parse(value: &str) -> crate::Result<Self> {
+        if value.is_empty() || value.len() > 64
+            || !value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(crate::Error::new(storage_contract::ErrorCode::InvalidId,
+                "invalid local recovery inventory selection"));
+        }
+        Ok(Self(value.into()))
+    }
+}
+impl Serialize for RecoveryDiskSelection {
+    fn serialize<S: data_serialization::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+impl<'de> Deserialize<'de> for RecoveryDiskSelection {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(data_serialization::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct StorageControlBinding {
@@ -48,14 +75,14 @@ pub struct StorageRecoveryControl {
     pub binding: StorageControlBinding,
     pub source_evidence: MaterialCommitment,
     pub principal: Principal,
-    pub disk_ids: Vec<String>,
+    pub disk_ids: Vec<RecoveryDiskSelection>,
     pub predecessor: StorageRecoveryPredecessor,
 }
 
 impl StorageRecoveryControl {
     pub fn new(
         binding: StorageControlBinding, source_evidence: MaterialCommitment,
-        principal: Principal, disk_ids: Vec<String>, predecessor: StorageRecoveryPredecessor,
+        principal: Principal, disk_ids: Vec<RecoveryDiskSelection>, predecessor: StorageRecoveryPredecessor,
     ) -> Self {
         Self { format: Format::BoundControl, binding, source_evidence, principal, disk_ids, predecessor }
     }

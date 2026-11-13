@@ -11,6 +11,7 @@ use storage_engine::{
 /// Primary AuthStore and host exclusion must outlive this owner. Shared native
 /// records/results are the same ones used by the service, not helper-only flags.
 pub struct ExclusiveTerminalReadmission {
+    control: PrivateDirectory,
     system: PrivateDirectory,
     management: PrivateDirectory,
     auth: AuthReader,
@@ -19,6 +20,7 @@ pub struct ExclusiveTerminalReadmission {
 }
 impl ExclusiveTerminalReadmission {
     pub fn open(
+        control: PrivateDirectory,
         system: PrivateDirectory,
         management: PrivateDirectory,
         auth: AuthReader,
@@ -28,6 +30,7 @@ impl ExclusiveTerminalReadmission {
         if identity.smb_binding.is_some() {
             return Err(ApiError::forbidden());
         }
+        control.verify_identity().map_err(storage_error)?;
         system.verify_identity().map_err(storage_error)?;
         management.verify_identity().map_err(storage_error)?;
         let owner = AdvisoryLock::acquire(
@@ -38,6 +41,7 @@ impl ExclusiveTerminalReadmission {
         )
         .map_err(storage_error)?;
         Ok(Self {
+            control,
             system,
             management,
             auth,
@@ -47,6 +51,7 @@ impl ExclusiveTerminalReadmission {
     }
     fn check(&self) -> Result<(), ApiError> {
         self.auth.revalidate_identity(&self.identity)?;
+        self.control.verify_identity().map_err(storage_error)?;
         self.system.verify_identity().map_err(storage_error)?;
         self.management.verify_identity().map_err(storage_error)
     }
@@ -133,6 +138,11 @@ impl ExclusiveTerminalReadmission {
         record: &StoredReadmission,
     ) -> Result<OperationResult, ApiError> {
         self.actor(record)?;
+        crate::setup_recovery::SetupRecovery::from_held_control(
+            self.control.try_clone().map_err(storage_error)?,
+            self.management.path().to_owned(),
+        )?
+        .require_recovered_engine(&engine)?;
         let backend = EngineBackend::new(engine);
         backend.set_management_auth(self.auth.clone())?;
         backend
