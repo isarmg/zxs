@@ -85,6 +85,8 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
+    #[serialization(rename = "fresh-directory-snapshot-managed-directory-v1")]
+    FreshDirectorySnapshot { bootstrap: storage_contract::working_tree::MaterialCommitment },
     #[serialization(rename = "container-current-name-managed-directory")]
     ManagedDirectory,
     #[serialization(rename = "container-current-name-membership-generation")]
@@ -1081,9 +1083,10 @@ pub(crate) fn identity_at(
 
 fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Metadata) -> DiskSeal {
     DiskSeal {
-        format: match config.generation_hash() {
-            None => DiskSealFormat::ManagedDirectory,
-            Some(hash) => DiskSealFormat::MembershipGeneration {
+        format: match (config.fresh_bootstrap(), config.generation_hash()) {
+            (Some(bootstrap), _) => DiskSealFormat::FreshDirectorySnapshot { bootstrap },
+            (None, None) => DiskSealFormat::ManagedDirectory,
+            (None, Some(hash)) => DiskSealFormat::MembershipGeneration {
                 authority_hash: hash.to_owned(),
             },
         },

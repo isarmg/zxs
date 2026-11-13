@@ -1,5 +1,10 @@
 //! One held SYSTEM directory lock serializes every authority-format selection.
 //! It is retained with writer ownership, never reconstructed from a cache.
+mod fresh;
+pub use fresh::FreshBootstrapError;
+pub(crate) use fresh::{FreshSelection, has_fresh_selector};
+pub(crate) const FRESH_SELECTOR: &str = fresh::SELECTOR;
+pub(crate) const FRESH_DISK_SELECTOR: &str = "fresh-system-selection-v1.json";
 use crate::{Error, ErrorCode, Result};
 use platform_io::fs_safety::linux::{AdvisoryLock, MountPolicy, OpenAt2Root};
 use platform_io::fs_safety::{EntryName, PrivateDirectory};
@@ -11,6 +16,7 @@ pub(crate) const ONLINE_STATE: &str = "authority-online-state.json";
 pub(crate) struct SelectionGuard {
     directory: PrivateDirectory,
     _lock: AdvisoryLock,
+    fresh: Option<FreshSelection>,
 }
 impl SelectionGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
@@ -29,6 +35,7 @@ impl SelectionGuard {
         Ok(Self {
             directory,
             _lock: lock,
+            fresh: None,
         })
     }
     pub(crate) fn legacy(path: &Path) -> Result<Self> {
