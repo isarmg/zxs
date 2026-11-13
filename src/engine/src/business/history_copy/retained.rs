@@ -4,7 +4,7 @@ use crate::business::history_copy::{
     CopyRoute, Destination, DIRECTORY_EXPORT_KIND, FileHistoryCopyRequest, KIND, RETAINED_KIND,
     identity, invalid, sources_for,
 };
-use crate::{Error, ErrorCode, OperationId, OperationResult, Result, State};
+use crate::{Error, OperationId, OperationResult, Result, State};
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
 use storage_contract::{BranchId, FileId, HistoryTreeId, VersionId};
@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::file_deletion::retained::LifecycleRow;
 
 const FIELD: &str = "retained_lifecycle";
-const MAX_BYTES: usize = 12 * 1024 * 1024;
+const MAX_BYTES: usize = storage_contract::file_lifecycle::MAX_AUDIT_BYTES;
 
 pub(in crate::business) fn bounded<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     bounded_bytes(value).map(|_| ())
@@ -46,10 +46,9 @@ fn bounded_bytes<T: Serialize + ?Sized>(value: &T) -> Result<usize> {
     };
     match json_codec::to_writer(&mut limit, value) {
         Ok(()) => Ok(MAX_BYTES - limit.remaining),
-        Err(_) if limit.exceeded => Err(Error::new(
-            ErrorCode::ResourceLimit,
-            "retained audit exceeds its encoded byte budget",
-        )),
+        Err(_) if limit.exceeded => {
+            Err(Error::PathChange(crate::PathChangeError::Limit))
+        }
         Err(error) => Err(error.into()),
     }
 }
@@ -92,7 +91,7 @@ pub(crate) fn read(receipt: &OperationResult, file: &str) -> Result<CopiedLifecy
 
 /// Fence the vector before either reader clones or decodes its envelope.
 pub(in crate::business) fn require_event_budget(raw: &Value) -> Result<()> {
-    let mut remaining = 65_536;
+    let mut remaining = storage_contract::file_lifecycle::MAX_AUDIT_EVENTS;
     for field in ["events", "path_changes"] {
         let count = raw.get(field).and_then(Value::as_array).ok_or_else(invalid)?.len();
         if count > remaining {
@@ -128,8 +127,9 @@ pub(in crate::business) fn validate_payload(
     file: &str,
     value: &CopiedLifecycle,
 ) -> Result<()> {
-    if value.events.len() > 65_536
-        || value.path_changes.len() > 65_536 - value.events.len()
+    if value.events.len() > storage_contract::file_lifecycle::MAX_AUDIT_EVENTS
+        || value.path_changes.len()
+            > storage_contract::file_lifecycle::MAX_AUDIT_EVENTS - value.events.len()
         || value.file_id != file
         || value.file_id != identity(receipt.operation_id, &value.source_file_id)?
         || receipt.history_tree_id.as_deref() != Some(value.history_tree_id.as_str())
@@ -284,8 +284,9 @@ pub(in crate::business) fn capture_mapped(
         events,
         path_changes,
     };
-    if copied.events.len() > 65_536
-        || copied.path_changes.len() > 65_536 - copied.events.len()
+    if copied.events.len() > storage_contract::file_lifecycle::MAX_AUDIT_EVENTS
+        || copied.path_changes.len()
+            > storage_contract::file_lifecycle::MAX_AUDIT_EVENTS - copied.events.len()
     {
         return Err(Error::PathChange(crate::PathChangeError::Limit));
     }
@@ -320,7 +321,7 @@ pub(crate) fn path_changes(
         if fact.file_id.to_string() != file.as_str() || !seen.insert(fact.source.event_id) {
             return Err(crate::persist::path_changes::invalid());
         }
-        if facts.len() == 65_536 {
+        if facts.len() == storage_contract::file_lifecycle::MAX_AUDIT_EVENTS {
             return Err(Error::PathChange(crate::PathChangeError::Limit));
         }
         let encoded = bounded_bytes(&fact)?;

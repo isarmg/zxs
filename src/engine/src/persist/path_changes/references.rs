@@ -67,22 +67,26 @@ impl<'a> References<'a> {
             if commit.pending_file_versions.is_empty() {
                 continue;
             }
-            let mut members = BTreeSet::new();
+            let mut members: BTreeSet<(FileId, VersionId)> = BTreeSet::new();
             for entry in &commit.entries {
                 checkpoint()?;
                 if entry.kind == crate::NamespaceEntryKind::File {
-                    members.insert((entry.file_id.as_str(), entry.version_id.as_str()));
+                    members.insert((entry.file_id.parse()?, entry.version_id.parse()?));
                 }
             }
             for (file, version) in &commit.pending_file_versions {
                 checkpoint()?;
-                if !members.contains(&(file.as_str(), version.as_str())) {
+                let member = (file.parse()?, version.parse()?);
+                if !members.contains(&member) {
                     return Err(invalid());
                 }
-                let key = (commit.history_tree_id.parse()?, file.parse()?, version.parse()?);
-                pending.entry(key).and_modify(|sequence| {
-                    *sequence = (*sequence).min(Sequence::new(commit.sequence));
-                }).or_insert(Sequence::new(commit.sequence));
+                let key = (commit.history_tree_id.parse()?, member.0, member.1);
+                pending
+                    .entry(key)
+                    .and_modify(|sequence| {
+                        *sequence = (*sequence).min(Sequence::new(commit.sequence));
+                    })
+                    .or_insert(Sequence::new(commit.sequence));
             }
         }
         self.pending = Some(pending);

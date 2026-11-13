@@ -8,6 +8,8 @@ pub use crate::Timestamp;
 use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, fmt};
 
+pub const MAX_AUDIT_EVENTS: usize = 65_536;
+pub const MAX_AUDIT_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_EVENTS: usize = 64;
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -21,7 +23,7 @@ pub enum LifecycleError {
     Cursor,
     #[error("lifecycle response differs from its request or event evidence")]
     Response,
-    #[error("one lifecycle event exceeds the response byte limit")]
+    #[error("lifecycle audit or response exceeds its resource budget")]
     Bytes,
     #[error("lifecycle source has no complete retained audit evidence")]
     SourceIncomplete,

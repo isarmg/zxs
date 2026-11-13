@@ -7,6 +7,29 @@ use storage_contract::file_lifecycle::{
 };
 use storage_contract::history_window::HistoryWindowCancellation;
 
+struct EventBudget {
+    count: usize,
+    bytes: usize,
+}
+
+impl EventBudget {
+    fn new() -> Self {
+        Self { count: 0, bytes: 2 }
+    }
+
+    fn admit(&mut self, event: &Event) -> Result<()> {
+        let bytes = json_codec::to_vec(event)?.len() + usize::from(self.count != 0);
+        if self.count == storage_contract::file_lifecycle::MAX_AUDIT_EVENTS
+            || bytes > storage_contract::file_lifecycle::MAX_AUDIT_BYTES - self.bytes
+        {
+            return Err(LifecycleError::Bytes.into_error().into());
+        }
+        self.count += 1;
+        self.bytes += bytes;
+        Ok(())
+    }
+}
+
 pub struct FileLifecycleRead {
     read: HistoryWindowRead,
     request: Request,
@@ -15,12 +38,12 @@ pub struct FileLifecycleRead {
     source: State,
 }
 impl FileLifecycleRead {
-    /// O(permanent receipt ownership + retained lifecycle) work per page, NOT
-    /// O(page size). Ownership scanning checks cancellation between receipts;
-    /// one receipt's classification and decoding are not interruptible.
-    /// Existing source admission caps retained events at 65,536 and copied audit
-    /// envelopes at 12 MiB. Full audit admission retains summaries, not accumulated
-    /// frontiers; one source receipt/envelope still needs complete decoding.
+    /// Every page scans the full permanent ledger and decodes its audit envelopes;
+    /// this is NOT O(page size). Scans check cancellation between receipts and
+    /// facts; one envelope's classification and decoding are not interruptible.
+    /// Each audit envelope and the target event summaries have a 12 MiB budget;
+    /// the target summaries also have a 65,536-event limit. The full ledger has
+    /// no aggregate byte bound. Retained frontiers are not accumulated across it.
     /// The service's bounded history slot spans preparation and response encoding.
     pub fn page(&self) -> Result<Page> {
         self.read.cancellation.checkpoint()?;
@@ -39,6 +62,7 @@ impl FileLifecycleRead {
             || self.read.cancellation.checkpoint(),
         )?;
         self.read.cancellation.checkpoint()?;
+        let mut budget = EventBudget::new();
         let mut events = crate::file_deletion::retained::events_from_source(
             source.view(),
             || self.read.cancellation.checkpoint(),
@@ -64,12 +88,14 @@ impl FileLifecycleRead {
                 };
                 let occurred_at = matches!(detail, Detail::Delete { .. })
                     .then_some(Timestamp::from_unix_seconds(event.node.created_at));
-                Ok(Event {
+                let event = Event {
                     operation_id: event.operation_id,
                     sequence: event.sequence,
                     detail,
                     occurred_at,
-                })
+                };
+                budget.admit(&event)?;
+                Ok(event)
             },
         )?;
         self.read.cancellation.checkpoint()?;
@@ -80,7 +106,7 @@ impl FileLifecycleRead {
         {
             return Err(LifecycleError::SourceIncomplete.into_error().into());
         }
-        self.append_path_events(&mut events)?;
+        self.append_path_events(&mut events, &mut budget)?;
         events.sort_by_key(Event::order_key);
         let mut found_cursor = self.request.cursor.is_none();
         let mut selected = Vec::with_capacity(self.request.limit());
@@ -142,7 +168,11 @@ impl FileLifecycleRead {
         Ok(page)
     }
 
-    fn append_path_events(&self, events: &mut Vec<Event>) -> Result<()> {
+    fn append_path_events(
+        &self,
+        events: &mut Vec<Event>,
+        budget: &mut EventBudget,
+    ) -> Result<()> {
         crate::persist::path_changes::visit_ledger(
             &self.source,
             || self.read.cancellation.checkpoint(),
@@ -154,10 +184,7 @@ impl FileLifecycleRead {
                 {
                     return Err(crate::persist::path_changes::invalid());
                 }
-                if events.len() == 65_536 {
-                    return Err(LifecycleError::Bytes.into_error().into());
-                }
-                events.push(Event {
+                let event = Event {
                     operation_id: fact.operation_id,
                     sequence: fact.sequence.get(),
                     occurred_at: Some(fact.occurred_at),
@@ -166,7 +193,9 @@ impl FileLifecycleRead {
                         before: fact.before,
                         after: fact.after,
                     },
-                });
+                };
+                budget.admit(&event)?;
+                events.push(event);
                 Ok(())
             },
         )

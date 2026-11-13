@@ -8,8 +8,8 @@ use storage_contract::{
     Sequence, Timestamp, VersionId,
 };
 
-const MAX_FACTS: usize = 65_536;
-const MAX_BYTES: usize = 12 * 1024 * 1024;
+const MAX_FACTS: usize = storage_contract::file_lifecycle::MAX_AUDIT_EVENTS;
+const MAX_BYTES: usize = storage_contract::file_lifecycle::MAX_AUDIT_BYTES;
 
 mod ledger;
 mod references;

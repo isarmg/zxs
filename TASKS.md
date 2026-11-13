@@ -4,7 +4,7 @@
 
 ## 当前 CI 与失败闭环
 
-- [ ] 验证并完成[容器路径事实新格式](docs/adr/container-path-facts.md)：真实改名／同身份移动保持内容 HEAD／父边，永久 path_changes、完整批次成员、Current／冷快照准入、复制来源和无路径 FILE 投影同批闭合；显式路径工作区在改名后仍能保存，Web／HTTP 使用真实四段游标。当前候选已保存至 WIP，仍待准确 main 的 GitHub 定向证据；旧池／旧备份拒绝但不修改，未知时间不造。Merge 等其他非内容操作、完整时间线和真实 Chrome 尚未完成。
+- [ ] 验证并完成[容器路径事实新格式](docs/adr/container-path-facts.md)：真实改名／同身份移动保持内容 HEAD／父边，永久 path_changes、完整批次成员、Current／冷快照准入、复制来源和无路径 FILE 投影同批闭合；显式路径工作区在改名后仍能保存，Web／HTTP 使用真实四段游标。稳定引用与目标摘要预算已接入，仍待本批准确 main 的 GitHub 定向证据；旧池／旧备份拒绝但不修改，未知时间不造。Merge 等其他非内容操作、完整时间线和真实 Chrome 尚未完成。
 
 - [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的大来源耗时／分配与真实 Chrome 验收：目标收据来源在 #1309 已获定向证据，但仍逐页扫描全部永久收据，单收据解码只能前后取消，不宣称 O(page) 或实测加速。
 

@@ -169,7 +169,7 @@ fn collect_events<T>(
     let mut ids = BTreeSet::new();
     let mut insert = |event: LifecycleRow| -> Result<()> {
         checkpoint()?;
-        if events.len() == 65_536 {
+        if events.len() == storage_contract::file_lifecycle::MAX_AUDIT_EVENTS {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
                 "retained deletion audit exceeds its event budget",

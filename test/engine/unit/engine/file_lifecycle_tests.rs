@@ -154,7 +154,8 @@ fn file_lifecycle_real_delete_undo_paginate_reopen_and_reject_changed_source() {
     );
     hidden.source.operations.remove(&delete);
     assert_eq!(
-        hidden.page().unwrap_err().code(),
+        hidden.page().unwrap_err()
+                .code(),
         storage_contract::ErrorCode::PublicationInvalid,
     );
     let undo = OperationId::generate().unwrap();
@@ -212,7 +213,8 @@ fn file_lifecycle_real_delete_undo_paginate_reopen_and_reject_changed_source() {
         )
         .unwrap();
     assert_eq!(
-        engine.recheck_file_lifecycle(&read).unwrap_err().code(),
+        engine.recheck_file_lifecycle(&read).unwrap_err()
+                .code(),
         storage_contract::ErrorCode::HistoryChanged,
     );
     assert!(
@@ -240,7 +242,8 @@ fn file_lifecycle_real_delete_undo_paginate_reopen_and_reject_changed_source() {
         .unwrap();
     cancel.cancel();
     assert_eq!(
-        read.page().unwrap_err().code(),
+        read.page().unwrap_err()
+                .code(),
         storage_contract::ErrorCode::OperationAborted,
     );
 }
@@ -320,13 +323,15 @@ fn file_lifecycle_rename_uses_permanent_fact_without_changing_content_graph() {
         let bytes = storage_contract::canonical_json(&corrupted).unwrap();
         assert_eq!(
             crate::history_package::validate_prepared_state(&corrupted)
-                .unwrap_err().code(),
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         let decoded: crate::State = json_codec::from_slice(&bytes).unwrap();
         assert_eq!(
             crate::history_package::validate_prepared_state(&decoded)
-                .unwrap_err().code(),
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         assert_eq!(storage_contract::canonical_json(&corrupted).unwrap(), bytes);
@@ -366,16 +371,19 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
     let source = engine.state.repositories[
         &engine.state.histories[&history].repository_id
     ].clone();
-    engine.file_namespace(
-        &source.repository_id,
-        crate::NamespaceOperation::parse(
-            crate::NamespaceOperationKind::Rename,
-            "file.txt",
-            Some("renamed.txt"),
-        ).unwrap(),
-        "admin",
-        OperationId::generate().unwrap(),
-    ).unwrap();
+    engine
+        .file_namespace(
+            &source.repository_id,
+            crate::NamespaceOperation::parse(
+                crate::NamespaceOperationKind::Rename,
+                "file.txt",
+                Some("renamed.txt"),
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
     let target = engine.create_disk_root("D04", "admin", OperationId::generate().unwrap())
         .unwrap();
     let operation = OperationId::generate().unwrap();
@@ -400,34 +408,40 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
     let retained = crate::business::history_copy::retained::read(&receipt, &copied.file_id)
         .unwrap();
     assert_eq!(retained.path_changes.len(), 1);
-    for damage in ["missing branch", "missing version", "source owner"] {
+    enum Damage {
+        MissingBranch,
+        MissingVersion,
+        SourceOwner,
+    }
+    for damage in [Damage::MissingBranch, Damage::MissingVersion, Damage::SourceOwner] {
         let mut corrupted = engine.state().clone();
         let mut forged = retained.clone();
         match damage {
-            "missing branch" => {
+            Damage::MissingBranch => {
                 forged.path_changes[0].branch_id = storage_contract::BranchId::generate().unwrap();
             }
-            "missing version" => {
+            Damage::MissingVersion => {
                 forged.path_changes[0].after_version_id =
                     storage_contract::VersionId::generate().unwrap();
             }
-            "source owner" => {
+            Damage::SourceOwner => {
                 forged.path_changes[0].after_version_id = version.as_str().parse().unwrap();
             }
-            _ => unreachable!("invariant: the fixed damage cases are exhaustive"),
         }
         corrupted.operations.get_mut(&operation).unwrap().result["retained_lifecycle"] =
             json_codec::to_value(forged).unwrap();
         let bytes = storage_contract::canonical_json(&corrupted).unwrap();
         assert_eq!(
             crate::history_package::validate_prepared_state(&corrupted)
-                .unwrap_err().code(),
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         let decoded: crate::State = json_codec::from_slice(&bytes).unwrap();
         assert_eq!(
             crate::history_package::validate_prepared_state(&decoded)
-                .unwrap_err().code(),
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         assert_eq!(storage_contract::canonical_json(&corrupted).unwrap(), bytes);
@@ -446,7 +460,8 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
             .code(),
         storage_contract::ErrorCode::PublicationInvalid,
     );
-    assert_eq!(read.page().unwrap_err().code(), storage_contract::ErrorCode::PublicationInvalid);
+    assert_eq!(read.page().unwrap_err()
+                .code(), storage_contract::ErrorCode::PublicationInvalid);
     let mut unrelated = engine
         .capture_file_lifecycle(
             request_for(&engine, &file, 64),
@@ -455,7 +470,8 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
         .unwrap();
     unrelated.source = read.source.clone();
     assert_eq!(
-        unrelated.page().unwrap_err().code(),
+        unrelated.page().unwrap_err()
+                .code(),
         storage_contract::ErrorCode::PublicationInvalid,
     );
     assert_eq!(storage_contract::canonical_json(&read.source).unwrap(), bytes);
@@ -512,7 +528,8 @@ fn file_lifecycle_scoped_source_rejects_unrelated_malformed_ownership() {
             .unwrap();
         read.source = state;
         assert_eq!(
-            read.page().unwrap_err().code(),
+            read.page().unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
         let mut graph_only = engine.state.operations.values().next().unwrap().clone();
@@ -523,7 +540,8 @@ fn file_lifecycle_scoped_source_rejects_unrelated_malformed_ownership() {
         // New-format copies require their complete audit envelope. Neither a
         // graph-only stub nor unrelated corruption may become an empty prefix.
         assert_eq!(
-            read.page().unwrap_err().code(),
+            read.page().unwrap_err()
+                .code(),
             storage_contract::ErrorCode::PublicationInvalid,
         );
     }
@@ -558,4 +576,58 @@ fn file_lifecycle_scoped_source_cancels_during_receipt_scan_without_a_partial_so
     assert_eq!(error.code(), storage_contract::ErrorCode::OperationAborted);
     assert_eq!(checkpoints, 3);
     assert_lifecycle_sources_agree(&engine.state, &file);
+}
+
+#[test]
+fn lifecycle_summary_budget_counts_mixed_events_and_rejects_overflow_without_admission() {
+    use crate::engine::history_window::read::lifecycle::EventBudget;
+    use storage_contract::file_lifecycle::{Event, MAX_AUDIT_BYTES, PathLocation};
+
+    let deletion = Event {
+        operation_id: OperationId::generate().unwrap(),
+        sequence: 1,
+        occurred_at: None,
+        detail: Detail::Undo {
+            deletion_id: storage_contract::FileDeletionId::generate().unwrap(),
+        },
+    };
+    let path = Event {
+        operation_id: OperationId::generate().unwrap(),
+        sequence: 2,
+        occurred_at: Some(Timestamp::from_unix_seconds(1)),
+        detail: Detail::PathChanged {
+            event_id: storage_contract::FilePathEventId::generate().unwrap(),
+            before: PathLocation {
+                repository_id: storage_contract::RepositoryId::generate().unwrap(),
+                path: name_policy::PortablePath::parse(&"a".repeat(180)).unwrap(),
+            },
+            after: PathLocation {
+                repository_id: storage_contract::RepositoryId::generate().unwrap(),
+                path: name_policy::PortablePath::parse(&"b".repeat(180)).unwrap(),
+            },
+        },
+    };
+    let mut budget = EventBudget::new();
+    let mut encoded_bytes = 2;
+    let mut count = 0;
+    loop {
+        let event = if count % 2 == 0 { &deletion } else { &path };
+        let next_bytes = json_codec::to_vec(event).unwrap().len() + usize::from(count != 0);
+        if encoded_bytes + next_bytes > MAX_AUDIT_BYTES {
+            assert_eq!(
+                budget.admit(event)
+                    .unwrap_err()
+                    .code(),
+                storage_contract::ErrorCode::ResourceLimit,
+            );
+            assert_eq!(budget.bytes, encoded_bytes);
+            assert_eq!(budget.count, count);
+            break;
+        }
+        budget.admit(event).unwrap();
+        encoded_bytes += next_bytes;
+        count += 1;
+        assert_eq!(budget.bytes, encoded_bytes);
+    }
+    assert!(count < storage_contract::file_lifecycle::MAX_AUDIT_EVENTS);
 }
