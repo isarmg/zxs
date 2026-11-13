@@ -3016,3 +3016,20 @@ class FrozenManualRecoverySelection(unittest.TestCase):
                          ('smb-protocol', 'src/smb/Cargo.toml', 'lib'))
         self.assertTrue(protocol['whole'])
         self.assertEqual((protocol['max_tests'], protocol['timeout_seconds']), (192, 900))
+
+
+class CurrentBackupPublicationAttackSelection(unittest.TestCase):
+    def test_exhaustive_state_attack_fixture_executes_complete_module(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'current-backup-publication-attacks'
+        assert_path_group_extension(self, policy, [
+            'test/engine/unit/engine/current_backup_configuration_tests.rs',
+        ], ['container-tags-engine'], [group])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-engine',
+            'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'prefixes': ['engine::disk_registry::current::backup_configuration::tests::'],
+            'max_tests': 16,
+            'timeout_seconds': 900,
+        }])

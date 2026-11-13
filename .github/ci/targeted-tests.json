@@ -1,5 +1,21 @@
 {
   "groups": {
+    "current-backup-publication-attacks": {
+      "reason": "Execute the complete live and cold Current backup publication attack module, including exhaustive per-State-field mutation refusal for container edits. Compilation alone is not attack execution evidence.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::disk_registry::current::backup_configuration::tests::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "container-manual-recovery": {
       "reason": "Frozen original manual-save query/resume across daemon restart and real RPC, bounded helper online CLI, and the complete SMB protocol library. Preserve default-share, close, namespace, admission, binding and captured snapshot consumers; this excludes the later Working/partial-freeze design.",
       "python_tests": [],
@@ -3858,6 +3874,12 @@
     }
   },
   "rules": [
+    {
+      "path": "test/engine/unit/engine/current_backup_configuration_tests.rs",
+      "groups": [
+        "current-backup-publication-attacks"
+      ]
+    },
     {
       "path": "test/server/unit/auth/password_change_tests.rs",
       "groups": [
