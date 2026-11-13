@@ -445,7 +445,7 @@ impl Engine {
 
     /// Called only after all original ACCEPT and FINALIZE receipts are retained.
     pub(in crate::engine) fn complete_directory_snapshot_material(
-        &self,
+        &mut self,
         candidate: &Candidate,
         next: &State,
         finalize: &Finalize,
@@ -469,12 +469,18 @@ impl Engine {
             retained.material, candidate.operation_id)
             .map_err(|error| failure(Failure::Material(error)))?;
         held.install(&admitted, &handle).map_err(|error| failure(Failure::Material(error)))?;
+        // The permanent FINALIZE and original material binding already exist.
+        // Recovery may finish this exact installed entity, never adopt a name.
+        #[cfg(feature = "fault-injection")]
+        self.failpoint("snapshot_after_material_install")?;
         let bytes = storage_contract::canonical_json(&proof(candidate, finalize)?)?;
         held.repository().write_relative_atomic(&PROOF.as_relative(), &bytes, false)?;
         let actual = held.repository().read_entry_bytes(&PROOF, bytes.len())?;
         if actual != bytes {
             return Err(rejected());
         }
+        #[cfg(feature = "fault-injection")]
+        self.failpoint("snapshot_after_material_proof")?;
         material::reopen_installed(&admitted, &handle, retained.material, candidate.operation_id)
             .map_err(|error| failure(Failure::Material(error)))?;
         Ok(())

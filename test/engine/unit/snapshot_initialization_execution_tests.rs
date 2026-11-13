@@ -321,15 +321,39 @@ fn offline_disk_does_not_become_an_absent_repository_or_initialize_a_replacement
 #[cfg(feature = "fault-injection")]
 #[test]
 fn decided_initialization_cold_recovery_keeps_original_operation_and_material() {
-    // These are existing publication fault boundaries. They do not inject a
-    // failure between the material rename and its retained decision proof.
-    for fault in ["after_accept_1", "after_finalize", "after_publication_1"] {
+    for fault in [
+        "after_accept_1",
+        "after_finalize",
+        "snapshot_after_material_install",
+        "snapshot_after_material_proof",
+        "after_publication_1",
+    ] {
         let mut fixture = Fixture::new();
         let operation = OperationId::generate().unwrap();
         fixture.engine.inject_fault_once(fault);
         assert!(fixture.publish(operation).is_err(), "{fault}");
+        let installed = match fault {
+            "snapshot_after_material_install" | "snapshot_after_material_proof" => {
+                let repository = repository_path(&fixture);
+                let before = image(&repository);
+                let proof = repository.join(layout::snapshot_init::DECISION.as_path());
+                assert_eq!(proof.exists(), fault == "snapshot_after_material_proof");
+                Some(before)
+            }
+            _ => None,
+        };
         let mut fixture = fixture.cold();
         fixture.assert_body(operation);
+        if let Some(installed) = installed {
+            let after = image(&repository_path(&fixture));
+            // Recovery may add only the decided proof. Every original entry,
+            // body byte, inode and mode must survive the cold installation retry.
+            for (path, original) in &installed {
+                assert_eq!(after.get(path), Some(original), "{}", path.display());
+            }
+            let expected_added = usize::from(fault == "snapshot_after_material_install");
+            assert_eq!(after.len(), installed.len() + expected_added);
+        }
         assert_eq!(
             fixture.engine.state().operation_principals.get(&operation).map(String::as_str),
             Some("admin"),
@@ -341,4 +365,20 @@ fn decided_initialization_cold_recovery_keeps_original_operation_and_material() 
         assert_eq!(fixture.engine.state(), &state);
         assert_eq!(image(&repository_path(&fixture)), material);
     }
+
+    // A retained FINALIZE is not permission to replace an unknown target or
+    // reconstruct the original snapshot by adopting the target's path spelling.
+    let mut fixture = Fixture::new();
+    let operation = OperationId::generate().unwrap();
+    fixture.engine.inject_fault_once("snapshot_after_material_install");
+    assert!(fixture.publish(operation).is_err());
+    let repository = repository_path(&fixture);
+    let retained = fixture.temp.path().join("retained-original-repository");
+    let system = fixture.temp.path().join("system");
+    drop(fixture.engine);
+    fs::rename(&repository, &retained).unwrap();
+    PrivateDirectory::create(&repository).unwrap();
+    let before = image(fixture.temp.path());
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(image(fixture.temp.path()), before);
 }
