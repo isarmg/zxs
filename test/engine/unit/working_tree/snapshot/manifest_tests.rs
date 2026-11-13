@@ -140,3 +140,48 @@ fn strict_manifest_has_no_old_format_missing_field_or_noncanonical_fallback() {
         &vec![b' '; MAX_MANIFEST_BYTES + 1], admitted.reference(),
     ), Err(SnapshotManifestError::Budget)));
 }
+
+#[test]
+fn short_ids_are_bound_addresses_and_collision_cannot_merge_full_version_identity() {
+    let first = file(b"one");
+    let mut second = file(b"two");
+    second.version_id = VersionId::from_random([6; 16]);
+    let admitted = prepare(vec![
+        entry("one.txt", SnapshotEntryContent::File(first)),
+        entry("two.txt", SnapshotEntryContent::File(second)),
+    ]).unwrap();
+    let one = &admitted.payloads()[&first.version_id];
+    assert_eq!(one.storage_id.as_str().len(), 15);
+    assert_eq!(layout::snapshot::file(one).as_os_str().to_str().unwrap(),
+        format!("{}-one.txt", one.storage_id));
+    let mut record = admitted.record.clone();
+    record.payloads[1].storage_id = record.payloads[0].storage_id;
+    let bytes = storage_contract::canonical_json(&record).unwrap();
+    let expected = SnapshotReference { manifest: commitment(&bytes), ..admitted.reference() };
+    assert!(matches!(AdmittedSnapshotManifest::decode(&bytes, expected),
+        Err(SnapshotManifestError::StorageIdentity)));
+}
+
+#[test]
+fn payload_mapping_requires_full_inventory_and_original_alias_spelling() {
+    let common = file(b"shared");
+    let admitted = prepare(vec![
+        entry("first.txt", SnapshotEntryContent::File(common)),
+        entry("second.txt", SnapshotEntryContent::File(common)),
+    ]).unwrap();
+    assert_eq!(admitted.payloads().len(), 1);
+    assert_eq!(admitted.payloads()[&common.version_id].source_path.as_str(), "first.txt");
+    let mut record = admitted.record.clone();
+    record.payloads.clear();
+    assert!(matches!(
+        AdmittedSnapshotManifest::admit(record), Err(SnapshotManifestError::Payloads),
+    ));
+    let mut record = admitted.record.clone();
+    record.payloads[0].source_path = PortablePath::parse("second.txt").unwrap();
+    assert!(matches!(
+        AdmittedSnapshotManifest::admit(record), Err(SnapshotManifestError::Payloads),
+    ));
+    let long = "a".repeat(240);
+    assert!(matches!(prepare(vec![entry(&long, SnapshotEntryContent::File(common))]),
+        Err(SnapshotManifestError::Filename)));
+}

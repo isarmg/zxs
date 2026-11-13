@@ -103,7 +103,7 @@ fn recovery_rejects_corrupt_missing_and_extra_payloads_without_repairing_them() 
     let node = prepared(&root);
     let binding = node.binding();
     let payload = node.node.path().join(layout::FILES.as_path())
-        .join(layout::file(version()).as_path());
+        .join(layout::file(&node.manifest().payloads()[&version()]).as_path());
     fs::write(&payload, b"modified snapshot").unwrap();
     assert!(HeldSnapshotNode::reopen(&root, binding).is_err());
     assert_eq!(fs::read(&payload).unwrap(), b"modified snapshot");
@@ -152,7 +152,7 @@ fn payloads_are_independent_single_link_copies_and_new_reads_verify_every_time()
     first.read_to_end(&mut body).unwrap();
     assert_eq!(body, BODY);
     let payload = node.node.path().join(layout::FILES.as_path())
-        .join(layout::file(version()).as_path());
+        .join(layout::file(&node.manifest().payloads()[&version()]).as_path());
     fs::write(&payload, b"changed after admission").unwrap();
     assert!(matches!(node.open_payload(version()), Err(SnapshotStoreError::Payload(_))));
 }

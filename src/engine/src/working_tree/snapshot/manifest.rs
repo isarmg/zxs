@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use storage_contract::working_tree::{
     MaterialCommitment, SnapshotNodeId, SnapshotRepositoryId,
 };
-use storage_contract::{ContentHash, FileId, OperationId, VersionId};
+use storage_contract::{ContentHash, FileId, OperationId, VersionId, VersionStorageId};
 
 pub(crate) const MAX_ENTRIES: usize = 2048;
 pub(crate) const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
@@ -33,6 +33,12 @@ pub(crate) enum SnapshotManifestError {
     Management,
     #[error("directory snapshot version has conflicting immutable file identities")]
     Version,
+    #[error("directory snapshot payload mappings do not exactly close the file inventory")]
+    Payloads,
+    #[error("directory snapshot short storage identities collide")]
+    StorageIdentity,
+    #[error("directory snapshot stored filename exceeds the portable component budget")]
+    Filename,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -75,6 +81,16 @@ pub(crate) struct SnapshotEntry {
     pub(crate) content: SnapshotEntryContent,
 }
 
+/// The short leaf is only an address. Full version identity and source spelling
+/// remain committed here; the first canonical alias supplies the physical suffix.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct SnapshotPayload {
+    pub(crate) version_id: VersionId,
+    pub(crate) storage_id: VersionStorageId,
+    pub(crate) source_path: PortablePath,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct ManifestRecord {
@@ -83,6 +99,7 @@ struct ManifestRecord {
     node_id: SnapshotNodeId,
     operation_id: OperationId,
     entries: Vec<SnapshotEntry>,
+    payloads: Vec<SnapshotPayload>,
 }
 
 /// Expected immutable material, not proof that a branch or repository is published.
@@ -100,6 +117,7 @@ pub(crate) struct AdmittedSnapshotManifest {
     record: ManifestRecord,
     reference: SnapshotReference,
     files: BTreeMap<VersionId, SnapshotFile>,
+    payloads: BTreeMap<VersionId, SnapshotPayload>,
     bytes: Vec<u8>,
 }
 impl AdmittedSnapshotManifest {
@@ -109,12 +127,26 @@ impl AdmittedSnapshotManifest {
         operation_id: OperationId,
         entries: Vec<SnapshotEntry>,
     ) -> Result<Self, SnapshotManifestError> {
+        if entries.len() > MAX_ENTRIES {
+            return Err(SnapshotManifestError::Budget);
+        }
+        let mut payloads = BTreeMap::new();
+        for entry in &entries {
+            if let SnapshotEntryContent::File(file) = entry.content {
+                payloads.entry(file.version_id).or_insert_with(|| SnapshotPayload {
+                    version_id: file.version_id,
+                    storage_id: VersionStorageId::from_version(file.version_id),
+                    source_path: entry.path.clone(),
+                });
+            }
+        }
         Self::admit(ManifestRecord {
             format: ManifestFormat::FullDirectorySnapshot,
             repository_id,
             node_id,
             operation_id,
             entries,
+            payloads: payloads.into_values().collect(),
         })
     }
 
@@ -144,6 +176,7 @@ impl AdmittedSnapshotManifest {
 
     fn admit(record: ManifestRecord) -> Result<Self, SnapshotManifestError> {
         let files = admit_entries(&record.entries)?;
+        let payloads = admit_payloads(&record, &files)?;
         let bytes = storage_contract::canonical_json(&record)
             .map_err(SnapshotManifestError::Encode)?;
         if bytes.len() > MAX_MANIFEST_BYTES {
@@ -154,7 +187,7 @@ impl AdmittedSnapshotManifest {
             node: record.node_id,
             manifest: commitment(&bytes),
         };
-        Ok(Self { record, reference, files, bytes })
+        Ok(Self { record, reference, files, payloads, bytes })
     }
 
     pub(crate) fn repository_id(&self) -> SnapshotRepositoryId {
@@ -174,6 +207,9 @@ impl AdmittedSnapshotManifest {
     }
     pub(crate) fn files(&self) -> &BTreeMap<VersionId, SnapshotFile> {
         &self.files
+    }
+    pub(crate) fn payloads(&self) -> &BTreeMap<VersionId, SnapshotPayload> {
+        &self.payloads
     }
     pub(super) fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -233,6 +269,40 @@ fn admit_entries(
         }
     }
     Ok(files)
+}
+
+fn admit_payloads(
+    record: &ManifestRecord,
+    files: &BTreeMap<VersionId, SnapshotFile>,
+) -> Result<BTreeMap<VersionId, SnapshotPayload>, SnapshotManifestError> {
+    if record.payloads.len() != files.len() {
+        return Err(SnapshotManifestError::Payloads);
+    }
+    let mut origins = BTreeMap::new();
+    for entry in &record.entries {
+        if let SnapshotEntryContent::File(file) = entry.content {
+            origins.entry(file.version_id).or_insert(&entry.path);
+        }
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    let mut payloads = BTreeMap::new();
+    for (payload, version) in record.payloads.iter().zip(files.keys()) {
+        if payload.version_id != *version
+            || origins.get(version).copied() != Some(&payload.source_path)
+        {
+            return Err(SnapshotManifestError::Payloads);
+        }
+        if !identities.insert(payload.storage_id) {
+            return Err(SnapshotManifestError::StorageIdentity);
+        }
+        // The physical prefix consumes sixteen bytes in addition to the user
+        // name. Reject before any I/O rather than silently truncate a spelling.
+        if payload.source_path.file_name().len() > 255 - 16 {
+            return Err(SnapshotManifestError::Filename);
+        }
+        payloads.insert(*version, payload.clone());
+    }
+    Ok(payloads)
 }
 
 #[cfg(test)]

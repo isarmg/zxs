@@ -1,7 +1,7 @@
 //! Node material lives beside worktrees, never inside a mutable worktree instance.
 use platform_io::fs_safety::EntryName;
 use std::sync::LazyLock;
-use storage_contract::VersionId;
+use crate::working_tree::snapshot::SnapshotPayload;
 use storage_contract::working_tree::SnapshotNodeId;
 
 pub(crate) static MANIFEST: LazyLock<EntryName> = LazyLock::new(|| {
@@ -17,7 +17,7 @@ pub(crate) fn node(id: SnapshotNodeId) -> EntryName {
     EntryName::new(id.to_string())
         .expect("invariant: snapshot node identity is one canonical ASCII entry")
 }
-pub(crate) fn file(id: VersionId) -> EntryName {
-    EntryName::new(id.to_string())
-        .expect("invariant: snapshot version identity is one canonical ASCII entry")
+pub(crate) fn file(payload: &SnapshotPayload) -> EntryName {
+    EntryName::new(format!("{}-{}", payload.storage_id, payload.source_path.file_name()))
+        .expect("invariant: admitted snapshot storage identity and basename form one entry")
 }

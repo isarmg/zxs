@@ -125,9 +125,10 @@ impl HeldSnapshotNode {
     ) -> Result<Self, SnapshotStoreError> {
         let (files, files_entity) = create_child(&node, &layout::FILES)?;
         let (worktrees, worktrees_entity) = create_child(&node, &layout::WORKTREES)?;
-        for file in manifest.files().values() {
+        for (version, payload) in manifest.payloads() {
+            let file = &manifest.files()[version];
             files.copy_new_entry_verified_synced(
-                &layout::file(file.version_id),
+                &layout::file(payload),
                 &mut source(file)?,
                 platform_io::payload::Expectation {
                     bytes: file.size,
@@ -211,7 +212,8 @@ impl HeldSnapshotNode {
     /// a read FD cannot freeze bytes against a privileged concurrent writer.
     pub(crate) fn open_payload(&self, version: VersionId) -> Result<ReadFile, SnapshotStoreError> {
         let file = self.manifest.files().get(&version).ok_or(SnapshotStoreError::Version)?;
-        let mut source = self.files.open_read_entry(&layout::file(version))
+        let payload = &self.manifest.payloads()[&version];
+        let mut source = self.files.open_read_entry(&layout::file(payload))
             .map_err(SnapshotStoreError::Disk)?;
         source.verify_full(platform_io::payload::Expectation {
             bytes: file.size,
@@ -241,8 +243,8 @@ impl HeldSnapshotNode {
         if !required.is_empty() {
             return Err(SnapshotStoreError::Entries);
         }
-        let mut files: BTreeSet<EntryName> = self.manifest.files().keys()
-            .map(|version| layout::file(*version)).collect();
+        let mut files: BTreeSet<EntryName> = self.manifest.payloads().values()
+            .map(layout::file).collect();
         for name in self.files.root_entries().map_err(SnapshotStoreError::Directory)? {
             if !files.remove(&name.map_err(SnapshotStoreError::Inventory)?) {
                 return Err(SnapshotStoreError::Entries);
