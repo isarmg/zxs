@@ -17,6 +17,8 @@ pub(crate) struct WorkingFile {
     pub(crate) entity: LocalEntityIdentity,
 }
 
+/// A completed, explicitly identified write operation, never a content-match
+/// guess. Hashes describe integrity only; they do not create or erase this fact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileEdit {
     pub(crate) path: PortablePath,
@@ -99,9 +101,7 @@ impl<'a> SparseProjection<'a> {
             if entry.path != edit.path || original.file_id != edit.material.file.file_id {
                 return Err(ProjectionError::Source);
             }
-            if changed(original, edit.material.file)
-                && original.version_id == edit.material.file.version_id
-            {
+            if original.version_id == edit.material.file.version_id {
                 return Err(ProjectionError::Version);
             }
             if by_index.insert(index, edit.material).is_some() {
@@ -118,13 +118,13 @@ impl<'a> SparseProjection<'a> {
         Some(match self.source.entries()[index].content {
             SnapshotEntryContent::Directory {} => ReadRoute::Directory,
             SnapshotEntryContent::File(file) => match self.edits.get(&index) {
-                Some(material) if changed(file, material.file) => ReadRoute::Working { material },
-                Some(_) | None => ReadRoute::Original { file },
+                Some(material) => ReadRoute::Working { material },
+                None => ReadRoute::Original { file },
             },
         })
     }
 
-    /// Resolve stable container identity only for actual modifications. The
+    /// Resolve stable container identity only for explicit modification facts. The
     /// owner performs these observations at commit admission; arbitrary path
     /// NotFound or disk failure must not be converted into ContainerPresence::Absent.
     pub(crate) fn plan<E>(
@@ -136,7 +136,7 @@ impl<'a> SparseProjection<'a> {
             let transfer = match entry.content {
                 SnapshotEntryContent::Directory {} => Transfer::Directory,
                 SnapshotEntryContent::File(file) => match self.edits.get(&index) {
-                    Some(material) if changed(file, material.file) => {
+                    Some(material) => {
                         let container = match locate(file.file_id)? {
                             ContainerPresence::Present { entity } => ContainerPublication::Update {
                                 file: file.file_id,
@@ -149,7 +149,7 @@ impl<'a> SparseProjection<'a> {
                         };
                         Transfer::MoveWorking { material, container }
                     }
-                    Some(_) | None => Transfer::CopyOriginal { file },
+                    None => Transfer::CopyOriginal { file },
                 },
             };
             result.push(PlannedEntry { path: &entry.path, transfer });
@@ -185,18 +185,15 @@ impl<'a> SparseProjection<'a> {
         match original.content {
             SnapshotEntryContent::Directory {} => SnapshotEntryContent::Directory {},
             SnapshotEntryContent::File(file) => match self.edits.get(&index) {
-                Some(material) if changed(file, material.file) => {
+                Some(material) => {
                     SnapshotEntryContent::File(material.file)
                 }
-                Some(_) | None => SnapshotEntryContent::File(file),
+                None => SnapshotEntryContent::File(file),
             },
         }
     }
 }
 
-fn changed(original: SnapshotFile, current: SnapshotFile) -> bool {
-    original.size != current.size || original.content_hash != current.content_hash
-}
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/directory_worktree/projection.rs"]

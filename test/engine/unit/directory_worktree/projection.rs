@@ -110,14 +110,21 @@ fn temporary_disk_failure_is_an_error_not_a_missing_container() {
 }
 
 #[test]
-fn same_content_save_uses_original_copy_and_does_not_request_a_file_history_node() {
+fn matching_bytes_do_not_erase_an_explicit_write_or_infer_its_source() {
     let source = source();
-    let view = SparseProjection::admit(&source, vec![edit(b"original A")]).unwrap();
-    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
-        panic!("unchanged content does not need a container mutation");
+    let changed = edit(b"original A");
+    let view = SparseProjection::admit(&source, vec![changed.clone()]).unwrap();
+    let mut identities = Vec::new();
+    let plan = view.plan(|identity| {
+        identities.push(identity);
+        Ok::<_, ()>(ContainerPresence::Absent)
     }).unwrap();
-    assert_eq!(plan[0].transfer, Transfer::CopyOriginal { file: file(3, b"original A") });
-    assert_eq!(route(&view, "A.txt"), ReadRoute::Original { file: file(3, b"original A") });
+    assert_eq!(identities, [changed.material.file.file_id]);
+    assert_eq!(plan[0].transfer, Transfer::MoveWorking {
+        material: &changed.material,
+        container: ContainerPublication::SnapshotOnly { file: changed.material.file.file_id },
+    });
+    assert_eq!(route(&view, "A.txt"), ReadRoute::Working { material: &changed.material });
 }
 
 #[test]
