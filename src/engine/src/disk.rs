@@ -14,7 +14,7 @@ use std::{
 
 mod admission;
 pub(crate) use admission::{
-    ClosedDiskIo, DiskIoBinding, DiskIoLease, JournalIo, RecoveredDiskIo, UploadFinish, UploadIo,
+    ClosedDiskIo, DiskIoBinding, DiskIoLease, JournalIo, RecoveredDiskIo, UploadFinish, UploadIo, UploadSource,
 };
 pub use admission::{
     DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount,

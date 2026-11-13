@@ -60,6 +60,8 @@ fn write_recovery_record(
         "operation_id": writer.operation_id,
         "dirty": writer.dirty,
         "published": writer.committed,
+        "container_draft_revision": writer.container.as_ref().and_then(|c| c.revision.as_ref()),
+        "draft_persisted": writer.container.as_ref().is_some_and(|c| c.persisted),
         "descriptor_changes_unconfirmed": true,
         "handle_state": if detached.is_some() { "detached" } else { "active" }
     });
@@ -227,6 +229,14 @@ impl Session {
             &writer.workspace.workspace_id,
             writer.write_access(&self.branch),
         )?;
+        if let Some(container) = writer.container.as_mut().filter(|c| c.persisted) {
+            // A durable shared draft is a new save generation, not a history head.
+            // Keep the same open workspace and selected source; only CAS/op advance.
+            writer.operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
+            container.persisted = false;
+            container.revision = None;
+            recovery_record(writer, &self.identity.principal, &self.branch)?;
+        }
         if writer.committed {
             let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
             let workspace = self.shared.workspace(&self.identity, &self.branch)?;
@@ -404,6 +414,16 @@ fn flush_writer(
             "changed bytes need an authorized workspace before saving",
         ));
     }
+    if let Some(container) = &writer.container {
+        let current = shared.backend.read_container_edit(identity, container.context.clone())?;
+        if current.mode() != container.edit.mode() {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
+                "container commit mode changed; reopen the retained file before saving"));
+        }
+        if current.mode() == storage_contract::container_edit::CommitMode::Manual {
+            return flush_container_draft(shared, identity, branch, max_file_bytes, writer);
+        }
+    }
     // A lost response must not restage under a new dirty generation and
     // thereby change the original request digest. Reconcile by operation id.
     match shared
@@ -456,4 +476,66 @@ fn flush_writer(
         .backend
         .commit_workspace(identity, writer.save_request())?;
     finish_publication(shared, identity, branch, writer, result.into())
+}
+
+fn draft_fingerprint(file: &File) -> Result<(storage_contract::ContentHash, u64), ApiError> {
+    let mut hash = blake3::Hasher::new();
+    let mut offset = 0u64;
+    let mut buffer = [0u8; 65_536];
+    loop {
+        let length = file.read_at(&mut buffer, offset).map_err(ApiError::io)?;
+        if length == 0 { break; }
+        hash.update(&buffer[..length]);
+        offset = offset.checked_add(length as u64)
+            .ok_or_else(|| ApiError::limit("draft byte count overflow"))?;
+    }
+    Ok((storage_contract::ContentHash::from_digest(hash.finalize()), offset))
+}
+
+fn flush_container_draft(
+    shared: &Shared, identity: &Identity, branch: &str, max_file_bytes: u64,
+    writer: &mut Writer,
+) -> Result<Value, ApiError> {
+    writer.directory.verify_payload(
+        &platform_io::fs_safety::EntryName::new(writer.source.file_name()
+            .ok_or_else(|| ApiError::invalid("SMB source filename missing"))?)
+            .map_err(crate::upload_fs_error)?, &writer.file,
+    ).map_err(crate::upload_fs_error)?;
+    writer.file.sync_all().map_err(ApiError::io)?;
+    if writer.file.metadata().map_err(ApiError::io)?.len() > max_file_bytes {
+        return Err(ApiError::limit("file exceeds SMB byte limit"));
+    }
+    let (hash, size) = draft_fingerprint(&writer.file)?;
+    if size > max_file_bytes { return Err(ApiError::limit("file exceeds SMB byte limit")); }
+    let container = writer.container.as_mut()
+        .expect("invariant: manual flush has an admitted container");
+    if container.revision.is_none() {
+        container.revision = Some(storage_contract::container_edit::DraftRevision {
+            operation: writer.operation_id, expected_generation: container.edit.generation(),
+            principal: identity.principal.parse().map_err(ApiError::invalid_authenticated_principal)?,
+            base: container.base.clone(), content_hash: hash, size,
+        });
+        // Freeze the exact request before the durable publication can occur.
+        recovery_record(writer, &identity.principal, branch)?;
+    }
+    let container = writer.container.as_ref().unwrap();
+    let revision = container.revision.as_ref().unwrap().clone();
+    let persisted = shared.backend.persist_container_draft(identity, crate::PersistContainerDraft {
+        context: container.context.clone(), revision: revision.clone(),
+    }, &writer.file)?;
+    let (actual_hash, actual_size) = draft_fingerprint(&writer.file)?;
+    let container = writer.container.as_mut().unwrap();
+    let generation = revision.expected_generation.next().map_err(ApiError::invalid_source)?;
+    container.edit = storage_contract::container_edit::ContainerEdit::ManualDirty {
+        generation, draft: persisted.revision,
+    };
+    container.persisted = true;
+    writer.dirty = actual_hash != revision.content_hash || actual_size != revision.size;
+    recovery_record(writer, &identity.principal, branch)?;
+    if writer.dirty {
+        return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceRebaseRequired,
+            "original draft saved; later changed bytes are retained and need a new dirty request"));
+    }
+    Ok(json!({"saved":true,"draft_persisted":true,
+        "operation_id":revision.operation,"generation":generation}))
 }

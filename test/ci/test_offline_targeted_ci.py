@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -33,6 +34,17 @@ class OfflineTargetedCi(unittest.TestCase):
                                   in zip(target['selection_groups'], configurations)
                                   if origin == group)
             self.assertCountEqual(selections, self.policy['groups'][group]['rust_targets'])
+
+    def test_public_wire_adds_manual_commit_without_dropping_portable_consumers(self):
+        previous = assert_path_group_extension(
+            self, self.policy, ['src/engine/src/wire.rs'], ['portable-path-consumers'],
+            ['container-manual-drafts'],
+        )
+        self.assertEqual(previous['groups'], ['portable-path-consumers'])
+        # The unrelated engine export retains its existing conversion coverage.
+        export = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
+        self.assertNotIn('container-manual-drafts', export['groups'])
+        self.assertNotIn('container-manual-drafts-consumers', export['groups'])
 
     def test_offline_paths_select_behavior_and_explicit_consumer_checks(self):
         for path in ['src/server/src/offline/foreign_chain.rs',

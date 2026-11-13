@@ -64,6 +64,27 @@ impl EngineBackend {
         }, &principal, request.operation_id).map_err(error)
     }
 
+    pub(super) fn persist_container_draft_admitted(
+        &self, identity: &Identity, request: crate::PersistContainerDraft,
+        source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, ApiError> {
+        let (mut engine, current) = self.lock_current(identity)?;
+        super::application::Application::new(&mut engine, &current)
+            .authorize_file(&request.context.file.to_string())?;
+        let base = context(&engine, &current, &request.context, true)?;
+        if request.revision.principal.as_str() != current.principal {
+            return Err(ApiError::forbidden());
+        }
+        if base != request.revision.base {
+            return Err(error(storage_engine::Error::ContainerEdit(
+                storage_contract::container_edit::EditConflict::SourceChanged,
+            )));
+        }
+        let receipt = engine.save_container_draft(request.context.file, &request.revision,
+            source.try_clone().map_err(ApiError::io)?).map_err(error)?;
+        Ok(crate::DraftPersisted { revision: request.revision, receipt })
+    }
+
     pub(super) fn current_container_content_admitted(
         &self, identity: &Identity, request: ReadContainerEdit,
     ) -> Result<CurrentContainerContent, ApiError> {
@@ -73,14 +94,24 @@ impl EngineBackend {
         let base = context(&engine, &current, &request, false)?;
         let edit = engine.container_edit(request.file).map_err(error)?;
         let download_name = Some(request.path.file_name().to_owned());
+        // Reserve before the store allocates its authenticated chunk proof.
+        // The smallest supported chunk is an upper bound across stored formats.
+        let draft_proof = edit.draft().map(|revision| {
+            let chunks = revision.size.div_ceil(65_536);
+            let bytes = chunks.checked_mul(32)
+                .and_then(|n| n.checked_add(storage_contract::CHECKSUM_HEADER_BYTES as u64))
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| ApiError::limit("draft checksum proof exceeds memory budget"))?;
+            crate::content_proof_budget::reserve(bytes)
+        }).transpose()?;
         if let Some(draft) = engine.open_container_draft(request.file).map_err(error)? {
             let content = Content {
                 fallback_files: Vec::new(),
-                checksum_manifest: None,
+                checksum_manifest: Some(draft.checksums),
                 file: draft.file.into(),
                 size: draft.revision.size,
                 hash: draft.revision.content_hash.to_string(),
-                lease: Box::new(()),
+                lease: Box::new(draft_proof),
                 download_name,
             };
             return Ok(CurrentContainerContent { edit, base, content });

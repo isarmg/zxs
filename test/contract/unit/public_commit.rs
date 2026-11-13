@@ -74,6 +74,7 @@ fn public_envelope_boundary_rejects_shapes_but_retains_semantic_preconditions() 
 #[test]
 fn typed_seal_serialization_keeps_the_frozen_public_bytes() {
     let seal = SealedWorkspace {
+        container_draft_commit: None,
         operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
         workspace_id: "workspace".into(),
         repository_id: "repo".into(),

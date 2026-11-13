@@ -450,15 +450,14 @@ class TargetedSelection(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             CI.select_plan(self.policy, paths)
-        plan = CI.select_plan(self.policy, paths, shardable=True)
-        self.assertEqual(plan['groups'], [
+        plan = assert_path_group_extension(self, self.policy, paths, [
             'browser-identity-generation', 'browser-smoke-fixture', 'ci-selection',
             'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery',
             'historical-directory-web', 'legacy-directory-branch-web-retirement',
             'legacy-directory-staging-web-retirement',
             'paged-deletion-review', 'web-directory-history-retirement',
-        ])
+        ], ['container-manual-drafts-consumers'])
         self.assertEqual(len(plan['rust_targets']), 8)
         self.assertEqual(plan['python_tests'],
                          sorted(set(self.policy['groups']['ci-selection']['python_tests'])
@@ -549,6 +548,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema',
+            'container-manual-drafts',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -1179,7 +1179,8 @@ class TargetedSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths, [
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine',
+            'container-manual-drafts'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -1896,7 +1897,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertIn('directory-rename-http-retirement', plan['groups'])
         plan = assert_path_group_extension(self, self.policy, paths + [
             '.github/ci/targeted-tests.json',
@@ -1907,7 +1908,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         ], None, [
             'container-path-facts-http', 'container-lifecycle-http',
             'container-lifecycle-contract', 'container-lifecycle-web',
-            'container-path-facts-schema',
+            'container-path-facts-schema', 'container-manual-drafts-consumers',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -2834,3 +2835,102 @@ class CurrentNameFixtureSelection(unittest.TestCase):
                 for group in groups:
                     self.assertCountEqual(origin_selections(plan, group),
                                           policy['groups'][group]['rust_targets'])
+
+
+class ContainerManualDraftSelection(unittest.TestCase):
+    def setUp(self):
+        self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+
+    def test_manual_storage_and_public_wire_select_real_modules(self):
+        group = 'container-manual-drafts'
+        for path in [
+            'src/engine/src/engine/container_drafts.rs',
+            'src/engine/src/engine/container_drafts/commit.rs',
+            'src/engine/src/business/workspace.rs', 'src/engine/src/wire.rs',
+            'src/engine/src/historical_save.rs', 'src/engine/src/disk/admission/upload.rs',
+            'src/engine/src/disk/admission.rs', 'src/engine/src/disk.rs',
+            'src/contract/src/container_edit.rs',
+            'src/contract/src/public_commit.rs', 'test/contract/unit/public_commit.rs',
+            'test/engine/unit/container_drafts_tests.rs',
+            'test/engine/unit/container_draft_store_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                complete = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(group, complete['groups'])
+                self.assertCountEqual(origin_selections(complete, group),
+                                      self.policy['groups'][group]['rust_targets'])
+        engine, contract = self.policy['groups'][group]['rust_targets']
+        self.assertEqual((engine['package'], engine['kind'], engine['prefixes']),
+                         ('storage-engine', 'lib', ['engine::container_drafts::']))
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (8, 900))
+        self.assertEqual((contract['package'], contract['kind']), ('storage-contract', 'lib'))
+        self.assertEqual(contract['prefixes'], ['container_edit::tests::', 'public_commit::tests::'])
+        self.assertEqual((contract['max_tests'], contract['timeout_seconds']), (8, 300))
+        # Public commit is exercised by its real module, not an empty wire::tests selector.
+        self.assertNotIn('wire::tests::', engine['prefixes'])
+
+    def test_required_backend_consumers_preserve_core_and_no_core_boundaries(self):
+        group = 'container-manual-drafts-consumers'
+        paths = [
+            'src/server/src/backend_container_drafts.rs', 'src/server/src/backend_methods.rs',
+            'src/server/src/engine_backend.rs', 'src/server/src/engine_backend/container_drafts.rs',
+            'src/server/src/file_manager.rs', 'src/server/src/http_container_drafts.rs',
+            'src/server/src/lib.rs', 'src/server/src/transfer.rs',
+            'test/server/unit/authorized_backend.rs', 'test/server/unit/http_container_drafts.rs',
+            'test/server/integration/http_engine.rs',
+            'test/server/integration/http_engine/container_drafts.rs',
+            'src/client/src/container_edit.rs', 'src/client/src/lib.rs',
+            'test/client/unit/container_edit.rs', 'src/web/src/api.rs',
+            'src/web/src/files/container_edit.rs', 'src/web/src/files/detail.rs',
+            'src/web/src/files/mod.rs', 'src/web/src/files/review.rs',
+            'test/web/unit/container_edit.rs', 'src/contract/src/public_commit.rs',
+            'test/server/unit/smb_rpc/manual_draft_tests.rs',
+            'src/server/src/smb_rpc/publication.rs', 'src/server/src/smb_rpc/handles.rs',
+            'src/server/src/smb_rpc.rs', 'test/server/unit/backend_admission.rs',
+            'test/server/unit/engine_backend/revocation_tests.rs',
+            'test/server/unit/tests/http_boundary.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                complete = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(group, complete['groups'])
+                self.assertCountEqual(origin_selections(complete, group),
+                                      self.policy['groups'][group]['rust_targets'])
+        native, http, no_core, client, web = self.policy['groups'][group]['rust_targets']
+        self.assertEqual((native['package'], native['kind'], native['features']),
+                         ('storage-server', 'lib', ['core']))
+        self.assertEqual(native['prefixes'], [
+            'http_container_drafts::tests::', 'smb_rpc::tests::manual_draft_tests::',
+        ])
+        self.assertEqual(native['exact'], [
+            'authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation',
+        ])
+        self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
+                         ('storage-server', 'test', 'http_engine', ['core']))
+        self.assertEqual(http['prefixes'], ['container_drafts::'])
+        for target in [native, http]:
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (8, 900))
+        self.assertEqual((no_core['package'], no_core['kind'], no_core['mode']),
+                         ('storage-server', 'lib', 'check'))
+        self.assertFalse(no_core['default_features'])
+        self.assertEqual(no_core['features'], [])
+        self.assertEqual(client['prefixes'], ['container_edit::tests::'])
+        self.assertEqual(web['prefixes'], ['files::container_edit::tests::'])
+        for target in [client, web]:
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (4, 600))
+
+    def test_production_extensions_never_replace_original_consumer_selections(self):
+        for path, retained, added in [
+            ('src/engine/src/business/workspace.rs', [
+                'container-tags-engine', 'container-unchanged-save',
+                'portable-path-consumers', 'container-path-facts-engine',
+                'container-lifecycle-engine',
+            ], ['container-manual-drafts']),
+            ('src/engine/src/wire.rs', ['portable-path-consumers'], ['container-manual-drafts']),
+            ('src/server/src/lib.rs', ['directory-rename-http-retirement', 'paged-deletion-review'],
+             ['container-manual-drafts-consumers']),
+            ('src/server/src/backend_methods.rs', ['container-tags-http', 'paged-deletion-review'],
+             ['container-manual-drafts-consumers']),
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, self.policy, [path], retained, added)

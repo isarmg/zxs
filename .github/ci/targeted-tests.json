@@ -3632,8 +3632,73 @@
         }
       ]
     },
+    "container-manual-drafts-consumers": {
+      "reason": "Real context-authorized manual-container settings and shared current-body HTTP reads, client wire validation and Web stale-state guards; explicit file consumption remains separately validated, not ordinary automatic upload permission.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "http_container_drafts::tests::",
+            "smb_rpc::tests::manual_draft_tests::"
+          ],
+          "exact": [
+            "authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "container_drafts::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        },
+        {
+          "package": "storage-client",
+          "manifest": "src/client/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "container_edit::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 600
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "files::container_edit::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 600
+        }
+      ]
+    },
     "container-manual-drafts": {
-      "reason": "Shared per-container edit authority and immutable draft bodies: exact generation, permanent publication, cold reads without history nodes, bounded original-intent storage, and clean-mode refusal. SMB routing and explicit draft commit are separate pending consumers.",
+      "reason": "Shared per-container edit authority and immutable draft bodies: exact generation, permanent publication, cold reads without history nodes, bounded original-intent storage, and clean-mode refusal. Native and public explicit commit bind exact draft consumption; ordinary SMB routing remains a pending consumer.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -3643,6 +3708,9 @@
           "prefixes": [
             "engine::container_drafts::"
           ],
+          "exact": [
+            "disk::admission::upload::tests::managed_upload_source_remains_revocable_on_a_different_target_disk"
+          ],
           "max_tests": 8,
           "timeout_seconds": 900
         },
@@ -3651,9 +3719,10 @@
           "manifest": "src/contract/Cargo.toml",
           "kind": "lib",
           "prefixes": [
-            "container_edit::tests::"
+            "container_edit::tests::",
+            "public_commit::tests::"
           ],
-          "max_tests": 4,
+          "max_tests": 8,
           "timeout_seconds": 300
         }
       ]
@@ -4742,14 +4811,16 @@
     {
       "path": "src/engine/src/business/workspace.rs",
       "groups": [
-        "container-tags-engine"
+        "container-tags-engine",
+        "container-manual-drafts"
       ]
     },
     {
       "path": "src/engine/src/historical_save.rs",
       "groups": [
         "container-current-name",
-        "container-tags-engine"
+        "container-tags-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -4917,7 +4988,8 @@
     {
       "path": "src/engine/src/business/workspace.rs",
       "groups": [
-        "container-unchanged-save"
+        "container-unchanged-save",
+        "container-manual-drafts"
       ]
     },
     {
@@ -5956,7 +6028,8 @@
     {
       "path": "src/engine/src/wire.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "container-manual-drafts"
       ]
     },
     {
@@ -6231,7 +6304,8 @@
     {
       "path": "src/engine/src/historical_save.rs",
       "groups": [
-        "typed-name-consumers"
+        "typed-name-consumers",
+        "container-manual-drafts"
       ]
     },
     {
@@ -6333,7 +6407,8 @@
     {
       "path": "src/engine/src/business/workspace.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "container-manual-drafts"
       ]
     },
     {
@@ -7607,7 +7682,8 @@
     {
       "path": "src/engine/src/historical_save.rs",
       "groups": [
-        "engine-integer-errors"
+        "engine-integer-errors",
+        "container-manual-drafts"
       ]
     },
     {
@@ -8847,7 +8923,8 @@
       "path": "src/engine/src/business/workspace.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -10187,6 +10264,319 @@
     },
     {
       "path": "test/engine/unit/container_draft_store_tests.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/contract/src/public_commit.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_methods.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/file_manager.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/http_container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/lib.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/transfer.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine/container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/authorized_backend.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/client/src/container_edit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/client/src/lib.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/api.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/container_edit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/detail.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/mod.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/review.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/client/unit/container_edit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/web/unit/container_edit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/contract/src/container_edit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/contract/src/public_commit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/contract/src/model.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts/commit.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/contract/unit/public_commit.rs",
+      "groups": [
+        "container-manual-drafts",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/admission/upload.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/admission.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_draft_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/publication.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/handles.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/auth/password_change_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/revocation_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_auth/tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_spool.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/management.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/sockets.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/http_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/close_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/namespace_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/snapshot_semantics_tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/telemetry/tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/tests/http_boundary.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/transfer/tests.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/upload_resources_tests.rs",
       "groups": [
         "container-manual-drafts"
       ]

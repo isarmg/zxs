@@ -1,5 +1,5 @@
 //! One revocable owner for upload directory, source, verified inode and cleanup.
-use super::DiskIoResource;
+use super::{DiskFile, DiskIoResource};
 use crate::{
     ContentHash, Error, ErrorCode, Result,
     disk::{DiskRoot, FullCopyProgress, full_copy_held_observed, remove_owned_file},
@@ -19,9 +19,43 @@ struct UploadResources {
     directory: OpenAt2Root,
     // A caller-supplied file is not inferred to belong to the target disk. This
     // owner closes only its transferred descriptor, never its external pathname.
-    source: File,
+    source: UploadSource,
     scratch: Option<UploadScratch>,
     verified: Option<VerifiedUploadFile>,
+}
+
+/// The original managed lease stays with the source; no untracked descriptor
+/// clone may outlive revocation of the disk that supplied the draft body.
+pub(crate) enum UploadSource {
+    Local(File),
+    Managed(DiskFile),
+}
+
+impl UploadSource {
+    fn with_file<T>(&self, inspect: impl FnOnce(&File) -> Result<T>) -> Result<T> {
+        match self {
+            Self::Local(file) => inspect(file),
+            Self::Managed(file) => {
+                let mut access = file.access_checked()?;
+                inspect(&access.value().resource)
+            }
+        }
+    }
+
+    fn check_running(&self) -> Result<()> {
+        match self {
+            Self::Local(_) => Ok(()),
+            Self::Managed(file) => file.check_running(),
+        }
+    }
+
+    pub(crate) fn admitted_length(&self) -> Result<u64> {
+        self.with_file(|file| {
+            platform_io::fs_safety::linux::SingleLinkRequirement::check(file)
+                .map_err(preparation_fs_error)?;
+            Ok(file.metadata()?.len())
+        })
+    }
 }
 
 struct UploadScratch {
@@ -49,6 +83,15 @@ fn preparation_fs_error(error: platform_io::fs_safety::Error) -> Error {
 
 impl UploadIo {
     pub(crate) fn new(root: &DiskRoot, path: &Path, source: File) -> Result<Self> {
+        Self::with_source(root, path, UploadSource::Local(source))
+    }
+
+    pub(crate) fn with_source(
+        root: &DiskRoot,
+        path: &Path,
+        source: UploadSource,
+    ) -> Result<Self> {
+        source.check_running()?;
         let lease = root.admit_io()?;
         let directory = OpenAt2Root::from_private_directory(
             root.private_directory(path)?,
@@ -95,9 +138,11 @@ impl UploadIo {
 
     pub(crate) fn fingerprint_source(&self, maximum: u64) -> Result<(u64, ContentHash)> {
         let mut access = self.resources.access_checked()?;
-        fingerprint(&access.value().resource.source, maximum, &mut || {
+        let source = &access.value().resource.source;
+        source.with_file(|file| fingerprint(file, maximum, &mut || {
+            source.check_running()?;
             self.resources.check_running()
-        })
+        }))
     }
 
     pub(crate) fn verify_retained(
@@ -211,8 +256,9 @@ impl UploadResources {
         check: &mut impl FnMut() -> Result<()>,
     ) -> Result<(u64, ContentHash)> {
         let scratch = &mut self.scratch;
-        let (size, hash, _, file) = full_copy_held_observed(
-            &self.source,
+        let source = &self.source;
+        let (size, hash, _, file) = source.with_file(|file| full_copy_held_observed(
+            file,
             &self.directory,
             &scratch_name,
             chunk_bytes,
@@ -230,9 +276,11 @@ impl UploadResources {
                             .name = scratch_name.clone();
                     }
                 }
+                source.check_running()?;
                 check()
             },
-        )?;
+        ))?;
+        source.check_running()?;
         check()?;
         self.verified = Some(VerifiedUploadFile {
             stamp: FileStamp::of(&file)?,

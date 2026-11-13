@@ -3,8 +3,8 @@
 use crate::disk::{DiskFile, DiskHandle, DiskRoot, UploadFinish, UploadIo};
 use crate::persist::layout::container_drafts as layout;
 use data_serialization::{Deserialize, Serialize};
-use std::{fs::File, io::Seek, path::PathBuf};
-use storage_contract::{FileId, Generation};
+use std::{fs::File, io::Seek, os::unix::fs::FileExt, path::PathBuf};
+use storage_contract::{ChecksumManifest, FileId, Generation};
 use storage_contract::container_edit::DraftRevision;
 use storage_contract::working_tree::{DiskRegistrationIdentity, LocalEntityIdentity};
 
@@ -81,6 +81,7 @@ pub(crate) struct PreparedDraft {
     expected: Generation,
     revision: DraftRevision,
     body: DiskFile,
+    checksums: ChecksumManifest,
 }
 impl PreparedDraft {
     pub(crate) fn file(&self) -> FileId {
@@ -95,6 +96,9 @@ impl PreparedDraft {
     pub(crate) fn into_body(self) -> DiskFile {
         self.body
     }
+    pub(crate) fn into_read_parts(self) -> (DiskFile, ChecksumManifest) {
+        (self.body, self.checksums)
+    }
 }
 fn directory(disk: &DiskHandle, file: FileId, revision: &DraftRevision) -> PathBuf {
     disk.root.path().join(layout::ROOT.as_path()).join(file.to_string())
@@ -102,7 +106,8 @@ fn directory(disk: &DiskHandle, file: FileId, revision: &DraftRevision) -> PathB
 }
 fn require_limits(revision: &DraftRevision, limits: DraftLimits) -> Result<()> {
     if revision.size > limits.max_file_bytes || revision.size > limits.max_retained_bytes
-        || limits.max_entries == 0 || limits.checksum_chunk_bytes == 0
+        || limits.max_entries == 0
+        || !storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&limits.checksum_chunk_bytes)
     {
         return Err(StoreError::Budget);
     }
@@ -259,7 +264,7 @@ pub(crate) fn prepare(
         }).map_err(engine)?;
     }
     drop(io);
-    reopen_at(&root, disk, file, expected, revision)
+    reopen_at(&root, disk, file, expected, revision, limits.checksum_chunk_bytes)
 }
 
 /// The revision and original expected generation must come from an admitted
@@ -274,11 +279,11 @@ pub(crate) fn reopen(
     }
     let root = disk.root.private_child(&disk.root.path().join(layout::ROOT.as_path()))
         .map_err(engine)?;
-    reopen_at(&root, disk, file, expected, revision)
+    reopen_at(&root, disk, file, expected, revision, limits.checksum_chunk_bytes)
 }
 fn reopen_at(
     root: &DiskRoot, disk: &DiskHandle, file: FileId, expected: Generation,
-    revision: &DraftRevision,
+    revision: &DraftRevision, chunk_bytes: u32,
 ) -> Result<PreparedDraft> {
     let path = directory(disk, file, revision);
     require_intent(root, &path, &Intent::new(disk, file, expected, revision))?;
@@ -287,8 +292,49 @@ fn reopen_at(
     body.verify_full(platform_io::payload::Expectation {
         bytes: revision.size, blake3: Some(revision.content_hash.digest()),
     }).map_err(StoreError::Payload)?;
+    let checksums = read_checksums(&body, revision, chunk_bytes)?;
     body.rewind().map_err(|error| engine(error.into()))?;
-    Ok(PreparedDraft { file, expected, revision: revision.clone(), body })
+    Ok(PreparedDraft { file, expected, revision: revision.clone(), body, checksums })
+}
+
+// A manifest is derived from this exact revocable descriptor, not a sidecar or
+// a fabricated version. Its full hash is checked against the selected revision.
+fn read_checksums(
+    body: &DiskFile, revision: &DraftRevision, chunk_bytes: u32,
+) -> Result<ChecksumManifest> {
+    let count = revision.size.div_ceil(u64::from(chunk_bytes));
+    let encoded = count.checked_mul(32)
+        .and_then(|bytes| bytes.checked_add(storage_contract::CHECKSUM_HEADER_BYTES as u64))
+        .ok_or(StoreError::Budget)?;
+    if encoded > crate::disk::MAX_METADATA as u64 {
+        return Err(StoreError::Budget);
+    }
+    let before = crate::file_stamp::FileStamp::from_metadata(
+        &body.metadata().map_err(|error| engine(error.into()))?,
+    );
+    let mut chunks = Vec::new();
+    let mut buffer = vec![0; chunk_bytes as usize];
+    let mut offset = 0u64;
+    let mut full = blake3::Hasher::new();
+    while offset < revision.size {
+        let length = (revision.size - offset).min(u64::from(chunk_bytes)) as usize;
+        body.check_running().map_err(engine)?;
+        body.read_exact_at(&mut buffer[..length], offset)
+            .map_err(|error| engine(error.into()))?;
+        full.update(&buffer[..length]);
+        chunks.push(*blake3::hash(&buffer[..length]).as_bytes());
+        offset += length as u64;
+    }
+    let after = crate::file_stamp::FileStamp::from_metadata(
+        &body.metadata().map_err(|error| engine(error.into()))?,
+    );
+    if before != after || before.size != revision.size
+        || full.finalize() != revision.content_hash.digest()
+    {
+        return Err(StoreError::Conflict);
+    }
+    body.check_running().map_err(engine)?;
+    Ok(ChecksumManifest { chunk_bytes, logical_size: revision.size, chunks })
 }
 
 #[cfg(test)]

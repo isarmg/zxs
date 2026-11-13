@@ -7,7 +7,7 @@
 mod observation;
 pub use observation::{DiskObservationAccess, DiskObservationDirectory, DiskObservationMount};
 mod upload;
-pub(crate) use upload::{UploadFinish, UploadIo};
+pub(crate) use upload::{UploadFinish, UploadIo, UploadSource};
 mod journal;
 pub(crate) use journal::JournalIo;
 

@@ -107,8 +107,13 @@ impl Shared {
     }
 }
 
+enum ReadAuthority {
+    Version(String),
+    Draft(crate::ReadContainerEdit),
+}
+
 enum Handle {
-    Read(Content, String),
+    Read(Content, ReadAuthority),
     Directory(DirectoryHandle),
     // Every live writer has handed out a mutable FD. The peer can have
     // changed it before a Dirty request reached us, including after a
@@ -131,6 +136,14 @@ struct DirectoryCursor {
     after: Option<String>,
 }
 
+struct ContainerWriter {
+    context: crate::ReadContainerEdit,
+    base: storage_contract::container_edit::DraftBase,
+    edit: storage_contract::container_edit::ContainerEdit,
+    revision: Option<storage_contract::container_edit::DraftRevision>,
+    persisted: bool,
+}
+
 struct Writer {
     recovery_record: recovery_record::ActiveRecord,
     reservation: budget::Lease,
@@ -145,6 +158,7 @@ struct Writer {
     operation_id: OperationId,
     last_head: String,
     write_through: bool,
+    container: Option<ContainerWriter>,
 }
 
 fn contract(error: storage_contract::Error) -> ApiError {

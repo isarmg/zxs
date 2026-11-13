@@ -374,3 +374,41 @@ fn cancellation_after_scratch_rename_cleans_the_current_owned_name() {
     assert!(fs::read_dir(&directory).unwrap().next().is_none());
     assert!(source.exists());
 }
+
+#[test]
+fn managed_upload_source_remains_revocable_on_a_different_target_disk() {
+    for during_copy in [false, true] {
+        let (_source_temp, source_disk, _, _) = fixture();
+        let (_target_temp, target_disk, directory, _) = fixture();
+        let source = source_disk.root.path().join("shared-draft.full");
+        fs::write(&source, vec![41u8; 65536 + 7]).unwrap();
+        let managed = source_disk.root.admit_io().unwrap()
+            .hold(File::open(&source).unwrap());
+        let upload = UploadIo::with_source(
+            &target_disk.root, &directory, UploadSource::Managed(managed),
+        ).unwrap();
+        let binding = source_disk.root.io_binding().unwrap();
+        if during_copy {
+            let result = {
+                let mut access = upload.resources.access_checked().unwrap();
+                access.value().resource.copy(name("draft.prepared"), 65536, 65543, &mut || {
+                    if directory.join("draft.prepared").exists() {
+                        drop(binding.begin_quiesce()?.unwrap());
+                    }
+                    upload.resources.check_running()
+                })
+            };
+            assert_eq!(result.unwrap_err().code(), ErrorCode::DiskUnavailable);
+        } else {
+            drop(binding.begin_quiesce().unwrap().unwrap());
+            assert_eq!(upload.fingerprint_source(65543).unwrap_err().code(),
+                ErrorCode::DiskUnavailable);
+        }
+        assert!(binding.status().unwrap().drained());
+        assert_eq!(descriptors(&source), 0);
+        assert_eq!(fs::read(&source).unwrap(), vec![41u8; 65536 + 7]);
+        assert!(target_disk.root.io_binding().unwrap().status().unwrap().ordinary > 0);
+        drop(upload);
+        assert!(!directory.join("draft.prepared").exists());
+    }
+}

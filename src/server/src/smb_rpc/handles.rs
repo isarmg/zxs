@@ -104,7 +104,7 @@ impl Session {
         // An unwritten branch reads its parent's immutable version. A private
         // write copy starts from those visible bytes, while merely opening and
         // closing the handle leaves the branch without an own version.
-        let version = existing
+        let mut version = existing
             .as_ref()
             .filter(|entry| !entry.version_id.is_empty())
             .map(|entry| entry.version_id.clone());
@@ -167,7 +167,7 @@ impl Session {
             return Ok((result, fd));
         }
         let path = path.expect("invariant: a file handle has an admitted entry path");
-        let mtime = match version.as_deref() {
+        let mut mtime = match version.as_deref() {
             Some(version) => self.version_mtime(version)?,
             None => smb_protocol::protocol::FileMtime::Unpublished {},
         };
@@ -225,11 +225,32 @@ impl Session {
                     .map_err(crate::upload_fs_error)?;
                 let source = directory.path().join(name.as_path());
                 pending_source = Some(source.clone());
-                let content = version
-                    .as_deref()
-                    .filter(|_| !truncate)
-                    .map(|version| self.shared.backend.content(&self.identity, version))
-                    .transpose()?;
+                let context = existing.as_ref().map(|entry| self.container_context(entry))
+                    .transpose()?.flatten();
+                let current = context.map(|context| {
+                    let current = self.shared.backend.current_container_content(
+                        &self.identity, context.clone(),
+                    )?;
+                    Ok::<_, ApiError>((context, current))
+                }).transpose()?;
+                let (container, content) = match current {
+                    Some((context, current)) => {
+                        if current.edit.draft().is_some() {
+                            version = None;
+                            mtime = smb_protocol::protocol::FileMtime::Unpublished {};
+                        }
+                        let container = ContainerWriter {
+                            context, base: current.base, edit: current.edit,
+                            revision: None, persisted: false,
+                        };
+                        let content = if truncate { None }
+                            else { Some(current.content.fully_verified()?) };
+                        (Some(container), content)
+                    }
+                    None => (None, version.as_deref().filter(|_| !truncate)
+                        .map(|version| self.shared.backend.content(&self.identity, version))
+                        .transpose()?),
+                };
                 let initial_size = content.as_ref().map_or(0, |content| content.size);
                 pending_reservation = Some(self.shared.budget.reserve(
                     &self.identity.principal,
@@ -289,6 +310,7 @@ impl Session {
                     committed: false,
                     operation_id,
                     write_through,
+                    container,
                 };
                 if let Err(error) = writer.file.sync_all().map_err(ApiError::io).and_then(|()| {
                     recovery_record(&mut writer, &self.identity.principal, &self.branch)
@@ -317,20 +339,37 @@ impl Session {
             let (writer, fd, size, workspace_id) = result?;
             (Handle::Write(writer, paths), fd, size, workspace_id)
         } else {
-            let version_id = version.as_deref().ok_or_else(|| {
+            let version_id = version.clone().ok_or_else(|| {
                 ApiError::new(
                     ::http::StatusCode::NOT_FOUND,
                     storage_contract::ErrorCode::NotFound,
                     "version missing",
                 )
             })?;
-            let content = self.shared.backend.range_content(
-                &self.identity,
-                crate::ReadContent {
-                    version: version_id,
-                    context: None,
-                },
-            )?;
+            let context = self.container_context(existing.as_ref()
+                .expect("invariant: existing read handle has its entry"))?;
+            let (content, authority) = if let Some(context) = context {
+                let current = self.shared.backend.current_container_content(
+                    &self.identity, context.clone(),
+                )?;
+                if current.base.version.to_string() != version_id
+                    || current.base.entry.to_string() != entry_id
+                {
+                    return Err(ApiError::conflict(storage_contract::ErrorCode::FileVersionConflict,
+                        "current file changed while its read handle was opening; reopen it"));
+                }
+                if current.edit.draft().is_some() {
+                    version = None;
+                    mtime = smb_protocol::protocol::FileMtime::Unpublished {};
+                    (current.content, ReadAuthority::Draft(context))
+                } else {
+                    (current.content, ReadAuthority::Version(version_id.to_owned()))
+                }
+            } else {
+                (self.shared.backend.range_content(&self.identity, crate::ReadContent {
+                    version: &version_id, context: None,
+                })?, ReadAuthority::Version(version_id.to_owned()))
+            };
             let manifest = content.checksum_manifest.as_ref().ok_or_else(|| {
                 ApiError::invalid(
                     "SMB immutable content requires an authenticated checksum manifest",
@@ -344,7 +383,7 @@ impl Session {
             let fd = OwnedFd::from(
                 File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?,
             );
-            (Handle::Read(content, version_id.to_owned()), fd, size, None)
+            (Handle::Read(content, authority), fd, size, None)
         };
         self.handles.insert(handle_id, handle);
         let result = OpenResult {
@@ -455,7 +494,12 @@ impl Handle {
         branch: &str,
     ) -> Result<(), ApiError> {
         match self {
-            Self::Read(_, version) => shared.backend.authorize_version(identity, version),
+            Self::Read(_, ReadAuthority::Version(version)) => {
+                shared.backend.authorize_version(identity, version)
+            }
+            Self::Read(_, ReadAuthority::Draft(context)) => {
+                shared.backend.read_container_edit(identity, context.clone()).map(|_| ())
+            }
             Self::Write(..) | Self::Directory(_) => {
                 shared.backend.authorize_current(identity, branch)
             }

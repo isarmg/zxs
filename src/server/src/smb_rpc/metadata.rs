@@ -43,9 +43,18 @@ impl Session {
                         "entry missing",
                     )
                 })?;
+                let mut size = entry.size;
                 let mtime = match entry.kind {
                     storage_contract::NamespaceEntryKind::File => {
-                        self.version_mtime(&entry.version_id)?
+                        let edit = self.container_context(&entry)?.map(|context| {
+                            self.shared.backend.read_container_edit(&self.identity, context)
+                        }).transpose()?;
+                        if let Some(draft) = edit.as_ref().and_then(|edit| edit.draft()) {
+                            size = draft.size;
+                            FileMtime::Unpublished {}
+                        } else {
+                            self.version_mtime(&entry.version_id)?
+                        }
                     }
                     storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
                 };
@@ -54,7 +63,7 @@ impl Session {
                     path: entry.path.into_string(),
                     entry_id: entry.entry_id,
                     kind: entry.kind,
-                    size: entry.size,
+                    size,
                     mtime,
                 }
             }
@@ -66,8 +75,14 @@ impl Session {
     /// A dirty successor keeps that saved time; a new unpublished file has none.
     pub(super) fn handle_metadata(&self, opened: &Handle) -> Result<AuthorizedMetadata, ApiError> {
         let mtime = match opened {
-            Handle::Read(_, version) => self.version_mtime(version)?,
+            Handle::Read(_, ReadAuthority::Version(version)) => self.version_mtime(version)?,
+            Handle::Read(_, ReadAuthority::Draft(_)) => FileMtime::Unpublished {},
             Handle::Directory(_) => FileMtime::NotFile {},
+            Handle::Write(writer, _) if writer.container.as_ref()
+                .is_some_and(|container| container.edit.draft().is_some()) =>
+            {
+                FileMtime::Unpublished {}
+            }
             Handle::Write(writer, _) => {
                 let entry = self.shared.backend.lookup_at(
                     &self.identity,

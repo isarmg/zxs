@@ -59,7 +59,7 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             'test/server/unit/engine_backend/revocation_tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertIn('server-authorization', plan['groups'])
                 self.assertNotIn('historical-directory-runtime', plan['groups'])
                 self.assertIn('test_historical_directory_targeted_ci', plan['python_tests'])
@@ -135,9 +135,13 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         self.assertEqual(len(paths), 14)
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertEqual(plan['changed_paths'], [path])
-                self.assertLessEqual(len(plan['rust_targets']), 16)
+                shards = CI.shard_tools().partition(plan)
+                self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                                 plan['rust_targets'])
+                for shard in shards:
+                    self.assertLessEqual(len(shard['rust_targets']), 16)
 
         # Shared-history adds a third server integration target to the combined batch.
         # Version reads add a second regression module beside historical authorization;
@@ -148,12 +152,16 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^invalid Python modules$'):
             CI.select_plan(self.policy, notes + policy)
         plans = [
-            CI.select_plan(self.policy, authorization),
+            assert_path_group_extension(self, self.policy, authorization, [
+                'portable-path-consumers', 'server-authorization',
+                'shared-history-http-boundary',
+            ], ['container-manual-drafts-consumers']),
             assert_path_group_extension(self, self.policy, notes, [
                 'container-tags-http', 'directory-rename-http-retirement',
                 'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',
                 'server-authorization', 'version-metadata-read',
-            ], ['container-path-facts-http', 'container-lifecycle-http']),
+            ], ['container-path-facts-http', 'container-lifecycle-http',
+                'container-manual-drafts-consumers']),
             CI.select_plan(self.policy, policy),
         ]
         # HTTP retirement adds a core product check without dropping any old selection.

@@ -30,9 +30,13 @@ Candidate/SYSTEM 决定发布。冷恢复依同一 receipt 证明，不从本地
 仅有 typed receipt 且前后精确稿代数/完整 revision/结果内容相符的 FileId 才可绕过
 脏稿来源不变围栏；不是任意 `workspace.commit` kind 字符串豁免。
 
-当前小片只接 native 普通主目录 workspace。历史分支的专门 historical-save 流程与
-PublicCommit/wire sealed envelope 尚未闭合，明确拒绝并保留稿，不能换入口自动建分支。
-server 普通 SMB flush 不调用此准备方法；HTTP 显式提交尚不能因此宣称已接通。
+当前小片接 native 及 PublicCommit/wire 的普通主目录 workspace。
+显式 `seal_container_draft_workspace` 使用调用者提供的原 operation，建立持久绑定并在
+SealedWorkspace 返回 typed proof；普通 `seal_workspace` 绝不自动建立绑定。公开请求的
+proof 必须精确等于 workspace；manifest 与 request digest 都绑定它。修改 proof/op 即使
+重算请求 hash 也拒绝。冷重试发送原冻结 envelope，不重新 seal 或重写 operation。
+历史分支的专门 historical-save 流程仍明确拒绝并保留稿，不能换入口自动建分支。
+server 普通 SMB flush 不调用此准备方法；HTTP 显式准备路由尚须独立接线和验证。
 
 ## 验证计划与未完成项
 
@@ -42,4 +46,20 @@ server 普通 SMB flush 不调用此准备方法；HTTP 显式提交尚不能因
 
 只执行静态阅读及 `git diff --check`，没有本机编译、测试或 formatter。
 后续 GitHub 定向组 `container-manual-drafts` 才提供运行证据。仍需完善故障边界、
-PublicCommit/历史提交、全链权限/格式早拒、clean package 导入边界与稿回收。
+历史提交、HTTP 显式准备路由、全链权限/格式早拒、clean package 导入边界与稿回收。
+
+最终格式必须与独立目录根/目录 worktree 格式统一审阅。本分支不把 A 分支的 selector
+当成手动稿授权，也不向已有 A/legacy 根补字段迁移；未证明格式及消费者整合前不进 main。
+
+## 从共享稿直接准备（后继 WIP）
+
+`prepare_shared_container_draft_commit` 以真实当前稿和原 EntryId 开启普通单文件 workspace，
+先持久同 operation 的准备绑定，再通过 `UploadSource::Managed(DiskFile)` 复制当前正文，
+最终显式 seal。传输保留原源盘责任，不克隆逃离 gate 的裸 FD；fingerprint/copy 每个
+checkpoint 都检查源盘与目标盘撤销。正文使用已有 workspace 总量/单稿预算。
+同 operation 已绑定 workspace 可继续准备；若崩溃发生在 workspace 建立但绑定未落盘的
+窗口，该未知 workspace 保留、不自动收养/删除，不声称所有中断均自动恢复。
+
+新增原源盘与目标盘不同的实际 FD 回归覆盖复制前/复制中撤销，要求原正文不变、源描述符
+关闭而目标责任仍受其自身 gate 管理。公共显式提交回归直接消费这个 producer，不经浏览器
+下载再上传。完整主动撤销/断电矩阵仍须 GitHub 验证与后继补充。

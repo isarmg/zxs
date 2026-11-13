@@ -1011,6 +1011,12 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.set_container_commit_mode_admitted(identity, request)
     }
+    fn persist_container_draft(
+        &self, identity: &Identity, request: crate::PersistContainerDraft,
+        source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, ApiError> {
+        self.persist_container_draft_admitted(identity, request, source)
+    }
     fn current_container_content(
         &self, identity: &Identity, request: crate::ReadContainerEdit,
     ) -> Result<crate::CurrentContainerContent, ApiError> {

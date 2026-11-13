@@ -75,6 +75,7 @@ pub(crate) fn plan_edit(state: &State, request: &EditCommand) -> crate::Result<C
 pub struct ContainerDraftRead {
     pub file: crate::ReadFile,
     pub revision: DraftRevision,
+    pub checksums: storage_contract::ChecksumManifest,
 }
 
 impl Engine {
@@ -198,9 +199,11 @@ impl Engine {
         let prepared = store::reopen(
             &handle, file, revision.expected_generation, revision, self.draft_limits(),
         ).map_err(|error| Error::ContainerDrafts(DraftError::Store(error)))?;
+        let (body, checksums) = prepared.into_read_parts();
         Ok(Some(ContainerDraftRead {
-            file: prepared.into_body().into(),
+            file: body.into(),
             revision: revision.clone(),
+            checksums,
         }))
     }
 
@@ -255,6 +258,25 @@ pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result
         event.sequence == next.sequence && event.kind == "directory.changes.commit"
     });
     for (file, edit) in &previous.container_edits {
+        // A clean manual container also cannot be auto-published by a legacy
+        // content-save path that forgot to route through shared draft storage.
+        if !directory_commit && consumed != Some(*file)
+            && edit.mode() == storage_contract::container_edit::CommitMode::Manual
+        {
+            let owns_new_version = |id: &String| {
+                !previous.versions.contains_key(id)
+                    && next.versions.get(id).is_some_and(|version| {
+                        version.file_id == file.to_string()
+                    })
+            };
+            let creates_version = match next.versions.changes_since(&previous.versions) {
+                storage_contract::MapChanges::Keys(keys) => keys.iter().any(owns_new_version),
+                storage_contract::MapChanges::All => next.versions.keys().any(owns_new_version),
+            };
+            if creates_version {
+                return Err(Error::ContainerEdit(EditConflict::UncommittedDraft));
+            }
+        }
         if consumed == Some(*file) {
             continue;
         }

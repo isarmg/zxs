@@ -439,6 +439,15 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn persist_container_draft(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PersistContainerDraft,
+        _source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn current_container_content(
         &self,
         _identity: &crate::auth::Identity,

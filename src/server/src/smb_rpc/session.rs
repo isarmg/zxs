@@ -36,6 +36,25 @@ impl Session {
         }
         Ok(())
     }
+    pub(super) fn container_context(&self, entry: &Entry)
+        -> Result<Option<crate::ReadContainerEdit>, ApiError>
+    {
+        let repository = if let Some(binding) = &self.identity.smb_binding {
+            Some(binding.repository_id.clone())
+        } else {
+            // Internal historical sessions retain historical semantics. Only an
+            // exact current repository branch has shared-container authority.
+            self.shared.backend.repositories_snapshot(&self.identity)?.into_iter()
+                .find(|repository| repository.main_branch_id == self.branch)
+                .map(|repository| repository.repository_id)
+        };
+        repository.map(|repository| Ok(crate::ReadContainerEdit {
+            file: entry.file_id.parse().map_err(ApiError::contract_input)?,
+            repository: repository.parse().map_err(ApiError::contract_input)?,
+            path: entry.path.clone(),
+        })).transpose()
+    }
+
     pub(super) fn find(&self, path: &name_policy::LookupPath) -> Result<Option<Entry>, ApiError> {
         self.shared
             .backend

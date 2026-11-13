@@ -323,6 +323,14 @@ impl Backend for CloseFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.set_container_commit_mode(identity, request)
     }
+    fn persist_container_draft(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+        source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, crate::ApiError> {
+        self.inner.persist_container_draft(identity, request, source)
+    }
     fn current_container_content(
         &self,
         identity: &crate::auth::Identity,

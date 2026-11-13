@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -25,7 +26,10 @@ class VersionReadSelection(unittest.TestCase):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
     def test_complete_change_keeps_original_overlaps_and_build_limit(self):
-        plan = CI.select_plan(self.policy, PATHS)
+        plan = assert_path_group_extension(self, self.policy, PATHS, [
+            'ci-selection', 'container-tags-http', 'note-http-boundary',
+            'paged-deletion-review', 'version-metadata-read',
+        ], ['container-manual-drafts-consumers'])
         self.assertEqual(plan['groups'], [
             'ci-selection', 'container-tags-http', 'note-http-boundary', 'paged-deletion-review',
             'version-metadata-read'])
@@ -69,7 +73,7 @@ class VersionReadSelection(unittest.TestCase):
     def test_query_and_all_three_consumer_tests_select_the_real_family(self):
         for path in PATHS[1:]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                plan = CI.select_plan(self.policy, [path], shardable=True)
                 self.assertIn('version-metadata-read', plan['groups'])
         group = self.policy['groups']['version-metadata-read']
         engine = [target for target in group['rust_targets']

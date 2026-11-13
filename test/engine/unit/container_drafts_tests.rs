@@ -5,6 +5,15 @@ use std::{fs, io::Read};
 
 #[test]
 fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
+    exercise_manual_commit(false);
+}
+
+#[test]
+fn explicit_public_file_commit_consumes_exact_shared_draft_after_cold_open() {
+    exercise_manual_commit(true);
+}
+
+fn exercise_manual_commit(public: bool) {
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");
     let config = Config::development([temporary.path().join("disk")]).unwrap();
@@ -94,7 +103,7 @@ fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
     engine.stage_bytes(&workspace.workspace_id, "note.txt", b"second draft").unwrap();
     engine.seal_workspace(&workspace.workspace_id, principal.as_str()).unwrap();
     let workspace = engine.workspace(&workspace.workspace_id).unwrap();
-    let request = CommitRequest {
+    let mut request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
         operation_id: OperationId::generate().unwrap(),
         principal: principal.as_str().to_owned(),
@@ -106,10 +115,52 @@ fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
     // Matching bytes alone cannot turn a normal flush into an explicit commit.
     assert!(engine.commit_workspace(request.clone()).is_err());
     assert_eq!(engine.container_edit(file).unwrap(), dirty);
-    engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft).unwrap();
+    let envelope = if public {
+        let context = storage_contract::file_container_tags::Context {
+            repository_id: repository.repository_id.parse().unwrap(),
+            path: name_policy::PortablePath::parse("note.txt").unwrap(),
+        };
+        let sealed = engine.prepare_shared_container_draft_commit(
+            file, &context, dirty.generation(), draft, &principal, request.operation_id,
+        ).unwrap();
+        let prepared_count = engine.workspaces.len();
+        let repeated = engine.prepare_shared_container_draft_commit(
+            file, &context, dirty.generation(), draft, &principal, request.operation_id,
+        ).unwrap();
+        assert_eq!(
+            crate::canonical_json(&sealed).unwrap(), crate::canonical_json(&repeated).unwrap(),
+        );
+        assert_eq!(engine.workspaces.len(), prepared_count);
+        request.workspace_id = sealed.workspace_id.clone();
+        request.expected_head = sealed.expected_head.clone();
+        request.fencing_token = sealed.fencing_token;
+        let mut body = json_codec::to_value(sealed).unwrap();
+        body["message"] = json_codec::Value::String(request.message.clone());
+        let digest = crate::wire::commit_request_digest(&request.workspace_id, &body).unwrap();
+        body["request_digest"] = json_codec::Value::String(digest);
+        let mut altered = body.clone();
+        altered["container_draft_commit"]["operation"] =
+            json_codec::Value::String(OperationId::generate().unwrap().to_string());
+        let changed_digest = crate::wire::commit_request_digest(
+            &request.workspace_id, &altered,
+        ).unwrap();
+        altered["request_digest"] = json_codec::Value::String(changed_digest);
+        let altered = crate::PublicCommitEnvelope::parse(&request.workspace_id, altered).unwrap();
+        assert!(engine.commit_workspace_wire(request.clone(), altered).is_err());
+        assert_eq!(engine.container_edit(file).unwrap(), dirty);
+        assert_eq!(engine.state().versions, versions);
+        let envelope = crate::PublicCommitEnvelope::parse(&request.workspace_id, body).unwrap();
+        Some(envelope)
+    } else {
+        engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft).unwrap();
+        None
+    };
     drop(engine);
     let mut engine = Engine::open(&system).unwrap();
-    let published = engine.commit_workspace(request.clone()).unwrap();
+    let published = match envelope.clone() {
+        Some(envelope) => engine.commit_workspace_wire(request.clone(), envelope).unwrap(),
+        None => engine.commit_workspace(request.clone()).unwrap(),
+    };
     assert!(engine.open_container_draft(file).unwrap().is_none());
     assert_eq!(engine.container_edit(file).unwrap().mode(), CommitMode::Manual);
     assert_eq!(engine.state().versions.len(), versions.len() + 1);
@@ -117,8 +168,15 @@ fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
     let committed_branches = engine.state().branches.clone();
     drop(engine);
     let mut engine = Engine::open(&system).unwrap();
-    engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft).unwrap();
-    assert_eq!(engine.commit_workspace(request).unwrap(), published);
+    let replay = match envelope {
+        Some(envelope) => engine.commit_workspace_wire(request, envelope).unwrap(),
+        None => {
+            engine.prepare_container_draft_commit(&request, file, dirty.generation(), draft)
+                .unwrap();
+            engine.commit_workspace(request).unwrap()
+        }
+    };
+    assert_eq!(replay, published);
     assert_eq!(engine.state().versions, committed_versions);
     assert_eq!(engine.state().branches, committed_branches);
     assert_installed_edit(

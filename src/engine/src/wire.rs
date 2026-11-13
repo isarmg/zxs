@@ -43,7 +43,10 @@ pub(crate) fn admit_public_commit<'state>(
 pub fn manifest_hash(w: &Workspace) -> Result<String> {
     object_hash(
         "workspace-manifest",
-        &json!({"workspace_id":w.workspace_id,"branch_id":w.branch_id,"base_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"items":w.files.values().map(|f|json!({"item_id":f.item_id,"path":f.path,"logical_size":f.size.to_string(),"content_hash":f.content_hash,"upload_generation":f.dirty_generation.to_string()})).collect::<Vec<_>>(),"namespace_operations":w.namespace_operations}),
+        &crate::persist::container_edits::bind_workspace_input(
+            json!({"workspace_id":w.workspace_id,"branch_id":w.branch_id,"base_head":w.base_head,"fencing_token":w.fencing_token.to_string(),"items":w.files.values().map(|f|json!({"item_id":f.item_id,"path":f.path,"logical_size":f.size.to_string(),"content_hash":f.content_hash,"upload_generation":f.dirty_generation.to_string()})).collect::<Vec<_>>(),"namespace_operations":w.namespace_operations}),
+            w.container_draft_commit.as_ref(),
+        )?,
     ).map_err(Into::into)
 }
 pub fn commit_request_digest(workspace: &str, body: &Value) -> Result<String> {
@@ -92,7 +95,9 @@ impl Engine {
         }
         let sealed_manifest_hash = manifest_hash(&w)?;
         Ok(SealedWorkspace {
-            operation_id,
+            container_draft_commit: w.container_draft_commit.clone(),
+            operation_id: w.container_draft_commit.as_ref()
+                .map(|binding| binding.operation).unwrap_or(operation_id),
             workspace_id: id.into(),
             repository_id: repository.repository_id,
             branch_id: w.branch_id,
@@ -187,7 +192,11 @@ impl crate::engine::PlanningContext<'_> {
         // binding between the authenticated request and its original body.
         let w = workspace;
         let repo = self.repository_for_branch(&w.branch_id)?;
-        if envelope.route_workspace() != request.workspace_id
+        if envelope.container_draft_commit() != w.container_draft_commit.as_ref()
+            || envelope.container_draft_commit().is_some_and(|binding| {
+                binding.operation != request.operation_id
+            })
+            || envelope.route_workspace() != request.workspace_id
             || envelope.operation_id() != request.operation_id
             || envelope.workspace_id() != w.workspace_id
             || envelope.repository_id() != repo.repository_id

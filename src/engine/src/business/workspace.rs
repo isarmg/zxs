@@ -691,10 +691,37 @@ impl Engine {
         generation: u64,
         expected_content: Option<(u64, ContentHash)>,
     ) -> Result<UploadPreparation> {
-        platform_io::fs_safety::linux::SingleLinkRequirement::check(&source)
-            .map_err(preparation_fs_error)?;
+        self.prepare_upload_source(
+            workspace, item, path, UploadSource::Local(source), generation, expected_content,
+        )
+    }
+
+    pub(crate) fn prepare_upload_managed(
+        &self,
+        workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: DiskFile,
+        generation: u64,
+        expected_content: (u64, ContentHash),
+    ) -> Result<UploadPreparation> {
+        self.prepare_upload_source(
+            workspace, item, path, UploadSource::Managed(source), generation,
+            Some(expected_content),
+        )
+    }
+
+    fn prepare_upload_source(
+        &self,
+        workspace: &str,
+        item: &str,
+        path: &name_policy::PortablePath,
+        source: UploadSource,
+        generation: u64,
+        expected_content: Option<(u64, ContentHash)>,
+    ) -> Result<UploadPreparation> {
+        let expected = source.admitted_length()?;
         let (w, base_entry) = self.validate_upload_target(workspace, item, path, generation)?;
-        let expected = source.metadata()?.len();
         if expected > self.config.max_file_bytes {
             return Err(Error::new(
                 storage_contract::ErrorCode::ResourceLimit,
@@ -728,7 +755,7 @@ impl Engine {
             claims: self.upload_preparations.clone(),
         };
         let disk_root = self.planning_context().workspace_data_root(&w)?;
-        let io = UploadIo::new(disk_root, &directory, source)?;
+        let io = UploadIo::with_source(disk_root, &directory, source)?;
         let (retained, generations) = io.retained_usage()?;
         let target = directory.join(format!("{item}-{generation}.full"));
         let target_name = EntryName::new(
@@ -1331,11 +1358,9 @@ impl crate::engine::PlanningContext<'_> {
         }
         let w = workspace;
         if let Some(binding) = &w.container_draft_commit {
-            if wire.is_some() {
-                return Err(crate::engine::container_drafts::invalid());
-            }
             crate::engine::container_drafts::commit::validate_workspace(
-                self.state, &w, &request, binding,
+                self.state, self.current_namespaces.map(std::sync::Arc::as_ref),
+                &w, &request, binding,
             )?;
         }
         if w.purpose == WorkspacePurpose::HistoricalBranch {

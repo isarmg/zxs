@@ -26,3 +26,17 @@ pub struct CurrentContainerContent {
     pub base: DraftBase,
     pub content: crate::Content,
 }
+
+/// An ordinary filesystem save, not authorization to create a historical node.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct PersistContainerDraft {
+    pub context: ReadContainerEdit,
+    pub revision: storage_contract::container_edit::DraftRevision,
+}
+
+/// A durable draft acknowledgement cannot be mistaken for a published version.
+pub struct DraftPersisted {
+    pub revision: storage_contract::container_edit::DraftRevision,
+    pub receipt: storage_contract::OperationResult,
+}

@@ -44,7 +44,7 @@ fn fixture() -> (tempfile::TempDir, Engine, FileId, DraftRevision) {
 }
 fn limits() -> DraftLimits {
     DraftLimits {
-        max_file_bytes: 1024, checksum_chunk_bytes: 4096, max_entries: 8,
+        max_file_bytes: 1024, checksum_chunk_bytes: 65_536, max_entries: 8,
         max_retained_bytes: 8192,
     }
 }
@@ -186,5 +186,41 @@ fn corrupt_body_and_exhausted_budget_never_fall_back_to_history_or_overwrite_evi
     let before = image(held.root.path());
     assert!(matches!(reopen(&held, file, original.expected_generation, &original,
         limits()), Err(StoreError::Payload(_))));
+    assert_eq!(image(held.root.path()), before);
+}
+
+#[test]
+fn range_manifest_is_bound_to_selected_bytes_and_detects_later_chunk_tampering() {
+    let (temp, engine, file, mut revision) = fixture();
+    let held = disk(&engine);
+    let mut bytes = vec![b'a'; 65_536 + 19];
+    bytes[65_536..].fill(b'b');
+    revision.size = bytes.len() as u64;
+    revision.content_hash = ContentHash::from_digest(blake3::hash(&bytes));
+    let mut bounds = limits();
+    bounds.max_file_bytes = 128 * 1024;
+    bounds.max_retained_bytes = 256 * 1024;
+    let prepared = prepare(&held, file, revision.expected_generation, &revision,
+        source(&temp, &bytes), bounds).unwrap();
+    let (body, checksums) = prepared.into_read_parts();
+    assert_eq!(checksums.logical_size, revision.size);
+    assert_eq!(checksums.chunk_bytes, 65_536);
+    assert_eq!(checksums.chunks.len(), 2);
+    assert_eq!(checksums.chunks[0], *blake3::hash(&bytes[..65_536]).as_bytes());
+    assert_eq!(checksums.chunks[1], *blake3::hash(&bytes[65_536..]).as_bytes());
+    // The wire manifest remains a real checksum manifest, without VersionId.
+    let decoded = ChecksumManifest::decode(&checksums.encode().unwrap()).unwrap();
+    let mut last_chunk = [0; 19];
+    body.read_exact_at(&mut last_chunk, 65_536).unwrap();
+    assert_eq!(*blake3::hash(&last_chunk).as_bytes(), decoded.chunks[1]);
+    let path = directory(&held, file, &revision).join(layout::BODY.as_path());
+    let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    writer.write_all_at(b"x", 65_540).unwrap();
+    writer.sync_all().unwrap();
+    body.read_exact_at(&mut last_chunk, 65_536).unwrap();
+    assert_ne!(*blake3::hash(&last_chunk).as_bytes(), decoded.chunks[1]);
+    let before = image(held.root.path());
+    assert!(matches!(reopen(&held, file, revision.expected_generation, &revision,
+        bounds), Err(StoreError::Payload(_))));
     assert_eq!(image(held.root.path()), before);
 }

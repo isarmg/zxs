@@ -823,6 +823,15 @@ impl Backend for RecordingBackend {
         self.record("set_container_commit_mode", Some(identity), json!(request))?;
         Ok(recorded_operation(request.operation_id, "set_container_commit_mode"))
     }
+    fn persist_container_draft(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+        _source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, crate::ApiError> {
+        self.record("persist_container_draft", Some(identity), json!(request))?;
+        Err(crate::ApiError::unsupported())
+    }
     fn current_container_content(
         &self,
         identity: &crate::auth::Identity,
@@ -2962,6 +2971,7 @@ fn public_seal() -> storage_contract::SealedWorkspace {
         file_placement: BTreeMap::new(),
         expected_topology_generation: 3,
         sealed_manifest_hash: "manifest".into(),
+        container_draft_commit: None,
     }
 }
 fn public_envelope() -> storage_contract::PublicCommitEnvelope {
@@ -3371,6 +3381,23 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
         mode: storage_contract::container_edit::CommitMode::Manual,
         operation_id: storage_contract::OperationId::from_random([13; 16]),
     };
+    let revision = storage_contract::container_edit::DraftRevision {
+        operation: storage_contract::OperationId::from_random([14; 16]),
+        expected_generation: storage_contract::Generation::new(7),
+        principal: storage_contract::Principal::new(fixture.identity.principal.clone()).unwrap(),
+        base: storage_contract::container_edit::DraftBase {
+            entry: storage_contract::EntryId::from_random([15; 16]),
+            repository: request.repository,
+            branch: storage_contract::BranchId::from_random([16; 16]),
+            node: "ver_00000000000000000000000000000001".parse().unwrap(),
+            version: storage_contract::VersionId::from_random([1; 16]),
+            selection_generation: storage_contract::Generation::new(0),
+        },
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"draft")),
+        size: 5,
+    };
+    let persist = crate::PersistContainerDraft { context: request.clone(), revision };
+    let source = tempfile::tempfile().unwrap();
     fixture.probe.fail.store(true, Ordering::SeqCst);
     let errors = [
         ("read_container_edit", fixture.backend
@@ -3379,24 +3406,29 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
             .set_container_commit_mode(&fixture.identity, mode.clone()).err().unwrap()),
         ("current_container_content", fixture.backend
             .current_container_content(&fixture.identity, request.clone()).err().unwrap()),
+        ("persist_container_draft", fixture.backend
+            .persist_container_draft(&fixture.identity, persist.clone(), &source).err().unwrap()),
     ];
     for (method, error) in errors {
         assert_error(error, method);
     }
     let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
-    assert_eq!(calls.len(), 3);
+    assert_eq!(calls.len(), 4);
     for call in &calls {
         assert_identity(call.identity.as_ref(), &fixture.identity);
     }
     assert_eq!(calls[0].arguments, json!(request));
     assert_eq!(calls[1].arguments, json!(mode));
     assert_eq!(calls[2].arguments, json!(request));
+    assert_eq!(calls[3].arguments, json!(persist));
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     assert_eq!(fixture.backend.read_container_edit(&fixture.identity, request.clone())
         .err().unwrap().status, 401);
     assert_eq!(fixture.backend.set_container_commit_mode(&fixture.identity, mode)
         .err().unwrap().status, 401);
     assert_eq!(fixture.backend.current_container_content(&fixture.identity, request)
+        .err().unwrap().status, 401);
+    assert_eq!(fixture.backend.persist_container_draft(&fixture.identity, persist, &source)
         .err().unwrap().status, 401);
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }

@@ -114,7 +114,8 @@ pub use backend_file_merge::{MergeFileBranches, MergeFileHistory};
 mod backend_container_drafts;
 mod http_container_drafts;
 pub use backend_container_drafts::{
-    CurrentContainerContent, ReadContainerEdit, SetContainerCommitMode,
+    CurrentContainerContent, DraftPersisted, PersistContainerDraft,
+    ReadContainerEdit, SetContainerCommitMode,
 };
 mod backend_file_tags;
 mod http_file_metadata;

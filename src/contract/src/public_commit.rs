@@ -36,6 +36,7 @@ impl PublicCommitParseError {
 #[derive(Clone, Debug, data_serialization::Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct PublicCommitBody {
+    container_draft_commit: Option<crate::container_edit::DraftConsumption>,
     #[serialization(deserialize_with = "nonempty")]
     workspace_id: String,
     #[serialization(deserialize_with = "nonempty")]
@@ -62,6 +63,10 @@ pub struct FilePlacement {
 }
 
 impl PublicCommitEnvelope {
+    pub fn container_draft_commit(&self) -> Option<&crate::container_edit::DraftConsumption> {
+        self.fields.container_draft_commit.as_ref()
+    }
+
     /// Called only at an external HTTP/persisted request decoding boundary.
     /// The route workspace participates in the digest independently of body binding.
     pub fn parse(
@@ -140,6 +145,8 @@ impl PublicCommitEnvelope {
 /// Frozen seal response, built from domain values and serialized by the adapter.
 #[derive(Debug, data_serialization::Serialize)]
 pub struct SealedWorkspace {
+    #[serialization(skip_serializing_if = "Option::is_none")]
+    pub container_draft_commit: Option<crate::container_edit::DraftConsumption>,
     pub operation_id: OperationId,
     pub workspace_id: String,
     pub repository_id: String,

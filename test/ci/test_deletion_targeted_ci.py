@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('deletion_targeted_ci', ROOT / '.github/scripts/check-targeted-ci.py')
@@ -15,7 +16,10 @@ class DeletionTargetedCi(unittest.TestCase):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
     def test_server_entrypoint_selects_registered_deletion_scope(self):
-        plan = CI.select_plan(self.policy, ['src/server/src/lib.rs'])
+        plan = assert_path_group_extension(self, self.policy,
+            ['src/server/src/lib.rs'],
+            ['directory-rename-http-retirement', 'paged-deletion-review'],
+            ['container-manual-drafts-consumers'])
         self.assertIn('paged-deletion-review', plan['groups'])
         self.assertEqual(len(plan['rust_targets']), 8)
         group = self.policy['groups']['paged-deletion-review']

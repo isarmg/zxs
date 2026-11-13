@@ -22,6 +22,8 @@ impl Session {
     }
 }
 
+#[path = "manual_draft_tests.rs"]
+mod manual_draft_tests;
 #[path = "admission_tests.rs"]
 mod admission_tests;
 #[path = "binding_tests.rs"]
@@ -480,6 +482,14 @@ impl Backend for LostCommitReply {
         request: crate::SetContainerCommitMode,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.set_container_commit_mode(identity, request)
+    }
+    fn persist_container_draft(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+        source: &std::fs::File,
+    ) -> Result<crate::DraftPersisted, crate::ApiError> {
+        self.inner.persist_container_draft(identity, request, source)
     }
     fn current_container_content(
         &self,
