@@ -17,7 +17,7 @@ pub use offline::{
     DiskDatabaseReconstruction, DiskDatabaseRelation, MAX_DISK_DATABASE_ARCHIVE_BYTES,
     inspect_disk_database_material, reconstruct_disk_database_material,
 };
-pub(in crate::engine) use replay::visit_published_prefix;
+pub(in crate::engine) use replay::{PublishedSnapshot, visit_published_prefix};
 
 const MAX_PUBLICATIONS: usize = 2048;
 const MAX_CHANGES: usize = 65_536;

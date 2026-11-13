@@ -113,12 +113,14 @@ impl Scopes {
             engine,
             engine.state.sequence,
             &|| checkpoint(cancellation),
-            |candidate, candidate_hash, publication, publication_hash, admitted| {
+            |source| {
                 checkpoint(cancellation)?;
+                let candidate = source.candidate();
+                let admitted = source.admitted();
                 // Recovery overlays need their own exact timeline recipe.
                 // Do not present original snapshots as those
                 // different visible outcomes or silently start coverage later.
-                if publication.recovery.is_some() {
+                if source.publication().recovery.is_some() {
                     return Err(Error::new(
                         ErrorCode::UnsupportedOperation,
                         "move scoped databases require the complete non-recovery authenticated prefix",
@@ -127,9 +129,9 @@ impl Scopes {
                 scopes.add(
                     Scope::PublishedSystem {
                         sequence: candidate.sequence,
-                        candidate_hash: candidate_hash.into(),
+                        candidate_hash: source.candidate_hash().as_str().into(),
                         snapshot_hash: candidate.snapshot_hash.clone(),
-                        publication_hash: publication_hash.into(),
+                        publication_hash: source.publication_hash().as_str().into(),
                     },
                     crate::engine::index::preparation::encode_observed(admitted, &|| {
                         checkpoint(cancellation)
@@ -139,7 +141,7 @@ impl Scopes {
                 disks
                     .as_mut()
                     .expect("invariant: prefix finishes only at its last sequence")
-                    .observe(candidate, candidate_hash, admitted, &stop)?;
+                    .observe_published(&source, &stop)?;
                 if candidate.sequence == engine.state.sequence {
                     if admitted.state() != engine.state() {
                         return Err(invalid(

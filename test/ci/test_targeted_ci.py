@@ -67,6 +67,33 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 class TargetedSelection(unittest.TestCase):
 
+    def test_published_snapshot_bridge_keeps_real_readers_and_no_inventory_claim(self):
+        group = self.policy['groups']['published-snapshot-proof']
+        for path in [
+            'src/engine/src/engine/disk_catalog/history.rs',
+            'src/engine/src/engine/disk_catalog/history/replay.rs',
+            'src/engine/src/engine/disk_catalog/history/replay/current.rs',
+            'src/engine/src/engine/disk_catalog/history/replay/journals.rs',
+            'src/engine/src/engine/history_move_decision/scopes/projection.rs',
+            'src/engine/src/engine/move_execution/scopes.rs',
+            'test/engine/unit/engine/published_snapshot_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn('published-snapshot-proof', plan['groups'])
+                self.assertCountEqual(
+                    origin_selections(plan, 'published-snapshot-proof'), group['rust_targets'])
+        unit, move, product = group['rust_targets']
+        self.assertIn('engine::disk_catalog::history::replay::tests::', unit['prefixes'])
+        self.assertIn('engine::disk_catalog::history::preparation::encoding_tests::',
+                      unit['prefixes'])
+        self.assertEqual(move['name'], 'file_history_copy')
+        self.assertEqual(move['prefixes'], ['move_execution::'])
+        self.assertEqual(move['features'], ['fault-injection'])
+        self.assertEqual(product['mode'], 'check')
+        self.assertFalse(product['default_features'])
+
+
     def test_deletion_graph_sources_keep_lifecycle_and_http_consumers(self):
         paths = [
             'src/contract/src/id/node.rs',

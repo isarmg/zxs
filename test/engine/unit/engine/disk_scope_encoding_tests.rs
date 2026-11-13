@@ -45,7 +45,7 @@ impl Fixture {
             &self.engine,
             self.engine.state().sequence,
             &|| preparation_checkpoint(&stop),
-            |candidate, hash, _, _, admitted| scopes.observe(candidate, hash, admitted, &stop),
+            |source| scopes.observe_published(&source, &stop),
         ).unwrap();
         scopes
     }

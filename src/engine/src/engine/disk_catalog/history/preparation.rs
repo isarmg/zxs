@@ -88,7 +88,41 @@ impl PreparedDiskScopes {
         }
     }
 
+    /// Consume the exact authenticated replay step without dropping its
+    /// candidate/snapshot relationship back into independent caller values.
+    pub(in crate::engine) fn observe_published(
+        &mut self,
+        source: &PublishedSnapshot<'_>,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        self.observe_bound(
+            source.candidate(), source.candidate_hash().as_str(), source.admitted(), stop,
+        )
+    }
+
+    /// Staged and externally admitted projections still need their sequence
+    /// check. These inputs do not establish publication authority.
     pub(in crate::engine) fn observe(
+        &mut self,
+        candidate: &Candidate,
+        hash: &str,
+        admitted: &AdmittedState,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        // An empty projection has no scope to extend, as before. Otherwise the
+        // shared snapshot check runs once, not once for every selected disk.
+        if !self.disks.is_empty() {
+            preparation_checkpoint(stop)?;
+            if admitted.state().sequence != candidate.sequence {
+                return Err(invalid(
+                    "prepared disk scopes do not extend their exact authenticated prefix",
+                ));
+            }
+        }
+        self.observe_bound(candidate, hash, admitted, stop)
+    }
+
+    fn observe_bound(
         &mut self,
         candidate: &Candidate,
         hash: &str,
@@ -105,7 +139,6 @@ impl PreparedDiskScopes {
             if candidate.pool_id != disk.header.identity.pool_id
                 || candidate.sequence <= disk.header.through_sequence
                 || candidate.previous_snapshot != disk.header.through_snapshot
-                || admitted.state().sequence != candidate.sequence
                 || disk.header.publications as usize == MAX_PUBLICATIONS
             {
                 return Err(invalid(

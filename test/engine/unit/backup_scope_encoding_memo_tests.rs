@@ -387,10 +387,15 @@ impl DiskPairFixture {
             &self.engine,
             self.engine.state().sequence,
             &|| preparation_checkpoint(&stop),
-            |candidate, hash, _, _, admitted| {
+            |source| {
                 // A deliberate typed encoder-input variant, not admission of
                 // another on-disk history. Final catalog rows stay identical.
-                scopes.observe(candidate, historical_hash.unwrap_or(hash), admitted, &stop)
+                scopes.observe(
+                    source.candidate(),
+                    historical_hash.unwrap_or(source.candidate_hash().as_str()),
+                    source.admitted(),
+                    &stop,
+                )
             },
         ).unwrap();
         scopes

@@ -10,6 +10,63 @@ mod backup;
 mod current;
 mod journals;
 
+/// One original snapshot reached through the held publication sources and
+/// authenticated against its permanent candidate, publication seal and receipt.
+/// Fields and construction stay inside replay: a caller hash or structurally
+/// admitted State cannot create this proof.
+///
+/// This borrows one replay step, not a live root or complete-prefix capability.
+/// The enclosing visit must still finish successfully before a consumer may use
+/// its accumulated projection. A recovery publication can have a different
+/// visible result; this always identifies its original candidate snapshot.
+pub(in crate::engine) struct PublishedSnapshot<'a> {
+    candidate: &'a Candidate,
+    candidate_hash: CandidateDigest<'a>,
+    publication: &'a Publication,
+    publication_hash: PublicationDigest<'a>,
+    admitted: &'a crate::history_package::AdmittedState,
+}
+
+impl PublishedSnapshot<'_> {
+    pub(in crate::engine) fn candidate(&self) -> &Candidate {
+        self.candidate
+    }
+
+    pub(in crate::engine) fn candidate_hash(&self) -> CandidateDigest<'_> {
+        self.candidate_hash
+    }
+
+    pub(in crate::engine) fn publication(&self) -> &Publication {
+        self.publication
+    }
+
+    pub(in crate::engine) fn publication_hash(&self) -> PublicationDigest<'_> {
+        self.publication_hash
+    }
+
+    pub(in crate::engine) fn admitted(&self) -> &crate::history_package::AdmittedState {
+        self.admitted
+    }
+}
+
+/// Exact canonical digest text retained after source authentication. The
+/// private constructors preserve that admission without parsing it a second time.
+#[derive(Clone, Copy)]
+pub(in crate::engine) struct CandidateDigest<'a>(&'a str);
+impl<'a> CandidateDigest<'a> {
+    pub(in crate::engine) fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::engine) struct PublicationDigest<'a>(&'a str);
+impl<'a> PublicationDigest<'a> {
+    pub(in crate::engine) fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
 struct Source {
     candidate: String,
     publication: String,
@@ -53,20 +110,30 @@ impl Prefix {
     }
 }
 
-/// Visit the complete authenticated source prefix without installing a catalog.
-/// The callback borrows each admitted State only for that one publication.
+/// Visit original snapshots without installing a catalog. Each callback holds
+/// one authenticated publication; only a successful return proves the requested
+/// complete prefix. Callbacks may accumulate preparation, never activate it.
 pub(in crate::engine) fn visit_published_prefix(
     engine: &Engine,
     through: u64,
     checkpoint: &impl Fn() -> Result<()>,
-    mut visit: impl FnMut(
-        &Candidate,
-        &str,
-        &Publication,
-        &str,
-        &crate::history_package::AdmittedState,
-    ) -> Result<()>,
+    mut visit: impl FnMut(PublishedSnapshot<'_>) -> Result<()>,
 ) -> Result<()> {
+    let mut observe = |
+        candidate: &Candidate,
+        candidate_hash: &str,
+        publication: &Publication,
+        publication_hash: &str,
+        admitted: &crate::history_package::AdmittedState,
+    | {
+        visit(PublishedSnapshot {
+            candidate,
+            candidate_hash: CandidateDigest(candidate_hash),
+            publication,
+            publication_hash: PublicationDigest(publication_hash),
+            admitted,
+        })
+    };
     checkpoint()?;
     if through > engine.state.sequence {
         return Err(invalid(
@@ -74,11 +141,11 @@ pub(in crate::engine) fn visit_published_prefix(
         ));
     }
     if engine.config.generation().is_some() {
-        return current::visit(engine, through, checkpoint, visit);
+        return current::visit(engine, through, checkpoint, &mut observe);
     }
     let sources = journals::sources(engine, through, checkpoint)?;
     let mut prefix = Prefix::default();
-    visit_sources(engine, sources, checkpoint, &mut prefix, &mut visit)?;
+    visit_sources(engine, sources, checkpoint, &mut prefix, &mut observe)?;
     prefix.finish(engine, through)
 }
 
@@ -199,7 +266,9 @@ pub(super) fn capture(
             engine,
             through,
             &|| Ok(()),
-            |candidate, hash, _, _, state| observe(candidate, hash, state),
+            |source| observe(
+                source.candidate(), source.candidate_hash().as_str(), source.admitted(),
+            ),
         )?;
     }
     if through == engine.state.sequence && !previous.same_rows(&snapshot(&engine.state, identity)?)
@@ -213,3 +282,7 @@ pub(super) fn capture(
         changes: changes.rows,
     })
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/published_snapshot_tests.rs"]
+mod tests;

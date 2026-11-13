@@ -109,7 +109,7 @@ impl Databases {
             engine,
             engine.state.sequence,
             &|| Ok(()),
-            |candidate, hash, _, _, state| scopes.observe(candidate, hash, state, &stop),
+            |source| scopes.observe_published(&source, &stop),
         )?;
         // A candidate-bound authenticated snapshot is sufficient to prepare SQL,
         // never to apply it. The PublishedMove capability is required below.

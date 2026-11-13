@@ -3704,6 +3704,45 @@
         "test_zxs_demo"
       ],
       "rust_targets": []
+    },
+    "published-snapshot-proof": {
+      "reason": "Preserve exact held-journal and permanent publication admission in a private original-snapshot proof; consume it in disk-history and move-scope projections without caller-hash authority. Cover cold retry, substituted material, writer replacement, cancellation, endpoint failure, staged sequence rejection and unchanged SQLite bytes. No new-layout catalog activation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::disk_catalog::history::replay::tests::",
+            "engine::disk_catalog::history::preparation::encoding_tests::",
+            "engine::disk_catalog::tests::"
+          ],
+          "max_tests": 40,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "file_history_copy",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "move_execution::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "kind": "lib",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -10191,6 +10230,48 @@
       "path": "test/ci/test_zxs_demo.py",
       "groups": [
         "standalone-demo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/replay.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/replay/current.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_catalog/history/replay/journals.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/scopes/projection.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/move_execution/scopes.rs",
+      "groups": [
+        "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/published_snapshot_tests.rs",
+      "groups": [
+        "published-snapshot-proof"
       ]
     }
   ],
