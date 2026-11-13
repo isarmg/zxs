@@ -3690,10 +3690,27 @@
           "manifest": "src/web/Cargo.toml",
           "kind": "lib",
           "prefixes": [
-            "files::container_edit::tests::"
+            "files::container_edit::"
           ],
-          "max_tests": 4,
-          "timeout_seconds": 600
+          "max_tests": 16,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "container-manual-fresh-format": {
+      "reason": "Explicit fresh-only primary manual-container SYSTEM selector and bound DISK seal; original-root and writer proof before cold recovery, strict refusal without migration, and actual initialized FILE cold reads. No claim of full FD-relative SYSTEM SQLite recovery or completed legacy-entry retirement.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "authority_selection::manual::tests::",
+            "engine::container_drafts::format::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
         }
       ]
     },
@@ -3706,7 +3723,8 @@
           "manifest": "src/engine/Cargo.toml",
           "kind": "lib",
           "prefixes": [
-            "engine::container_drafts::"
+            "engine::container_drafts::tests::",
+            "engine::container_drafts::store::tests::"
           ],
           "exact": [
             "disk::admission::upload::tests::managed_upload_source_remains_revocable_on_a_different_target_disk"
@@ -3729,6 +3747,56 @@
     }
   },
   "rules": [
+    {
+      "path": "src/web/src/files/container_edit/storage.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/web/unit/container_edit_storage.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/mod.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/actions/operation.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/model.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/review/recovery.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/ui.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_workspace.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
     {
       "path": "src/engine/src/history_package/audit_guard.rs",
       "groups": [
@@ -5584,6 +5652,7 @@
     {
       "path": "src/engine/src/engine/membership_transition/pending/activation/recovery/restricted.rs",
       "groups": [
+        "container-manual-fresh-format",
         "held-directory-layout"
       ]
     },
@@ -10579,6 +10648,114 @@
       "path": "test/engine/unit/disk/upload_resources_tests.rs",
       "groups": [
         "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/metadata.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "note-target-consumers",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/session.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "note-target-consumers",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/manual.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts/format.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/discovery.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/local.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/foreign_import/inspect.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "test/engine/unit/manual_format_tests.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "test/engine/unit/manual_container_initialization_tests.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "container-manual-fresh-format"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/store.rs",
+      "groups": [
+        "container-manual-fresh-format"
       ]
     }
   ],

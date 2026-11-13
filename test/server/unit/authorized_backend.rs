@@ -436,6 +436,7 @@ impl Backend for RecordingBackend {
                     pool_id: "pool".into(),
                     publication: None,
                 },
+                container_edits: None,
                 entries: crate::backend_read::DirectoryEntries::Projected(std::sync::Arc::new(
                     Vec::new(),
                 )),
@@ -806,6 +807,14 @@ impl Backend for RecordingBackend {
             request.operation_id,
             "merge_file_history",
         ))
+    }
+    fn prepare_container_draft_commit(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.record("prepare_container_draft_commit", Some(identity), json!(request))?;
+        Ok(public_seal())
     }
     fn read_container_edit(
         &self,
@@ -3397,6 +3406,11 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
         size: 5,
     };
     let persist = crate::PersistContainerDraft { context: request.clone(), revision };
+    let prepare = crate::PrepareContainerDraftCommit {
+        context: request.clone(), expected_generation: storage_contract::Generation::new(8),
+        draft_operation: persist.revision.operation,
+        operation_id: storage_contract::OperationId::from_random([17; 16]),
+    };
     let source = tempfile::tempfile().unwrap();
     fixture.probe.fail.store(true, Ordering::SeqCst);
     let errors = [
@@ -3408,12 +3422,14 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
             .current_container_content(&fixture.identity, request.clone()).err().unwrap()),
         ("persist_container_draft", fixture.backend
             .persist_container_draft(&fixture.identity, persist.clone(), &source).err().unwrap()),
+        ("prepare_container_draft_commit", fixture.backend
+            .prepare_container_draft_commit(&fixture.identity, prepare.clone()).err().unwrap()),
     ];
     for (method, error) in errors {
         assert_error(error, method);
     }
     let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5);
     for call in &calls {
         assert_identity(call.identity.as_ref(), &fixture.identity);
     }
@@ -3421,6 +3437,7 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
     assert_eq!(calls[1].arguments, json!(mode));
     assert_eq!(calls[2].arguments, json!(request));
     assert_eq!(calls[3].arguments, json!(persist));
+    assert_eq!(calls[4].arguments, json!(prepare));
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
     assert_eq!(fixture.backend.read_container_edit(&fixture.identity, request.clone())
         .err().unwrap().status, 401);
@@ -3429,6 +3446,8 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
     assert_eq!(fixture.backend.current_container_content(&fixture.identity, request)
         .err().unwrap().status, 401);
     assert_eq!(fixture.backend.persist_container_draft(&fixture.identity, persist, &source)
+        .err().unwrap().status, 401);
+    assert_eq!(fixture.backend.prepare_container_draft_commit(&fixture.identity, prepare)
         .err().unwrap().status, 401);
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
 }

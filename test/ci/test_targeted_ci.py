@@ -2853,6 +2853,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             'src/contract/src/public_commit.rs', 'test/contract/unit/public_commit.rs',
             'test/engine/unit/container_drafts_tests.rs',
             'test/engine/unit/container_draft_store_tests.rs',
+            'test/engine/unit/disk/upload_resources_tests.rs',
         ]:
             with self.subTest(path=path):
                 complete = CI.select_plan(self.policy, [path], shardable=True)
@@ -2863,6 +2864,10 @@ class ContainerManualDraftSelection(unittest.TestCase):
         self.assertEqual((engine['package'], engine['kind'], engine['prefixes']),
                          ('storage-engine', 'lib', ['engine::container_drafts::']))
         self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (8, 900))
+        self.assertEqual(engine['exact'], [
+            'disk::admission::upload::tests::'
+            'managed_upload_source_remains_revocable_on_a_different_target_disk',
+        ])
         self.assertEqual((contract['package'], contract['kind']), ('storage-contract', 'lib'))
         self.assertEqual(contract['prefixes'], ['container_edit::tests::', 'public_commit::tests::'])
         self.assertEqual((contract['max_tests'], contract['timeout_seconds']), (8, 300))
@@ -2886,6 +2891,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             'test/web/unit/container_edit.rs', 'src/contract/src/public_commit.rs',
             'test/server/unit/smb_rpc/manual_draft_tests.rs',
             'src/server/src/smb_rpc/publication.rs', 'src/server/src/smb_rpc/handles.rs',
+            'src/server/src/smb_rpc/metadata.rs', 'src/server/src/smb_rpc/session.rs',
             'src/server/src/smb_rpc.rs', 'test/server/unit/backend_admission.rs',
             'test/server/unit/engine_backend/revocation_tests.rs',
             'test/server/unit/tests/http_boundary.rs',

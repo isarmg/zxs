@@ -82,6 +82,40 @@ pub(crate) async fn set_mode(
         }).await.map(Json)
 }
 
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct PrepareBody {
+    repository: RepositoryId,
+    path: name_policy::PortablePath,
+    expected_generation: Generation,
+    draft_operation: OperationId,
+    operation_id: OperationId,
+}
+pub(crate) struct DraftCommitBody(PrepareBody);
+impl JsonBody for DraftCommitBody {
+    fn from_json(value: json_codec::Value) -> Result<Self, ApiError> {
+        json_codec::from_value(value).map(Self).map_err(ApiError::invalid_source)
+    }
+}
+
+pub(crate) async fn prepare_commit(
+    State(state): State<AppState>,
+    Authenticated(identity): Authenticated,
+    ApiPath(file): ApiPath<FilePath>,
+    ApiJson(DraftCommitBody(body)): ApiJson<DraftCommitBody>,
+) -> Result<Json<storage_contract::SealedWorkspace>, ApiError> {
+    crate::http_job::HttpBackendJob::admit(state.backend, state.auth, state.backend_slots)?
+        .run(move |backend| backend.prepare_container_draft_commit(&identity,
+            crate::PrepareContainerDraftCommit {
+                context: ReadContainerEdit {
+                    file: file.0.map_err(ApiError::contract_input)?,
+                    repository: body.repository, path: body.path,
+                },
+                expected_generation: body.expected_generation,
+                draft_operation: body.draft_operation, operation_id: body.operation_id,
+            })).await.map(Json)
+}
+
 pub(crate) async fn content(
     State(state): State<AppState>,
     Authenticated(identity): Authenticated,

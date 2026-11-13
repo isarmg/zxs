@@ -626,6 +626,13 @@ impl Backend for NamespaceFailure {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.merge_file_branches(identity, request)
     }
+    fn prepare_container_draft_commit(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.inner.prepare_container_draft_commit(identity, request)
+    }
     fn read_container_edit(
         &self,
         identity: &crate::auth::Identity,
@@ -1796,6 +1803,13 @@ impl Backend for PreparationFailure {
         request: crate::MergeFileBranches,
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.merge_file_branches(identity, request)
+    }
+    fn prepare_container_draft_commit(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        self.inner.prepare_container_draft_commit(identity, request)
     }
     fn read_container_edit(
         &self,

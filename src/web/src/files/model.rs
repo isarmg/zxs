@@ -77,6 +77,8 @@ pub(crate) struct Model {
     pub placement: Option<super::placement::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
     pub container_tags: super::tags::ReadModel,
+    pub container_draft_commit: Option<super::container_edit::CommitPreparation>,
+    pub container_draft_recovery_error: Option<crate::api::Error>,
     pub node_retirement: super::node_retirement::Model,
     pub publications: super::review::Publications,
     pub tag_submission: Option<super::review::TagSubmission>,

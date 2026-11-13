@@ -38,6 +38,10 @@ pub(crate) fn read_local_disk_configuration(
         &root.join("metadata/pool-membership/config.json"),
     )?)?)?;
     let config = match &seal.format {
+        DiskSealFormat::ManualContainerDrafts { .. } => {
+            crate::engine::container_drafts::format::admit_local(saved, seal,
+                &read(&root.join(layout::MANUAL_DISK_SELECTION.as_path()))?)?
+        }
         DiskSealFormat::ManagedDirectory => saved,
         DiskSealFormat::MembershipGeneration { authority_hash } => {
             read_generation_configuration(root, seal, authority_hash, &saved, read)?.1
@@ -75,6 +79,18 @@ pub(crate) fn verify_local_membership(
         )?)?)
     })();
     match &seal.format {
+        DiskSealFormat::ManualContainerDrafts { .. } => {
+            let admitted = (|| {
+                let config = crate::engine::container_drafts::format::admit_local(saved?, seal,
+                    &read(&root.join(layout::MANUAL_DISK_SELECTION.as_path()))?)?;
+                config.verify_candidate_membership(candidate)?;
+                Ok(config)
+            })();
+            match metadata {
+                Some(metadata) => metadata.membership(admitted),
+                None => admitted,
+            }
+        }
         DiskSealFormat::ManagedDirectory => {
             let saved = match metadata {
                 Some(metadata) => metadata.membership(saved)?,

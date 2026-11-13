@@ -168,6 +168,12 @@ macro_rules! methods {
                     request: $crate::SetContainerCommitMode,
                 ) -> Result<storage_contract::OperationResult, $crate::ApiError>;
 
+                fn prepare_container_draft_commit(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: $crate::PrepareContainerDraftCommit,
+                ) -> Result<storage_contract::SealedWorkspace, $crate::ApiError>;
+
                 fn persist_container_draft(
                     &self,
                     identity: &$crate::Identity,

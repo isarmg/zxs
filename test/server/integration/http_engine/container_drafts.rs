@@ -104,6 +104,9 @@ async fn cold_current_http_reads_shared_draft_without_changing_historical_bytes_
     let edit = success(&app, &token, "GET", &format!("{route}/edit-mode{query}"), None).await;
     assert_eq!(edit["state"], "manual_dirty");
     assert_eq!(edit["draft"]["operation"], json!(draft.operation));
+    let listing = success(&app, &token, "GET",
+        "/api/file-manager/disks/P01/entries?path=", None).await;
+    assert_eq!(listing["entries"][0]["size"], "24");
     let response = app.clone().oneshot(Request::builder()
         .uri(format!("{route}/current-content{query}"))
         .header("authorization", format!("Bearer {token}"))
@@ -120,4 +123,32 @@ async fn cold_current_http_reads_shared_draft_without_changing_historical_bytes_
     assert_ne!(denied.0, StatusCode::OK);
     assert_eq!(success(&app, &token, "GET", &format!("{route}/edit-mode{query}"), None).await,
         edit);
+    let operation = new_id("op").unwrap();
+    let mut prepared = success(&app, &token, "POST", &format!("{route}/prepare-draft-commit"),
+        Some(json!({"repository":repository,"path":"file.txt",
+            "expected_generation":edit["generation"],"draft_operation":draft.operation,
+            "operation_id":operation}))).await;
+    assert_eq!(prepared["operation_id"], operation);
+    assert_eq!(success(&app, &token, "GET", &format!("{route}/edit-mode{query}"), None).await,
+        edit, "preparation is not a historical publication");
+    let workspace = prepared["workspace_id"].as_str().unwrap().to_owned();
+    prepared["request_digest"] = request_digest("POST", "/api/workspaces/{workspace}/commit",
+        json!({"workspace":workspace}), json!({}), &prepared).unwrap().into();
+    drop(app);
+    let engine = reopen_after_router_drop(&system).await;
+    assert_eq!(engine.state().versions, versions);
+    assert_eq!(engine.state().branches, branches);
+    assert_eq!(engine.state().commits, commits);
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.protect_auth(AuthStore::open(&system).unwrap()).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
+    let token = login(&app, "admin", "integration-test-password").await;
+    let commit_route = format!("/api/workspaces/{workspace}/commit");
+    let published = success(&app, &token, "POST", &commit_route, Some(prepared.clone())).await;
+    let retried = success(&app, &token, "POST", &commit_route, Some(prepared)).await;
+    assert_eq!(published["operation_id"], operation);
+    assert_eq!(retried["operation_id"], operation);
+    assert_eq!(success(&app, &token, "GET", &format!("{route}/edit-mode{query}"), None).await
+        ["state"], "manual_clean");
+    assert_eq!(version_bytes(&app, &token, &entry.version_id).await, b"original");
 }

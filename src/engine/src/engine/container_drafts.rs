@@ -1,6 +1,7 @@
 //! Shared edit authority is selected by SYSTEM publication, never local bodies.
 pub(crate) mod store;
 pub(crate) mod commit;
+pub(crate) mod format;
 
 use crate::{Engine, Error, OperationId, OperationResult, State};
 use storage_contract::container_edit::{
@@ -16,6 +17,8 @@ mod tests;
 
 #[derive(Debug, error_definition::Error)]
 pub enum DraftError {
+    #[error(transparent)]
+    Format(crate::authority_selection::manual::ManualFormatError),
     #[error("container {0} has no retained content identity")]
     FileMissing(FileId),
     #[error("container edit publication differs from its original request")]
@@ -31,6 +34,7 @@ pub enum DraftError {
 impl DraftError {
     pub fn code(&self) -> crate::ErrorCode {
         match self {
+            Self::Format(error) => error.code(),
             Self::FileMissing(_) => crate::ErrorCode::FileNotFound,
             Self::Publication | Self::Encoding(_) => crate::ErrorCode::PublicationInvalid,
             Self::Generation(_) => crate::ErrorCode::ResourceLimit,
@@ -42,6 +46,10 @@ impl DraftError {
             | Self::Store(store::StoreError::Incomplete) => crate::ErrorCode::RecoveryRequired,
         }
     }
+}
+
+pub(crate) fn format_error(error: crate::authority_selection::manual::ManualFormatError) -> Error {
+    Error::ContainerDrafts(DraftError::Format(error))
 }
 
 pub(crate) fn invalid() -> Error {
@@ -135,6 +143,20 @@ impl Engine {
         })
     }
 
+    fn require_draft_source_write(&self, file: FileId, revision: &DraftRevision) -> crate::Result<()> {
+        let repository = self.state.repositories.get(&revision.base.repository.to_string())
+            .ok_or_else(invalid)?;
+        let snapshot = self.namespace_snapshot(&repository.main_branch_id)?;
+        let entry = snapshot.entries().iter().find(|entry| {
+            entry.entry_id == revision.base.entry.to_string()
+                && entry.file_id == file.to_string()
+        }).ok_or_else(invalid)?;
+        self.require_container_draft_context(file, &storage_contract::file_container_tags::Context {
+            repository_id: revision.base.repository,
+            path: entry.location().clone(),
+        }, true)
+    }
+
     /// The source is a completed upload, not a mutable version or an SMB path.
     /// A failed predecision preparation retains its original body and intent.
     pub fn save_container_draft(
@@ -151,6 +173,7 @@ impl Engine {
             );
         }
         plan_edit(&self.state, &request)?;
+        self.require_draft_source_write(file, revision)?;
         if self.current_container_draft_base(file, revision.base.repository, revision.base.entry)?
             != revision.base
         {
@@ -227,7 +250,7 @@ impl Engine {
     }
 
     pub(in crate::engine) fn verify_draft_material(&self, next: &State) -> crate::Result<()> {
-        for (file, edit) in &next.container_edits {
+        for (file, edit) in next.container_edits.iter() {
             if self.state.container_edits.get(file) == Some(edit) {
                 continue;
             }
@@ -257,7 +280,7 @@ pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result
     let directory_commit = next.events.last().is_some_and(|event| {
         event.sequence == next.sequence && event.kind == "directory.changes.commit"
     });
-    for (file, edit) in &previous.container_edits {
+    for (file, edit) in previous.container_edits.iter() {
         // A clean manual container also cannot be auto-published by a legacy
         // content-save path that forgot to route through shared draft storage.
         if !directory_commit && consumed != Some(*file)

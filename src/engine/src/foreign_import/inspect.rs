@@ -206,6 +206,11 @@ impl ForeignImportPreview {
                 },
                 seal_digest,
                 role_evidence: match &seal.format {
+                    DiskSealFormat::ManualContainerDrafts { .. } => {
+                        return Err(crate::engine::container_drafts::format_error(
+                            crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+                        ));
+                    }
                     DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
                     DiskSealFormat::MembershipGeneration { authority_hash } => {
                         DiskRoleEvidence::MembershipGeneration {
@@ -324,6 +329,11 @@ fn open_source(directory: File, path: PathBuf, budget: &mut Budget) -> Result<Op
     disk.root = root.path().to_owned();
     let marker = root.path().join("metadata/pool-membership/generation.json");
     let journal_path = match &seal.format {
+        DiskSealFormat::ManualContainerDrafts { .. } => {
+            return Err(crate::engine::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         DiskSealFormat::ManagedDirectory => {
             if root.open_optional_read_regular(&marker)?.is_some() {
                 return Err(invalid(

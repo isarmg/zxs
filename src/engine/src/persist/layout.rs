@@ -100,3 +100,19 @@ pub(crate) static VERSION_NAMES_INTENT: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new(".zxs-version-names.json")
         .expect("invariant: version rename intent uses one canonical entry")
 });
+
+/// Existing old-writer deny slot, now strictly typed for an explicit fresh format.
+pub(crate) static MANUAL_SYSTEM_SELECTION: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("initialized.json").expect("invariant: manual selector is one canonical entry")
+});
+pub(crate) static MANUAL_DISK_SELECTION: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("manual-container-selection-v1.json")
+        .expect("invariant: manual disk selection is one canonical entry")
+});
+pub(crate) static MANUAL_INITIALIZATION_COMPLETE: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("manual-container-initialized-v1.json")
+        .expect("invariant: manual completion is one canonical entry")
+});
+pub(crate) static SYSTEM_CONFIG: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("config.json").expect("invariant: SYSTEM configuration is one canonical entry")
+});

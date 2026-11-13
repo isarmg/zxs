@@ -146,6 +146,8 @@ impl crate::DirectoryReadSnapshot {
             history_tree_id: engine.state().branches[branch].history_tree_id.clone(),
             commit_id: namespace.head_commit_id().into(),
             binding: crate::backend_read::DirectoryRegistryBinding::capture(engine),
+            container_edits: (repo_for_branch(engine, branch)?.main_branch_id == branch)
+                .then(|| engine.state().container_edits.clone()),
             entries: match namespace.into_entries() {
                 storage_engine::NamespaceEntries::Commit(commit) => {
                     crate::backend_read::DirectoryEntries::Commit(commit)
@@ -234,6 +236,7 @@ impl DirectorySnapshot {
             },
             crate::DirectorySelection::Page { after, .. } => DirectoryPageProjection::page(
                 engine.state(),
+                snapshot.container_edits.as_ref(),
                 &repository.repository_id,
                 &snapshot.commit_id,
                 entries,
@@ -259,6 +262,8 @@ struct DirectoryPageProjection {
 impl DirectoryPageProjection {
     fn page(
         state: &storage_contract::State,
+        container_edits: Option<&storage_contract::TrackedFiles<
+            storage_contract::container_edit::ContainerEdit>>,
         repository: &str,
         commit_id: &str,
         entries: &[storage_contract::Entry],
@@ -308,8 +313,16 @@ impl DirectoryPageProjection {
             {
                 continue;
             }
+            let draft = if entry.kind == storage_contract::NamespaceEntryKind::File {
+                let file = entry.file_id.parse::<storage_contract::FileId>()
+                    .map_err(ApiError::contract_input)?;
+                container_edits.and_then(|edits| edits.get(&file)).and_then(|edit| edit.draft())
+            } else { None };
             let mtime = match entry.kind {
                 storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
+                storage_contract::NamespaceEntryKind::File if draft.is_some() => {
+                    FileMtime::Unpublished {}
+                }
                 storage_contract::NamespaceEntryKind::File => {
                     let version = state.versions.get(&entry.version_id).ok_or_else(|| {
                         ApiError::new(
@@ -321,10 +334,9 @@ impl DirectoryPageProjection {
                     crate::backend_read::version_mtime(version)?
                 }
             };
-            let entry = DirectoryEntry {
-                entry: entry.clone(),
-                mtime,
-            };
+            let mut observed = entry.clone();
+            if let Some(draft) = draft { observed.size = draft.size; }
+            let entry = DirectoryEntry { entry: observed, mtime };
             let extra = encoded_size(&entry)
                 .expect("invariant: internal JSON serialization succeeds")
                 + usize::from(!page.entries.is_empty());

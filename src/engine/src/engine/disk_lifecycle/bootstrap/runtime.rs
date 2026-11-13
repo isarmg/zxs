@@ -21,16 +21,43 @@ pub(crate) fn management_error(error: BootstrapError) -> Error {
 /// Keep the ledger's exclusive lock until resource admission and the system
 /// writer lock have completed. A cooperating stop cannot race this snapshot.
 pub(crate) fn open_store(root: &Path) -> crate::Result<BootstrapStore> {
+    let system = existing_private_dir(root)?;
+    if crate::authority_selection::manual::ManualSelection::read(&system)
+        .map_err(crate::engine::container_drafts::format_error)?.is_some()
+    {
+        return Err(crate::engine::container_drafts::format_error(
+            crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+        ));
+    }
     let path = root.join(DIRECTORY);
     let reader = OpenAt2Root::open(&path, MountPolicy::SameMount)
         .map_err(|error| management_error(BootstrapError::fs("open system locator", error)))?;
     BootstrapStore::hold(reader.into_directory(), path).map_err(management_error)
 }
 
+pub(crate) fn open_store_for_config(
+    root: &Path,
+    config: &ValidatedConfig,
+) -> crate::Result<BootstrapStore> {
+    if config.manual_selection().is_none() {
+        return open_store(root);
+    }
+    let system = existing_private_dir(root)?;
+    let anchor = OpenAt2Root::from_private_directory(system.try_clone()?, MountPolicy::SameMount)?;
+    let directory = anchor.open_directory(&EntryName::new(DIRECTORY)?.as_relative())?;
+    let expected_writer = crate::engine::container_drafts::format::admit_bootstrap_handle(
+        &system, config, platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)?,
+    )?;
+    BootstrapStore::hold_existing(directory, root.join(DIRECTORY), expected_writer)
+        .map_err(management_error)
+}
+
 fn create_store(root: &Path) -> crate::Result<BootstrapStore> {
     let system = existing_private_dir(root)?;
-    system.create_child(&EntryName::new(DIRECTORY)?)?;
-    open_store(root)
+    let directory = system.create_child(&EntryName::new(DIRECTORY)?)?;
+    let path = root.join(DIRECTORY);
+    let reader = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)?;
+    BootstrapStore::hold(reader.into_directory(), path).map_err(management_error)
 }
 
 pub(in crate::engine) fn observe<'a>(

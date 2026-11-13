@@ -128,6 +128,10 @@ pub(crate) fn routes() -> Router<AppState> {
             get(http_container_drafts::read).post(http_container_drafts::set_mode),
         )
         .route(
+            "/api/file-manager/files/{file}/prepare-draft-commit",
+            post(crate::http_container_drafts::prepare_commit),
+        )
+        .route(
             "/api/file-manager/files/{file}/current-content",
             get(http_container_drafts::content),
         )

@@ -311,12 +311,21 @@ fn listed_current_entry(
             )
         }
     };
+    let current_draft = if entry.kind == storage_contract::NamespaceEntryKind::File {
+        let edit = engine.container_edit(entry.file_id.parse().map_err(ApiError::contract_input)?)
+            .map_err(error)?;
+        edit.draft().map(|revision| crate::CurrentDraftMetadata {
+            generation: edit.generation(), revision: revision.clone(),
+        })
+    } else { None };
+    let size = current_draft.as_ref().map_or(entry.size, |draft| draft.revision.size);
     Ok(ListingEntry {
+        current_draft,
         entry_id: entry.entry_id.clone(),
         name: entry.name().into(),
         path: display,
         kind: entry.kind,
-        size: entry.size,
+        size,
         file_id: entry.file_id.clone(),
         version,
         location: Some(ListingLocation {
@@ -369,6 +378,7 @@ fn listed_preview_entry(
         },
     };
     Ok(crate::ListingEntry {
+        current_draft: None,
         entry_id: entry.entry_id.clone(),
         name: entry.name().into(),
         path: if prefix.is_empty() {
@@ -408,6 +418,7 @@ fn listed_preview_entry(
 
 fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
     crate::ListingEntry {
+        current_draft: None,
         entry_id: id.into(),
         name: name.into(),
         path: display.into(),

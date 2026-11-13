@@ -30,8 +30,16 @@ pub struct ValidatedConfig {
 }
 
 #[derive(Clone, Debug)]
+struct ManualAdmission {
+    selection: Arc<crate::authority_selection::manual::ManualSelection>,
+    commitment: storage_contract::working_tree::MaterialCommitment,
+    completion: Option<storage_contract::working_tree::MaterialCommitment>,
+}
+
+#[derive(Clone, Debug)]
 struct AdmittedConfig {
     config: Config,
+    manual: Option<ManualAdmission>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -57,6 +65,7 @@ impl TryFrom<Config> for ValidatedConfig {
         Ok(Self {
             admitted: Arc::new(AdmittedConfig {
                 config,
+                manual: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -94,6 +103,11 @@ impl ValidatedConfig {
         original: &Self,
         projection: &super::backup_preparation::BackupRegistryProjection,
     ) -> Result<Self> {
+        if original.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         if original.generation().is_some() {
             return Err(Error::new(
                 ErrorCode::UnsupportedOperation,
@@ -132,6 +146,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         if self.generation().is_some() {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
@@ -152,6 +171,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         let original = self.generation().ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
@@ -176,6 +200,11 @@ impl ValidatedConfig {
         mut self,
         admission: &super::membership_transition::pending::activation::backup::startup::BackupStartupAdmission,
     ) -> Result<Self> {
+        if self.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         admission.require_config(&self)?;
         Arc::make_mut(&mut self.admitted).io_disks = None;
         Ok(self)
@@ -185,6 +214,11 @@ impl ValidatedConfig {
         mut self,
         barrier: &super::backup_preparation::ServingBarrier,
     ) -> Result<Self> {
+        if self.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         barrier.require_config(&self)?;
         // No retired/rebound identities exist in this fixed-Genesis Backup
         // recipe. Both retained originals and explicitly selected new targets
@@ -283,6 +317,49 @@ impl ValidatedConfig {
     ) -> Option<&Arc<super::membership_transition::pending::activation::Generation>> {
         self.admitted.generation.as_ref()
     }
+    pub(crate) fn with_manual_selection(
+        mut self,
+        selection: &crate::authority_selection::manual::ManualSelection,
+    ) -> Result<Self> {
+        selection.require_config(&self).map_err(super::container_drafts::format_error)?;
+        let commitment = selection.commitment().map_err(super::container_drafts::format_error)?;
+        Arc::make_mut(&mut self.admitted).manual = Some(ManualAdmission {
+            selection: Arc::new(selection.clone()), commitment, completion: None,
+        });
+        Ok(self)
+    }
+
+    pub(crate) fn with_manual_completion(
+        mut self,
+        completion: storage_contract::working_tree::MaterialCommitment,
+    ) -> Result<Self> {
+        let admission = Arc::make_mut(&mut self.admitted).manual.as_mut().ok_or_else(|| {
+            super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::Changed,
+            )
+        })?;
+        admission.completion = Some(completion);
+        Ok(self)
+    }
+
+    pub(crate) fn manual_completion(
+        &self,
+    ) -> Option<&storage_contract::working_tree::MaterialCommitment> {
+        self.admitted.manual.as_ref().and_then(|value| value.completion.as_ref())
+    }
+
+    pub(crate) fn manual_selection(
+        &self,
+    ) -> Option<&crate::authority_selection::manual::ManualSelection> {
+        self.admitted.manual.as_ref().map(|admission| admission.selection.as_ref())
+    }
+
+    pub(crate) fn manual_commitment(
+        &self,
+    ) -> Option<&storage_contract::working_tree::MaterialCommitment> {
+        self.admitted.manual.as_ref().map(|admission| &admission.commitment)
+    }
+
     pub(crate) fn generation_hash(&self) -> Option<&str> {
         self.generation().map(|generation| generation.hash.as_str())
     }
@@ -296,6 +373,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.manual_selection().is_some() {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+            ));
+        }
         if generation.portable.is_foreign() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -342,6 +424,13 @@ impl ValidatedConfig {
             return Err(Error::new(
                 ErrorCode::ConfigInvalid,
                 "disk root count differs from configured membership",
+            ));
+        }
+        if self.manual_selection().is_some()
+            && self.disks.iter().zip(&roots).any(|(disk, root)| &disk.root != root)
+        {
+            return Err(super::container_drafts::format_error(
+                crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
             ));
         }
         validate_disk_roots(roots.iter().map(PathBuf::as_path))?;
@@ -403,11 +492,22 @@ pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<Valid
 }
 
 pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<WriterLocks> {
-    acquire_locks_selected(
-        root,
-        disks,
-        crate::authority_selection::SelectionGuard::legacy(root)?,
-    )
+    let guard = crate::authority_selection::SelectionGuard::acquire(root)?;
+    let system = guard.selected_directory()?;
+    let manual = crate::authority_selection::manual::ManualSelection::read(&system)
+        .map_err(super::container_drafts::format_error)?;
+    let guard = match manual {
+        Some(selection) => {
+            let saved: Config = storage_contract::decode_strict(
+                &system.read_bounded(&layout::SYSTEM_CONFIG, 1024 * 1024)?,
+            )?;
+            let config = ValidatedConfig::try_from(saved)?;
+            super::container_drafts::format::require_complete(&system, &config, &selection)?;
+            guard.with_recovered_manual(selection)
+        }
+        None => { guard.require_legacy()?; guard }
+    };
+    acquire_locks_selected(root, disks, guard)
 }
 
 pub(super) fn acquire_locks_selected(
@@ -415,24 +515,33 @@ pub(super) fn acquire_locks_selected(
     disks: &DiskResources,
     selection: crate::authority_selection::SelectionGuard,
 ) -> Result<WriterLocks> {
-    selection.require_legacy()?;
-    let system = File::from(
-        rustix::fs::open(
-            root.join(layout::CONTROL_WRITER_LOCK.as_path()),
-            rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::RDWR
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .map_err(std::io::Error::from)?,
-    );
+    selection.require_selected()?;
+    let directory = selection.selected_directory()?;
+    if directory.path() != root {
+        return Err(super::container_drafts::format_error(
+            crate::authority_selection::manual::ManualFormatError::Changed,
+        ));
+    }
+    use platform_io::fs_safety::PayloadOpenMode;
+    let create_writer = selection.allows_writer_creation();
+    let opened = directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::Existing);
+    let system = match opened {
+        Ok(file) => file,
+        Err(platform_io::fs_safety::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound && create_writer => {
+                directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::CreateNew)?
+            }
+        Err(error) => return Err(error.into()),
+    };
     acquire_writer(&system)?;
-    selection.require_legacy()?;
+    selection.require_selected()?;
     let mut locks = WriterLocks::new(system, selection);
     for disk in disks.handles() {
-        let file = disk.root.lock_file()?;
+        let file = if create_writer {
+            disk.root.lock_file()?
+        } else {
+            disk.root.open_regular_entry(&layout::DISK_WRITER_LOCK)?
+        };
         acquire_writer(&file)?;
         let owner = FenceOwner::new(file, None);
         locks.insert(

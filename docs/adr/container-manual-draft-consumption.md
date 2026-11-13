@@ -7,8 +7,8 @@
 - 必填 SYSTEM `container_edits` 是模式与当前稿的唯一决定权威。DISK 的
   immutable draft body/intent 只证明材料，不能自行成为当前稿。
 - 缺少整张必填表不是自动模式兼容入口。表内尚无记录的 FileId 才是初始
-  Automatic/0。当前仅快照 schema 拒旧；启动首写 selector/DISK discriminator
-  的零副作用早拒尚未完成，不能声称旧 writer 全部安全退出。
+  Automatic/0。最初检查点仅快照 schema 拒旧；后继明确 fresh 入口加入首写 selector/
+  DISK discriminator，细节见文末。普通旧入口退休仍未完成，不能声称旧 writer 全部退出。
 - 稿不是 VersionId、历史节点或分支；FileId 共享，原 EntryId/branch/node/version/
   selection generation 绑定来源。容器改名不得通过猜 path 重新关联身份。
 - 普通 flush/close 不获得显式消费许可。目录提交、未提交 worktree 软删与手动稿的
@@ -63,3 +63,32 @@ checkpoint 都检查源盘与目标盘撤销。正文使用已有 workspace 总�
 新增原源盘与目标盘不同的实际 FD 回归覆盖复制前/复制中撤销，要求原正文不变、源描述符
 关闭而目标责任仍受其自身 gate 管理。公共显式提交回归直接消费这个 producer，不经浏览器
 下载再上传。完整主动撤销/断电矩阵仍须 GitHub 验证与后继补充。
+
+## 独立 fresh 格式后继（未验证）
+
+`initialize_manual_container_storage` 仅接受调用者已经创建的私有空 SYSTEM 和独立
+level-1/无 upstream 的根。SYSTEM 与所有 DISK 原目录锁、FD 在首写期间持有；
+`initialized.json` 使用原旧 writer 已拒绝的槽名直接 CreateNew，再 sync 目录和正文，
+不是旧 writer 不认识的临时文件 rename。selector 固定原 operation、config commitment
+与全部物理根身份；新 DISK seal 使用独立未知判别并绑定同一 commitment。
+
+selector 是格式选择证据，DISK 副本不能自授当前稿，SYSTEM 永久 Candidate 仍是稿决定。
+完整初始化后 Complete 记录绑定同 selector、原 SYSTEM/DISK writer inode 及 bootstrap-discovery 目录/writer 身份。
+manual 的 bootstrap cold hold 只打开既有 lock，不创建或同步替代 sidecar。cold open
+先严格验 Complete、根实体、selector 副本及所有既有 writer，之后才进入原恢复路径。
+缺 Complete、丢失/替换 writer、未知/旧/A selector 原字节保留并拒绝，不重建 sidecar。
+marker 后任一未知 partial 当前只保留拒绝，不宣称自动完成每一个初始化崩溃窗口。
+
+普通旧初始化入口与旧材料 reader 的全部退休仍待单独收口。本阶段提供明确新入口，
+绝不向已存在的池加 marker；不是并行旧格式作为最终兼容交付。新模式拒绝 legacy
+membership generation 变换，不扩展多级备份。继承的 SYSTEM SQLite/locator 操作尚有
+绝对路径，首写/准入的持有证明不等于全链 held API；未完成该边界与 GitHub 验证前不进 main。
+
+### bootstrap 预准入到实际锁的证明传递（未运行）
+
+冷开配置保留原 Complete 的 typed commitment，不以稍后重读的本地记录自证身份。
+实际 bootstrap 目录 FD 必须匹配该原记录；随后 Existing 锁 FD 必须匹配原 writer
+inode、空正文及锁后路径身份。没有该运行时证明的旧管理入口拒绝新格式。
+新增接缝回归分别在预准入后替换 bootstrap 根，以及取得根准入后替换 writer，
+要求失败且完整磁盘 bytes/inode/mode 不变。仅静态审查，未执行测试；这不代表
+SYSTEM SQLite/WAL 或全部恢复路径已经改为持有式访问。

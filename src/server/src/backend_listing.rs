@@ -245,7 +245,15 @@ pub struct ListingContext {
     pub branch_id: String,
     pub base_head: String,
 }
+#[derive(Clone, Debug)]
+pub struct CurrentDraftMetadata {
+    pub generation: storage_contract::Generation,
+    pub revision: storage_contract::container_edit::DraftRevision,
+}
+
 pub struct ListingEntry {
+    /// Page-local current metadata; immutable version identity remains its source.
+    pub current_draft: Option<CurrentDraftMetadata>,
     pub entry_id: String,
     pub name: String,
     pub path: String,
@@ -331,6 +339,7 @@ enum ListingVersionResponse {
 impl From<ListingEntry> for ListingEntryResponse {
     fn from(entry: ListingEntry) -> Self {
         let ListingEntry {
+            current_draft: _,
             entry_id,
             name,
             path,

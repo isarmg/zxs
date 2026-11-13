@@ -40,3 +40,13 @@ pub struct DraftPersisted {
     pub revision: storage_contract::container_edit::DraftRevision,
     pub receipt: storage_contract::OperationResult,
 }
+
+/// Explicit user intent to prepare a history commit from one observed shared draft.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct PrepareContainerDraftCommit {
+    pub context: ReadContainerEdit,
+    pub expected_generation: Generation,
+    pub draft_operation: OperationId,
+    pub operation_id: OperationId,
+}

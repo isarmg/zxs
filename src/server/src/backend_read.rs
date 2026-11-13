@@ -33,6 +33,10 @@ pub struct DirectoryReadSnapshot {
     pub(crate) commit_id: String,
     pub(crate) binding: DirectoryRegistryBinding,
     pub(crate) entries: DirectoryEntries,
+    // O(1) COW ownership freezes each revision/generation with directory capture.
+    // Historical sessions never acquire current-container metadata.
+    pub(crate) container_edits:
+        Option<storage_contract::TrackedFiles<storage_contract::container_edit::ContainerEdit>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

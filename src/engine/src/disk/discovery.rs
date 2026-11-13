@@ -109,6 +109,11 @@ pub fn recognize_disk(directory: File, path: PathBuf) -> Result<RecognizedDisk> 
         upstream_slot_id: disk.upstream_slot_id.clone(),
         metadata_member: disk.metadata_member,
         evidence: match seal.format {
+            DiskSealFormat::ManualContainerDrafts { .. } => {
+                return Err(crate::engine::container_drafts::format_error(
+                    crate::authority_selection::manual::ManualFormatError::UnsupportedReader,
+                ));
+            }
             DiskSealFormat::ManagedDirectory => DiskRoleEvidence::InitialConfiguration,
             DiskSealFormat::MembershipGeneration { authority_hash } => {
                 DiskRoleEvidence::MembershipGeneration { authority_hash }

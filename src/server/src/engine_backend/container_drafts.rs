@@ -64,6 +64,22 @@ impl EngineBackend {
         }, &principal, request.operation_id).map_err(error)
     }
 
+    pub(super) fn prepare_container_draft_commit_admitted(
+        &self, identity: &Identity, request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, ApiError> {
+        let (mut engine, current) = self.lock_current(identity)?;
+        if current.smb_binding.is_some() { return Err(ApiError::forbidden()); }
+        super::application::Application::new(&mut engine, &current)
+            .authorize_file(&request.context.file.to_string())?;
+        let principal = current.principal.parse()
+            .map_err(ApiError::invalid_authenticated_principal)?;
+        engine.prepare_shared_container_draft_commit(request.context.file,
+            &storage_contract::file_container_tags::Context {
+                repository_id: request.context.repository, path: request.context.path,
+            }, request.expected_generation, request.draft_operation,
+            &principal, request.operation_id).map_err(error)
+    }
+
     pub(super) fn persist_container_draft_admitted(
         &self, identity: &Identity, request: crate::PersistContainerDraft,
         source: &std::fs::File,
@@ -75,7 +91,29 @@ impl EngineBackend {
         if request.revision.principal.as_str() != current.principal {
             return Err(ApiError::forbidden());
         }
-        if base != request.revision.base {
+        let edit = engine.container_edit(request.context.file).map_err(error)?;
+        let expected_base = edit.draft().map_or(&base, |draft| &draft.base);
+        if expected_base != &request.revision.base {
+            return Err(error(storage_engine::Error::ContainerEdit(
+                storage_contract::container_edit::EditConflict::SourceChanged,
+            )));
+        }
+        // A different occurrence may edit the shared draft, but cannot change
+        // its original source or borrow authority from the caller's path alone.
+        let original = repository(&engine, &request.revision.base.repository.to_string())?;
+        let namespace = engine.namespace_tree(&original.main_branch_id).map_err(error)?;
+        let source_entry = namespace.entries().iter().find(|entry| {
+            entry.entry_id == request.revision.base.entry.to_string()
+                && entry.file_id == request.context.file.to_string()
+        }).ok_or_else(|| error(storage_engine::Error::ContainerTags(
+            storage_engine::ContainerTagsError::Context,
+        )))?;
+        let source_context = ReadContainerEdit {
+            file: request.context.file,
+            repository: request.revision.base.repository,
+            path: source_entry.path.clone(),
+        };
+        if context(&engine, &current, &source_context, true)? != request.revision.base {
             return Err(error(storage_engine::Error::ContainerEdit(
                 storage_contract::container_edit::EditConflict::SourceChanged,
             )));

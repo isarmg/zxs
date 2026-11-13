@@ -23,6 +23,7 @@ impl Engine {
         if edit.generation() != generation || revision.operation != draft {
             return Err(Error::ContainerEdit(EditConflict::GenerationChanged));
         }
+        self.require_draft_source_write(file, &revision)?;
         if self.current_container_draft_base(
             file, revision.base.repository, revision.base.entry,
         )? != revision.base {
@@ -138,6 +139,7 @@ impl Engine {
         let binding = DraftConsumption {
             file, generation, revision, operation: request.operation_id,
         };
+        self.require_draft_source_write(file, &binding.revision)?;
         if self.current_container_draft_base(
             file, binding.revision.base.repository, binding.revision.base.entry,
         )? != binding.revision.base {

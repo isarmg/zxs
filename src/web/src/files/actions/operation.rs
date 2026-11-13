@@ -14,6 +14,7 @@ use web_interface::tasks::spawn_local;
 pub(crate) fn record_receipt(state: RwSignal<State>, id: &str, value: Value) -> SaveStatus {
     let operation = if state.with_untracked(|s| {
         crate::files::review::receipt_kind_matches(s, id, &value)
+            && crate::files::container_edit::receipt_matches(s, id, &value)
             && crate::files::node_retirement::receipt_matches(s, id, &value)
             && crate::files::deletion::receipt_matches(s, id, &value)
             && crate::files::mkdir::receipt_matches(s, id, &value)
@@ -67,6 +68,7 @@ pub(crate) fn record_operation(state: RwSignal<State>, operation: FileOperation)
     if recorded && status != SaveStatus::Unknown {
         crate::files::deletion::finish_recovery(state, &id);
         crate::files::mkdir::finish(state, &id);
+        crate::files::container_edit::finish(state, &id);
     }
     if recorded && matches!(status, SaveStatus::Published | SaveStatus::Degraded) {
         reload_entries(state);

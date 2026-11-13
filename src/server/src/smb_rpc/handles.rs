@@ -239,8 +239,11 @@ impl Session {
                             version = None;
                             mtime = smb_protocol::protocol::FileMtime::Unpublished {};
                         }
+                        let base = current.edit.draft().map_or_else(
+                            || current.base.clone(), |draft| draft.base.clone(),
+                        );
                         let container = ContainerWriter {
-                            context, base: current.base, edit: current.edit,
+                            context, base, edit: current.edit,
                             revision: None, persisted: false,
                         };
                         let content = if truncate { None }

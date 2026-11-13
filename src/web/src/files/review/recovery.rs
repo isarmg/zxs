@@ -5,6 +5,7 @@ use web_interface::{i18n::t, prelude::*};
 
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
+        {crate::files::container_edit::recovery_view(state)}
         <Show when=move ||state.with(has_tag_replay)>
             <section class="zxs-frame zxs-stack" data-tag-request-recovery="" aria-label=t("标签请求恢复","Tag request recovery")>
                 <p class="zxs-row" role="status">{t(

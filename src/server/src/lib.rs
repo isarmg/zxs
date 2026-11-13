@@ -115,7 +115,7 @@ mod backend_container_drafts;
 mod http_container_drafts;
 pub use backend_container_drafts::{
     CurrentContainerContent, DraftPersisted, PersistContainerDraft,
-    ReadContainerEdit, SetContainerCommitMode,
+    PrepareContainerDraftCommit, ReadContainerEdit, SetContainerCommitMode,
 };
 mod backend_file_tags;
 mod http_file_metadata;
@@ -159,7 +159,7 @@ pub use backend_rename_file_branch::RenameFileBranch;
 mod backend_listing;
 mod http_listing;
 pub use backend_listing::{
-    ListingContext, ListingCursor, ListingEntry, ListingLocation, ListingSnapshot, ListingVersion,
+    CurrentDraftMetadata, ListingContext, ListingCursor, ListingEntry, ListingLocation, ListingSnapshot, ListingVersion,
     ReadListing,
 };
 mod backend_disk_directory;

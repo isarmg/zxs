@@ -219,6 +219,7 @@ fn project(
                 entry
             } else {
                 crate::ListingEntry {
+                    current_draft: None,
                     entry_id: version.file_id.clone(),
                     name: name.into(),
                     path: display.into(),
@@ -268,6 +269,7 @@ fn project(
                 unreachable!("invariant: backup file candidates project file content");
             };
             *backup_version = Some(version.version_id.clone());
+            value.current_draft = None;
             value.size = version.logical_size;
             value.historical_only = Some(current.is_none());
             value

@@ -44,3 +44,18 @@ fn edit_mode_rejects_client_principal_and_historical_target() {
         assert!(Body::from_json(candidate).is_err(), "{field}");
     }
 }
+
+#[test]
+fn explicit_prepare_requires_exact_draft_generation_and_operation_without_body_upload() {
+    let request = json!({
+        "repository":storage_contract::RepositoryId::from_random([2; 16]),
+        "path":"file.txt", "expected_generation":"2",
+        "draft_operation":storage_contract::OperationId::from_random([4; 16]),
+        "operation_id":storage_contract::OperationId::from_random([5; 16]),
+    });
+    let parsed = super::DraftCommitBody::from_json(request.clone()).unwrap();
+    assert_eq!(parsed.0.expected_generation.get(), 2);
+    let mut injected = request;
+    injected["bytes"] = json!("client-selected replacement");
+    assert!(super::DraftCommitBody::from_json(injected).is_err());
+}

@@ -1011,6 +1011,11 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::OperationResult, ApiError> {
         self.set_container_commit_mode_admitted(identity, request)
     }
+    fn prepare_container_draft_commit(
+        &self, identity: &Identity, request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, ApiError> {
+        self.prepare_container_draft_commit_admitted(identity, request)
+    }
     fn persist_container_draft(
         &self, identity: &Identity, request: crate::PersistContainerDraft,
         source: &std::fs::File,

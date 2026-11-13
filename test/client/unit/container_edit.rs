@@ -83,3 +83,48 @@ async fn mode_read_does_not_treat_unknown_or_malformed_state_as_automatic() {
         task.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn explicit_preparation_freezes_bound_envelope_without_submitting_it() {
+    let request = request();
+    let operation = OperationId::from_random([3; 16]);
+    let draft = OperationId::from_random([4; 16]);
+    let binding = json!({
+        "file":request.file_id,"generation":"2","operation":operation,
+        "revision":{
+            "operation":draft,"expected_generation":"1","principal":"alice","size":"5",
+            "content_hash":"0000000000000000000000000000000000000000000000000000000000000000",
+            "base":{
+                "entry":"entry_00000000000000000000000000000001",
+                "repository":request.context.repository_id,
+                "branch":"br_00000000000000000000000000000001",
+                "node":"ver_00000000000000000000000000000001",
+                "version":"ver_00000000000000000000000000000001",
+                "selection_generation":"0"
+            }
+        }
+    });
+    let seal = json!({
+        "workspace_id":"workspace","operation_id":operation,"repository_id":"repo",
+        "branch_id":"branch","expected_head":"head","fencing_token":"7","message":"",
+        "requested_protection":"strict","file_placement":{},"expected_topology_generation":"1",
+        "sealed_manifest_hash":"manifest","container_draft_commit":binding,
+    });
+    let (client, task) = capture(seal.clone()).await;
+    let prepared = client.prepare_container_draft_commit(&request, Generation::new(2), draft,
+        operation, "explicit commit").await.unwrap();
+    let (headers, _) = task.await.unwrap();
+    assert!(headers.starts_with(&format!(
+        "POST /api/file-manager/files/{}/prepare-draft-commit HTTP/1.1\r\n", request.file_id)));
+    assert_eq!(prepared["container_draft_commit"], binding);
+    assert_eq!(prepared["operation_id"], json!(operation));
+    assert_eq!(prepared["message"], "explicit commit");
+    let envelope = storage_contract::PublicCommitEnvelope::parse("workspace", prepared).unwrap();
+    assert_eq!(envelope.claimed_digest(), envelope.digest());
+    let mut wrong = seal;
+    wrong["container_draft_commit"]["operation"] = json!(draft);
+    let (client, task) = capture(wrong).await;
+    assert!(client.prepare_container_draft_commit(&request, Generation::new(2), draft,
+        operation, "explicit commit").await.is_err());
+    task.await.unwrap();
+}

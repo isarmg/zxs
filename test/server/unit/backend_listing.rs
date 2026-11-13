@@ -60,6 +60,7 @@ fn query_boundary_keeps_defaults_limits_lookup_spelling_and_selected_pair() {
 }
 fn entry(version: ListingVersion) -> ListingEntry {
     ListingEntry {
+        current_draft: None,
         entry_id: "entry".into(),
         name: "file".into(),
         path: "Folder/file".into(),

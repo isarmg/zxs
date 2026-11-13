@@ -611,6 +611,16 @@ impl Engine {
             membership_transition::pending::reservation::lock_initialization_directories(
                 &disk_resources,
             )?;
+        Self::initialize_resources_locked(root, config, disk_resources, selection, &_directory_locks)
+    }
+
+    fn initialize_resources_locked(
+        root: PathBuf,
+        config: ValidatedConfig,
+        disk_resources: Arc<DiskResources>,
+        selection: crate::authority_selection::SelectionGuard,
+        _directory_locks: &[platform_io::fs_safety::linux::AdvisoryLock],
+    ) -> Result<Self> {
         // The same directory lock arbitrates independent-format creation.
         // Admit every root before creating even a legacy writer sidecar, so a
         // different SYSTEM cannot claim an existing independent disk or SYSTEM.
@@ -639,6 +649,16 @@ impl Engine {
             let disk = disk_resources.get(d)?;
             disk.root
                 .write_json(&d.root.join(layout::DISK_IDENTITY.as_path()), &disk.seal, false)?;
+            if let Some(selection) = config.manual_selection() {
+                let directory = disk.root.private_directory(disk.root.path())?;
+                let mut file = directory.open_payload(&layout::MANUAL_DISK_SELECTION,
+                    platform_io::fs_safety::PayloadOpenMode::CreateNew)?;
+                std::io::Write::write_all(&mut file, &selection.canonical_bytes()
+                    .map_err(container_drafts::format_error)?)?;
+                file.sync_all()?;
+                directory.verify_payload(&layout::MANUAL_DISK_SELECTION, &file)?;
+                directory.sync()?;
+            }
             disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
             for p in [
                 "histories",
@@ -787,13 +807,27 @@ impl Engine {
             ErrorCode::RecoveryRequired,
             "system state is unavailable; use explicit retained metadata roots for management recovery",
         ))?.path().to_path_buf();
-        crate::authority_selection::require_legacy(&root)?;
+        let system = platform_io::fs_safety::PrivateDirectory::open_existing(&root)?;
+        let manual = crate::authority_selection::manual::ManualSelection::read(&system)
+            .map_err(container_drafts::format_error)?;
+        if manual.is_none() {
+            crate::authority_selection::require_legacy(&root)?;
+        }
         disk_lifecycle::terminal::require_active_startup(&root)?;
         let config = read_json::<Config>(&root.join("config.json")).map_err(|source| source.context(
             ErrorCode::RecoveryRequired,
             "system projection is unavailable; use explicit retained metadata roots for management recovery",
         ))?;
         let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+        let config = match manual {
+            Some(selection) => {
+                let completion = container_drafts::format::require_complete(
+                    &system, &config, &selection,
+                )?;
+                config.with_manual_selection(&selection)?.with_manual_completion(completion)?
+            }
+            None => config,
+        };
         Ok((root, config))
     }
 
@@ -872,7 +906,14 @@ impl Engine {
         disk_resources: Arc<DiskResources>,
         locks: crate::disk::WriterLocks,
     ) -> Result<Self> {
-        crate::authority_selection::require_legacy(&root)?;
+        if let Some(selection) = config.manual_selection() {
+            container_drafts::format::require_complete(
+                &platform_io::fs_safety::PrivateDirectory::open_existing(&root)?,
+                &config, selection,
+            )?;
+        } else {
+            crate::authority_selection::require_legacy(&root)?;
+        }
         let mut engine = Self {
             root,
             config,

@@ -229,6 +229,7 @@ pub fn app() -> impl IntoView {
                     });
                     files::restore_deletion_recovery(state);
                     files::restore_folder_creation(state);
+                    files::restore_container_draft_commit(state);
                     management::load(state);
                 }
                 Err(error) => state.update(|s| s.login_failure = Some(feedback(&error))),
@@ -452,6 +453,7 @@ fn restore_session(state: RwSignal<State>) {
         state.update(|s| s.session_transition = SessionTransition::Idle);
         files::restore_deletion_recovery(state);
         files::restore_folder_creation(state);
+        files::restore_container_draft_commit(state);
         management::load(state);
     });
 }

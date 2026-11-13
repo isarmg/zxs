@@ -47,6 +47,7 @@ pub(crate) fn error_text(state: &State, kind: Kind) -> String {
         .unwrap_or_default()
 }
 pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
+    super::container_edit::settle(model, id, status);
     let kinds = model
         .publications
         .iter()

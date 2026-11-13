@@ -5,6 +5,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 mod container_edit;
+pub use container_edit::DraftPrepareError;
 mod download_target;
 mod response;
 mod transfer;
@@ -13,6 +14,8 @@ pub use transfer::PreparedUpload;
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error(transparent)]
+    DraftPrepare(#[from] DraftPrepareError),
     #[error("invalid server address: {0}")]
     Address(String),
     #[error("invalid server address: {0}")]

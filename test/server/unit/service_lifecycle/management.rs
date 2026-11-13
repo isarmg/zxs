@@ -255,6 +255,13 @@ impl Backend for WriterProbe {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn prepare_container_draft_commit(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn read_container_edit(
         &self,
         _identity: &crate::auth::Identity,

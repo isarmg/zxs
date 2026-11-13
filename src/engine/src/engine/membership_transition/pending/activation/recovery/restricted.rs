@@ -5,13 +5,13 @@ use super::*;
 mod exit_stop;
 use crate::engine::disk_lifecycle::bootstrap::{
     LoadedLocator, ReadProbe, RestrictedProbes, StopHint,
-    runtime::{management_error, open_store},
+    runtime::management_error,
     store::BootstrapStore,
 };
 pub(in crate::engine::membership_transition::pending::activation) use exit_stop::verify_prepared_exit_stop;
 
 #[cfg(test)]
-use crate::engine::disk_lifecycle::bootstrap::BootstrapError;
+use crate::engine::disk_lifecycle::bootstrap::{BootstrapError, runtime::open_store};
 use crate::persist::layout;
 
 #[cfg(test)]
@@ -73,7 +73,9 @@ fn discover_startup_with_io(
             "protected terminal selection failed before storage discovery",
         )
     })?;
-    let store = open_store(root)?;
+    let store = crate::engine::disk_lifecycle::bootstrap::runtime::open_store_for_config(
+        root, &projected,
+    )?;
     super::super::exit::stop_plan::require_no_pending_stop(root, &store)?;
     if let Some(admission) =
         super::super::backup::startup::discover_completed(root, &projected, &store)?

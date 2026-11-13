@@ -299,6 +299,13 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn prepare_container_draft_commit(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PrepareContainerDraftCommit,
+    ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn read_container_edit(
         &self,
         _identity: &crate::auth::Identity,
@@ -1593,6 +1600,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             request: crate::MergeFileBranches,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.merge_file_branches(identity, request)
+        }
+        fn prepare_container_draft_commit(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::PrepareContainerDraftCommit,
+        ) -> Result<storage_contract::SealedWorkspace, crate::ApiError> {
+            self.delegate.prepare_container_draft_commit(identity, request)
         }
         fn read_container_edit(
             &self,

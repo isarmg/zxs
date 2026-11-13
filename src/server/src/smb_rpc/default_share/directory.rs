@@ -170,7 +170,11 @@ impl DefaultShare {
                         .shared
                         .backend
                         .version_snapshot(&projection_identity, &version)?;
-                    let mtime = crate::backend_read::version_mtime(&snapshot.version)?;
+                    let mtime = if entry.current_draft.is_some() {
+                        FileMtime::Unpublished {}
+                    } else {
+                        crate::backend_read::version_mtime(&snapshot.version)?
+                    };
                     (version, mtime)
                 }
             };
