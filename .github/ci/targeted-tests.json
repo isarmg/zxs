@@ -19,7 +19,7 @@
       ]
     },
     "directory-snapshot-initialization": {
-      "reason": "Fresh-only typed initialization intent, exact original bytes and source plan, cold observation and deny fence. Does not yet prove final directory registration, material recovery or SMB activation.",
+      "reason": "Fresh-only original intent and deny fence; explicit FILE-source snapshot candidate/material binding, cold publication/reads and exact recovery. Does not cover existing-host catalog registration or SMB activation.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -30,6 +30,15 @@
           ],
           "max_tests": 8,
           "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": ["fault-injection"],
+          "prefixes": ["engine::snapshot_initialization::execution_tests::"],
+          "max_tests": 5,
+          "timeout_seconds": 900
         }
       ]
     },
@@ -3667,6 +3676,22 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/execution.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "test/engine/unit/snapshot_initialization_execution_tests.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": ["directory-snapshot-initialization"]
+    },
     {
       "path": "src/engine/src/authority_selection.rs",
       "groups": ["directory-storage-bootstrap"]

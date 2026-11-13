@@ -49,7 +49,7 @@ pub(crate) struct PreparedMaterial {
 }
 
 fn stage_name(operation: OperationId) -> Result<EntryName> {
-    EntryName::new(format!("snapshot-init-{operation}")).map_err(MaterialError::Name)
+    Ok(layout::snapshot_init::stage(operation))
 }
 
 fn roots(admitted: &AdmittedFreshRoot, disk: &DiskHandle) -> Result<(DiskRoot, DiskRoot)> {
@@ -74,6 +74,26 @@ fn roots(admitted: &AdmittedFreshRoot, disk: &DiskHandle) -> Result<(DiskRoot, D
     Ok((common, zxs))
 }
 
+/// A's explicit source initializer targets a new empty common root. It never
+/// classifies or adopts ordinary host files; those need later catalog producers.
+pub(crate) fn require_empty_target(admitted: &AdmittedFreshRoot, disk: &DiskHandle) -> Result<()> {
+    let (common, _) = roots(admitted, disk)?;
+    require_host_inventory(&common, false)
+}
+
+fn require_host_inventory(common: &DiskRoot, installed: bool) -> Result<()> {
+    let mut count = 0usize;
+    for entry in common.root_entries().map_err(MaterialError::Directory)? {
+        let entry = entry.map_err(MaterialError::Name)?;
+        if !installed || entry != *layout::SNAPSHOT_REPOSITORY || count != 0 {
+            return Err(MaterialError::Target);
+        }
+        count += 1;
+    }
+    if installed && count != 1 { return Err(MaterialError::Target); }
+    Ok(())
+}
+
 pub(crate) fn prepare<R: Read>(
     admitted: &AdmittedFreshRoot,
     disk: &DiskHandle,
@@ -89,6 +109,7 @@ pub(crate) fn prepare<R: Read>(
     if record.target.path != DirectoryTargetPath::Root {
         return Err(MaterialError::Target);
     }
+    require_empty_target(admitted, disk)?;
     let manifest = intent.manifest().map_err(MaterialError::Intent)?;
     let (_, parent) = roots(admitted, disk)?;
     let name = stage_name(record.operation)?;
@@ -149,10 +170,25 @@ fn reopen(
 ) -> Result<PreparedMaterial> {
     let _activity = disk.root.retain_io_activity().map_err(MaterialError::Disk)?;
     let (common, parent) = roots(admitted, disk)?;
+    require_host_inventory(&common, installed)?;
     let name = if installed { layout::SNAPSHOT_REPOSITORY.clone() } else { stage_name(operation)? };
     let holder = if installed { &common } else { &parent };
     let repository = holder.private_entry_matching(&name,
         file_identity(original.repository_entity())).map_err(MaterialError::Directory)?;
+    let expected_node = layout::snapshot::node(original.reference().node);
+    let mut nodes = 0usize;
+    let mut count = 0usize;
+    for entry in repository.root_entries().map_err(MaterialError::Directory)? {
+        let entry = entry.map_err(MaterialError::Name)?;
+        count += 1;
+        if count > 2 { return Err(MaterialError::Target); }
+        if entry == expected_node {
+            nodes += 1;
+        } else if !installed || entry != *layout::snapshot_init::DECISION {
+            return Err(MaterialError::Target);
+        }
+    }
+    if nodes != 1 { return Err(MaterialError::Target); }
     let node = HeldSnapshotNode::reopen(&repository, original).map_err(MaterialError::Snapshot)?;
     roots(admitted, disk)?;
     holder.private_entry_matching(&name, file_identity(original.repository_entity()))

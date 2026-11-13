@@ -567,7 +567,8 @@ class TargetedSelection(unittest.TestCase):
                                              ['src/engine/src/lib.rs'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine',
+            'directory-snapshot-initialization'])
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -616,6 +617,35 @@ class TargetedSelection(unittest.TestCase):
         self.assertNotIn('directory-snapshot-source-preview', central['groups'])
         self.assertIn('historical-directory-runtime', central['groups'])
         self.assertIn('version-metadata-read', central['groups'])
+
+    def test_snapshot_execution_paths_keep_original_and_fault_injection_scopes_separate(self):
+        for path in [
+            'src/engine/src/engine/snapshot_initialization/execution.rs',
+            'test/engine/unit/snapshot_initialization_execution_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-initialization'], [])
+                self.assertEqual(plan['python_tests'], [])
+                self.assertEqual(len(plan['rust_targets']), 2)
+                self.assertCountEqual(origin_selections(plan, 'directory-snapshot-initialization'), [
+                    {
+                        'package': 'storage-engine',
+                        'manifest': 'src/engine/Cargo.toml',
+                        'prefixes': ['engine::snapshot_initialization::tests::'],
+                        'max_tests': 8,
+                        'timeout_seconds': 300,
+                    },
+                    {
+                        'package': 'storage-engine',
+                        'manifest': 'src/engine/Cargo.toml',
+                        'kind': 'lib',
+                        'features': ['fault-injection'],
+                        'prefixes': ['engine::snapshot_initialization::execution_tests::'],
+                        'max_tests': 5,
+                        'timeout_seconds': 900,
+                    },
+                ])
 
     def test_snapshot_source_paths_select_real_engine_and_http_preview_modules(self):
         paths = [
@@ -1253,6 +1283,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
+            'directory-snapshot-initialization',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',

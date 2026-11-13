@@ -351,6 +351,14 @@ impl Engine {
     }
     fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
         self.require_no_snapshot_initialization()?;
+        if detached.candidate.directory_material().is_some() {
+            return Err(Error::SnapshotInitialization(Box::new(
+                super::snapshot_initialization::SnapshotInitializationError::Publication,
+            )));
+        }
+        self.require_detached_publication_context(detached)
+    }
+    fn require_detached_publication_context(&self, detached: &DetachedPublication) -> Result<()> {
         if self.blocked
             || self.move_is_retained()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)
@@ -497,6 +505,24 @@ impl Engine {
         detached: DetachedPublication,
     ) -> Result<OperationResult> {
         self.require_detached_publication(&detached)?;
+        self.decide_admitted_publication(detached)
+    }
+
+    pub(in crate::engine) fn decide_directory_snapshot_publication(
+        &mut self,
+        detached: DetachedPublication,
+    ) -> Result<OperationResult> {
+        self.require_detached_publication_context(&detached)?;
+        if detached.candidate.directory_material().is_none() {
+            return Err(Error::SnapshotInitialization(Box::new(
+                super::snapshot_initialization::SnapshotInitializationError::Publication,
+            )));
+        }
+        self.require_directory_snapshot_transition(&detached.candidate, &detached.next)?;
+        self.decide_admitted_publication(detached)
+    }
+
+    fn decide_admitted_publication(&mut self, detached: DetachedPublication) -> Result<OperationResult> {
         let DetachedPublication {
             next,
             next_current_namespaces,
@@ -597,6 +623,7 @@ impl Engine {
             )
             .retryable());
         }
+        self.require_directory_snapshot_transition(&candidate, &next)?;
         // Admission is after every PREPARE and before first ACCEPT. The short
         // schedule/epoch fence has now committed to starting this decision;
         // stop/fault after it cannot cancel publication or release ownership.
@@ -737,6 +764,9 @@ impl Engine {
         mut append_receipt: impl FnMut(&mut Engine, &DiskConfig, &str) -> Result<Receipt>,
     ) -> Result<()> {
         self.require_bound_publication(c, hash, &publication)?;
+        self.complete_directory_snapshot_material(
+            c, next, &publication.finalize, &publication.finalize_receipts,
+        )?;
         crate::container_storage::repair_historical_names(
             &self.config,
             &self.disk_resources,
@@ -848,6 +878,7 @@ impl Engine {
                 )?;
             }
         }
+        self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }
     fn complete_candidate_verified(
@@ -952,6 +983,7 @@ impl Engine {
         drop(finalize_object);
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_finalize")?;
+        self.complete_directory_snapshot_material(c, next, &finalize, &final_receipts)?;
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
         #[cfg(feature = "fault-injection")]
@@ -1095,6 +1127,7 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
+        self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }
 }

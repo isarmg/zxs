@@ -5,6 +5,9 @@ pub(crate) mod bootstrap;
 pub(crate) mod registration;
 mod store;
 mod material;
+mod execution;
+pub(in crate::engine) use execution::RegisteredSnapshot;
+pub use execution::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
 
 use super::Engine;
 use crate::disk::DiskRoot;
@@ -137,6 +140,14 @@ impl Engine {
             return Err(failure(SnapshotInitializationError::Registration));
         }
         let root = self.snapshot_intent_system().map_err(failure)?;
+        // A currently has one original initialization slot. Never fence a new
+        // operation after discovering another retained original in that slot.
+        if let Some(original) = store::read(&root)
+            .map_err(|error| failure(SnapshotInitializationError::Store(error)))?
+            && original.bytes() != intent.bytes()
+        {
+            return Err(failure(SnapshotInitializationError::Publication));
+        }
         self.snapshot_initialization_intent = Some(intent.record().operation);
         store::save(&root, intent)
             .map_err(|error| failure(SnapshotInitializationError::Store(error)))?;
@@ -160,3 +171,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/snapshot_initialization_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/snapshot_initialization_execution_tests.rs"]
+mod execution_tests;

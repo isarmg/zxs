@@ -53,6 +53,7 @@ mod persist;
 pub mod disk_authority;
 mod engine;
 pub use engine::DetachedHistoryRead;
+pub use engine::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
 pub use engine::{
     DirectorySnapshotBudget, DirectorySnapshotContent, DirectorySnapshotEntry,
     DirectorySnapshotLimits, DirectorySnapshotPreview, DirectorySnapshotSourceError,

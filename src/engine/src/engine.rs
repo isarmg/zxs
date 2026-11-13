@@ -89,6 +89,7 @@ pub use disk_catalog::{
 };
 mod history_move_recovery;
 pub(crate) mod snapshot_initialization;
+pub use snapshot_initialization::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub(crate) mod move_execution;
 pub(crate) use move_execution::PublishedMove;
@@ -269,6 +270,7 @@ pub struct Engine {
     move_completion: Option<move_execution::CompletionBinding>,
     history_move_intent: Option<OperationId>,
     snapshot_initialization_intent: Option<OperationId>,
+    directory_snapshots: BTreeMap<OperationId, snapshot_initialization::RegisteredSnapshot>,
     history_move_choice: Option<history_move_decision::Choice>,
     history_move_prepare: Option<history_move_decision::PrepareBinding>,
     backup_preparation: Option<backup_preparation::Worker>,
@@ -708,6 +710,7 @@ impl Engine {
             move_completion: None,
             history_move_intent: None,
             snapshot_initialization_intent: None,
+            directory_snapshots: BTreeMap::new(),
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,
@@ -934,6 +937,7 @@ impl Engine {
             move_completion: None,
             history_move_intent: None,
             snapshot_initialization_intent: None,
+            directory_snapshots: BTreeMap::new(),
             history_move_choice: None,
             history_move_prepare: None,
             backup_preparation: None,

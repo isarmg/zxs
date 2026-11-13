@@ -97,6 +97,7 @@ impl FreshBootstrap {
         if config.generation().is_some() || config.disks.len() > 256 {
             return Err(FreshBootstrapError::Changed);
         }
+        crate::authority_selection::FreshSelection::require_primary(&config)?;
         let selection = SelectionGuard::acquire(root).map_err(engine_error)?;
         let mut directory_locks = Vec::new();
         for disk in &config.disks {

@@ -7,7 +7,8 @@
 目前隔离实现已加入显式 fresh 存储初始化、先于 writer sidecar 的 SYSTEM 格式选择、
 新 DISK seal、三根身份记录及完成标记、完整初始化的冷开准入；另有 typed 原始
 快照意图、fresh-only 意图存储、Engine 冷发现写围栏、目录 Candidate/材料机制。
-这些代码尚未通过 GitHub 编译或测试；尚无首节点发布、同决定节点登记恢复或真实冷读入口。不得将本阶段视为 A 段
+首节点发布、同决定节点登记恢复与只读入口已在后继切片接线，但这些代码尚未通过
+GitHub 编译或行为验证；已有 host 的 FILE/catalog 位置登记与 SMB 仍未完成。不得将本阶段视为 A 段
 完成或目录 worktree 上线。以下字段仍是实施约束，不代表已验证的持久协议。
 依据 `TASKS.md` 的目录仓库/worktree 顺序及《工程规范》§2–§7，保留类型证明、
 真实准入边界、永久收据和故障行为，不通过兼容默认值、路径扫描或旧目录 Git 接口接管。
@@ -181,3 +182,21 @@ A、B、C 各阶段只有真实 producer、持久决定、冷恢复与消费者�
   不能只凭候选或 OperationResult 中的 JSON 开放读取。
 - 初始化专用 source 冻结保留租约并要求完整当前清单与原捕获严格一致；preview
   原先允许保留冻结旧版本的语义不变。所有测试仅已编写，未本机运行。
+
+### 显式 FILE 来源到首节点的后继切片（未验证）
+
+`initialize_directory_snapshot_from_source` 只接受已验证的实际 FILE/Current namespace
+来源和一个已独立准入、common-data 完全为空的新根。它不从名字、正文相等或已有
+普通文件猜测复制来源，也不把 raw catalog 当授权。永久候选只新增该操作记录与
+sequence；完整 node material 绑定原意图和同一个 candidate，在原 FINALIZE 后才
+以 NOREPLACE 安装 `.zxs`，DISK 决定证明绑定原 finalize。全部 publication seals
+验证后才建立只读登记；冷读再次验证原登记、当前盘/根实体、完整正文与决定证明。
+
+这不是就地初始化一个已有 FILE 的 common-data 目录。普通 FILE 保存目前仍使用
+既有容器/Current producer，尚未形成 FILE→working-tree catalog 的生产位置登记；
+该映射以及真实 SMB 路由仍须后继实现。本阶段保留单一原初始化 intent 槽，只允许
+池的首个显式来源快照；另一操作在写围栏之前拒绝，不能覆盖或删除原意图。
+
+已编写真实非空 FILE 来源、完整副本/原来源不变、冷开/精确重试、未知 `.zxs`
+全盘不变、正文/实体替换、离线拒绝与 ACCEPT/FINALIZE/Publication 故障恢复用例。
+未在本机运行。首节点执行与冷读尚无 GitHub 行为验证结果，不得作为 A 已完成交付。

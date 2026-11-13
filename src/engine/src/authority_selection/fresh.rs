@@ -22,6 +22,8 @@ pub enum FreshBootstrapError {
     Codec(#[source] storage_contract::Error),
     #[error("this reader cannot admit the fresh directory snapshot disk format")]
     UnsupportedReader,
+    #[error("fresh directory storage requires independent primary roots without upstreams")]
+    Topology,
     #[error("fresh bootstrap directory is not empty; existing bytes were preserved")]
     Occupied,
     #[error("fresh bootstrap identity, configuration or original operation changed")]
@@ -36,6 +38,7 @@ impl FreshBootstrapError {
         match self {
             Self::Occupied | Self::Incomplete => ErrorCode::RecoveryRequired,
             Self::Changed => ErrorCode::PublicationInvalid,
+            Self::Topology => ErrorCode::UnsupportedOperation,
             Self::Format | Self::Codec(_) | Self::UnsupportedReader => ErrorCode::FormatUnsupported,
             Self::Filesystem(_) | Self::Engine(_) => ErrorCode::RecoveryRequired,
         }
@@ -81,9 +84,16 @@ fn config_hash(config: &ValidatedConfig) -> Result<MaterialCommitment> {
     Ok(MaterialCommitment::from_digest(hash.finalize()))
 }
 impl FreshSelection {
+    pub(crate) fn require_primary(config: &ValidatedConfig) -> Result<()> {
+        if config.disks.iter().any(|disk| disk.level != 1 || disk.upstream_slot_id.is_some()) {
+            return Err(FreshBootstrapError::Topology);
+        }
+        Ok(())
+    }
     fn capture(guard: &SelectionGuard, config: &ValidatedConfig, operation: OperationId)
         -> Result<Self>
     {
+        Self::require_primary(config)?;
         let system = entity(&held(&guard.directory)?);
         let mut disks = Vec::new();
         for disk in &config.disks {
@@ -219,6 +229,7 @@ impl FreshSelection {
     }
     pub(crate) fn require_config(&self, config: &ValidatedConfig) -> crate::Result<()> {
         let checked = || -> Result<()> {
+            Self::require_primary(config)?;
             if self.config != config_hash(config)? {
                 return Err(FreshBootstrapError::Changed);
             }
@@ -273,6 +284,7 @@ impl FreshSelection {
         config: ValidatedConfig, seal: &crate::disk::DiskSeal, bytes: &[u8],
     ) -> crate::Result<ValidatedConfig> {
         let admit = || -> Result<Self> {
+            Self::require_primary(&config)?;
             if bytes.len() > MAX_BYTES || config.generation().is_some() {
                 return Err(FreshBootstrapError::Format);
             }

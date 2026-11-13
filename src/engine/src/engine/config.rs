@@ -150,6 +150,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
+        }
         if self.generation().is_some() {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
@@ -170,6 +175,11 @@ impl ValidatedConfig {
         mut self,
         generation: Arc<super::membership_transition::pending::activation::Generation>,
     ) -> Result<Self> {
+        if self.fresh_bootstrap().is_some() {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
+        }
         let original = self.generation().ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,

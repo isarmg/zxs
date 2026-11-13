@@ -15,7 +15,11 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf, crate::Config) {
         fs::create_dir(root).unwrap();
         fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let config = crate::Config::development(roots).unwrap();
+    let mut config = crate::Config::development(roots).unwrap();
+    for disk in &mut config.disks {
+        disk.level = 1;
+        disk.upstream_slot_id = None;
+    }
     (temp, system, config)
 }
 fn image(root: &Path) -> BTreeMap<std::path::PathBuf, (u64, u64, u32, Vec<u8>)> {
@@ -68,6 +72,25 @@ fn selector_is_first_and_old_writer_refuses_without_sidecar_or_disk_writes() {
 #[test]
 fn occupied_roots_and_changed_operation_preserve_all_existing_material() {
     let (temp, system, config) = fixture();
+    // Both are otherwise valid old topologies. A must not erase their source
+    // chains by registering every member as a new independent primary root.
+    for full_chain in [false, true] {
+        let mut descendant = config.clone();
+        descendant.disks[1].level = 2;
+        descendant.disks[1].upstream_slot_id = Some(config.disks[0].slot_id.clone());
+        if full_chain {
+            descendant.disks[2].level = 3;
+            descendant.disks[2].upstream_slot_id = Some(config.disks[1].slot_id.clone());
+        }
+        let before = image(temp.path());
+        let result = Engine::initialize_directory_storage(
+            &system, descendant, OperationId::generate().unwrap(),
+        );
+        assert!(matches!(result, Err(crate::Error::FreshBootstrap(error))
+            if matches!(*error, FreshBootstrapError::Topology)));
+        assert!(!system.join("initialized.json").exists());
+        assert_eq!(image(temp.path()), before);
+    }
     let unknown = config.disks[1].root.join("operator-data");
     fs::write(&unknown, b"do not adopt or delete").unwrap();
     let before = image(temp.path());
@@ -98,7 +121,7 @@ fn complete_fresh_bootstrap_reopens_exact_roots_and_rejects_replaced_child() {
     // merely reopening an empty Engine would not exercise that proof boundary.
     let repository = engine.create_repository(
         &storage_contract::RepositoryName::parse("bootstrap-source").unwrap(),
-        "P01", 3, "admin", OperationId::generate().unwrap(),
+        "P01", 1, "admin", OperationId::generate().unwrap(),
     ).unwrap();
     let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
     engine.stage_bytes(&workspace.workspace_id, "source.txt", b"fresh FILE proof").unwrap();
