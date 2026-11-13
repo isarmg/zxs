@@ -220,6 +220,9 @@ def cargo_command(target, build):
 def current_artifact(output, target, root):
     artifacts, finished = [], []
     kind = target.get('kind', 'lib')
+    # Cargo check --test still checks a test harness and reports profile.test
+    # true, but emits metadata rather than an executable or executed tests.
+    test_profile = kind == 'test' or target.get('mode', 'test') == 'test'
     name = target['package'].replace('-', '_') if kind == 'lib' else target['name']
     for line in output.splitlines():
         item = json.loads(line)
@@ -232,7 +235,7 @@ def current_artifact(output, target, root):
                         if kind == 'lib' else actual_kind == [kind])
         if (not matches_kind or item['target']['name'] != name
                 or Path(item['manifest_path']).resolve() != root / target['manifest']
-                or item['profile']['test'] != (target.get('mode', 'test') == 'test')):
+                or item['profile']['test'] != test_profile):
             continue
         if not set(target.get('features', [])) <= set(item['features']):
             raise ValueError('current artifact lacks requested features')

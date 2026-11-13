@@ -1049,6 +1049,25 @@ class TargetedSelection(unittest.TestCase):
         with self.assertRaises(ValueError):
             CI.current_artifact(output(item), dict(target, features=['core']), ROOT)
 
+    def test_compile_only_integration_keeps_cargos_test_harness_profile(self):
+        target = {'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
+                  'kind': 'test', 'name': 'recursive_backup_paths', 'mode': 'check'}
+        command = CI.cargo_command(target, '/build')
+        self.assertEqual(command[:2], ['cargo', 'check'])
+        self.assertEqual(command[command.index('--test') + 1], 'recursive_backup_paths')
+        self.assertNotIn('--no-run', command)
+        item = {'reason': 'compiler-artifact',
+                'target': {'name': 'recursive_backup_paths', 'kind': ['test']},
+                'manifest_path': str(ROOT / target['manifest']),
+                'profile': {'test': True}, 'features': [], 'executable': None,
+                'filenames': ['/build/librecursive_backup_paths.rmeta']}
+        def output(artifact):
+            return json.dumps(artifact) + '\n' + json.dumps(
+                {'reason': 'build-finished', 'success': True})
+        self.assertEqual(CI.current_artifact(output(item), target, ROOT), item)
+        with self.assertRaises(ValueError):
+            CI.current_artifact(output(dict(item, profile={'test': False})), target, ROOT)
+
     def overlapping_policy(self, first, second):
         return {'groups': {
             'first': {'reason': 'first behavior', 'python_tests': [], 'rust_targets': [first]},
@@ -1421,6 +1440,29 @@ class TargetedExecution(unittest.TestCase):
 
     def persisted(self):
         return json.loads((self.run.directory / 'summary.json').read_text())
+
+    def test_integration_metadata_check_does_not_list_or_execute_tests(self):
+        target = {'package': 'fixture', 'manifest': 'src/fixture/Cargo.toml',
+                  'kind': 'test', 'name': 'retained_format', 'mode': 'check'}
+        build = self.run.directory / 'build'
+        build.mkdir()
+        metadata = build / 'libretained_format.rmeta'
+        metadata.write_text('synthetic current check metadata')
+        artifact = {'reason': 'compiler-artifact',
+                    'target': {'name': 'retained_format', 'kind': ['test']},
+                    'manifest_path': str(self.root / target['manifest']),
+                    'profile': {'test': True}, 'features': [], 'executable': None,
+                    'filenames': [str(metadata)]}
+        output = json.dumps(artifact) + '\n' + json.dumps(
+            {'reason': 'build-finished', 'success': True})
+        with mock.patch.object(self.run, 'command', return_value=output) as command:
+            self.run.rust(target)
+        command.assert_called_once_with(CI.cargo_command(target, build), 1800)
+        summary = self.persisted()
+        self.assertEqual(summary['compiled'], [target])
+        self.assertEqual(summary['passed'], [])
+        self.assertEqual(summary['failed'], [])
+        self.assertEqual(summary['artifacts'][0]['files'][0]['path'], str(metadata))
 
     def test_python_runner_uses_exact_budget_and_records_completion(self):
         directory = self.root / 'test/ci'

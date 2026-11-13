@@ -6,6 +6,7 @@ use crate::{disk::*, journal::*, *};
 use crate::persist::layout;
 use std::{
     io::Read,
+    os::unix::fs::FileExt,
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
@@ -86,10 +87,13 @@ impl HeldFile {
         Ok(Self { file, stamp })
     }
     fn validate(&self, root: &DiskRoot, path: &Path) -> Result<()> {
+        self.validate_stamp(root, path, &self.stamp)
+    }
+    fn validate_stamp(&self, root: &DiskRoot, path: &Path, expected: &FileStamp) -> Result<()> {
         self.file.check_running()?;
         let current = root.open_leased_regular(path)?;
-        if FileStamp::from_metadata(&self.file.metadata()?) != self.stamp
-            || FileStamp::from_metadata(&current.metadata()?) != self.stamp
+        if &FileStamp::from_metadata(&self.file.metadata()?) != expected
+            || &FileStamp::from_metadata(&current.metadata()?) != expected
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::PreparationStale,
@@ -430,6 +434,16 @@ impl PayloadProofCursor<'_> {
         version: &FileVersion,
         slot: &str,
     ) -> Result<()> {
+        self.validate_payload_after_names(config, version, slot, None)
+    }
+
+    pub(super) fn validate_payload_after_names(
+        &mut self,
+        config: &ValidatedConfig,
+        version: &FileVersion,
+        slot: &str,
+        renamed: Option<&crate::container_storage::AppliedPayloadRenames>,
+    ) -> Result<()> {
         if self.remaining == 0 {
             return Err(Error::new(
                 storage_contract::ErrorCode::PreparationStale,
@@ -474,15 +488,47 @@ impl PayloadProofCursor<'_> {
                 "payload proof identity differs",
             ));
         }
-        entry.body.validate(
+        let path = crate::container_storage::content_path_at(
             &entry.disk.root,
-            &crate::container_storage::content_path_at(
-                &entry.disk.root,
-                &entry.directory,
-                version,
-                &mut |_| Ok(()),
-            )?,
+            &entry.directory,
+            version,
+            &mut |_| Ok(()),
         )?;
+        let current = FileStamp::from_metadata(&entry.body.file.metadata()?);
+        let version_id = version.version_id.parse()?;
+        let renamed_payload = match renamed {
+            Some(renamed) => renamed.matches(
+                &name_policy::SlotId::parse(slot)?, version_id, &entry.body.stamp, &current,
+            ),
+            None => false,
+        };
+        if renamed_payload {
+            // Only an actual, inode-bound rename can replace the old ctime.
+            // Its exact before/after stamps are retained in process. Re-read
+            // every byte, then bind both the reopened path and original FD to
+            // that exact post-syscall stamp, rejecting replacement or mutation.
+            entry.body.validate_stamp(&entry.disk.root, &path, &current)?;
+            // Reuse the budgeted descriptor and positional reads. Retaining a
+            // second replica proof here would bypass PayloadProofBudget.
+            let mut full = blake3::Hasher::new();
+            let mut buffer = vec![0; 64 * 1024];
+            let mut offset = 0;
+            while offset < version.logical_size {
+                let count = (version.logical_size - offset).min(buffer.len() as u64) as usize;
+                entry.body.file.read_exact_at(&mut buffer[..count], offset)?;
+                full.update(&buffer[..count]);
+                offset += count as u64;
+            }
+            if ContentHash::from_digest(full.finalize()) != version.content_hash {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ChecksumMismatch,
+                    "renamed payload hash differs from its prepared version",
+                ));
+            }
+            entry.body.validate_stamp(&entry.disk.root, &path, &current)?;
+        } else {
+            entry.body.validate(&entry.disk.root, &path)?;
+        }
         for (path, held) in &entry.metadata {
             held.validate(&entry.disk.root, path)?;
         }

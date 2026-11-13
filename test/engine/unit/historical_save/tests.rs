@@ -1,4 +1,75 @@
 use super::*;
+
+#[test]
+fn historical_only_new_file_publishes_current_name_without_changing_main() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    let mut engine = Engine::initialize(
+        &system,
+        Config::development([temp.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let repository = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("historical owner").unwrap(),
+            "P01", 1, "admin", OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let source = engine.state.branches[&repository.main_branch_id].head_commit_id.clone();
+    let frozen = engine.state.commits[&source].clone();
+    let workspace = engine
+        .create_historical_workspace(&repository.main_branch_id, &source, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "new.txt", b"historical-only body")
+        .unwrap();
+    let plan = engine
+        .create_historical_save_plan(
+            &repository.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: source.clone(),
+                name: "historical destination".into(),
+                workspace_id: Some(workspace.workspace_id),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    let operation = OperationId::generate().unwrap();
+    let result = engine.commit_historical_save_plan(&plan.plan_id, "admin", operation).unwrap();
+    let branch = result.branch_id.as_ref().unwrap();
+    let entries = engine.list_tree(branch).unwrap();
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    let file = entry.file_id.clone();
+    let version = entry.version_id.clone();
+    assert_eq!(entry.path(), "new.txt");
+    assert_eq!(engine.state.file_locations[&file], "new.txt");
+    assert_eq!(engine.state.file_names[&file], "new.txt");
+    assert_eq!(engine.state.branches[&repository.main_branch_id].head_commit_id, source);
+    assert_eq!(engine.state.commits[&source], frozen);
+    assert!(engine.list_tree(&repository.main_branch_id).unwrap().is_empty());
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state.file_locations[&file], "new.txt");
+    assert_eq!(engine.state.file_names[&file], "new.txt");
+    assert_eq!(engine.list_tree(branch).unwrap(), entries);
+    assert_eq!(engine.state.commits[&source], frozen);
+    let mut opened = engine.open_content(&version).unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut opened.file, &mut bytes).unwrap();
+    assert_eq!(bytes, b"historical-only body");
+    drop(opened);
+    let sequence = engine.state.sequence;
+    assert_eq!(
+        engine.commit_historical_save_plan(&plan.plan_id, "admin", operation).unwrap(),
+        result,
+    );
+    assert_eq!(engine.state.sequence, sequence);
+}
+
 #[test]
 fn historical_edits_materialize_only_written_files_without_changing_the_source_head() {
     let root = tempfile::tempdir().unwrap();

@@ -80,9 +80,10 @@ fn apply(
     (request, operation, result)
 }
 
-// Produce a real existing alias using the older Move behavior, without injecting
-// State or picking an original by sort order. One frozen branch is retained at
-// a different path so separation must not rewrite its file identity/history.
+// Produce real same-name aliases through Move, without injecting State or
+// picking an original by sort order. A retained branch uses a different parent,
+// not a different leaf: all occurrences of one FileId share its current name.
+// Separation must not rewrite the retained branch's file identity/history.
 fn aliases(engine: &mut Engine, repo: &Repository) -> (String, String) {
     save(engine, repo, "a/report.txt", b"frozen secondary body");
     save(engine, repo, "b/keep", b"unrelated");
@@ -91,14 +92,19 @@ fn aliases(engine: &mut Engine, repo: &Repository) -> (String, String) {
     let main = main_id(engine, repo, "");
     let transfer = branch(engine, repo, "", "transfer");
     let other = branch(engine, repo, "", "other branch");
+    let frozen = entry(engine, &transfer, "a/report.txt");
     let items = vec![mapping(
         engine,
         &other,
         "a/report.txt",
         &other,
-        "a/renamed.txt",
+        "b/report.txt",
     )];
     apply(engine, repo, DirectoryBatchKind::Rename, items);
+    let retained = entry(engine, &other, "b/report.txt");
+    assert_eq!(retained.file_id, frozen.file_id);
+    assert_eq!(retained.version_id, frozen.version_id);
+    assert_eq!(entry(engine, &transfer, "a/report.txt"), frozen);
     save(engine, repo, "a/report.txt", b"latest retained save");
     let items = vec![mapping(
         engine,
@@ -112,6 +118,9 @@ fn aliases(engine: &mut Engine, repo: &Repository) -> (String, String) {
         entry(engine, &main, "a/report.txt").file_id,
         entry(engine, &main, "b/report.txt").file_id
     );
+    assert_eq!(entry(engine, &main, "b/report.txt").version_id, frozen.version_id);
+    assert_ne!(entry(engine, &main, "a/report.txt").version_id, frozen.version_id);
+    assert_eq!(entry(engine, &other, "b/report.txt"), retained);
     (main, other)
 }
 
@@ -390,7 +399,7 @@ fn ambiguous_or_stale_separation_rejects_without_publishing_a_partial_file() {
         ),
         (
             &other,
-            "a/renamed.txt",
+            "b/report.txt",
             &main,
             "b/report.txt",
             ErrorCode::DirectoryBranchConflict,

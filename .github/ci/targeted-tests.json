@@ -3098,7 +3098,8 @@
           "exact": [
             "engine::detached_history::tests::detached_discovery_uses_current_container_name_for_pre_rename_versions",
             "engine::publication::verified_payloads::tests::version_rename_uses_shared_descriptor_budget_before_persisting_intent",
-            "history_package::tests::decoded_manifest_requires_current_location_for_every_retained_file"
+            "history_package::tests::decoded_manifest_requires_current_location_for_every_retained_file",
+            "historical_save::tests::historical_only_new_file_publishes_current_name_without_changing_main"
           ],
           "max_tests": 64,
           "timeout_seconds": 900
@@ -4542,6 +4543,7 @@
     {
       "path": "src/engine/src/historical_save.rs",
       "groups": [
+        "container-current-name",
         "container-tags-engine"
       ]
     },
@@ -5864,6 +5866,7 @@
     {
       "path": "test/engine/unit/historical_save/tests.rs",
       "groups": [
+        "container-current-name",
         "portable-path-consumers"
       ]
     },
@@ -9738,6 +9741,13 @@
       "path": "test/tools/contract-check/unit/history_window_tests.rs",
       "groups": [
         "container-tags-contract",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/file_stamp.rs",
+      "groups": [
+        "current-name-layout-consumers",
         "container-current-name"
       ]
     }

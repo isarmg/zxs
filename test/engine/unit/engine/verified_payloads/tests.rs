@@ -1203,3 +1203,99 @@ fn version_rename_uses_shared_descriptor_budget_before_persisting_intent() {
     drop(prepared);
     assert_eq!(budget.held(), 0);
 }
+
+#[test]
+fn decided_name_renames_revalidate_only_exact_held_payload_transitions() {
+    use std::os::unix::fs::PermissionsExt;
+    for mutation in [
+        "none", "body", "replacement", "mode", "metadata", "unlisted-ctime", "renamed-ctime",
+    ] {
+        let _budget = test_budget(LEGACY_DESCRIPTOR_BUDGET);
+        let (_temp, engine, candidate) = fixture_with_files(2);
+        let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
+        let version = &candidate.versions[0].version;
+        let mut next = engine.state().clone();
+        next.file_names.insert(version.file_id.clone(), "renamed.txt".into());
+        next.file_locations.insert(version.file_id.clone(), "renamed.txt".into());
+        let transition = crate::state_projection::ProjectionTransition::new(
+            engine.state(), &next, None,
+        ).unwrap();
+        let names = crate::container_storage::prepare_names(
+            &engine.config, &engine.disk_resources, &transition, MAX_METADATA,
+        ).unwrap();
+        proof.validate(&engine.config, &candidate).unwrap();
+        let (_, renamed) = names.apply_with_payload_renames(&mut |_| Ok(())).unwrap();
+        let affected = if mutation == "unlisted-ctime" { 1 } else { 0 };
+        let evidence = &candidate.versions[affected];
+        let disk = engine.disk(&evidence.placement.route_slot_ids[0]).unwrap();
+        let handle = engine.disk_resources.get(disk).unwrap();
+        let directory = version_dir(
+            disk, &evidence.version.history_tree_id, &evidence.version.version_id,
+        );
+        let path = crate::container_storage::content_path_at(
+            &handle.root, &directory, &evidence.version, &mut |_| Ok(()),
+        ).unwrap();
+        match mutation {
+            "none" => {}
+            "body" => {
+                let permissions = std::fs::metadata(&path).unwrap().permissions();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                std::fs::write(&path, b"tampered").unwrap();
+                std::fs::set_permissions(&path, permissions).unwrap();
+                assert_eq!(std::fs::read(&path).unwrap(), b"tampered");
+            }
+            "replacement" => {
+                let bytes = std::fs::read(&path).unwrap();
+                std::fs::rename(&path, path.with_extension("old")).unwrap();
+                std::fs::write(&path, bytes).unwrap();
+            }
+            "mode" => {
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode ^ 0o100))
+                    .unwrap();
+            }
+            "metadata" => {
+                let metadata = directory.join("checksums.bin");
+                let permissions = std::fs::metadata(&metadata).unwrap().permissions();
+                std::fs::set_permissions(&metadata, std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+                std::fs::write(&metadata, b"tampered").unwrap();
+                std::fs::set_permissions(&metadata, permissions).unwrap();
+            }
+            "unlisted-ctime" | "renamed-ctime" => {
+                use std::os::unix::fs::MetadataExt;
+                let before = std::fs::metadata(&path).unwrap();
+                let alias = path.with_extension("link");
+                std::fs::hard_link(&path, &alias).unwrap();
+                std::fs::remove_file(alias).unwrap();
+                let after = std::fs::metadata(&path).unwrap();
+                assert_eq!(before.dev(), after.dev());
+                assert_eq!(before.ino(), after.ino());
+                assert_eq!(before.len(), after.len());
+                assert_eq!(before.mode(), after.mode());
+                assert_eq!(before.nlink(), after.nlink());
+                assert_eq!((before.mtime(), before.mtime_nsec()),
+                    (after.mtime(), after.mtime_nsec()));
+                assert_ne!((before.ctime(), before.ctime_nsec()),
+                    (after.ctime(), after.ctime_nsec()));
+            }
+            _ => unreachable!(),
+        }
+        let result = (|| -> Result<()> {
+            let mut cursor = proof.cursor();
+            for evidence in &candidate.versions {
+                for slot in &evidence.placement.route_slot_ids {
+                    cursor.validate_payload_after_names(
+                        &engine.config, &evidence.version, slot, Some(&renamed),
+                    )?;
+                }
+            }
+            cursor.finish()
+        })();
+        if mutation == "none" {
+            result.unwrap();
+        } else {
+            assert!(result.is_err(), "accepted post-rename mutation: {mutation}");
+        }
+    }
+}

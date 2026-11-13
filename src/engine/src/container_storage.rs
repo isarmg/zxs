@@ -1019,6 +1019,27 @@ struct PreparedName {
     version_names: Option<version_rename::Prepared>,
     finish_version_names: Option<version_rename::CompletionBinding>,
 }
+/// Only successful leaf rename syscalls can populate this process-local proof.
+#[derive(Default)]
+pub(crate) struct AppliedPayloadRenames {
+    entries: BTreeMap<
+        name_policy::SlotId,
+        BTreeMap<storage_contract::VersionId, version_rename::AppliedVersionRename>,
+    >,
+}
+impl AppliedPayloadRenames {
+    pub(crate) fn matches(
+        &self,
+        slot: &name_policy::SlotId,
+        version: storage_contract::VersionId,
+        before: &crate::file_stamp::FileStamp,
+        after: &crate::file_stamp::FileStamp,
+    ) -> bool {
+        self.entries.get(slot).and_then(|versions| versions.get(&version))
+            .is_some_and(|rename| rename.matches(before, after))
+    }
+}
+
 impl PreparedNames {
     /// Exact FILE write set from the candidate's projection, before probing
     /// container existence. Retained read-only history is not a database write.
@@ -1156,9 +1177,16 @@ impl PreparedNames {
         self.apply_observed(&mut |_| Ok(()))
     }
     pub(crate) fn apply_observed(
-        mut self,
+        self,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<DirectoryLayoutReceipt> {
+        self.apply_with_payload_renames(observe).map(|(receipt, _)| receipt)
+    }
+    pub(crate) fn apply_with_payload_renames(
+        mut self,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<(DirectoryLayoutReceipt, AppliedPayloadRenames)> {
+        let mut renamed = AppliedPayloadRenames::default();
         if let Some(cache) = &mut self.cache {
             for item in &mut cache.items {
                 if let Some(names) = item.version_names.take() {
@@ -1166,13 +1194,15 @@ impl PreparedNames {
                         &item.disk.root, &item.history, Some(&item.history_id),
                         &item.file, &mut |_| Ok(()),
                     )?.ok_or(Error::VersionNames(VersionNameError::Intent))?;
-                    names.apply(&item.disk.root, &current, observe)?;
+                    let slot = name_policy::SlotId::parse(&item.disk.seal.slot_id)?;
+                    renamed.entries.entry(slot).or_default()
+                        .extend(names.apply(&item.disk.root, &current, observe)?);
                 }
             }
         }
         let receipt = self.layouts.apply(observe)?;
         let Some(mut cache) = self.cache else {
-            return Ok(receipt);
+            return Ok((receipt, renamed));
         };
         for item in cache.items {
             let root = &item.disk.root;
@@ -1241,7 +1271,7 @@ impl PreparedNames {
                 version_rename::finish(root, &named, expected)?;
             }
         }
-        Ok(receipt)
+        Ok((receipt, renamed))
     }
 }
 

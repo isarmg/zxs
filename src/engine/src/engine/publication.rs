@@ -954,9 +954,10 @@ impl Engine {
         // Only a decided candidate may rename a published file container.
         // A crash leaves the operation indeterminate and recovery replays it.
         #[cfg(feature = "fault-injection")]
-        names.apply_observed(&mut |point| self.failpoint(point))?;
+        let (_, renamed_payloads) =
+            names.apply_with_payload_renames(&mut |point| self.failpoint(point))?;
         #[cfg(not(feature = "fault-injection"))]
-        names.apply()?;
+        let (_, renamed_payloads) = names.apply_with_payload_renames(&mut |_| Ok(()))?;
         let directory_result = next.operations.get(&c.operation_id).ok_or_else(|| {
             Error::new(
                 ErrorCode::PublicationInvalid,
@@ -982,7 +983,12 @@ impl Engine {
                     &evidence.version.version_id,
                 );
                 if let Some(cursor) = &mut payload_cursor {
-                    cursor.validate_payload(&self.config, &evidence.version, slot)?;
+                    cursor.validate_payload_after_names(
+                        &self.config,
+                        &evidence.version,
+                        slot,
+                        Some(&renamed_payloads),
+                    )?;
                 } else {
                     // Recovery has no live held-inode proof and must re-read all bytes.
                     handle.verify_payload(&directory, &evidence.version)?;

@@ -21,6 +21,14 @@ impl FileStamp {
         Ok(Self::from_metadata(&file.metadata()?))
     }
 
+    /// Compare metadata that a rename cannot change. This does not prove the
+    /// contents: the payload consumer separately re-hashes the complete body.
+    pub(crate) fn differs_only_by_rename(&self, before: &Self) -> bool {
+        self.device == before.device && self.inode == before.inode
+            && self.size == before.size && self.links == before.links
+            && self.mode == before.mode && self.modified == before.modified
+    }
+
     /// Snapshot already acquired under the owning resource's I/O guard.
     pub(crate) fn from_metadata(metadata: &Metadata) -> Self {
         Self {
