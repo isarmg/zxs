@@ -3616,6 +3616,54 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "current-name-publication-fixtures": {
+      "reason": "Fixture-only edits execute their complete Rust module with the retained inventory and runtime bounds. Production source routes retain all existing consumer selections; this is not a reduced production-change plan.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::publication::verified_payloads::tests::"
+          ],
+          "max_tests": 160,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "current-name-selected-batch-fixtures": {
+      "reason": "Fixture-only edits execute their complete Rust module with the retained inventory and runtime bounds. Production source routes retain all existing consumer selections; this is not a reduced production-change plan.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::disk_registry::current::batch::tests::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "current-name-directory-label-fixtures": {
+      "reason": "Fixture-only edits execute their complete Rust module with the retained inventory and runtime bounds. Production source routes retain all existing consumer selections; this is not a reduced production-change plan.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::disk_registry::current::tests::directory_labels::"
+          ],
+          "max_tests": 192,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -9917,8 +9965,7 @@
     {
       "path": "test/engine/unit/engine/verified_payloads/tests.rs",
       "groups": [
-        "current-name-layout-consumers",
-        "container-current-name"
+        "current-name-publication-fixtures"
       ]
     },
     {
@@ -10049,7 +10096,7 @@
     {
       "path": "test/engine/unit/engine/current_namespace_directory_label_tests.rs",
       "groups": [
-        "current-name-namespace-consumers"
+        "current-name-directory-label-fixtures"
       ]
     },
     {
@@ -10061,7 +10108,7 @@
     {
       "path": "test/engine/unit/engine/current_selected_batch_tests.rs",
       "groups": [
-        "current-name-namespace-consumers"
+        "current-name-selected-batch-fixtures"
       ]
     },
     {
