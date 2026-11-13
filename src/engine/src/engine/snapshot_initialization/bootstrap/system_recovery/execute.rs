@@ -104,7 +104,9 @@ impl Engine {
             writer.verify_retained_name()?;
             engine.journals.insert(disk, writer);
         }
-        engine.install_recovered_namespace_state(admission.state, admission.source.snapshot_hash)?;
+        engine.install_recovered_namespace_state(
+            admission.state, admission.source.snapshot_hash.clone(),
+        )?;
         engine.next_slot = engine.state.sequence.checked_add(1).ok_or_else(refused)?;
         let mut next = (*engine.state).clone();
         next.sequence = engine.next_slot;
