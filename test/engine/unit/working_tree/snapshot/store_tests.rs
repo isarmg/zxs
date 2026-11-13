@@ -86,7 +86,7 @@ fn incomplete_payload_preserves_node_and_cannot_be_retried_as_a_fresh_preparatio
         SnapshotPreparationError::Incomplete { reference: actual, entity, source } => {
             assert_eq!(actual, reference);
             assert!(entity.is_some());
-            assert!(matches!(source, SnapshotStoreError::Content));
+            assert!(matches!(source, SnapshotStoreError::Copy(_)));
         }
         _ => panic!("creation must remain visible as incomplete"),
     }

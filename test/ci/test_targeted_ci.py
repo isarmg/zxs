@@ -2627,6 +2627,7 @@ class ContainerPathFactSelection(unittest.TestCase):
                 self.assertEqual(engine['prefixes'], [
                     'working_tree::snapshot::manifest::tests::',
                     'working_tree::snapshot::store::tests::',
+                    'disk::owned::worktree_io::tests::',
                 ])
                 self.assertEqual(engine['max_tests'], 32)
                 self.assertEqual(product['mode'], 'check')

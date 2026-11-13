@@ -1,4 +1,4 @@
-use crate::disk::{DirectoryCreateOutcome, DirectoryIoError, DiskRoot};
+use crate::disk::{DirectoryCreateOutcome, DirectoryIoError, DiskRoot, NewEntryCopyError};
 use crate::persist::layout::snapshot as layout;
 use crate::working_tree::records::{file_identity, local_entity};
 use crate::working_tree::snapshot::manifest::MAX_MANIFEST_BYTES;
@@ -30,8 +30,8 @@ pub(crate) enum SnapshotStoreError {
     Repository,
     #[error("directory snapshot has missing, extra or conflicting immutable entries")]
     Entries,
-    #[error("directory snapshot payload differs from its complete-body commitment")]
-    Content,
+    #[error("publishing directory snapshot complete payload copy")]
+    Copy(#[source] NewEntryCopyError),
     #[error("directory snapshot does not contain the requested version")]
     Version,
 }
@@ -126,9 +126,14 @@ impl HeldSnapshotNode {
         let (files, files_entity) = create_child(&node, &layout::FILES)?;
         let (worktrees, worktrees_entity) = create_child(&node, &layout::WORKTREES)?;
         for file in manifest.files().values() {
-            let bytes = read_source(&mut source(file)?, file)?;
-            files.write_relative_atomic(&layout::file(file.version_id).as_relative(), &bytes, false)
-                .map_err(SnapshotStoreError::Disk)?;
+            files.copy_new_entry_verified_synced(
+                &layout::file(file.version_id),
+                &mut source(file)?,
+                platform_io::payload::Expectation {
+                    bytes: file.size,
+                    blake3: Some(file.content_hash.digest()),
+                },
+            ).map_err(SnapshotStoreError::Copy)?;
         }
         // Only a complete manifest after every full body can be accepted by recovery.
         node.write_relative_atomic(&layout::MANIFEST.as_relative(), manifest.bytes(), false)
@@ -264,17 +269,6 @@ fn create_child(
             Ok((directory, identity))
         }
     }
-}
-
-fn read_source(input: &mut impl Read, file: &SnapshotFile) -> Result<Vec<u8>, SnapshotStoreError> {
-    // Manifest admission already bounds every file and the aggregate to 64 MiB.
-    // A single extra byte detects trailing source data without unbounded reads.
-    let mut bytes = Vec::new();
-    input.take(file.size + 1).read_to_end(&mut bytes).map_err(SnapshotStoreError::Io)?;
-    if bytes.len() as u64 != file.size || blake3::hash(&bytes) != file.content_hash.digest() {
-        return Err(SnapshotStoreError::Content);
-    }
-    Ok(bytes)
 }
 
 fn incomplete(
