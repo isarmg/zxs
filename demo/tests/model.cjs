@@ -10,6 +10,18 @@ const context=vm.createContext({TextEncoder,Date});
 vm.runInContext(script.slice(0,script.indexOf('const esc ='))+';globalThis.Model=Simulation;',context);
 const Model=context.Model;
 function fixture(){const s=new Model(),f=Object.values(s.files)[0],r=Object.values(s.repos)[0];return {s,f,r};}
+function secondPrimary(s) {
+  const disk = s.registerDisk('主盘 B');
+  const dir = s.mkdir(disk.root, '目标仓库');
+  const repo = s.initRepo(dir.id);
+  const node = s.snapshot(repo.id);
+  return {disk, dir, repo, node};
+}
+function refusedUnchanged(s, action) {
+  const before = JSON.stringify(s);
+  assert.throws(action);
+  assert.equal(JSON.stringify(s), before);
+}
 test('same bytes do not create nodes; A B A does; current name survives history',()=>{
   const {s,f}=fixture(),old=f.selected;s.saveFile(f.id,s.current(f));assert.equal(f.versions.length,1);
   s.saveFile(f.id,'B');s.saveFile(f.id,'实验记录：第一版。');assert.equal(f.versions.length,3);
@@ -22,7 +34,7 @@ test('manual draft is shared, does not advance HEAD, and blocks implicit discard
   const reboot=Object.assign(Object.create(Model.prototype),JSON.parse(JSON.stringify(s)));
   assert.equal(reboot.current(reboot.files[f.id]),'draft');s.commitFile(f.id);assert.equal(f.versions.length,2);
 });
-test('copy creates independent identity; rename move delete preserve identity',()=>{
+test('copy creates independent identity; same-disk rename move delete preserve identity',()=>{
   const {s,f}=fixture(),dest=Object.values(s.dirs).find(d=>d.name==='资料');
   const copy=s.copy(f.id,dest.id);assert.notEqual(copy.id,f.id);assert.equal(copy.versions.length,1);
   s.remove(f.id);assert.equal(f.trash.length,16);assert.equal(f.versions.length,1);
@@ -128,6 +140,207 @@ test('SMB worktree drop uses explicit container identity and rejects unknown sou
   assert.equal(s.view(w)['新导入.txt'].fileId,f.id);assert.equal(f.deleted,true);
   assert.throws(()=>s.transferSMB({kind:'unknown',id:f.id},{kind:'wt',id:w.id}));
   assert.throws(()=>s.transferSMB({kind:'file',id:f.id},{kind:'wt',id:w.id}));
+});
+test('same-disk common and deleted containers remain valid worktree references', () => {
+  const {s, f, r} = fixture();
+  const source = r.heads.main;
+  const w = s.createWT(source);
+  assert.equal(r.disk, f.disk);
+  assert.equal(w.disk, f.disk);
+  assert.equal(s.view(w)['报告.txt'].disk, f.disk);
+  s.editWT(w.id, '报告.txt', 'common edit');
+  s.commitWT(w.id);
+  assert.equal(s.current(f), 'common edit');
+  s.remove(f.id);
+  s.renameDisk(f.disk, '同盘改名');
+  s.editWT(w.id, '报告.txt', 'deleted edit');
+  const node = s.commitWT(w.id);
+  assert.equal(node.files['报告.txt'].fileId, f.id);
+  assert.equal(node.files['报告.txt'].disk, f.disk);
+  assert.equal(s.current(f), 'deleted edit');
+  assert.equal(f.deleted, true);
+  assert.equal(s.nodes[source].files['报告.txt'].body, '实验记录：第一版。');
+});
+test('explicit cross-disk SMB move creates B identity and retains A historical reference', () => {
+  const {s, f, r} = fixture();
+  const b = secondPrimary(s), a = s.disks[f.disk];
+  const source = r.heads.main, history = JSON.stringify(s.nodes[source]);
+  const oldName = a.name;
+  s.renameDisk(a.id, '临时盘名');
+  s.renameDisk(b.disk.id, oldName);
+  s.renameDisk(a.id, '主盘 B');
+  const moved = s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:b.dir.id});
+  assert.notEqual(moved.id, f.id);
+  assert.equal(moved.disk, b.disk.id);
+  assert.equal(moved.deleted, false);
+  assert.equal(moved.versions.length, 1);
+  assert.equal(s.current(moved), s.current(f));
+  assert.equal(f.disk, a.id);
+  assert.equal(f.deleted, true);
+  assert.equal(f.trash.length, 16);
+  assert.equal(JSON.stringify(s.nodes[source]), history);
+  assert.equal(s.nodes[source].files['报告.txt'].fileId, f.id);
+  assert.equal(s.nodes[source].files['报告.txt'].disk, a.id);
+  const destination = s.snapshot(b.repo.id);
+  assert.equal(destination.files['报告.txt'].fileId, moved.id);
+  assert.equal(destination.files['报告.txt'].disk, b.disk.id);
+  const oldWorktree = s.createWT(source);
+  s.editWT(oldWorktree.id, '报告.txt', 'source history edit');
+  s.commitWT(oldWorktree.id);
+  assert.equal(s.current(f), 'source history edit');
+  assert.equal(s.current(moved), '实验记录：第一版。');
+});
+test('explicit cross-disk copy never deletes or reuses the identical source', () => {
+  const {s, f} = fixture();
+  const b = secondPrimary(s);
+  const twin = s.add(b.disk.root, f.name, s.current(f));
+  const before = JSON.stringify(f);
+  const copied = s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:b.dir.id}, true);
+  assert.notEqual(copied.id, f.id);
+  assert.notEqual(copied.id, twin.id);
+  assert.equal(copied.disk, b.disk.id);
+  assert.equal(JSON.stringify(f), before);
+});
+test('cross-disk move into worktree maps B deleted container and leaves A history on A', () => {
+  const {s, f, r} = fixture();
+  const b = secondPrimary(s), w = s.createWT(b.node.id);
+  const oldNode = r.heads.main, oldVersions = JSON.stringify(f.versions);
+  const moved = s.transferSMB({kind:'file', id:f.id}, {kind:'wt', id:w.id});
+  assert.notEqual(moved.id, f.id);
+  assert.equal(moved.disk, b.disk.id);
+  assert.equal(moved.deleted, true);
+  assert.equal(moved.trash.length, 16);
+  assert.equal(f.disk, r.disk);
+  assert.equal(f.deleted, true);
+  assert.equal(s.view(w)[f.name].fileId, moved.id);
+  assert.equal(s.view(w)[f.name].disk, b.disk.id);
+  assert.equal(s.nodes[oldNode].files[f.name].fileId, f.id);
+  assert.equal(s.nodes[oldNode].files[f.name].disk, r.disk);
+  s.editWT(w.id, f.name, 'B only');
+  const committed = s.commitWT(w.id);
+  assert.equal(committed.files[f.name].fileId, moved.id);
+  assert.equal(committed.files[f.name].disk, b.disk.id);
+  assert.equal(s.current(moved), 'B only');
+  assert.equal(JSON.stringify(f.versions), oldVersions);
+});
+test('cross-disk worktree copies are separate destination containers with unchanged source', () => {
+  const {s, f} = fixture();
+  const b = secondPrimary(s), first = s.createWT(b.node.id), second = s.createWT(b.node.id);
+  const before = JSON.stringify(f);
+  const one = s.transferSMB({kind:'file', id:f.id}, {kind:'wt', id:first.id}, true);
+  const two = s.transferSMB({kind:'file', id:f.id}, {kind:'wt', id:second.id}, true);
+  assert.notEqual(one.id, two.id);
+  assert.notEqual(one.id, f.id);
+  assert.equal(one.disk, b.disk.id);
+  assert.equal(two.disk, b.disk.id);
+  assert(one.deleted && two.deleted);
+  assert.equal(JSON.stringify(f), before);
+});
+test('cross-disk worktree export moves only the occurrence, not its original container', () => {
+  const {s, f, r} = fixture();
+  const b = secondPrimary(s), source = r.heads.main, w = s.createWT(source);
+  const before = JSON.stringify(f);
+  const copied = s.transferSMB({kind:'wt-file', id:w.id, path:f.name},
+    {kind:'dir', id:b.disk.root}, true);
+  assert.equal(f.deleted, false);
+  assert(s.view(w)[f.name]);
+  const moved = s.transferSMB({kind:'wt-file', id:w.id, path:f.name},
+    {kind:'dir', id:b.dir.id});
+  assert.notEqual(moved.id, f.id);
+  assert.notEqual(moved.id, copied.id);
+  assert.equal(moved.disk, b.disk.id);
+  assert.equal(f.disk, r.disk);
+  assert.equal(JSON.stringify(f), before);
+  assert.equal(s.view(w)[f.name], undefined);
+  assert.equal(s.nodes[source].files[f.name].fileId, f.id);
+  assert.equal(s.nodes[source].files[f.name].disk, r.disk);
+});
+test('ordinary cross-disk moves copy the selected exposure without changing source draft or history', () => {
+  for (const dirty of [false, true]) {
+    const {s, f} = fixture();
+    const b = secondPrimary(s), selected = f.selected;
+    s.saveFile(f.id, 'later HEAD');
+    s.selectVersion(f.id, selected);
+    if (dirty) {
+      s.mode(f.id);
+      s.saveFile(f.id, 'current draft');
+    }
+    const exposed = s.current(f), draft = f.draft, auto = f.auto;
+    const history = JSON.stringify({versions:f.versions, heads:f.heads, branch:f.branch});
+    const moved = s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:b.dir.id});
+    assert.equal(s.current(moved), exposed);
+    assert.equal(moved.versions.length, 1);
+    assert.equal(f.selected, selected);
+    assert.equal(f.draft, draft);
+    assert.equal(f.auto, auto);
+    assert.equal(f.deleted, true);
+    assert.equal(JSON.stringify({versions:f.versions, heads:f.heads, branch:f.branch}), history);
+  }
+});
+test('same-disk ordinary move preserves the shared draft and selected identity', () => {
+  const {s, f} = fixture();
+  const target = s.mkdir(s.disks[f.disk].root, '同盘目标');
+  s.mode(f.id);
+  s.saveFile(f.id, 'shared draft');
+  const selected = f.selected, history = JSON.stringify(f.versions);
+  const moved = s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:target.id});
+  assert.equal(moved, f);
+  assert.equal(f.dir, target.id);
+  assert.equal(f.selected, selected);
+  assert.equal(f.draft, 'shared draft');
+  assert.equal(JSON.stringify(f.versions), history);
+});
+test('snapshot and worktree creation refuse foreign references before allocating any IDs', () => {
+  const {s, r} = fixture();
+  const b = secondPrimary(s);
+  const laterFile = Object.values(s.files)[1];
+  laterFile.disk = b.disk.id;
+  refusedUnchanged(s, () => s.snapshot(r.id));
+  refusedUnchanged(s, () => s.createWT(r.heads.main));
+  laterFile.disk = r.disk;
+  const entry = s.nodes[r.heads.main].files[laterFile.name];
+  entry.disk = b.disk.id;
+  delete s.files[entry.fileId];
+  refusedUnchanged(s, () => s.createWT(r.heads.main));
+});
+test('worktree rejects foreign source metadata before publishing, deleting, or importing', () => {
+  const {s, f, r} = fixture();
+  const b = secondPrimary(s), w = s.createWT(r.heads.main);
+  s.editWT(w.id, f.name, 'pending edit');
+  const foreign = s.add(b.dir.id, f.name, s.current(f));
+  w.imports['foreign.txt'] = {fileId:foreign.id, disk:foreign.disk,
+    version:foreign.selected, branch:foreign.branch, body:s.current(f), storage:'foreign'};
+  refusedUnchanged(s, () => s.commitWT(w.id));
+  refusedUnchanged(s, () => s.deleteWT(w.id));
+  refusedUnchanged(s, () => s.importWT(w.id, null, false, 'new.txt'));
+  refusedUnchanged(s, () => s.exportWT(w.id, f.name, b.disk.root, true));
+  w.imports['foreign.txt'].disk = r.disk;
+  refusedUnchanged(s, () => s.commitWT(w.id));
+  refusedUnchanged(s, () => s.deleteWT(w.id));
+});
+test('repository restoration is same-disk and retains stable ownership after renames', () => {
+  const {s, r} = fixture();
+  const b = secondPrimary(s), local = s.mkdir(s.disks[r.disk].root, '恢复位置');
+  s.revokeRepo(r.id);
+  refusedUnchanged(s, () => s.restoreRepo(r.id, b.disk.root));
+  s.renameDisk(r.disk, '原盘新名字');
+  s.restoreRepo(r.id, local.id);
+  assert.equal(r.disk, local.disk);
+  assert.equal(r.dir, local.id);
+  assert.equal(s.createWT(r.heads.main).disk, local.disk);
+});
+test('cross-disk transfer conflicts, offline disks, and unknown explicit IDs leave state intact', () => {
+  const {s, f} = fixture();
+  const b = secondPrimary(s), w = s.createWT(b.node.id);
+  s.add(b.dir.id, f.name, 'occupied');
+  refusedUnchanged(s, () => s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:b.dir.id}));
+  s.transferSMB({kind:'file', id:f.id}, {kind:'wt', id:w.id}, true);
+  refusedUnchanged(s, () => s.transferSMB({kind:'file', id:f.id}, {kind:'wt', id:w.id}));
+  refusedUnchanged(s, () => s.importWT(w.id, 'unknown-file', false, 'new.txt'));
+  refusedUnchanged(s, () => s.importWT(w.id, null, true, 'new.txt'));
+  s.toggleDisk(b.disk.id);
+  refusedUnchanged(s, () => s.transferSMB({kind:'file', id:f.id}, {kind:'dir', id:b.disk.root}));
+  assert.equal(f.deleted, false);
 });
 test('SMB keyboard shortcuts dispatch only within the file browser and outside editors',()=>{
   let handler;const calls=[];

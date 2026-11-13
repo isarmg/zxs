@@ -50,7 +50,7 @@ class Simulation {
     return value;
   }
   reset() {
-    this.format = 'zxs-demo-2026-11'; this.sequence = 0; this.clock = 0;
+    this.format = 'zxs-demo-2026-11-same-disk'; this.sequence = 0; this.clock = 0;
     this.disks = {}; this.dirs = {}; this.files = {}; this.repos = {};
     this.nodes = {}; this.worktrees = {}; this.events = []; this.jobs = {};
     this.receipts = {}; this.loggedIn = true; this.selected = null;
@@ -69,6 +69,17 @@ class Simulation {
       at:new Date().toISOString()}; this.events.push(e); return e;
   }
   diskForDir(id) { return this.disks[this.dirs[id].disk]; }
+  sameDisk(owner, source) {
+    if (!this.disks[owner] || owner !== source)
+      throw Error('目录仓库与 worktree 只引用本磁盘 ID 的容器；跨盘操作须新建目标容器。');
+  }
+  referencesOnDisk(disk, entries) {
+    for (const entry of Object.values(entries)) {
+      this.sameDisk(disk, entry.disk);
+      const file = this.files[entry.fileId];
+      if (file) this.sameDisk(disk, file.disk);
+    }
+  }
   online(id) {
     const d = this.disks[id];
     if (!d || !d.registered || !d.online) throw Error('磁盘离线或未登记，不等于容器不存在。');
@@ -234,9 +245,22 @@ class Simulation {
     if(!f.deleted)this.assertFree(f.dir,name,id);f.name=name;this.log('文件改名','容器和所有版本后缀保持最新名称。',id);
   }
   move(id,dir) {
-    const f=this.files[id];this.online(f.disk);const target=this.diskForDir(dir);this.online(target.id);
-    this.assertFree(dir,f.name,id);f.dir=dir;f.disk=target.id;f.deleted=false;f.trash=null;
-    this.log('移动 / 恢复','明确移动保留容器身份与工作稿；位置 '+this.path(dir),id);
+    const f = this.files[id];
+    this.online(f.disk);
+    const target = this.diskForDir(dir);
+    this.online(target.id);
+    this.assertFree(dir, f.name, id);
+    if (f.disk !== target.id) {
+      const copy = this.copy(id, dir);
+      this.remove(id);
+      this.log('跨盘明确移动', '目标新建独立容器；原容器留在源盘 deleted-data，旧引用不变。', copy.id);
+      return copy;
+    }
+    f.dir = dir;
+    f.deleted = false;
+    f.trash = null;
+    this.log('移动 / 恢复', '同盘明确移动保留容器身份与工作稿；位置 '+this.path(dir), id);
+    return f;
   }
   remove(id) {
     const f=this.files[id];this.online(f.disk);if(f.deleted)return;
@@ -251,18 +275,25 @@ class Simulation {
     delete this.files[id];this.log('模拟管理员物理删除','仅移除模拟实体，历史快照仍保留。',id);
   }
   initRepo(dir) {
-    this.online(this.dirs[dir].disk);
+    const disk = this.online(this.dirs[dir].disk);
     if(Object.values(this.repos).some(r=>r.active&&r.dir===dir))throw Error('该目录已初始化。');
-    const r={id:this.id(),dir,active:true,heads:{main:null},branch:'main',trash:null};
+    const r={id:this.id(),dir,disk:disk.id,active:true,heads:{main:null},branch:'main',trash:null};
     this.repos[r.id]=r;this.log('初始化目录仓库','只增加 .zxs；无自动首提交，子仓独立。');return r;
   }
   capture(r) {
     const ids=this.descendants(r.dir),root=this.path(r.dir),files={},dirs=[];
+    this.online(r.disk);
+    ids.forEach(id => this.sameDisk(r.disk, this.dirs[id].disk));
+    const current = Object.values(this.files).filter(f => !f.deleted && ids.includes(f.dir));
+    for (const f of current) {
+      this.sameDisk(r.disk, f.disk);
+      this.clean(f);
+    }
     ids.filter(id=>id!==r.dir).forEach(id=>dirs.push(this.path(id).slice(root.length+1)));
-    for(const f of Object.values(this.files).filter(f=>!f.deleted&&ids.includes(f.dir))) {
-      this.online(f.disk);this.clean(f);
+    for(const f of current) {
       const path=(this.path(f.dir).slice(root.length+1)+'/'+f.name).replace(/^\//,'');
-      files[path]={fileId:f.id,version:f.selected,branch:f.branch,body:this.current(f),storage:this.id()};
+      files[path]={fileId:f.id,disk:f.disk,version:f.selected,branch:f.branch,
+        body:this.current(f),storage:this.id()};
     }
     return {files,dirs};
   }
@@ -277,7 +308,12 @@ class Simulation {
     this.log('撤销目录仓库','.zxs 移入 deleted-data；原文件及子仓不受影响。');
   }
   restoreRepo(id,dir) {
-    const r=this.repos[id];if(Object.values(this.repos).some(x=>x.active&&x.dir===dir))throw Error('目标已有仓库，请更名或选其他路径。');
+    const r=this.repos[id];
+    this.sameDisk(r.disk, this.diskForDir(dir).id);
+    this.online(r.disk);
+    for (const node of Object.values(this.nodes).filter(n => n.repo === id))
+      this.referencesOnDisk(r.disk, node.files);
+    if(Object.values(this.repos).some(x=>x.active&&x.dir===dir))throw Error('目标已有仓库，请更名或选其他路径。');
     r.dir=dir;r.active=true;r.trash=null;this.log('管理员恢复仓库','保留原身份；不与同路径后来新仓库合并。');
   }
   allocateWT(w,preferred=null) {
@@ -291,41 +327,73 @@ class Simulation {
   }
   createWT(node) {
     const n=this.nodes[node],r=this.repos[n.repo];if(!r.active)throw Error('仓库已撤销。');
-    this.online(this.dirs[r.dir].disk);
-    const w={id:this.id(),repo:r.id,source:node,branch:n.branch,birthBranch:n.branch,
-      parent:this.dirs[r.dir].parent||r.dir,edits:{},imports:{},removed:[],dirs:clone(n.dirs),
+    this.sameDisk(r.disk, this.diskForDir(r.dir).id);
+    this.online(r.disk);
+    this.referencesOnDisk(r.disk, n.files);
+    const parent = this.dirs[r.dir].parent || r.dir;
+    this.sameDisk(r.disk, this.diskForDir(parent).id);
+    const w={id:this.id(),repo:r.id,disk:r.disk,source:node,branch:n.branch,birthBranch:n.branch,
+      parent,edits:{},imports:{},removed:[],dirs:clone(n.dirs),
       deleted:false,generation:0,ledger:{}};
     w.name=this.allocateWT(w);this.worktrees[w.id]=w;
     this.log('创建空稀疏 worktree',w.name+'：只映射原节点，实例不共享修改。');return w;
   }
   view(w) {
-    const out=clone(this.nodes[w.source].files);w.removed.forEach(p=>delete out[p]);
+    const repo = this.repos[w.repo], source = this.nodes[w.source];
+    this.sameDisk(w.disk, repo.disk);
+    this.sameDisk(w.disk, this.diskForDir(repo.dir).id);
+    this.sameDisk(w.disk, this.diskForDir(w.parent).id);
+    this.sameDisk(w.disk, this.repos[source.repo].disk);
+    this.referencesOnDisk(w.disk, source.files);
+    this.referencesOnDisk(w.disk, w.imports);
+    this.referencesOnDisk(w.disk, w.edits);
+    const out=clone(source.files);w.removed.forEach(p=>delete out[p]);
     Object.assign(out,clone(w.imports),clone(w.edits));return out;
   }
-  wtReady(w) {if(w.deleted)throw Error('先由管理员恢复实例。');this.online(this.dirs[this.repos[w.repo].dir].disk);}
+  wtReady(w) {
+    if(w.deleted)throw Error('先由管理员恢复实例。');
+    this.online(w.disk);
+    return this.view(w);
+  }
   wtPath(w,path) {
     const parts=path.split('/');parts.forEach(p=>this.name(p));
     if(parts.length>1&&!w.dirs.includes(parts.slice(0,-1).join('/')))throw Error('父目录不存在，请先在 worktree 创建。');
     return path;
   }
   editWT(id,path,body) {
-    const w=this.worktrees[id];this.wtReady(w);const source=this.view(w)[path];
+    const w=this.worktrees[id],source=this.wtReady(w)[path];
     if(!source)throw Error('文件不存在。');if(body===source.body)return;
     w.edits[path]={...source,body,saved:false};w.generation++;
     this.log('worktree 写入','仅修改正文落入稀疏层；原快照不变。',source.fileId);
   }
   importWT(id,fileId,move=false,name='新文件.txt',body='外部新文件') {
-    const w=this.worktrees[id];this.wtReady(w);let f=fileId?this.files[fileId]:null;
-    if(f){this.online(f.disk);if(move)this.clean(f);name=f.name;}
-    this.wtPath(w,name);if(this.view(w)[name]||w.dirs.includes(name))throw Error('worktree 名称冲突。');
-    if(move)this.remove(f.id);else f=this.add(this.repos[w.repo].dir,name.split('/').pop(),f?this.current(f):body,true);
-    w.imports[name]={fileId:f.id,version:f.selected,branch:f.branch,body:this.current(f),storage:this.id()};
-    w.generation++;this.log(move?'移动容器进入 worktree':'复制 / 新文件进入 worktree','立即关联 deleted-data 容器；不猜测未知来源。',f.id);
+    const w = this.worktrees[id], entries = this.wtReady(w);
+    const source = fileId === null ? null : this.files[fileId];
+    if ((fileId !== null && !source) || (move && !source))
+      throw Error('明确来源容器不存在；新文件须使用独立导入入口。');
+    if (source) {
+      this.online(source.disk);
+      if (move) this.clean(source);
+      name = source.name;
+    }
+    this.wtPath(w, name);
+    if (entries[name] || w.dirs.includes(name)) throw Error('worktree 名称冲突。');
+    const localMove = move && source.disk === w.disk;
+    const f = localMove ? source : this.add(this.repos[w.repo].dir,
+      name.split('/').pop(), source ? this.current(source) : body, true);
+    if (move) this.remove(source.id);
+    w.imports[name] = {fileId:f.id, disk:f.disk, version:f.selected, branch:f.branch,
+      body:this.current(f), storage:this.id()};
+    w.generation++;
+    this.log(move ? '移动容器进入 worktree' : '复制 / 新文件进入 worktree',
+      localMove ? '同盘容器移至 deleted-data，保持原身份。' :
+        '目标盘 deleted-data 新建独立容器；不关联跨盘来源，不猜测身份。', f.id);
+    return f;
   }
   renameWT(id,path,newPath) {
-    const w=this.worktrees[id];this.wtReady(w);this.wtPath(w,newPath);
-    if(this.view(w)[newPath]||w.dirs.includes(newPath))throw Error('名称冲突。');
-    const entry=this.view(w)[path];if(!entry)throw Error('文件不存在。');
+    const w=this.worktrees[id],entries=this.wtReady(w);this.wtPath(w,newPath);
+    if(entries[newPath]||w.dirs.includes(newPath))throw Error('名称冲突。');
+    const entry=entries[path];if(!entry)throw Error('文件不存在。');
     if(w.edits[path]){w.edits[newPath]=w.edits[path];delete w.edits[path];}
     else w.imports[newPath]=entry;
     delete w.imports[path];w.removed.push(path);w.generation++;this.log('worktree 改名 / 移动',path+' → '+newPath);
@@ -335,15 +403,15 @@ class Simulation {
     w.removed.push(path);w.generation++;this.log('worktree 删除文件','仅改变该实例最终清单，原快照和其他实例不动。');
   }
   mkdirWT(id,path) {
-    const w=this.worktrees[id];this.wtReady(w);this.wtPath(w,path);
-    if(w.dirs.includes(path)||this.view(w)[path])throw Error('名称冲突。');w.dirs.push(path);w.generation++;
+    const w=this.worktrees[id],entries=this.wtReady(w);this.wtPath(w,path);
+    if(w.dirs.includes(path)||entries[path])throw Error('名称冲突。');w.dirs.push(path);w.generation++;
   }
   changeWTDir(id,path,target=null) {
-    const w=this.worktrees[id];this.wtReady(w);
+    const w=this.worktrees[id],entries=this.wtReady(w);
     if(!w.dirs.includes(path))throw Error('目录不存在。');
     if(target && (target===path || target.startsWith(path+'/')))throw Error('不能移入自身。');
-    if(target){this.wtPath(w,target);if(w.dirs.includes(target)||this.view(w)[target])throw Error('名称冲突。');}
-    const paths=Object.keys(this.view(w)).filter(p=>p.startsWith(path+'/'));
+    if(target){this.wtPath(w,target);if(w.dirs.includes(target)||entries[target])throw Error('名称冲突。');}
+    const paths=Object.keys(entries).filter(p=>p.startsWith(path+'/'));
     if(target){
       const mapped=w.dirs.map(p=>p===path||p.startsWith(path+'/')?target+p.slice(path.length):p);
       w.dirs=mapped;
@@ -355,9 +423,12 @@ class Simulation {
     w.generation++;this.log(target?'worktree 目录移动':'worktree 目录删除','只改变本实例清单。');
   }
   exportWT(id,path,dir,move=false) {
-    const w=this.worktrees[id],entry=this.view(w)[path];this.wtReady(w);
-    const f=this.add(dir,path.split('/').pop(),entry.body);
-    if(move)this.removeWTFile(id,path);this.log('worktree 文件导出','目标即时独立容器，来源快照身份不被冒用。',f.id);return f;
+    const w = this.worktrees[id], entry = this.wtReady(w)[path];
+    if (!entry) throw Error('文件不存在。');
+    const f = this.add(dir, path.split('/').pop(), entry.body);
+    if (move) this.removeWTFile(id, path);
+    this.log('worktree 文件导出', '目标即时独立容器，来源快照身份不被冒用。', f.id);
+    return f;
   }
   preflightWT(w) {
     for(const e of Object.values(w.edits)){const f=this.files[e.fileId];if(f){this.online(f.disk);this.clean(f);}}
@@ -387,6 +458,8 @@ class Simulation {
   }
   restoreWT(id) {
     const w=this.worktrees[id];if(!this.repos[w.repo].active)throw Error('先恢复仓库。');
+    this.online(w.disk);
+    this.view(w);
     w.name=this.allocateWT(w,w.name);w.deleted=false;this.log('恢复 worktree','原实例及编辑保留；原名冲突则重新分配。');
   }
   configureBackup(target,sources) {
@@ -481,7 +554,7 @@ const App={
   exportState(){download('zxs-demo-state.json',JSON.stringify(sim,null,2));},
   save(){localStorage.setItem('zxs-demo-state',JSON.stringify(sim));notify('模拟状态已保存到本浏览器。');},
   load(){act(()=>{const state=JSON.parse(localStorage.getItem('zxs-demo-state')||'null');
-    if(!state||state.format!=='zxs-demo-2026-11')throw Error('没有同格式保存状态；不自动迁移。');
+    if(!state||state.format!=='zxs-demo-2026-11-same-disk')throw Error('没有同格式保存状态；不自动迁移。');
     sim=Object.assign(Object.create(Simulation.prototype),state);sim.log('模拟冷重开','恢复状态与工作稿；不代表真实持久化协议。');});}
 };
 document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b){if(b.closest('#smbView'))ui.smbFocus=true;act(actions[Number(b.dataset.action)]);}});
