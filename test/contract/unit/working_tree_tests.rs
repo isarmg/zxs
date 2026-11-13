@@ -1,6 +1,6 @@
 use crate::working_tree::{
     DirectoryId, DirectoryRelativePath, DirectoryTargetPath, ReplicaId, ReplicaPurpose,
-    RootId, SnapshotNodeId, SnapshotRepositoryId, StorageLayout, WorkingTreeCatalog,
+    RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId, StorageLayout, WorkingTreeCatalog,
 };
 
 #[test]
@@ -34,6 +34,10 @@ fn snapshot_node_identity_is_not_a_directory_tree_or_repository() {
         .to_string().parse::<SnapshotNodeId>().is_err());
     let bytes = crate::canonical_json(&node).unwrap();
     assert_eq!(crate::decode_strict::<SnapshotNodeId>(&bytes).unwrap(), node);
+    let branch = SnapshotBranchId::from_random([3; 16]);
+    assert_eq!(branch.to_string().parse::<SnapshotBranchId>().unwrap(), branch);
+    assert!(branch.to_string().parse::<SnapshotNodeId>().is_err());
+    assert!(branch.to_string().parse::<crate::DirectoryBranchId>().is_err());
 }
 
 #[test]
