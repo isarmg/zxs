@@ -4,6 +4,8 @@ mod container_tags_fixture;
 use super::*;
 #[path = "directory_contents_tests.rs"]
 mod directory_contents;
+#[path = "export_audit_guard_tests.rs"]
+mod export_audit_guard;
 use crate::journal::RecordType;
 use std::{
     io::Read,
