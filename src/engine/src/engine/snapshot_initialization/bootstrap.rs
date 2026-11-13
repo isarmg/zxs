@@ -265,7 +265,7 @@ impl FreshBootstrap {
         // not permission to rebuild or adopt that index during fresh retry.
         AtomicFile::create(&system, &name(COMPLETE)?, &bytes)
             .map_err(FreshBootstrapError::Filesystem)?;
-        verify_record(&engine, &record)?;
+        verify_roots(&engine.config, &record, &selection_bytes, Some(&engine.disk_resources))?;
         Ok(engine)
     }
 }
@@ -278,10 +278,10 @@ impl AdmittedFreshRoot {
         &self.binding
     }
 }
-fn verify_record(engine: &Engine, record: &RootRecord) -> Result<()> {
-    verify_roots(&engine.config, record)
-}
-fn verify_roots(config: &ValidatedConfig, record: &RootRecord) -> Result<()> {
+fn verify_roots(
+    config: &ValidatedConfig, record: &RootRecord, selector_bytes: &[u8],
+    resources: Option<&DiskResources>,
+) -> Result<()> {
     if config.fresh_bootstrap() != Some(record.selection)
         || record.roots.len() != config.disks.len()
         || record.disk_writers.len() != config.disks.len()
@@ -304,7 +304,16 @@ fn verify_roots(config: &ValidatedConfig, record: &RootRecord) -> Result<()> {
         {
             return Err(FreshBootstrapError::Changed);
         }
-        let root = crate::disk::DiskRoot::open(&disk.root).map_err(engine_error)?;
+        let unopened;
+        let root = match resources {
+            Some(resources) => &resources.get(disk).map_err(engine_error)?.root,
+            None => {
+                // Cold validation runs before resource/writer creation. It
+                // observes identities only and cannot grant a live I/O lease.
+                unopened = crate::disk::DiskRoot::open(&disk.root).map_err(engine_error)?;
+                &unopened
+            }
+        };
         let named_writer = root.open_regular_entry(&layout::DISK_WRITER_LOCK)
             .map_err(engine_error)?;
         let named_writer = platform_io::fs_safety::linux::FileIdentity::from_fd(&named_writer)
@@ -315,6 +324,17 @@ fn verify_roots(config: &ValidatedConfig, record: &RootRecord) -> Result<()> {
         let directory = root.directory(&disk.root).map_err(engine_error)?;
         let held = platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)
             .map_err(|error| FreshBootstrapError::Filesystem(error.into()))?;
+        let seal = crate::disk::decode_seal(&root.read_bytes(
+            &disk.root.join(layout::DISK_IDENTITY.as_path()), MAX_BYTES,
+        ).map_err(engine_error)?).map_err(engine_error)?;
+        let expected = crate::disk::identity_at(config, disk, &directory).map_err(engine_error)?;
+        crate::disk::validate_stored_seal(&seal, &expected).map_err(engine_error)?;
+        if root.read_bytes(
+            &disk.root.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_BYTES,
+        ).map_err(engine_error)? != selector_bytes
+        {
+            return Err(FreshBootstrapError::Changed);
+        }
         if binding.root_entity != LocalEntityIdentity::new(held.device, held.inode) {
             return Err(FreshBootstrapError::Changed);
         }
@@ -337,8 +357,8 @@ fn verify_roots(config: &ValidatedConfig, record: &RootRecord) -> Result<()> {
     }
     Ok(())
 }
-pub(crate) fn fresh_root(engine: &Engine, id: RootId) -> crate::Result<AdmittedFreshRoot> {
-    let inspect = || -> Result<AdmittedFreshRoot> {
+fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
+    let inspect = || -> Result<RootRecord> {
         let system = PrivateDirectory::open_existing(&engine.root)
             .map_err(FreshBootstrapError::Filesystem)?;
         let selector = crate::authority_selection::FreshSelection::read(&system)?
@@ -368,15 +388,32 @@ pub(crate) fn fresh_root(engine: &Engine, id: RootId) -> crate::Result<AdmittedF
         {
             return Err(FreshBootstrapError::Changed);
         }
-        verify_record(engine, &record)?;
-        let binding = record.roots.into_iter().find(|binding| binding.root_id == id)
-            .ok_or(FreshBootstrapError::Changed)?;
-        Ok(AdmittedFreshRoot { binding })
+        verify_roots(
+            &engine.config, &record, &selector.canonical_bytes().map_err(engine_error)?,
+            Some(&engine.disk_resources),
+        )?;
+        system.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
+        Ok(record)
     };
     inspect().map_err(failure)
 }
 
+pub(crate) fn fresh_root(engine: &Engine, id: RootId) -> crate::Result<AdmittedFreshRoot> {
+    let record = read_verified_roots(engine)?;
+    let binding = record.roots.into_iter().find(|binding| binding.root_id == id)
+        .ok_or_else(|| failure(FreshBootstrapError::Changed))?;
+    Ok(AdmittedFreshRoot { binding })
+}
+
 impl Engine {
+    /// Read current selectable descriptions from the original fresh SYSTEM and
+    /// DISK evidence. These values are not write capabilities: callers select a
+    /// RootId, and mutation must independently re-admit that root at use time.
+    /// Missing or changed evidence is an error, never an omitted root.
+    pub fn directory_storage_roots(&self) -> crate::Result<Vec<RootBinding>> {
+        Ok(read_verified_roots(self)?.roots)
+    }
+
     /// Initialize only explicitly selected, existing empty private roots in the
     /// new directory format. Old and interrupted unclaimed material is preserved.
     pub fn initialize_directory_storage(
@@ -420,7 +457,9 @@ pub(crate) fn require_complete(root: &Path, config: &ValidatedConfig) -> crate::
         if record.system_writer != LocalEntityIdentity::new(observed.device, observed.inode) {
             return Err(FreshBootstrapError::Changed);
         }
-        verify_roots(config, &record)?;
+        verify_roots(
+            config, &record, &selector.canonical_bytes().map_err(engine_error)?, None,
+        )?;
         system.verify_identity().map_err(FreshBootstrapError::Filesystem)
     };
     inspect().map_err(failure)

@@ -119,7 +119,16 @@ fn complete_fresh_bootstrap_reopens_exact_roots_and_rejects_replaced_child() {
     );
     let root_id = RootId::from_random(identity(operation, &config.disks[0].disk_id, "root"));
     let binding = engine.fresh_directory_root(root_id).unwrap().binding().clone();
-    require_complete(&system, engine.config()).unwrap();
+    let before_query = image(temp.path());
+    let descriptions = engine.directory_storage_roots().unwrap();
+    assert_eq!(descriptions.len(), config.disks.len());
+    assert!(descriptions.iter().any(|root| root == &binding));
+    assert_eq!(image(temp.path()), before_query);
+    let mut untrusted = descriptions[0].clone();
+    untrusted.root_id = RootId::from_random([255; 16]);
+    assert!(engine.fresh_directory_root(untrusted.root_id).is_err());
+    assert_eq!(image(temp.path()), before_query);
+    require_complete(&system, &engine.config).unwrap();
     let selector = fs::read(system.join("initialized.json")).unwrap();
     let roots = fs::read(system.join(ROOTS)).unwrap();
     drop(engine);
@@ -127,18 +136,30 @@ fn complete_fresh_bootstrap_reopens_exact_roots_and_rejects_replaced_child() {
         &system, config.clone(), operation,
     ).unwrap();
     assert_eq!(reopened.fresh_directory_root(root_id).unwrap().binding(), &binding);
+    let before_query = image(temp.path());
+    assert_eq!(reopened.directory_storage_roots().unwrap(), descriptions);
+    assert_eq!(image(temp.path()), before_query);
     assert_eq!(
         fs::read(reopened.valid_replica(&file.version_id).unwrap().0.path()).unwrap(),
         b"fresh FILE proof",
     );
     assert_eq!(fs::read(system.join("initialized.json")).unwrap(), selector);
     assert_eq!(fs::read(system.join(ROOTS)).unwrap(), roots);
+    let disk_selector = config.disks[0].root.join(crate::authority_selection::FRESH_DISK_SELECTOR);
+    let retained_selector = disk_selector.with_extension("retained-original");
+    fs::rename(&disk_selector, &retained_selector).unwrap();
+    let unavailable = image(temp.path());
+    assert!(reopened.directory_storage_roots().is_err());
+    assert_eq!(image(temp.path()), unavailable);
+    fs::rename(&retained_selector, &disk_selector).unwrap();
+    assert_eq!(reopened.directory_storage_roots().unwrap(), descriptions);
     let child = config.disks[0].root.join(layout::COMMON_DATA_ROOT.as_path());
     fs::rename(&child, config.disks[0].root.join("original-common")).unwrap();
     fs::create_dir(&child).unwrap();
     fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).unwrap();
     let before = image(temp.path());
     assert!(reopened.fresh_directory_root(root_id).is_err());
+    assert!(reopened.directory_storage_roots().is_err());
     assert_eq!(image(temp.path()), before);
     drop(reopened);
     let cold_before = image(temp.path());
@@ -196,13 +217,16 @@ fn missing_original_writer_is_not_recreated_by_cold_open() {
         let engine = Engine::initialize_directory_storage(
             &system, config.clone(), OperationId::generate().unwrap(),
         ).unwrap();
-        drop(engine);
         let writer = if system_writer {
             system.join(layout::CONTROL_WRITER_LOCK.as_path())
         } else {
             config.disks[0].root.join(layout::DISK_WRITER_LOCK.as_path())
         };
         fs::rename(&writer, writer.with_extension("retained-original")).unwrap();
+        let before = image(temp.path());
+        assert!(engine.directory_storage_roots().is_err());
+        assert_eq!(image(temp.path()), before);
+        drop(engine);
         let before = image(temp.path());
         assert!(Engine::open(&system).is_err());
         assert_eq!(image(temp.path()), before);
