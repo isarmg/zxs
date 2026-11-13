@@ -2,6 +2,8 @@
 use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
 
+pub(crate) mod snapshot;
+
 /// Physical roots of the unified working-tree layout. These names do not by
 /// themselves admit a directory or authorize adoption of existing material.
 pub(crate) static COMMON_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {

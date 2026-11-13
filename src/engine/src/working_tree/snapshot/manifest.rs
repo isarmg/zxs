@@ -1,0 +1,240 @@
+use crate::persist::layout;
+use data_serialization::{Deserialize, Deserializer, Serialize};
+use name_policy::PortablePath;
+use std::collections::BTreeMap;
+use storage_contract::working_tree::{
+    MaterialCommitment, SnapshotNodeId, SnapshotRepositoryId,
+};
+use storage_contract::{ContentHash, FileId, OperationId, VersionId};
+
+pub(crate) const MAX_ENTRIES: usize = 2048;
+pub(crate) const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PATH_BYTES: usize = 1024 * 1024;
+const MAX_VERSIONS: usize = 512;
+pub(crate) const MAX_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, error_definition::Error)]
+pub(crate) enum SnapshotManifestError {
+    #[error("directory snapshot manifest exceeds its admission budget")]
+    Budget,
+    #[error("decoding directory snapshot manifest")]
+    Decode(#[source] storage_contract::Error),
+    #[error("encoding directory snapshot manifest")]
+    Encode(#[source] storage_contract::Error),
+    #[error("directory snapshot manifest differs from its committed canonical bytes")]
+    Commitment,
+    #[error("directory snapshot manifest is not bound to the selected repository and node")]
+    Identity,
+    #[error("directory snapshot paths are not in strict lookup-key order")]
+    Order,
+    #[error("directory snapshot path has an absent, non-directory or differently spelled parent")]
+    Parent,
+    #[error("directory snapshot contains protected management material")]
+    Management,
+    #[error("directory snapshot version has conflicting immutable file identities")]
+    Version,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serialization(rename_all = "snake_case")]
+enum ManifestFormat {
+    FullDirectorySnapshot,
+}
+impl<'de> Deserialize<'de> for ManifestFormat {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "full_directory_snapshot" => Ok(Self::FullDirectorySnapshot),
+            _ => Err(data_serialization::de::Error::custom(
+                "unsupported directory snapshot format",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct SnapshotFile {
+    pub(crate) file_id: FileId,
+    pub(crate) version_id: VersionId,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub(crate) size: u64,
+    pub(crate) content_hash: ContentHash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", content = "file", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum SnapshotEntryContent {
+    Directory {},
+    File(SnapshotFile),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct SnapshotEntry {
+    pub(crate) path: PortablePath,
+    pub(crate) content: SnapshotEntryContent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct ManifestRecord {
+    format: ManifestFormat,
+    repository_id: SnapshotRepositoryId,
+    node_id: SnapshotNodeId,
+    operation_id: OperationId,
+    entries: Vec<SnapshotEntry>,
+}
+
+/// Expected immutable material, not proof that a branch or repository is published.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct SnapshotReference {
+    pub(crate) repository: SnapshotRepositoryId,
+    pub(crate) node: SnapshotNodeId,
+    pub(crate) manifest: MaterialCommitment,
+}
+
+/// Syntax, complete parent closure, bounded inventory and canonical commitment.
+/// Its construction does not prove source authorization or file-body availability.
+pub(crate) struct AdmittedSnapshotManifest {
+    record: ManifestRecord,
+    reference: SnapshotReference,
+    files: BTreeMap<VersionId, SnapshotFile>,
+    bytes: Vec<u8>,
+}
+impl AdmittedSnapshotManifest {
+    pub(crate) fn prepare(
+        repository_id: SnapshotRepositoryId,
+        node_id: SnapshotNodeId,
+        operation_id: OperationId,
+        entries: Vec<SnapshotEntry>,
+    ) -> Result<Self, SnapshotManifestError> {
+        Self::admit(ManifestRecord {
+            format: ManifestFormat::FullDirectorySnapshot,
+            repository_id,
+            node_id,
+            operation_id,
+            entries,
+        })
+    }
+
+    pub(crate) fn decode(
+        bytes: &[u8],
+        expected: SnapshotReference,
+    ) -> Result<Self, SnapshotManifestError> {
+        if bytes.len() > MAX_MANIFEST_BYTES {
+            return Err(SnapshotManifestError::Budget);
+        }
+        if commitment(bytes) != expected.manifest {
+            return Err(SnapshotManifestError::Commitment);
+        }
+        let record = storage_contract::decode_strict(bytes)
+            .map_err(SnapshotManifestError::Decode)?;
+        let admitted = Self::admit(record)?;
+        if admitted.reference.repository != expected.repository
+            || admitted.reference.node != expected.node
+        {
+            return Err(SnapshotManifestError::Identity);
+        }
+        if admitted.bytes != bytes {
+            return Err(SnapshotManifestError::Commitment);
+        }
+        Ok(admitted)
+    }
+
+    fn admit(record: ManifestRecord) -> Result<Self, SnapshotManifestError> {
+        let files = admit_entries(&record.entries)?;
+        let bytes = storage_contract::canonical_json(&record)
+            .map_err(SnapshotManifestError::Encode)?;
+        if bytes.len() > MAX_MANIFEST_BYTES {
+            return Err(SnapshotManifestError::Budget);
+        }
+        let reference = SnapshotReference {
+            repository: record.repository_id,
+            node: record.node_id,
+            manifest: commitment(&bytes),
+        };
+        Ok(Self { record, reference, files, bytes })
+    }
+
+    pub(crate) fn repository_id(&self) -> SnapshotRepositoryId {
+        self.reference.repository
+    }
+    pub(crate) fn node_id(&self) -> SnapshotNodeId {
+        self.reference.node
+    }
+    pub(crate) fn commitment(&self) -> MaterialCommitment {
+        self.reference.manifest
+    }
+    pub(crate) fn reference(&self) -> SnapshotReference {
+        self.reference
+    }
+    pub(crate) fn entries(&self) -> &[SnapshotEntry] {
+        &self.record.entries
+    }
+    pub(crate) fn files(&self) -> &BTreeMap<VersionId, SnapshotFile> {
+        &self.files
+    }
+    pub(super) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+fn commitment(bytes: &[u8]) -> MaterialCommitment {
+    let mut hasher = blake3::Hasher::new_derive_key("ZXS full directory snapshot manifest");
+    hasher.update(bytes);
+    MaterialCommitment::from_digest(hasher.finalize())
+}
+
+fn admit_entries(
+    entries: &[SnapshotEntry],
+) -> Result<BTreeMap<VersionId, SnapshotFile>, SnapshotManifestError> {
+    if entries.len() > MAX_ENTRIES {
+        return Err(SnapshotManifestError::Budget);
+    }
+    let management = name_policy::lookup_key(
+        layout::SNAPSHOT_REPOSITORY.as_os_str().to_str()
+            .expect("invariant: snapshot repository layout name is ASCII"),
+    );
+    let mut path_bytes = 0usize;
+    let mut logical_bytes = 0u64;
+    let mut files = BTreeMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        path_bytes = path_bytes.checked_add(entry.path.as_str().len())
+            .filter(|total| *total <= MAX_PATH_BYTES)
+            .ok_or(SnapshotManifestError::Budget)?;
+        if index > 0 && entries[index - 1].path.key() >= entry.path.key() {
+            return Err(SnapshotManifestError::Order);
+        }
+        if entry.path.key().split('/').any(|component| component == management) {
+            return Err(SnapshotManifestError::Management);
+        }
+        if let Some(parent) = entry.path.parent() {
+            let position = entries[..index].binary_search_by(|entry| {
+                entry.path.key().cmp(parent.key())
+            }).map_err(|_| SnapshotManifestError::Parent)?;
+            let ancestor = &entries[position];
+            if ancestor.path.as_str() != parent.as_str()
+                || !matches!(ancestor.content, SnapshotEntryContent::Directory {})
+            {
+                return Err(SnapshotManifestError::Parent);
+            }
+        }
+        if let SnapshotEntryContent::File(file) = entry.content {
+            logical_bytes = logical_bytes.checked_add(file.size)
+                .filter(|total| *total <= MAX_LOGICAL_BYTES)
+                .ok_or(SnapshotManifestError::Budget)?;
+            if files.insert(file.version_id, file).is_some_and(|previous| previous != file) {
+                return Err(SnapshotManifestError::Version);
+            }
+            if files.len() > MAX_VERSIONS {
+                return Err(SnapshotManifestError::Budget);
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/working_tree/snapshot/manifest_tests.rs"]
+mod tests;

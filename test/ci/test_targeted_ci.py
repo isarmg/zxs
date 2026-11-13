@@ -2610,5 +2610,28 @@ class ContainerPathFactSelection(unittest.TestCase):
                             for target in engine + [http, schema]))
 
 
+    def test_snapshot_node_material_selects_exact_storage_boundaries(self):
+        for path in [
+            'src/engine/src/working_tree/snapshot.rs',
+            'src/engine/src/working_tree/snapshot/manifest.rs',
+            'src/engine/src/working_tree/snapshot/store.rs',
+            'src/engine/src/persist/layout/snapshot.rs',
+            'test/engine/unit/working_tree/snapshot/manifest_tests.rs',
+            'test/engine/unit/working_tree/snapshot/store_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertEqual(plan['groups'], ['directory-snapshot-material'])
+                self.assertEqual(plan['python_tests'], [])
+                engine, product = plan['rust_targets']
+                self.assertEqual(engine['prefixes'], [
+                    'working_tree::snapshot::manifest::tests::',
+                    'working_tree::snapshot::store::tests::',
+                ])
+                self.assertEqual(engine['max_tests'], 32)
+                self.assertEqual(product['mode'], 'check')
+                self.assertIs(product['default_features'], False)
+
+
 if __name__ == '__main__':
     unittest.main()
