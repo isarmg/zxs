@@ -117,3 +117,9 @@ pub(crate) static MANUAL_INITIALIZATION_COMPLETE: LazyLock<EntryName> = LazyLock
 pub(crate) static SYSTEM_CONFIG: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("config.json").expect("invariant: SYSTEM configuration is one canonical entry")
 });
+
+/// Installation evidence for the one permanent storage-root registration decision.
+pub(crate) static STORAGE_INITIALIZATION_PROOF: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("storage-initialization-proof-v1.json")
+        .expect("invariant: storage initialization proof is one canonical entry")
+});

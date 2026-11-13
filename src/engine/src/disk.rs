@@ -66,7 +66,7 @@ pub(crate) const MAX_METADATA: usize = 64 * 1024 * 1024;
 // A 1 TiB file with the smallest supported 64 KiB checksum chunks needs
 // 512 MiB plus its fixed checksum header. Keep this separate from JSON metadata.
 pub(crate) const MAX_CHECKSUM_MANIFEST: usize = 512 * 1024 * 1024 + CHECKSUM_HEADER_BYTES;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct DiskSeal {
     pub format: DiskSealFormat,

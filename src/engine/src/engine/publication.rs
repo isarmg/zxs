@@ -359,6 +359,7 @@ impl Engine {
         self.require_detached_publication_context(detached)
     }
     fn require_detached_publication_context(&self, detached: &DetachedPublication) -> Result<()> {
+        self.require_storage_bootstrap_transition(&detached.candidate, &detached.next)?;
         crate::engine::container_drafts::verify_transition(&self.state, &detached.next)?;
         self.verify_draft_material(&detached.next)?;
         if self.blocked
@@ -880,6 +881,7 @@ impl Engine {
                 )?;
             }
         }
+        self.complete_storage_bootstrap(c, next, &publication)?;
         self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }
@@ -1129,6 +1131,7 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
+        self.complete_storage_bootstrap(c, next, &publication)?;
         self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }

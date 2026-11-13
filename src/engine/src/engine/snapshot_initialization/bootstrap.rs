@@ -15,6 +15,8 @@ use storage_contract::working_tree::{
 };
 use storage_contract::Generation;
 
+mod decision;
+
 const ROOTS: &str = "fresh-directory-roots-v1.json";
 const COMPLETE: &str = "fresh-directory-bootstrap-complete-v1.json";
 const MAX_BYTES: usize = 1024 * 1024;
@@ -56,7 +58,7 @@ pub(crate) struct FreshBootstrap {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct RootRecord {
+pub(in crate::engine) struct RootRecord {
     layout: StorageLayout,
     selection: MaterialCommitment,
     operation: OperationId,
@@ -193,10 +195,19 @@ impl FreshBootstrap {
                 if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(FreshBootstrapError::Filesystem(error)),
         };
+        let registered = match system.read_bounded(&name(ROOTS)?, MAX_BYTES) {
+            Ok(bytes) => {
+                RootRecord::decode(&bytes)?;
+                true
+            }
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(FreshBootstrapError::Filesystem(error)),
+        };
         let handles = directories.into_iter().map(|directory| {
             Ok(opened(directory)?.into_directory())
         }).collect::<Result<Vec<_>>>()?;
-        let resources = Arc::new(if complete {
+        let resources = Arc::new(if complete || registered {
             DiskResources::recover_held(&config, handles)
         } else {
             DiskResources::initialize_held(&config, handles)
@@ -229,6 +240,26 @@ impl FreshBootstrap {
                 require_complete(&self.root, &self.config).map_err(engine_error)?;
                 let path = self.root.clone();
                 drop(self);
+                return Engine::open(&path).map_err(engine_error);
+            }
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(FreshBootstrapError::Filesystem(error)),
+        }
+        match system.read_bounded(&name(ROOTS)?, MAX_BYTES) {
+            Ok(bytes) => {
+                let record = RootRecord::decode(&bytes)?;
+                // Recover only a fully retained permanent installation. The
+                // original selector operation was already compared in prepare.
+                let locks = crate::engine::config::acquire_locks_selected(
+                    &self.root, &self.resources, self.selection,
+                ).map_err(engine_error)?;
+                decision::restore_completion(&system, &self.config, &self.resources, &record)
+                    .map_err(engine_error)?;
+                let path = self.root;
+                drop(locks);
+                drop(self.resources);
+                drop(self._directory_locks);
                 return Engine::open(&path).map_err(engine_error);
             }
             Err(platform_io::fs_safety::Error::Io(error))
@@ -359,8 +390,7 @@ impl FreshBootstrap {
         ).map_err(engine_error)?;
         // Completion is last. An index write interrupted before this record is
         // not permission to rebuild or adopt that index during fresh retry.
-        AtomicFile::create(&system, &name(COMPLETE)?, &bytes)
-            .map_err(FreshBootstrapError::Filesystem)?;
+        engine.publish_storage_bootstrap(&record).map_err(engine_error)?;
         verify_roots(&engine.config, &record, &selection_bytes, Some(&engine.disk_resources))?;
         let proof = require_complete_resources(&system, &engine.config, Some(&engine.disk_resources))
             .map_err(engine_error)?;
@@ -468,12 +498,15 @@ fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
-        if bytes != complete || engine.config.fresh_completion()
+        if engine.config.fresh_completion()
             .is_none_or(|proof| proof.commitment != completion_commitment(&complete))
         {
             return Err(FreshBootstrapError::Changed);
         }
         let record = RootRecord::decode(&bytes)?;
+        let decision = decision::BootstrapDecision::decode(&complete, &record)
+            .map_err(engine_error)?;
+
         if record.operation != selector.operation
             || record.selection != selector.commitment().map_err(engine_error)?
         {
@@ -493,6 +526,8 @@ fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
             &engine.config, &record, &selector.canonical_bytes().map_err(engine_error)?,
             Some(&engine.disk_resources),
         )?;
+        decision.verify_installed(&engine.config, &engine.disk_resources, &record, &complete)
+            .map_err(engine_error)?;
         system.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
         Ok(record)
     };
@@ -557,14 +592,14 @@ fn require_complete_resources(
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
-        if bytes != complete {
-            return Err(FreshBootstrapError::Changed);
-        }
         let selector = crate::authority_selection::FreshSelection::read(&system)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         selector.require_directory(&system)?;
         selector.require_config(config).map_err(engine_error)?;
         let record = RootRecord::decode(&bytes)?;
+        let decision = decision::BootstrapDecision::decode(&complete, &record)
+            .map_err(engine_error)?;
+
         if record.operation != selector.operation
             || record.selection != selector.commitment().map_err(engine_error)?
         {
@@ -585,6 +620,13 @@ fn require_complete_resources(
         if bootstrap_root != record.bootstrap_root || bootstrap_writer != record.bootstrap_writer {
             return Err(FreshBootstrapError::Changed);
         }
+        match resources {
+            Some(resources) => decision.verify_installed(config, resources, &record, &complete),
+            None => {
+                let resources = DiskResources::open(config, true).map_err(engine_error)?;
+                decision.verify_installed(config, &resources, &record, &complete)
+            }
+        }.map_err(engine_error)?;
         system.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
         Ok(CompletionProof {
             commitment: completion_commitment(&complete), system: selector.system,

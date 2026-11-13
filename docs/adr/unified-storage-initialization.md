@@ -19,9 +19,15 @@
 
 ## 尚未完成，不能被本次整合提交冒充
 
-- 三根 RootRecord 的承诺还必须绑定永久 SYSTEM Candidate / operation / principal，并由
-  相同决定的 DISK 安装证据闭合。当前完成标记不是这个永久决定的替代品。
+- 第二阶段已写入 `storage.initialize` 永久决定：完整 RootRecord 是唯一首个 operation
+  的结果，原操作号、固定内部主体与根承诺进入 Candidate 对应的 State 快照。安装证明持有
+  该 Candidate / Publication，每个 DISK 留同一份证明；Complete 仅在全部证明和成员收据
+  复验后写入。冷开还读取并验证首快照的完整 operation / principal 闭包。
+- 原操作显式重试目前仅能从所有 DISK 已完整安装的证明重建缺失 Complete。
+  Accept / Finalize / 部分 proof 写入中断仍保留并拒绝，尚未实现完整阶段恢复。
 - 首写后无完整身份记录的中断材料仍保留并拒绝；需补决定前后逐边界恢复。
+  已补真实完整决定、删除 Complete 后原操作重试，以及缺失/损坏 DISK proof 的拒绝回归，
+  但这些回归尚未运行。
 - SYSTEM SQLite / WAL / SHM 仍有独立路径型消费者，本次不能称全流程 held。
 - 旧初始化入口退休会使仍依赖旧建池方式的测试及消费者显式失败；必须逐消费者调整真实
   fresh 准入，不能重新开放兼容来消除失败。

@@ -167,6 +167,22 @@ impl SelectionGuard {
             if original != expected {
                 return Err(FreshBootstrapError::Changed);
             }
+            let root = held(&self.directory)?;
+            let mut only_selector = true;
+            for entry in root.entries().map_err(FreshBootstrapError::Filesystem)? {
+                if entry.map_err(FreshBootstrapError::Filesystem)?.as_os_str() != SELECTOR {
+                    only_selector = false;
+                }
+            }
+            for directory in directories {
+                let root = held(directory)?;
+                if root.entries().map_err(FreshBootstrapError::Filesystem)?
+                    .next().transpose().map_err(FreshBootstrapError::Filesystem)?.is_some()
+                {
+                    only_selector = false;
+                }
+            }
+            self.first_write = only_selector;
         } else {
             self.first_write = true;
             let root = held(&self.directory)?;

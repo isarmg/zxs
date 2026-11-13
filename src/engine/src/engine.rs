@@ -1382,6 +1382,7 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn require_write(&self) -> Result<()> {
+        container_drafts::format::require_manual_storage(&self.config)?;
         self.require_move_source_read()?;
         if self.move_is_retained() {
             return Err(Error::new(ErrorCode::RecoveryRequired,

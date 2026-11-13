@@ -3128,7 +3128,7 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
         target, = policy['groups'][group]['rust_targets']
         self.assertEqual(target['prefixes'],
                          ['engine::snapshot_initialization::bootstrap::tests::'])
-        self.assertEqual(target['max_tests'], 10)
+        self.assertEqual(target['max_tests'], 12)
         self.assertEqual(target['timeout_seconds'], 900)
         self.assertEqual(target['exact'], [
             'disk::discovery::tests::'
@@ -3141,3 +3141,15 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path],
                                             ['held-directory-layout'], [group])
+
+
+class DirectoryBootstrapDecisionSelection(unittest.TestCase):
+    def test_decision_keeps_complete_original_bootstrap_scope(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        for path in [
+            'src/engine/src/engine/snapshot_initialization/bootstrap.rs',
+            'src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path],
+                                            ['directory-storage-bootstrap'], [])

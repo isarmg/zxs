@@ -374,3 +374,68 @@ fn cold_bootstrap_refuses_missing_writer_or_old_completion_without_repair() {
         assert_eq!(image(temp.path()), before);
     }
 }
+
+#[test]
+fn permanent_registration_binds_roots_and_exact_retry_restores_only_completion() {
+    let (temp, system, config) = fixture();
+    let operation = OperationId::generate().unwrap();
+    let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+    let roots = engine.directory_storage_roots().unwrap();
+    assert_eq!(roots.len(), config.disks.len());
+    let original = engine.state().operations.get(&operation).unwrap().clone();
+    assert_eq!(original.kind, "storage.initialize");
+    assert_eq!(original.sequence, 1);
+    assert_eq!(engine.state().operation_principals.get(&operation).map(String::as_str),
+        Some("system:storage-initializer"));
+    let complete = fs::read(system.join(COMPLETE)).unwrap();
+    let record = RootRecord::decode(&fs::read(system.join(ROOTS)).unwrap()).unwrap();
+    decision::BootstrapDecision::decode(&complete, &record).unwrap();
+    for disk in &config.disks {
+        assert_eq!(fs::read(disk.root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path()))
+            .unwrap(), complete);
+    }
+    drop(engine);
+    fs::remove_file(system.join(COMPLETE)).unwrap();
+    let before = image(temp.path());
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(image(temp.path()), before);
+    let engine = Engine::initialize_storage(&system, config, operation).unwrap();
+    assert_eq!(engine.state().operations.get(&operation), Some(&original));
+    assert_eq!(engine.directory_storage_roots().unwrap(), roots);
+    assert_eq!(fs::read(system.join(COMPLETE)).unwrap(), complete);
+    drop(engine);
+    let mut after = image(temp.path());
+    // Cold-open disposable database side effects are not the installation proof.
+    // Assert immutable bootstrap and every DISK proof separately above; the
+    // same operation must not append another permanent operation.
+    after.remove(std::path::Path::new(COMPLETE));
+    for (path, value) in before {
+        if path.starts_with("disk-0") || path.starts_with("disk-1")
+            || path.starts_with("disk-2")
+        {
+            assert_eq!(after.get(&path), Some(&value));
+        }
+    }
+}
+
+#[test]
+fn incomplete_disk_installation_proof_never_authorizes_completion_repair() {
+    for missing in [true, false] {
+        let (temp, system, config) = fixture();
+        let operation = OperationId::generate().unwrap();
+        let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+        drop(engine);
+        fs::remove_file(system.join(COMPLETE)).unwrap();
+        let proof = config.disks[1].root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path());
+        if missing {
+            fs::rename(&proof, config.disks[1].root.join("preserved-original-proof")).unwrap();
+        } else {
+            fs::set_permissions(&proof, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(&proof, b"{}\n").unwrap();
+        }
+        let before = image(temp.path());
+        assert!(Engine::initialize_storage(&system, config, operation).is_err());
+        assert_eq!(image(temp.path()), before);
+        assert!(!system.join(COMPLETE).exists());
+    }
+}

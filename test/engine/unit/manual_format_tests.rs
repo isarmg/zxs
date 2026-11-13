@@ -58,7 +58,7 @@ fn first_write_is_only_deny_selector_and_exact_read_does_not_rewrite_it() {
     drop(guard);
     let reopened = select(&f, operation).unwrap();
     assert_eq!(reopened.fresh_selection(), Some(&selected));
-    assert!(!reopened.allows_writer_creation());
+    assert!(reopened.allows_writer_creation());
     assert!(crate::authority_selection::require_legacy(f.system.path()).is_err());
     assert_eq!(bytes_identity(&path), before);
 }

@@ -34,7 +34,7 @@
             "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
             "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
           ],
-          "max_tests": 10,
+          "max_tests": 12,
           "timeout_seconds": 900
         }
       ]
@@ -3941,6 +3941,12 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
     {
       "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
       "groups": [
