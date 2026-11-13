@@ -169,6 +169,10 @@ fn full_descriptor(
         .collect::<Vec<_>>();
     canonical_json(&json!({
         "cache_only":true, "file_id":file,
+        "container_edit": state.container_edits
+            .get(&file.parse::<storage_contract::FileId>().unwrap())
+            .cloned()
+            .unwrap_or_else(storage_contract::container_edit::ContainerEdit::initial),
         "container_tags": state.container_tags.get(&file.parse::<storage_contract::FileId>().unwrap()), "history_tree_id":history, "name":name,
         "location":location, "primary_location":state.file_locations.get(file),
         "backup_policy_id":state.file_backup_policies.get(file), "metadata_nodes":metadata_nodes,

@@ -3,7 +3,7 @@
 use super::*;
 use crate::{Config, Engine};
 use std::{collections::BTreeMap, fs, io::{Read, Seek, SeekFrom}};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use storage_contract::{ContentHash, FileNodeId, OperationId};
 use storage_contract::container_edit::DraftBase;
 
@@ -106,9 +106,25 @@ fn draft_body_reopens_after_restart_without_creating_history_or_selecting_itself
     let engine = Engine::open(&temp.path().join("state")).unwrap();
     assert_eq!(storage_contract::canonical_json(engine.state()).unwrap(), before);
     let held = disk(&engine);
+    let reopened_history = image(&history);
+    assert_eq!(reopened_history.keys().collect::<Vec<_>>(), original.keys().collect::<Vec<_>>());
+    for (path, expected) in &original {
+        let actual = &reopened_history[path];
+        if path.file_name().is_some_and(|name| name == "container.json") {
+            // Cold recovery atomically reinstalls this derived descriptor.
+            // Its inode may change, but no descriptor bytes or mode may change.
+            assert_eq!(actual.0, expected.0, "device: {path:?}");
+            assert_eq!(actual.2, expected.2, "mode: {path:?}");
+            assert_eq!(actual.3, expected.3, "bytes: {path:?}");
+        } else {
+            // Frozen bodies, receipts, databases and their directories retain
+            // their exact bytes, inode, device and mode across the cold open.
+            assert_eq!(actual, expected, "immutable history: {path:?}");
+        }
+    }
     let prepared = reopen(&held, file, revision.expected_generation, &revision, limits()).unwrap();
     assert_eq!(body(prepared), b"working draft");
-    assert_eq!(image(&history), original);
+    assert_eq!(image(&history), reopened_history);
 }
 
 #[test]
@@ -186,6 +202,8 @@ fn corrupt_body_and_exhausted_budget_never_fall_back_to_history_or_overwrite_evi
     assert_eq!(body(reopen(&held, file, original.expected_generation, &original,
         bounded).unwrap()), b"working draft");
     let path = directory(&held, file, &original).join(layout::BODY.as_path());
+    // Simulate external corruption of an intentionally read-only saved body.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(&path, b"damaged draft").unwrap();
     let before = image(held.root.path());
     assert!(matches!(reopen(&held, file, original.expected_generation, &original,
@@ -218,6 +236,8 @@ fn range_manifest_is_bound_to_selected_bytes_and_detects_later_chunk_tampering()
     body.read_exact_at(&mut last_chunk, 65_536).unwrap();
     assert_eq!(*blake3::hash(&last_chunk).as_bytes(), decoded.chunks[1]);
     let path = directory(&held, file, &revision).join(layout::BODY.as_path());
+    // The published body is read-only; deliberately admit the attack writer.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
     writer.write_all_at(b"x", 65_540).unwrap();
     writer.sync_all().unwrap();
