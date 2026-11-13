@@ -961,3 +961,37 @@ None／cold／显式原 registry verify 预热后比较两目标的完整 State�
 不能用更早错误伪绿；替换配置目录名仍拒绝且保留原持有根。
 每次错误后核目录名／文件字节不变，仅恢复测试主动改坏材料。
 原完整事务 exact/max1/900、全部旧组和限额保持；新切片仍待 GitHub 实测。
+
+## generation-control 原前缀收集的同账户接线
+
+准确 68a23db 的 committed-only Current 接线已发布，#1334 的准确
+68a23db／40efc366 计划保留 4 个 Cargo 身份、8 个 Python 模块及原 900 秒独立片。
+平台片已实际 38 Rust 通过，selected failed/skipped/blocked 为空；
+主 Engine 与原事务仍待取证，不能把前述 #1332 的证据移作这一提交通过。
+平台工件 13994868710，ZIP SHA256：
+`64a630601a6786c90a72aa06b70e05bbd5b90172cb0006a9e24965706680e125`。
+
+下一接线只覆盖 generation_control::Plan::capture →
+archive::generation_objects::collect 的完整原前缀收集。
+现有 collect 保持 None，新 wrapper 接完整 NativeTask 与已有 memo，
+共同进入唯一 collect_at；Target 只读 committed canonical，冷 miss 不填充。
+manifest 解码／哈希、每次真实对象读取／预算／strict parse、
+完整 archive 验证、重复地址的原字节相等和 seal 解码次序均保留。
+其后的真实 frozen 控制读取、PreparedBackupControl::capture、
+所有材料读回、completion 和外层尾验不动，没有新 commit 边界。
+
+复用现有 serving 夹具的 cfg(test) helper，不新增测试数量或另一套 setup。
+None／cold／原 registry verify 预热后，逐目标比较完整 prefix objects/seals、
+独立 frozen→Control 构造及真实 read_authority_input 的全部 files/root，
+以及全部八个报告字段。坏 raw、duplicate、缺件和取消仍拒绝，
+每次调用后比较完整目录名和文件字节；只还原测试主动修改的材料。
+缺件以临时移走再放回原文件制造，不用重新创建替换原文件。
+私有 memo 账户不变由既有完整账户单测和唯一 Committed 只读路径静审覆盖，
+本 helper 不声称直接观测了跨模块私有账户，也不增加生产观测接口。
+
+#1332 的 generation-control authority input 约 125 毫秒是 inclusive 组件耗时，
+包含 frozen journal、Control 构造和实际读回，不能当成此接线可消除的成本。
+独立 source Snapshot 每次约 4.5 毫秒且尚未接入本片。
+当前切片待准确后继 GitHub 定向验证；原 exact/max1/900、
+memo 单元静态预计 89 项，保留 96 上限及全部旧选择；实际执行数以新 SHA 工件为准。
+不宣称完整事务已闭环。

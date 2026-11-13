@@ -6,8 +6,9 @@ use crate::business::{history_copy, object_move};
 use crate::persist::path_changes::{
     PathChanged, batch_transfers, invalid, is_kind, read, validate_receipt_facts,
 };
+use crate::persist::path_changes::references::References;
 use crate::state_projection::lifecycles::{DeletionOwner, history_copy_owner};
-use storage_contract::Principal;
+use storage_contract::{Principal, Sequence};
 
 pub(crate) fn admit(state: &State) -> Result<()> {
     visit(state, || Ok(()), |_| Ok(()))
@@ -18,6 +19,7 @@ pub(crate) fn visit(
     mut checkpoint: impl FnMut() -> Result<()>,
     mut path: impl FnMut(PathChanged) -> Result<()>,
 ) -> Result<()> {
+    let mut references = References::new(state);
     for (id, receipt) in state.operations.iter() {
         checkpoint()?;
         let copies = history_copy_owner(receipt);
@@ -40,11 +42,33 @@ pub(crate) fn visit(
                 return Err(invalid());
             }
             validate_receipt_facts(receipt, &movement.path_changes)?;
+            for copied in &movement.retained_lifecycle {
+                for fact in &copied.path_changes {
+                    references.check(
+                        fact.file_id,
+                        fact.history_tree_id,
+                        fact.branch_id,
+                        [fact.before_version_id, fact.after_version_id],
+                        Sequence::new(receipt.sequence),
+                        &mut checkpoint,
+                    )?;
+                }
+            }
             movement.path_changes
         } else {
             match copies {
                 DeletionOwner::File(file) => {
-                    history_copy::retained::read(receipt, file)?;
+                    let copied = history_copy::retained::read(receipt, file)?;
+                    for fact in &copied.path_changes {
+                        references.check(
+                            fact.file_id,
+                            fact.history_tree_id,
+                            fact.branch_id,
+                            [fact.before_version_id, fact.after_version_id],
+                            Sequence::new(receipt.sequence),
+                            &mut checkpoint,
+                        )?;
+                    }
                 }
                 DeletionOwner::Other => {}
                 DeletionOwner::Files(_) | DeletionOwner::Malformed => return Err(invalid()),
@@ -61,6 +85,14 @@ pub(crate) fn visit(
             if fact.author != principal {
                 return Err(invalid());
             }
+            references.check(
+                fact.file_id,
+                fact.history_tree_id,
+                fact.branch_id,
+                [fact.before_version_id, fact.after_version_id],
+                Sequence::new(receipt.sequence),
+                &mut checkpoint,
+            )?;
             path(fact)?;
         }
     }

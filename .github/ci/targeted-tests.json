@@ -8342,6 +8342,13 @@
       ]
     },
     {
+      "path": "src/engine/src/persist/path_changes/references.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
       "path": "src/engine/src/state_projection.rs",
       "groups": [
         "container-path-facts-engine",
@@ -8740,6 +8747,18 @@
     },
     {
       "path": "test/engine/unit/backup_committed_namespace_probe.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/generation_control.rs",
+      "groups": [
+        "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_generation_encoding_probe.rs",
       "groups": [
         "backup-scoped-encoding-memo"
       ]

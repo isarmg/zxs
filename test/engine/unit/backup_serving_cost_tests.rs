@@ -532,6 +532,9 @@ fn real_native_serving_component_costs_keep_all_admission_and_readback() -> Resu
     published_registry::encoding_probe::verify_committed_namespace_encodings(
         _temp.path(), &mut prepared, &decision, &expected, &stop,
     )?;
+    generation_control::encoding_probe::verify_generation_encoding_reuse(
+        _temp.path(), &mut prepared, &decision, &stop,
+    )?;
     let mut previous_completion = None;
     let mut previous_databases = BTreeMap::new();
     for iteration in 0..2 {

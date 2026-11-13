@@ -12,6 +12,7 @@ const MAX_FACTS: usize = 65_536;
 const MAX_BYTES: usize = 12 * 1024 * 1024;
 
 mod ledger;
+mod references;
 pub(crate) use ledger::{admit as admit_ledger, visit as visit_ledger};
 
 #[derive(Deserialize)]

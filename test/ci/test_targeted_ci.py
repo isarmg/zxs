@@ -2478,6 +2478,7 @@ class ContainerPathFactSelection(unittest.TestCase):
             'container-path-facts-engine': [
                 'src/engine/src/persist/path_changes.rs',
                 'src/engine/src/persist/path_changes/ledger.rs',
+                'src/engine/src/persist/path_changes/references.rs',
                 'src/engine/src/business/file_paths.rs',
                 'src/engine/src/business/workspace/file_location.rs',
                 'src/engine/src/business/history_copy/retained.rs',

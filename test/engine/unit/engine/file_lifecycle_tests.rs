@@ -307,6 +307,30 @@ fn file_lifecycle_rename_uses_permanent_fact_without_changing_content_graph() {
         after: facts[0].after.clone(),
     });
     crate::history_package::validate_prepared_state(engine.state()).unwrap();
+    for absent_branch in [false, true] {
+        let mut corrupted = engine.state().clone();
+        let mut forged = facts.clone();
+        if absent_branch {
+            forged[0].branch_id = storage_contract::BranchId::generate().unwrap();
+        } else {
+            forged[0].after_version_id = storage_contract::VersionId::generate().unwrap();
+        }
+        corrupted.operations.get_mut(&operation).unwrap().result["path_changes"] =
+            json_codec::to_value(forged).unwrap();
+        let bytes = storage_contract::canonical_json(&corrupted).unwrap();
+        assert_eq!(
+            crate::history_package::validate_prepared_state(&corrupted)
+                .unwrap_err().code(),
+            storage_contract::ErrorCode::PublicationInvalid,
+        );
+        let decoded: crate::State = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(
+            crate::history_package::validate_prepared_state(&decoded)
+                .unwrap_err().code(),
+            storage_contract::ErrorCode::PublicationInvalid,
+        );
+        assert_eq!(storage_contract::canonical_json(&corrupted).unwrap(), bytes);
+    }
     for missing in [false, true] {
         let mut corrupted = engine.state().clone();
         let result = &mut corrupted.operations.get_mut(&operation).unwrap().result;
@@ -342,13 +366,23 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
     let source = engine.state.repositories[
         &engine.state.histories[&history].repository_id
     ].clone();
+    engine.file_namespace(
+        &source.repository_id,
+        crate::NamespaceOperation::parse(
+            crate::NamespaceOperationKind::Rename,
+            "file.txt",
+            Some("renamed.txt"),
+        ).unwrap(),
+        "admin",
+        OperationId::generate().unwrap(),
+    ).unwrap();
     let target = engine.create_disk_root("D04", "admin", OperationId::generate().unwrap())
         .unwrap();
     let operation = OperationId::generate().unwrap();
     let receipt = engine.copy_file_history(
         &crate::FileHistoryCopyRequest {
             source_repository_id: source.repository_id.clone(),
-            source_path: "file.txt".into(),
+            source_path: "renamed.txt".into(),
             expected_source_head: engine.state.branches[&source.main_branch_id]
                 .head_commit_id.clone(),
             target_repository_id: target.repository_id.clone(),
@@ -363,6 +397,41 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
     let copied = engine.list_tree(&target.main_branch_id).unwrap().into_iter()
         .find(|entry| entry.path() == "copied.txt").unwrap();
     let copied_file = HistoryFileId::parse(&copied.file_id).unwrap();
+    let retained = crate::business::history_copy::retained::read(&receipt, &copied.file_id)
+        .unwrap();
+    assert_eq!(retained.path_changes.len(), 1);
+    for damage in ["missing branch", "missing version", "source owner"] {
+        let mut corrupted = engine.state().clone();
+        let mut forged = retained.clone();
+        match damage {
+            "missing branch" => {
+                forged.path_changes[0].branch_id = storage_contract::BranchId::generate().unwrap();
+            }
+            "missing version" => {
+                forged.path_changes[0].after_version_id =
+                    storage_contract::VersionId::generate().unwrap();
+            }
+            "source owner" => {
+                forged.path_changes[0].after_version_id = version.as_str().parse().unwrap();
+            }
+            _ => unreachable!("invariant: the fixed damage cases are exhaustive"),
+        }
+        corrupted.operations.get_mut(&operation).unwrap().result["retained_lifecycle"] =
+            json_codec::to_value(forged).unwrap();
+        let bytes = storage_contract::canonical_json(&corrupted).unwrap();
+        assert_eq!(
+            crate::history_package::validate_prepared_state(&corrupted)
+                .unwrap_err().code(),
+            storage_contract::ErrorCode::PublicationInvalid,
+        );
+        let decoded: crate::State = json_codec::from_slice(&bytes).unwrap();
+        assert_eq!(
+            crate::history_package::validate_prepared_state(&decoded)
+                .unwrap_err().code(),
+            storage_contract::ErrorCode::PublicationInvalid,
+        );
+        assert_eq!(storage_contract::canonical_json(&corrupted).unwrap(), bytes);
+    }
     let mut read = engine.capture_file_lifecycle(
         request_for(&engine, &copied_file, 64), HistoryWindowCancellation::new(),
     ).unwrap();
