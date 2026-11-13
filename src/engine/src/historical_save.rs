@@ -593,6 +593,11 @@ impl Engine {
                         };
                     if entry.file_id.starts_with("new-file:") {
                         entry.file_id = new_id("file")?;
+                        // This identity is first published only on a historical
+                        // branch, so main-head capture cannot supply its owner.
+                        // Existing identities keep their current authority.
+                        state.file_locations.insert(entry.file_id.clone(), entry.path().to_owned());
+                        state.file_names.insert(entry.file_id.clone(), entry.name().to_owned());
                         state.container_tags.insert(
                             entry.file_id.parse()?,
                             storage_contract::file_container_tags::ContainerTags::empty(),

@@ -395,6 +395,9 @@ fn checkout_paths_do_not_relocate_stable_main_and_topic_only_files_are_retained(
     fixture.checkout(&topic);
     fixture.rename("main/report.txt", "main/topic-report.txt");
     let changed = fixture.save("main/topic-report.txt", b"topic saved body");
+    let changed_storage = fixture.engine.state().versions[&changed.version_id].storage_id;
+    let changed_inode = fs::metadata(root.join("main/report.txt/versions")
+        .join(format!("{changed_storage}-report.txt"))).unwrap().ino();
     let topic_only = fixture.save("topic-only.txt", b"topic only body");
     assert_eq!(changed.file_id, original.file_id);
     assert_eq!(
@@ -422,6 +425,8 @@ fn checkout_paths_do_not_relocate_stable_main_and_topic_only_files_are_retained(
     assert_eq!(containers[&original.file_id].len(), 1);
     assert_eq!(containers[&topic_only.file_id].len(), 1);
     let fixture = fixture.reopen();
+    assert_eq!(fs::metadata(fixture.root().join("main/report.txt/versions")
+        .join(format!("{changed_storage}-report.txt"))).unwrap().ino(), changed_inode);
     assert_eq!(
         fixture.engine.state().directory_git_repositories[&fixture.repository.repository_id]
             .current_branch_id,
@@ -469,6 +474,9 @@ fn independent_child_uses_its_own_main_and_retained_directory_beyond_parent_pin(
         b"child saved beyond parent pin",
     );
     assert_eq!(child_saved.file_id, child_original.file_id);
+    let child_storage = fixture.engine.state().versions[&child_saved.version_id].storage_id;
+    let child_inode = fs::metadata(fixture.root().join("child/current-renamed.txt/versions")
+        .join(format!("{child_storage}-current-renamed.txt"))).unwrap().ino();
     let parent_topic = fixture.create_branch("", "parent-topic");
     fixture.checkout(&parent_topic);
     let parent_only = fixture.save("parent-topic-only.txt", b"parent retained body");
@@ -498,6 +506,8 @@ fn independent_child_uses_its_own_main_and_retained_directory_beyond_parent_pin(
         committed_child
     );
     let fixture = fixture.reopen();
+    assert_eq!(fs::metadata(fixture.root().join("child/current-renamed.txt/versions")
+        .join(format!("{child_storage}-current-renamed.txt"))).unwrap().ino(), child_inode);
     fixture.assert_body(
         &fixture.root().join("child/current-renamed.txt"),
         &child_saved,

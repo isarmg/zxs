@@ -118,6 +118,7 @@ fn position(root: &DiskRoot, container: &Path, intent: &Intent, body: &Body) -> 
 
 struct HeldBody {
     file: ReadFile,
+    stamp: crate::file_stamp::FileStamp,
     // Fields drop in order: close the descriptor before returning its lease.
     _reservation: crate::engine::PayloadProofReservation,
 }
@@ -126,7 +127,23 @@ fn hold_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<Held
     let reservation = crate::engine::payload_proof_budget().reserve(1)
         .ok_or(Error::VersionNames(VersionNameError::Descriptors))?;
     let file = verify_body(root, path, version)?;
-    Ok(HeldBody { file, _reservation: reservation })
+    let stamp = crate::file_stamp::FileStamp::from_metadata(&file.metadata()?);
+    Ok(HeldBody { file, stamp, _reservation: reservation })
+}
+
+/// In-process evidence from the actual rename syscall, never disk authority.
+pub(super) struct AppliedVersionRename {
+    before: crate::file_stamp::FileStamp,
+    after: crate::file_stamp::FileStamp,
+}
+impl AppliedVersionRename {
+    pub(super) fn matches(
+        &self,
+        before: &crate::file_stamp::FileStamp,
+        after: &crate::file_stamp::FileStamp,
+    ) -> bool {
+        &self.before == before && &self.after == after
+    }
 }
 
 pub(super) struct Prepared {
@@ -260,7 +277,7 @@ impl Prepared {
         root: &DiskRoot,
         container: &Path,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<Vec<(VersionId, AppliedVersionRename)>> {
         check_directory(root, container, &self.intent)?;
         let current = read(root, container)?.map(|(_, bytes)| bytes);
         if current != self.original {
@@ -270,7 +287,8 @@ impl Prepared {
         root.write_atomic(&intent_path(container), &bytes, self.original.is_some())?;
         root.sync_dir(container)?;
         observe("version-names-intent")?;
-        for (body, held) in self.intent.bodies.iter().zip(&self.held) {
+        let mut renamed = Vec::new();
+        for (body, held) in self.intent.bodies.iter().zip(self.held) {
             let identity = FileIdentity::from_metadata(&held.file.metadata()?);
             if identity.device != body.device || identity.inode != body.inode {
                 return Err(invalid());
@@ -278,13 +296,23 @@ impl Prepared {
             let (path, complete) = position(root, container, &self.intent, body)?;
             let (_, target) = paths(container, &self.intent, body)?;
             if !complete {
+                let before = crate::file_stamp::FileStamp::from_metadata(&held.file.metadata()?);
+                if before != held.stamp {
+                    return Err(invalid());
+                }
                 root.rename_noreplace_synced(&path, &target)?;
+                let after = crate::file_stamp::FileStamp::from_metadata(&held.file.metadata()?);
+                if !after.differs_only_by_rename(&before) {
+                    return Err(invalid());
+                }
+                renamed.push((body.version, AppliedVersionRename { before, after }));
             }
             position(root, container, &self.intent, body)?;
             root.sync_dir(&container.join(crate::persist::layout::VERSIONS.as_path()))?;
             observe("version-name-renamed")?;
         }
-        root.sync_dir(container)
+        root.sync_dir(container)?;
+        Ok(renamed)
     }
 }
 

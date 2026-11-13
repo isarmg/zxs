@@ -258,33 +258,46 @@ fn selected_batch_deduplicates_aliases_into_one_d_and_rejects_duplicate_source()
     let mut pool = Pool::disk_root();
     pool.save("a/report.txt", b"source");
     pool.save("b/stay.txt", b"untouched");
+    // Keep the container's current leaf name across both alias occurrences.
+    for path in ["b/first", "b/second"] {
+        pool.engine
+            .file_namespace(
+                &pool.repo.repository_id,
+                NamespaceOperation::Mkdir {
+                    path: name_policy::PortablePath::parse(path).unwrap(),
+                },
+                "admin",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
     let first_source = pool.register("", "first");
     let second_source = pool.register("", "second");
     let retained_source = pool.register("", "retained");
     let target = pool.register("", "target");
     let original = pool.entry(&first_source, "a/report.txt");
     for (source, destination) in [
-        (&first_source, "b/first.txt"),
-        (&second_source, "b/second.txt"),
+        (&first_source, "b/first/report.txt"),
+        (&second_source, "b/second/report.txt"),
     ] {
         let item = pool.mapping(source, "a/report.txt", &target, destination);
         pool.batch(storage_contract::DirectoryBatchKind::Move, vec![item]);
     }
     pool.select("", "target");
     assert_eq!(
-        pool.current_entry("b/first.txt").entry_id,
+        pool.current_entry("b/first/report.txt").entry_id,
         original.entry_id
     );
     assert_eq!(
-        pool.current_entry("b/second.txt").entry_id,
+        pool.current_entry("b/second/report.txt").entry_id,
         original.entry_id
     );
     let first = DirectoryNamespaceItem {
-        source: pool.source(&target, "b/first.txt"),
+        source: pool.source(&target, "b/first/report.txt"),
         target: None,
     };
     let second = DirectoryNamespaceItem {
-        source: pool.source(&target, "b/second.txt"),
+        source: pool.source(&target, "b/second/report.txt"),
         target: None,
     };
     let original_state = pool.engine.state().clone();
@@ -351,7 +364,7 @@ fn selected_batch_deduplicates_aliases_into_one_d_and_rejects_duplicate_source()
         .engine
         .namespace_tree(&pool.repo.main_branch_id)
         .unwrap();
-    for path in ["a/report.txt", "b/first.txt", "b/second.txt"] {
+    for path in ["a/report.txt", "b/first/report.txt", "b/second/report.txt"] {
         assert!(visible.get(path).is_none());
         assert_eq!(pool.entry(&target, path).file_id, original.file_id);
     }
