@@ -1,5 +1,26 @@
 {
   "groups": {
+    "readmission-exit-stop-observation": {
+      "reason": "Fixture-only diagnostic for the original single four-barrier readmitted-survivor test; preserve all three member cycles, assertions and the total 300-second limit. Does not replace full production consumer acceptance.",
+      "python_tests": [
+        "test_readmission_observation_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 300
+        }
+      ]
+    },
     "readmission-member-proof-scope": {
       "reason": "One verify_member call retains its immutable full proposal proof only. Keep the original single 17-cut regression under its unchanged total 300-second timeout, all readmission core/runtime tests, restricted cold consumers and server readmission entry points. No cross-root or cross-cut cache.",
       "python_tests": [
@@ -4426,6 +4447,14 @@
     }
   },
   "rules": [
+    {
+      "path": "test/ci/test_readmission_observation_targeted_ci.py",
+      "groups": ["readmission-exit-stop-observation"]
+    },
+    {
+      "path": "test/engine/unit/engine/exit_stop_probe_tests.rs",
+      "groups": ["readmission-exit-stop-observation"]
+    },
       {
         "path": "src/engine/src/engine/membership_transition/readmission/core.rs",
         "groups": [

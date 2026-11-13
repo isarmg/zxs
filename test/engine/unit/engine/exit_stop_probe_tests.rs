@@ -112,6 +112,10 @@ struct ReadmittedFixture {
 }
 impl ReadmittedFixture {
     fn new(phase: WriteFault) -> Self {
+        Self::new_observed(phase, |_| {})
+    }
+    fn new_observed(phase: WriteFault, observe: impl Fn(&str)) -> Self {
+        observe("fixture.begin");
         let temp = tempfile::Builder::new()
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
@@ -129,13 +133,19 @@ impl ReadmittedFixture {
                 OperationId::generate().unwrap(),
             )
             .unwrap();
-        for disk in &original.disks {
+        observe("initialize_repository.end");
+        for (index, disk) in original.disks.iter().enumerate() {
+            observe(&format!("disk{index}.exit_prepare.begin"));
             prepare_exit(&mut engine, &disk.disk_id, OperationId::generate().unwrap());
+            observe(&format!("disk{index}.exit_prepare.end"));
+            observe(&format!("disk{index}.exit_activate.begin"));
             engine.activate_pending_disk_exit().unwrap();
+            observe(&format!("disk{index}.exit_activate.end"));
             let directory = || PendingMemberDirectory {
                 disk_id: disk.disk_id.clone(),
                 directory: File::open(&disk.root).unwrap(),
             };
+            observe(&format!("disk{index}.readmission_begin.begin"));
             engine
                 .begin_disk_readmission(
                     &disk.disk_id,
@@ -144,16 +154,25 @@ impl ReadmittedFixture {
                     directory(),
                 )
                 .unwrap();
+            observe(&format!("disk{index}.readmission_begin.end"));
+            observe(&format!("disk{index}.readmission_archive.begin"));
             let archive = engine.build_managed_membership_control_archive().unwrap();
+            observe(&format!("disk{index}.readmission_archive.end"));
+            observe(&format!("disk{index}.readmission_activate.begin"));
             engine
                 .activate_disk_readmission(&archive.archive_path, &archive.root_hash, directory())
                 .unwrap();
+            observe(&format!("disk{index}.readmission_activate.end"));
         }
         let before = Arc::clone(&engine.state);
         let operation = OperationId::generate().unwrap();
+        observe("fault_exit_prepare.begin");
         prepare_exit(&mut engine, &original.disks[0].disk_id, operation);
+        observe("fault_exit_prepare.end");
+        observe("fault_exit_activate.begin");
         inject_next(phase);
         assert!(engine.activate_pending_disk_exit().is_err(), "{phase:?}");
+        observe("fault_exit_activate.end");
         assert!(!engine.state.operations.contains_key(&operation));
         let projected = engine.config.clone();
         let value: json_codec::Value = decode_strict(
@@ -168,7 +187,10 @@ impl ReadmittedFixture {
         .unwrap();
         let stop = json_codec::from_value(value["stop"].clone()).unwrap();
         let authority = json_codec::from_value(value["authority"].clone()).unwrap();
+        observe("original_engine_drop.begin");
         drop(engine);
+        observe("original_engine_drop.end");
+        observe("fixture.end");
         Self {
             temp,
             original,
@@ -208,13 +230,23 @@ fn prepare_exit(engine: &mut Engine, disk: &str, operation: OperationId) {
 
 #[test]
 fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
+    use std::io::Write;
+    let started = std::time::Instant::now();
     for phase in [
         WriteFault::BeforeRecord,
         WriteFault::AfterRecord,
         WriteFault::BeforeHead,
         WriteFault::AfterHead,
     ] {
-        let fixture = ReadmittedFixture::new(phase);
+        let progress = |stage: &str| {
+            let message = format!("\nZXS_EXIT_STOP phase={phase:?} stage={stage} elapsed_ms={}\n",
+                started.elapsed().as_millis());
+            let mut stderr = std::io::stderr().lock();
+            stderr.write_all(message.as_bytes()).unwrap();
+            stderr.flush().unwrap();
+        };
+        let fixture = ReadmittedFixture::new_observed(phase, &progress);
+        progress("verify_survivors.begin");
         let mut io = CountedIo::default();
         let verified = fixture.verify(&mut io).unwrap();
         assert_eq!(
@@ -235,8 +267,13 @@ fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
             assert!(epoch.is_some());
             assert_eq!(verified.io_admission_epoch(&disk.disk_id).unwrap(), epoch);
         }
+        progress("verify_survivors.end");
+        progress("resume.begin");
         let mut resumed = Engine::resume_membership_activation(&fixture.system()).unwrap();
+        progress("resume.end");
+        progress("activate.begin");
         let result = resumed.activate_pending_disk_exit().unwrap();
+        progress("activate.end");
         assert_eq!(result.operation_id, fixture.operation);
         for (operation, result) in fixture.before.operations.iter() {
             assert_eq!(
@@ -249,8 +286,12 @@ fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
                 .config
                 .excludes_io_disk(&fixture.original.disks[0].disk_id)
         );
+        progress("resumed_drop.begin");
         drop(resumed);
+        progress("resumed_drop.end");
+        progress("cold.begin");
         let reopened = Engine::open(&fixture.system()).unwrap();
+        progress("cold.end");
         assert_eq!(
             reopened
                 .operation_record(fixture.operation)
@@ -265,6 +306,14 @@ fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
             ),
             (2, 2)
         );
+        progress("cleanup.begin");
+        drop(reopened);
+        drop(result);
+        drop(verified);
+        drop(io);
+        drop(fixture);
+        progress("cleanup.end");
+        progress("phase.end");
     }
 }
 
