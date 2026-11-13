@@ -3070,7 +3070,7 @@
       ]
     },
     "directory-history-worktree": {
-      "reason": "Independent history worktree lifecycle, full-file publication mode, restore without duplicate nodes, current-HEAD branch selection and bounded collision-safe sibling name planning.",
+      "reason": "Independent sparse worktree lifecycle and source provenance, anchored immutable transition ledger, sealed edits, bounded idempotent replay, no-overwrite append and fail-closed checkpoint recovery; SMB publication and MOVE recovery are separate pending integration.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -3081,9 +3081,10 @@
             "directory_worktree::names::tests::",
             "disk::owned::worktree_io::tests::",
             "directory_worktree::store::tests::",
-            "directory_worktree::projection::tests::"
+            "directory_worktree::projection::tests::",
+            "directory_worktree::ledger::tests::"
           ],
-          "max_tests": 48,
+          "max_tests": 56,
           "timeout_seconds": 900
         }
       ]

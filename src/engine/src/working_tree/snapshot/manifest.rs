@@ -146,23 +146,13 @@ impl AdmittedSnapshotManifest {
         if entries.len() > MAX_ENTRIES {
             return Err(SnapshotManifestError::Budget);
         }
-        let mut payloads = BTreeMap::new();
-        for entry in &entries {
-            if let SnapshotEntryContent::File { material: file, .. } = entry.content {
-                payloads.entry(file.version_id).or_insert_with(|| SnapshotPayload {
-                    version_id: file.version_id,
-                    storage_id: VersionStorageId::from_version(file.version_id),
-                    source_path: entry.path.clone(),
-                });
-            }
-        }
         Self::admit(ManifestRecord {
             format: ManifestFormat::FullDirectorySnapshot,
             repository_id,
             node_id,
             operation_id,
+            payloads: default_payloads(&entries),
             entries,
-            payloads: payloads.into_values().collect(),
         })
     }
 
@@ -191,6 +181,7 @@ impl AdmittedSnapshotManifest {
     }
 
     fn admit(record: ManifestRecord) -> Result<Self, SnapshotManifestError> {
+        admit_sources(&record.entries)?;
         let files = admit_entries(&record.entries)?;
         let payloads = admit_payloads(&record, &files)?;
         let bytes = storage_contract::canonical_json(&record)
@@ -227,6 +218,35 @@ impl AdmittedSnapshotManifest {
     pub(crate) fn payloads(&self) -> &BTreeMap<VersionId, SnapshotPayload> {
         &self.payloads
     }
+    /// Preflight a complete replacement view without inventing future FILE
+    /// branch/node results. Provenance is checked separately at final admission.
+    pub(crate) fn validate_material_replacements(
+        &self,
+        replacements: &[(PortablePath, SnapshotFile)],
+    ) -> Result<(), SnapshotManifestError> {
+        let mut record = self.record.clone();
+        for (path, replacement) in replacements {
+            let index = record.entries.binary_search_by(|entry| entry.path.key().cmp(path.key()))
+                .map_err(|_| SnapshotManifestError::Identity)?;
+            let entry = &mut record.entries[index];
+            let SnapshotEntryContent::File { material, .. } = &mut entry.content else {
+                return Err(SnapshotManifestError::Identity);
+            };
+            if entry.path != *path || material.file_id != replacement.file_id {
+                return Err(SnapshotManifestError::Identity);
+            }
+            *material = *replacement;
+        }
+        let files = admit_entries(&record.entries)?;
+        record.payloads = default_payloads(&record.entries);
+        admit_payloads(&record, &files)?;
+        if storage_contract::canonical_json(&record).map_err(SnapshotManifestError::Encode)?.len()
+            > MAX_MANIFEST_BYTES
+        {
+            return Err(SnapshotManifestError::Budget);
+        }
+        Ok(())
+    }
     pub(super) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -236,6 +256,33 @@ fn commitment(bytes: &[u8]) -> MaterialCommitment {
     let mut hasher = blake3::Hasher::new_derive_key("ZXS full directory snapshot manifest");
     hasher.update(bytes);
     MaterialCommitment::from_digest(hasher.finalize())
+}
+
+fn default_payloads(entries: &[SnapshotEntry]) -> Vec<SnapshotPayload> {
+    let mut payloads = BTreeMap::new();
+    for entry in entries {
+        if let SnapshotEntryContent::File { material: file, .. } = entry.content {
+            payloads.entry(file.version_id).or_insert_with(|| SnapshotPayload {
+                version_id: file.version_id,
+                storage_id: VersionStorageId::from_version(file.version_id),
+                source_path: entry.path.clone(),
+            });
+        }
+    }
+    payloads.into_values().collect()
+}
+fn admit_sources(entries: &[SnapshotEntry]) -> Result<(), SnapshotManifestError> {
+    for entry in entries {
+        if let SnapshotEntryContent::File {
+            material,
+            source: SnapshotFileSource::Container { node: FileNodeId::Version(version), .. },
+        } = entry.content {
+            if version != material.version_id {
+                return Err(SnapshotManifestError::SourceVersion);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn admit_entries(
@@ -272,14 +319,7 @@ fn admit_entries(
                 return Err(SnapshotManifestError::Parent);
             }
         }
-        if let SnapshotEntryContent::File { material: file, source } = entry.content {
-            if let SnapshotFileSource::Container {
-                node: FileNodeId::Version(version), ..
-            } = source {
-                if version != file.version_id {
-                    return Err(SnapshotManifestError::SourceVersion);
-                }
-            }
+        if let SnapshotEntryContent::File { material: file, .. } = entry.content {
             logical_bytes = logical_bytes.checked_add(file.size)
                 .filter(|total| *total <= MAX_LOGICAL_BYTES)
                 .ok_or(SnapshotManifestError::Budget)?;

@@ -1,7 +1,7 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotFileSource,
-    SnapshotReference,
+    SnapshotManifestError, SnapshotReference,
 };
 use name_policy::{LookupPath, PortablePath};
 use platform_io::fs_safety::EntryName;
@@ -83,6 +83,8 @@ pub(crate) enum ProjectionError {
     Version,
     #[error("published directory node differs from the complete submitted logical view")]
     PublishedView,
+    #[error("complete worktree material exceeds snapshot admission or conflicts")]
+    Material(#[source] SnapshotManifestError),
 }
 
 pub(crate) struct SparseProjection<'a> {
@@ -109,13 +111,17 @@ impl<'a> SparseProjection<'a> {
             if entry.path != edit.path || original.file_id != edit.material.file.file_id {
                 return Err(ProjectionError::Source);
             }
-            if original.version_id == edit.material.file.version_id {
+            if source.files().contains_key(&edit.material.file.version_id) {
                 return Err(ProjectionError::Version);
             }
             if by_index.insert(index, edit.material).is_some() {
                 return Err(ProjectionError::Duplicate);
             }
         }
+        let replacements = by_index.iter().map(|(index, material)| {
+            (source.entries()[*index].path.clone(), material.file)
+        }).collect::<Vec<_>>();
+        source.validate_material_replacements(&replacements).map_err(ProjectionError::Material)?;
         Ok(Self { source, edits: by_index })
     }
 

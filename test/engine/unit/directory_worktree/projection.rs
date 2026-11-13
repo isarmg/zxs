@@ -237,3 +237,12 @@ fn alias_edits_use_the_frozen_selected_branch_and_node_not_a_current_default() {
     }, .. } = plan[0].transfer else { panic!("expected known-container change") };
     assert_eq!(SnapshotFileSource::Container { branch: source_branch, node: source_node }, selected);
 }
+
+#[test]
+fn replacement_admission_counts_unchanged_original_bytes_before_any_publication() {
+    let source = source();
+    let mut changed = edit(b"placeholder");
+    changed.material.file.size = 64 * 1024 * 1024;
+    assert!(matches!(SparseProjection::admit(&source, vec![changed]),
+        Err(ProjectionError::Material(SnapshotManifestError::Budget))));
+}

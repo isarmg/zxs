@@ -48,6 +48,9 @@ impl SparseWorktreeBinding {
     pub(crate) fn worktree(self) -> WorktreeId {
         self.worktree
     }
+    pub(crate) fn operation(self) -> OperationId {
+        self.operation
+    }
     pub(crate) fn source(self) -> SnapshotReference {
         self.source
     }

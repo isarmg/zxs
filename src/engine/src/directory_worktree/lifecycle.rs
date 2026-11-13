@@ -1,3 +1,4 @@
+use data_serialization::{Deserialize, Serialize};
 use name_policy::LookupName;
 use storage_contract::working_tree::{
     DirectoryId, MaterialCommitment, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,
@@ -11,7 +12,8 @@ impl IdKind for WorktreeKind {
 pub(crate) type WorktreeId = Id<WorktreeKind>;
 
 /// Identifies original immutable material, never a previous worktree's contents.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct SnapshotSource {
     pub(crate) repository: SnapshotRepositoryId,
     pub(crate) node: SnapshotNodeId,
@@ -19,13 +21,15 @@ pub(crate) struct SnapshotSource {
     pub(crate) manifest: MaterialCommitment,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Mount {
     pub(crate) parent: DirectoryId,
     pub(crate) name: LookupName,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Revision {
     pub(crate) generation: Generation,
     pub(crate) manifest: MaterialCommitment,
@@ -33,13 +37,15 @@ pub(crate) struct Revision {
 
 /// Directory commits MOVE modified files and COPY unchanged original files.
 /// Deletion retains the sparse view and only publishes actual file modifications.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PublicationMode {
     DirectoryCommit { destination: DirectoryDestination },
     FilesBeforeDelete,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DirectoryDestination {
     Continue {
         branch: SnapshotBranchId,
@@ -58,7 +64,8 @@ impl DirectoryDestination {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct PublicationIntent {
     pub(crate) worktree: WorktreeId,
     pub(crate) source: SnapshotSource,
@@ -67,7 +74,8 @@ pub(crate) struct PublicationIntent {
     pub(crate) mode: PublicationMode,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PublicationScope {
     Directory {
         branch: SnapshotBranchId,
@@ -78,7 +86,8 @@ pub(crate) enum PublicationScope {
 
 /// This is a reference to an externally verified permanent receipt, not proof
 /// that writing this local record published any file or directory nodes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Publication {
     pub(crate) intent: PublicationIntent,
     pub(crate) scope: PublicationScope,
