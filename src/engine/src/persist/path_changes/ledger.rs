@@ -33,7 +33,7 @@ pub(crate) fn visit(
             return Err(invalid());
         }
         let principal = state.operation_principals.get(id).ok_or_else(invalid)?;
-        let principal = Principal::new(principal.clone())
+        let principal = Principal::new(principal.clone().into())
             .map_err(|source| crate::Error::PathChange(crate::PathChangeError::Principal(source)))?;
         let facts = if receipt.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND {
             // The move decoder admits each required retained-copy envelope too.
