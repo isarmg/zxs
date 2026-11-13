@@ -20,6 +20,20 @@ fn initialize(fixture: &mut Fixture, path: &str) -> String {
         .unwrap()
 }
 
+fn initialize_working(fixture: &mut Fixture, path: &str) -> String {
+    let head = fixture.engine.state.branches[&fixture.repo.main_branch_id]
+        .head_commit_id.clone();
+    fixture.engine.initialize_directory_git(
+        &fixture.repo.repository_id,
+        &storage_contract::directory_git::DirectoryGitInitializeBody {
+            path: path.into(), expected_namespace_head: head, operation_id: op(),
+        },
+        "admin",
+    ).unwrap();
+    fixture.engine.directory_git_status(&fixture.repo.repository_id, path)
+        .unwrap().directory_branch_id.unwrap()
+}
+
 fn selected(fixture: &Fixture, path: &str) -> String {
     let directory = if path.is_empty() {
         fixture.repo.repository_id.clone()
@@ -97,10 +111,14 @@ fn assert_clean(fixture: &Fixture) {
         }));
     }
     let head = &fixture.engine.state.branches[&fixture.repo.main_branch_id].head_commit_id;
-    assert_eq!(
-        fixture.engine.state.commits[head].entries,
-        current.entries()
-    );
+    // Frozen commits may retain D3-hidden rows. Only the authenticated Current
+    // composition is the visibility authority; names are a separate projection.
+    let mut projected = view.branch_entries(&fixture.repo.main_branch_id, head).unwrap().to_vec();
+    let names = crate::business::namespace::container_name::current_names(
+        &fixture.engine.state, &projected,
+    ).unwrap();
+    crate::business::namespace::container_name::apply_file_names(&mut projected, &names).unwrap();
+    assert_eq!(projected, current.entries());
     for branch in fixture
         .engine
         .state
@@ -127,23 +145,16 @@ fn assert_clean(fixture: &Fixture) {
                     }))
         })
     {
-        assert_eq!(
-            branch.entries,
-            fixture
-                .engine
-                .current_directory_entries(&branch.directory_branch_id)
-                .unwrap()
-        );
-        for path in branch.file_contexts.keys() {
-            assert!(branch.entries.iter().any(|entry| {
+        let scope = view.batch_scope(&fixture.engine.state, &branch.directory_branch_id).unwrap();
+        let projected = scope.branch();
+        assert_eq!(projected.entries,
+            fixture.engine.current_directory_entries(&branch.directory_branch_id).unwrap());
+        assert!(projected.entries.iter().all(|entry| {
+            entry.entry_id != fixture.removed.entry_id && entry.file_id != fixture.removed.file_id
+        }));
+        for path in projected.file_contexts.keys() {
+            assert!(projected.entries.iter().any(|entry| {
                 entry.kind == NamespaceEntryKind::File && entry.lookup_key() == path
-            }));
-        }
-        for reference in branch.directory_refs.values() {
-            let tree = &fixture.engine.state.directory_trees[&reference.tree_id];
-            assert!(tree.entries.iter().all(|entry| {
-                entry.entry_id != fixture.removed.entry_id
-                    && entry.file_id != fixture.removed.file_id
             }));
         }
     }
@@ -280,6 +291,28 @@ fn membership_registry_current_batch_copy_allocates_new_bodies_and_refreshes_fro
 }
 
 #[test]
+fn membership_registry_current_batch_committed_scope_transfer_is_atomic_refusal() {
+    let mut fixture = Fixture::new(true);
+    save(&mut fixture.engine, &fixture.repo.main_branch_id, "destination/keep", b"destination");
+    let source = initialize(&mut fixture, "dir");
+    let destination = initialize(&mut fixture, "destination");
+    fixture.project(false);
+    let request = DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Move,
+        items: vec![item(&fixture, &source, "dir/b", Some((&destination, "destination/b")))],
+    };
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let operation = op();
+    assert_eq!(apply(&mut fixture, &request, operation).unwrap_err().code(),
+        ErrorCode::UnsupportedOperation);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert!(!fixture.engine.state.operations.contains_key(&operation));
+    assert_eq!(current(&fixture, "dir/b"), fixture.retained);
+    assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+        .get("destination/b").is_none());
+}
+
+#[test]
 fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_nested_directories()
 {
     let mut fixture = Fixture::new(true);
@@ -295,8 +328,8 @@ fn membership_registry_current_batch_moves_between_selected_scopes_and_renames_n
         "dir/child/keep",
         b"nested",
     );
-    let source = initialize(&mut fixture, "dir");
-    let destination = initialize(&mut fixture, "destination");
+    let source = initialize_working(&mut fixture, "dir");
+    let destination = initialize_working(&mut fixture, "destination");
     let original_context = fixture
         .engine
         .file_context(&fixture.repo.repository_id, "dir/b")
@@ -465,19 +498,54 @@ fn membership_registry_current_batch_delete_records_only_visible_occurrences() {
         kind: DirectoryBatchKind::Delete,
         items: vec![item(&fixture, &root, "dir", None)],
     };
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let refused = op();
+    assert_eq!(apply(&mut fixture, &request, refused).unwrap_err().code(),
+        ErrorCode::DirectoryBranchConflict);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert!(!fixture.engine.state.operations.contains_key(&refused));
+    // A genuine current write materializes the admitted visible composition.
+    // Never weaken complete-subtree admission to delete an unavailable member.
+    save(&mut fixture.engine, &fixture.repo.main_branch_id, "dir/b", b"retained current body");
+    let materialized = current(&fixture, "dir/b");
+    assert_eq!(materialized.file_id, fixture.retained.file_id);
+    assert_ne!(materialized.version_id, fixture.retained.version_id);
+    assert!(fixture.engine.state.directory_branches[&root].entries.iter().all(|entry| {
+        entry.entry_id != fixture.removed.entry_id && entry.file_id != fixture.removed.file_id
+    }));
+    let request = DirectoryNamespaceBatch {
+        kind: DirectoryBatchKind::Delete,
+        items: vec![item(&fixture, &root, "dir", None)],
+    };
     let result = apply(&mut fixture, &request, op()).unwrap();
-    let head = result.result["commit_id"].as_str().unwrap();
-    let deletions = &fixture.engine.state.commits[head]
-        .namespace_deletions
-        .as_ref()
-        .unwrap()
-        .paths;
-    assert!(deletions.iter().any(|entry| entry.path == "dir/b"));
-    assert!(deletions.iter().all(|entry| entry.path != "dir/a"));
+    let marker: storage_contract::directory_git::DirectoryDeletionNode =
+        json_codec::from_value(result.result["directory_deletion"].clone()).unwrap();
+    assert_eq!(marker.files.len(), 1);
+    assert!(marker.files.contains_key(&fixture.retained.file_id));
+    assert!(!marker.files.contains_key(&fixture.removed.file_id));
+    assert_eq!(fixture.engine.state.file_deletions[&fixture.retained.file_id].path.as_str(),
+        "dir/b");
+    assert!(!fixture.engine.state.file_deletions.contains_key(&fixture.removed.file_id));
+    assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+        .get("dir").is_none());
     assert_clean(&fixture);
     for (id, commit) in old_commits.iter() {
         assert_eq!(fixture.engine.state.commits.get(id), Some(commit));
     }
+    // Restore the retained directory through its lifecycle API before writing
+    // under it. Undo cannot resurrect the D3-hidden original file identity.
+    fixture.engine.undo_directory_deletion(
+        &fixture.repo.repository_id,
+        &storage_contract::directory_git::UndoDirectoryDeletionBody {
+            owner_directory_id: marker.owner_directory_id,
+            directory_id: marker.directory_id,
+            deletion_node_id: marker.node_id,
+            operation_id: op(),
+        },
+        "admin",
+    ).unwrap();
+    assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+        .get("dir/a").is_none());
     save(
         &mut fixture.engine,
         &fixture.repo.main_branch_id,

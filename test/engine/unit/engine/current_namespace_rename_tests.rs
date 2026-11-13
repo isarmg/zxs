@@ -305,11 +305,10 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
     save(
         &mut fixture.engine,
         &fixture.repo.main_branch_id,
-        "alias/keep",
+        "dir/alias/keep",
         b"keep",
     );
     crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "dir");
-    crate::directory_git_fixture::checkpoint(&mut fixture.engine, &fixture.repo, "alias");
     let frozen = fixture
         .engine
         .create_directory_branches(
@@ -324,7 +323,7 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
         .as_str()
         .unwrap()
         .to_owned();
-    let alias = current(&fixture, "alias");
+    let alias = current(&fixture, "dir");
     let target = fixture.engine.state.directory_selections[&alias.entry_id].clone();
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Move,
@@ -342,7 +341,7 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
                 expected_tree_id: fixture.engine.state.directory_branches[&target]
                     .head_tree_id
                     .clone(),
-                path: "alias/c".into(),
+                path: "dir/alias/b".into(),
             }),
         }],
     };
@@ -408,7 +407,7 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
         .engine
         .select_file_branch_at(
             &fixture.repo.repository_id,
-            &name_policy::PortablePath::parse("alias/c").unwrap(),
+            &name_policy::PortablePath::parse("dir/alias/b").unwrap(),
             &fixture.retained.file_id,
             &branch,
             "admin",
@@ -418,17 +417,17 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
     save(
         &mut fixture.engine,
         &fixture.repo.main_branch_id,
-        "alias/c",
+        "dir/alias/b",
         b"independent alias version",
     );
-    let alias = current(&fixture, "alias/c");
+    let alias = current(&fixture, "dir/alias/b");
     let source = current(&fixture, "dir/b");
     assert_eq!(alias.entry_id, source.entry_id);
     assert_eq!(alias.file_id, source.file_id);
     assert_ne!(alias.version_id, source.version_id);
     let alias_context = fixture
         .engine
-        .file_context(&fixture.repo.repository_id, "alias/c")
+        .file_context(&fixture.repo.repository_id, "dir/alias/b")
         .unwrap();
     let source_context = fixture
         .engine
@@ -437,13 +436,13 @@ fn membership_registry_current_rename_keeps_alias_versions_and_contexts_independ
     assert_ne!(alias_context.branch_id, source_context.branch_id);
     fixture.project(false);
     rename(&mut fixture, "dir/b", "dir/renamed");
-    assert_eq!(current(&fixture, "alias/c"), alias);
-    assert_eq!(
-        fixture
-            .engine
-            .file_context(&fixture.repo.repository_id, "alias/c"),
-        Some(alias_context)
-    );
+    let mut renamed_alias = alias.clone();
+    renamed_alias.relocate(name_policy::PortablePath::parse("dir/alias/renamed").unwrap());
+    assert_eq!(current(&fixture, "dir/alias/renamed"), renamed_alias);
+    assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+        .get("dir/alias/b").is_none());
+    assert_eq!(fixture.engine.file_context(&fixture.repo.repository_id, "dir/alias/renamed"),
+        Some(alias_context));
     let moved = current(&fixture, "dir/renamed");
     assert_eq!(moved.entry_id, source.entry_id);
     assert_eq!(moved.version_id, source.version_id);
