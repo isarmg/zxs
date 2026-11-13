@@ -215,3 +215,105 @@ fn copied_subset_of_directory_rename_batch_refuses_without_output_or_source_writ
     // forged one-member rename. Exporting only its copied member must fail.
     assert_refused_without_writes(&engine, &target.history_tree_id, temporary.path());
 }
+
+#[test]
+fn repeated_mixed_source_object_move_refuses_without_state_or_disk_writes() {
+    use crate::history_package::path_audit::{self, PathAuditCarrier};
+    use storage_contract::{
+        file_relocation::{NamespaceEntryId, ObjectMoveRequest},
+        history_window::{HistoryFileId, HistoryRepositoryId},
+    };
+
+    let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut config = Config::development(
+        (0..5).map(|index| temporary.path().join(format!("disk-{index}"))),
+    ).unwrap();
+    for disk in config.disks.iter_mut().skip(3) {
+        disk.level = 1;
+        disk.upstream_slot_id = None;
+        disk.metadata_member = false;
+    }
+    let mut engine = Engine::initialize(&temporary.path().join("state"), config).unwrap();
+    let source = engine.create_disk_root("P01", "alice", OperationId::generate().unwrap())
+        .unwrap();
+    let middle = engine.create_disk_root("D04", "alice", OperationId::generate().unwrap())
+        .unwrap();
+    let target = engine.create_disk_root("D05", "alice", OperationId::generate().unwrap())
+        .unwrap();
+    save(&mut engine, &source.main_branch_id, b"mixed source body");
+    let rename = engine.file_namespace(
+        &source.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "file.txt", Some("renamed.txt"),
+        ).unwrap(),
+        "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    let request = |engine: &Engine, from: &crate::Repository, to: &crate::Repository,
+                   path: &str, destination: &str| {
+        let tree = engine.namespace_tree(&from.main_branch_id).unwrap();
+        let entry = tree.get(path).unwrap();
+        ObjectMoveRequest {
+            source_repository_id: HistoryRepositoryId::parse(&from.repository_id).unwrap(),
+            source_entry_id: NamespaceEntryId::parse(&entry.entry_id).unwrap(),
+            source_path: name_policy::LookupPath::parse(path).unwrap(),
+            target_slot_id: to.primary_slot_id.clone(),
+            target_repository_id: Some(
+                HistoryRepositoryId::parse(&to.repository_id).unwrap(),
+            ),
+            target_path: name_policy::PortablePath::parse(destination).unwrap(),
+            replace: false,
+            target_entry_id: None,
+        }
+    };
+    let first_request = request(&engine, &source, &middle, "renamed.txt", "moved.txt");
+    let first = engine.move_object(
+        &first_request, "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    let movement = crate::business::object_move::read_result(&first).unwrap();
+    assert!(movement.retained_lifecycle.iter().any(|prefix| {
+        prefix.path_changes.iter().any(|row| row.source.operation_id == rename.operation_id)
+    }));
+    assert!(matches!(
+        path_audit::carrier(engine.state(), first.operation_id).unwrap(),
+        Some(PathAuditCarrier::Unsupported { .. })
+    ));
+    let moved = engine.namespace_tree(&middle.main_branch_id).unwrap()
+        .get("moved.txt").unwrap().clone();
+    let file = HistoryFileId::parse(&moved.file_id).unwrap();
+    let projection = crate::state_projection::ProjectionSnapshot::new(engine.state());
+    let facts = crate::business::history_copy::retained::path_changes(projection.view(), &file)
+        .unwrap();
+    assert!(facts.iter().any(|row| row.source.operation_id == rename.operation_id));
+    assert_eq!(
+        fs::read(engine.valid_replica(&moved.version_id).unwrap().0.path()).unwrap(),
+        b"mixed source body",
+    );
+    assert!(engine.namespace_tree(&source.main_branch_id).unwrap().get("renamed.txt").is_none());
+
+    // The second cross-repository move necessarily recaptures history. Freeze
+    // every persisted byte and filesystem identity after the successful first move.
+    let second_request = request(&engine, &middle, &target, "moved.txt", "arrived.txt");
+    let second_operation = OperationId::generate().unwrap();
+    let state = canonical_json(engine.state()).unwrap();
+    let image = disk_image(temporary.path());
+    let error = engine.move_object(&second_request, "alice", second_operation).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+    assert!(matches!(
+        error,
+        Error::PathChange(crate::PathChangeError::SourceAuditUnsupported)
+    ));
+    assert_eq!(canonical_json(engine.state()).unwrap(), state);
+    assert_eq!(disk_image(temporary.path()), image);
+    assert!(!engine.state().operations.contains_key(&second_operation));
+    assert_eq!(
+        engine.namespace_tree(&middle.main_branch_id).unwrap().get("moved.txt"),
+        Some(&moved),
+    );
+    assert!(engine.namespace_tree(&target.main_branch_id).unwrap().get("arrived.txt").is_none());
+    let projection = crate::state_projection::ProjectionSnapshot::new(engine.state());
+    assert_eq!(
+        crate::business::history_copy::retained::path_changes(projection.view(), &file).unwrap(),
+        facts,
+    );
+}
