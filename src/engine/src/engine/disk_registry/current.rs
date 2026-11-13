@@ -125,6 +125,7 @@ pub(crate) struct WorkspaceNamespaceBaseline {
     principal: String,
     fencing_token: u64,
     entries_hash: String,
+    names: BTreeMap<storage_contract::FileId, name_policy::Name>,
 }
 
 fn stale() -> Error {
@@ -172,6 +173,22 @@ impl CurrentNamespaces {
             return Err(stale());
         }
         Ok(&scope.entries)
+    }
+
+    pub(crate) fn share_branch_entries(&self, branch: &str, head: &str) -> Result<Arc<Vec<Entry>>> {
+        let scope = self.branches.get(branch).ok_or_else(stale)?;
+        if scope.head != head {
+            return Err(stale());
+        }
+        Ok(Arc::clone(&scope.entries))
+    }
+
+    pub(crate) fn share_directory_entries(&self, branch: &str, head: &str) -> Result<Arc<Vec<Entry>>> {
+        let scope = self.directories.get(branch).ok_or_else(stale)?;
+        if scope.head != head {
+            return Err(stale());
+        }
+        Ok(Arc::clone(&scope.entries))
     }
 
     pub(crate) fn contains_entry(
@@ -298,6 +315,10 @@ impl CurrentNamespaces {
         if workspace.purpose != WorkspacePurpose::Normal || workspace.base_head != scope.head {
             return Err(stale());
         }
+        let names = crate::business::namespace::container_name::current_names(
+            state, scope.entries.as_ref(),
+        )?;
+        let entries_hash = workspace::named_entries_hash(scope.entries.as_ref(), &names)?;
         Ok(WorkspaceNamespaceBaseline {
             registry: self.registry.clone(),
             mask_hash: self.mask_hash.clone(),
@@ -306,10 +327,8 @@ impl CurrentNamespaces {
             head: workspace.base_head.clone(),
             principal: workspace.principal.clone(),
             fencing_token: workspace.fencing_token,
-            entries_hash: crate::object_hash(
-                "current-workspace-namespace",
-                scope.entries.as_ref(),
-            )?,
+            entries_hash,
+            names,
         })
     }
 
@@ -390,6 +409,11 @@ impl CurrentNamespaces {
         {
             return Err(stale());
         }
+        for (file, name) in &baseline.names {
+            if crate::container_storage::current_container_name(state, &file.to_string())? != *name {
+                return Err(stale());
+            }
+        }
         for operation in &workspace.namespace_operations {
             self.require_namespace_operation(operation)?;
         }
@@ -454,8 +478,16 @@ impl CurrentNamespaces {
         entries: &[Entry],
     ) -> Result<()> {
         let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
-        let mut projected;
-        let scope = if previous.branches.get(&workspace.branch_id)
+        // Only the previous authoritative names may normalize the visible source.
+        // Candidate paths still require the existing one-source-per-occurrence proof.
+        let names = crate::business::namespace::container_name::current_names(
+            previous, &scope.entries,
+        )?;
+        let mut source = scope.entries.as_ref().clone();
+        crate::business::namespace::container_name::apply_file_names(&mut source, &names)?;
+        let mut projected = scope.as_ref().clone();
+        projected.entries = Arc::new(source);
+        if previous.branches.get(&workspace.branch_id)
             .is_some_and(|branch| branch.file_id.is_some())
             && let Some(file) = workspace.files.values().next()
         {
@@ -463,15 +495,12 @@ impl CurrentNamespaces {
                 previous,
                 Some(self),
                 workspace,
-                &scope.entries,
+                &projected.entries,
                 &file.path,
             )?;
-            projected = scope.as_ref().clone();
             projected.entries = Arc::new(source.into_owned());
-            &projected
-        } else {
-            scope.as_ref()
-        };
+        }
+        let scope = &projected;
         let changes = VerifiedEntryChanges::between_states(&scope.entries, entries, previous, next);
         self.validate_entry_changes(Some(scope), entries, &changes)
     }
@@ -566,6 +595,7 @@ impl CurrentNamespaces {
     }
 
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        workspace::verify_admissions(self, previous, next)?;
         let published = self.advance_namespaces(previous, next)?;
         path_changes::verify(previous, next, Some(self), Some(&published))?;
         Ok(published)
@@ -826,30 +856,25 @@ impl Engine {
             .commits
             .get(&commit.commit_id)
             .ok_or_else(stale)?;
-        match self.admitted_current_namespaces()? {
-            Some(view) => view.branch_entries(branch, &admitted.commit_id),
-            None => Ok(&admitted.entries),
-        }
+        self.named_namespaces()?
+            .branch(branch.parse()?, admitted.commit_id.parse()?)
+            .map(|rows| rows.entries())
     }
 
-    pub(crate) fn workspace_namespace_entries<'a>(
-        &'a self,
+    pub(crate) fn workspace_namespace_entries(
+        &self,
         workspace: &Workspace,
-    ) -> Result<&'a [Entry]> {
-        match self.admitted_current_namespaces()? {
-            Some(view) => view.validate_workspace(
-                &self.state,
-                workspace,
-                self.workspace_namespace_baselines
-                    .get(&workspace.workspace_id),
+    ) -> Result<crate::NamespaceEntries> {
+        let source = match self.admitted_current_namespaces()? {
+            Some(view) => view.share_workspace_source(
+                &self.state, workspace,
+                self.workspace_namespace_baselines.get(&workspace.workspace_id),
+            )?,
+            None => crate::NamespaceEntries::Commit(
+                self.state.commits.get_shared(&workspace.base_head).ok_or_else(stale)?,
             ),
-            None => self
-                .state
-                .commits
-                .get(&workspace.base_head)
-                .map(|commit| commit.entries.as_slice())
-                .ok_or_else(stale),
-        }
+        };
+        self.named_namespaces()?.project_workspace(source)
     }
 
     pub fn current_directory_entries(&self, branch_id: &str) -> Result<&[Entry]> {
@@ -863,10 +888,9 @@ impl Engine {
                     "directory branch not found",
                 )
             })?;
-        match self.admitted_current_namespaces()? {
-            Some(view) => view.directory_entries(branch_id, &branch.head_tree_id),
-            None => Ok(&branch.entries),
-        }
+        self.named_namespaces()?
+            .directory(branch_id.parse()?, branch.head_tree_id.parse()?)
+            .map(|rows| rows.entries())
     }
 
     pub(in crate::engine) fn install_recovered_namespace_state(
@@ -879,16 +903,62 @@ impl Engine {
             .as_ref()
             .map(|view| view.advance(&self.state, &next).map(Arc::new))
             .transpose()?;
-        self.state = Arc::new(next);
+        self.named_namespaces.install_state(&mut self.state, Arc::new(next));
         self.snapshot = Some(snapshot);
-        self.current_namespaces = next_view;
+        self.named_namespaces.install_current(&mut self.current_namespaces, next_view);
         // The lifecycle verifier alone can establish the first active view.
         self.restore_current_disk_exit()?;
         Ok(())
     }
 }
 
+impl CurrentNamespaces {
+    /// Share only after the workspace's registry, owner, token and name fence pass.
+    pub(crate) fn share_workspace_source(
+        &self,
+        state: &State,
+        workspace: &Workspace,
+        baseline: Option<&WorkspaceNamespaceBaseline>,
+    ) -> Result<crate::NamespaceEntries> {
+        self.validate_workspace(state, workspace, baseline)?;
+        let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
+        if workspace.base_head == scope.source_head {
+            Ok(crate::NamespaceEntries::Projected(Arc::clone(&scope.source_entries)))
+        } else {
+            Ok(crate::NamespaceEntries::Commit(
+                state.commits.get_shared(&workspace.base_head).ok_or_else(stale)?,
+            ))
+        }
+    }
+}
+
 impl<'a> crate::engine::PlanningContext<'a> {
+    pub(crate) fn workspace_namespace_entries(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<crate::NamespaceEntries> {
+        let publication = match self.current_namespaces {
+            Some(view) => NamespaceReadView::Published(Arc::clone(view)),
+            None if self.config.generation()
+                .is_some_and(|generation| generation.registry().is_some()) =>
+            {
+                NamespaceReadView::AwaitingPublication
+            }
+            None => NamespaceReadView::Initial,
+        };
+        let named = self.named_namespaces.capture(self.state, publication)?;
+        let source = match self.current_namespaces {
+            Some(view) => view.share_workspace_source(
+                self.state, workspace,
+                self.workspace_namespace_baselines.get(&workspace.workspace_id),
+            )?,
+            None => crate::NamespaceEntries::Commit(
+                self.state.commits.get_shared(&workspace.base_head).ok_or_else(stale)?,
+            ),
+        };
+        named.project_workspace(source)
+    }
+
     /// The current source for rule resolution. It borrows the admitted planning
     /// input; a frozen Commit supplied by a caller cannot become current data.
     pub(crate) fn current_branch_entries(&self, branch_id: &str) -> Result<&'a [Entry]> {
@@ -903,21 +973,18 @@ impl<'a> crate::engine::PlanningContext<'a> {
                 "branch moved to another history",
             ));
         }
-        match self.current_namespaces {
-            Some(view) => view.branch_entries(branch_id, &branch.head_commit_id),
-            None if self
-                .config
-                .generation()
+        let publication = match self.current_namespaces {
+            Some(view) => NamespaceReadView::Published(Arc::clone(view)),
+            None if self.config.generation()
                 .is_some_and(|generation| generation.registry().is_some()) =>
             {
-                Err(pending_publication())
+                NamespaceReadView::AwaitingPublication
             }
-            None => state
-                .commits
-                .get(&branch.head_commit_id)
-                .map(|commit| commit.entries.as_slice())
-                .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "branch HEAD missing")),
-        }
+            None => NamespaceReadView::Initial,
+        };
+        self.named_namespaces.capture(self.state, publication)?
+            .branch(branch_id.parse()?, branch.head_commit_id.parse()?)
+            .map(|rows| rows.entries())
     }
 }
 
@@ -933,10 +1000,9 @@ impl crate::MetadataView {
                     "directory branch not found",
                 )
             })?;
-        match self.current_namespaces.admitted()? {
-            Some(view) => view.directory_entries(branch_id, &branch.head_tree_id),
-            None => Ok(&branch.entries),
-        }
+        self.named_namespaces()?
+            .directory(branch_id.parse()?, branch.head_tree_id.parse()?)
+            .map(|rows| rows.entries())
     }
 }
 

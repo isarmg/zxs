@@ -183,7 +183,11 @@ fn batch_scope(engine: &Engine, branch: &DirectoryBranch) -> Result<BatchScope> 
         Some(current) => current
             .batch_scope(&engine.state, &branch.directory_branch_id)
             .map(BatchScope::Current),
-        None => Ok(BatchScope::Initial(branch.clone())),
+        None => {
+            let mut source = branch.clone();
+            namespace::container_name::normalize_directory_branch(&engine.state, &mut source)?;
+            Ok(BatchScope::Initial(source))
+        }
     }
 }
 
@@ -660,8 +664,24 @@ fn apply(
         planned.push((item, source, target, target_path));
     }
     if touched.is_empty() {
-        return Ok(
-            json!({"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"commit_id":main.head_commit_id,"no_change":true,"directory_branch_ids":[],"changes":[],"copies":[]}),
+        // A no-op still has a permanent request-bound receipt. Recovery must
+        // not interpret an absent fact/transfer envelope as an empty one.
+        let transfers = request.items.iter().zip(&paths).map(|(item, (path, _))| {
+            let source = originals[&item.source.directory_branch_id].branch();
+            let entry = namespace::find_unordered_key(&source.entries, path.key())
+                .expect("invariant: every no-op source was admitted before planning");
+            let file = entry.kind == NamespaceEntryKind::File;
+            json!({
+                "source": item.source,
+                "target": item.target,
+                "file_id": file.then_some(&entry.file_id),
+                "version_id": file.then_some(&entry.version_id),
+                "physical_path": state.file_locations.get(&entry.file_id),
+            })
+        }).collect::<Vec<_>>();
+        return crate::persist::path_changes::attach(
+            json!({"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"commit_id":main.head_commit_id,"no_change":true,"directory_branch_ids":[],"changes":[],"copies":[],"action":request.kind,"count":request.items.len().to_string(),"transfers":transfers}),
+            Vec::new(),
         );
     }
     // Every source was resolved against its admitted baseline composition, and
@@ -867,9 +887,17 @@ fn apply(
                             .to_owned(),
                     );
                     if let Some(existing) = copies.get(&cache_key) {
-                        // Frozen target branches can name the same directory
-                        // differently. Share only the new copy's identity and
-                        // body, never another target's logical path spelling.
+                        if crate::container_storage::current_container_name(
+                            state, &existing.file_id,
+                        )? != name_policy::Name::parse(moved.name())? {
+                            return Err(Error::ContainerName(
+                                namespace::container_name::RenameError::ConflictingNames(
+                                    existing.file_id.parse()?,
+                                ),
+                            ));
+                        }
+                        // Frozen parents may differ, but a shared copied
+                        // container has one exact current name in every occurrence.
                         moved.entry_id = existing.entry_id.clone();
                         moved.file_id = existing.file_id.clone();
                         moved.version_id = existing.version_id.clone();
@@ -1134,6 +1162,48 @@ fn apply(
             format!("{path}/")
         });
     }
+    let names = namespace::container_name::current_names(state, &entries)?;
+    let before_names = entries.clone();
+    let name_changes = namespace::container_name::apply_file_names(&mut entries, &names)?;
+    let mut renamed_contexts = Vec::new();
+    for change in &name_changes {
+        let old = namespace::find_unordered_key(&before_names, change.before.key())
+            .ok_or_else(crate::persist::path_changes::invalid)?;
+        let new = namespace::find_unordered_key(&entries, change.after.key())
+            .ok_or_else(crate::persist::path_changes::invalid)?;
+        let context = directory::context_at_key(state, repository, old.lookup_key());
+        let changed = file_paths::record_change(
+            state,
+            repository,
+            file_paths::PathChange { old, new, after_entries: &entries, context },
+            principal,
+            operation,
+        )?;
+        if let Some(recorded) = path_changes.iter()
+            .find(|recorded| recorded.event_id == changed.fact.event_id)
+        {
+            // A requested frozen occurrence may also be the live occurrence.
+            // One event represents it only when both prove the same selected body/context.
+            let mut same_event = changed.fact.clone();
+            same_event.occurred_at = recorded.occurred_at;
+            if &same_event != recorded {
+                return Err(crate::persist::path_changes::invalid());
+            }
+        } else {
+            path_changes.push(changed.fact);
+        }
+        renamed_contexts.push((
+            directory::context_key_from_key(repository, new.lookup_key()),
+            changed.context,
+        ));
+        changed_paths.extend([old.path().to_owned(), new.path().to_owned()]);
+    }
+    for change in &name_changes {
+        state.file_contexts.remove(&directory::context_key_from_key(
+            repository, change.before.key(),
+        ));
+    }
+    state.file_contexts.extend(renamed_contexts);
     validate_entries(&mut entries, engine.config.max_entries)?;
     validate_identities(&entries)?;
     let active_deleted = active_deleted
@@ -1144,7 +1214,7 @@ fn apply(
             Ok(deleted)
         })
         .collect::<Result<Vec<_>>>()?;
-    let commit_id = if !active.is_empty() {
+    let commit_id = if !active.is_empty() || !name_changes.is_empty() {
         let id = new_id("commit")?;
         let pending = directory::snapshot_pending(state, &entries);
         state.commits.insert(

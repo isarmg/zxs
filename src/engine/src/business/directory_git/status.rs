@@ -157,10 +157,11 @@ struct Contents<'a> {
     path: &'a str,
 }
 fn owned<'a>(
+    state: &State,
     contents: Contents<'a>,
     boundaries: &BTreeSet<&str>,
     budget: &mut Budget<'_>,
-) -> Result<BTreeMap<&'a str, OwnedEntry<'a>>> {
+) -> Result<BTreeMap<std::borrow::Cow<'a, str>, OwnedEntry<'a>>> {
     let depth = if contents.path.is_empty() {
         0
     } else {
@@ -203,10 +204,25 @@ fn owned<'a>(
         } else {
             None
         };
-        result.insert(
-            relative(entry.lookup_key(), depth),
-            OwnedEntry::new(entry, depth, context),
-        );
+        let value = OwnedEntry::new(entry, depth, context);
+        let (key, value) = if entry.kind == NamespaceEntryKind::File {
+            let name = crate::container_storage::current_container_name(state, &entry.file_id)?;
+            let path = match entry.location().parent() {
+                Some(parent) => parent.join_name(&name)?,
+                None => name_policy::PortablePath::from_name(&name)?,
+            };
+            budget.text(path.as_str())?;
+            budget.text(path.key())?;
+            (
+                std::borrow::Cow::Owned(relative(path.key(), depth).to_owned()),
+                value.with_current_path(relative(path.as_str(), depth).to_owned()),
+            )
+        } else {
+            (std::borrow::Cow::Borrowed(relative(entry.lookup_key(), depth)), value)
+        };
+        if result.insert(key, value).is_some() {
+            return Err(crate::persist::path_changes::invalid());
+        }
     }
     Ok(result)
 }
@@ -237,9 +253,10 @@ fn changes(
         budget.step()?;
         boundary_ids.insert(id);
     }
-    let working = owned(contents, &boundary_ids, budget)?;
+    let working = owned(state, contents, &boundary_ids, budget)?;
     let staged = &state.directory_trees[&index.index_tree_id];
     let after = owned(
+        state,
         Contents {
             entries: &staged.entries,
             contexts: &staged.file_contexts,
@@ -267,6 +284,7 @@ fn changes(
                 ids.insert(id.as_str());
             }
             owned(
+                state,
                 Contents {
                     entries: &head.entries,
                     contexts: &head.file_contexts,

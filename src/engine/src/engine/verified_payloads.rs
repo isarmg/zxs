@@ -13,9 +13,9 @@ use std::{
     },
 };
 
-/// Optional retained payload evidence only, shared by every pool/preparation in
+/// Retained payload evidence, shared by every pool/preparation and rename in
 /// this process. This is not a count of free FDs or a total-process FD limit.
-pub(super) struct PayloadProofBudget {
+pub(crate) struct PayloadProofBudget {
     capacity: usize,
     held: AtomicUsize,
 }
@@ -29,7 +29,7 @@ impl PayloadProofBudget {
         }
     }
 
-    pub(super) fn reserve(self: &Arc<Self>, descriptors: usize) -> Option<PayloadProofReservation> {
+    pub(crate) fn reserve(self: &Arc<Self>, descriptors: usize) -> Option<PayloadProofReservation> {
         // Only the counter is shared; acquiring a lease publishes no other data.
         if self
             .held
@@ -49,7 +49,7 @@ impl PayloadProofBudget {
 
 /// Declare after the files it covers, or keep outside the scope consuming them:
 /// descriptors must close before the reservation is returned. Never clone it.
-pub(super) struct PayloadProofReservation {
+pub(crate) struct PayloadProofReservation {
     budget: Arc<PayloadProofBudget>,
     descriptors: usize,
 }
@@ -61,7 +61,7 @@ impl Drop for PayloadProofReservation {
     }
 }
 
-pub(super) fn payload_proof_budget() -> Arc<PayloadProofBudget> {
+pub(crate) fn payload_proof_budget() -> Arc<PayloadProofBudget> {
     #[cfg(test)]
     if let Some(budget) = TEST_PROOF_BUDGET.with(|budget| budget.borrow().as_ref().map(Arc::clone))
     {

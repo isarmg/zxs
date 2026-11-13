@@ -432,16 +432,17 @@ pub(super) fn checkout(
     }
     let direct = boundaries(state, repository, &selected.directory_id, &path, &entries);
     let children = ChildBoundaries::new(&entries, |id| direct.contains_key(id));
-    let source = match view {
+    let mut source = match view {
         Some(view) => {
             view.require_directory_branch_write(state, selected_id)?;
             view.directory_checkout_projection(state, selected_id, &direct)?
-                .branch()
+                .raw_branch()
                 .clone()
         }
         None => selected.clone(),
     };
     require_source(state, &source)?;
+    namespace::container_name::normalize_directory_branch(state, &mut source)?;
     if git.current_branch_id == selected_id {
         return Ok(
             json!({"input":input,"directory_branch_id":selected_id,"branch_id":repo.main_branch_id,"commit_id":main.head_commit_id,"no_change":true}),

@@ -3733,3 +3733,37 @@ fn file_branch_kind_requires_a_stable_file_binding_at_external_admission() {
     assert_eq!(error.message(), expected);
     assert_eq!(canonical_json(destination.state()).unwrap(), before);
 }
+
+#[test]
+fn decoded_manifest_requires_current_location_for_every_retained_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = initialize(temp.path());
+    let repo = engine.create_repository(
+        &storage_contract::RepositoryName::parse("name closure").unwrap(),
+        "P01", 2, "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    save(&mut engine, &repo.main_branch_id, b"body");
+    let original = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let file = original.versions.values().next().unwrap().file_id.clone();
+    let original_bytes = canonical_json(&original).unwrap();
+    for corruption in [0, 1, 2] {
+        let mut changed = original.clone();
+        if corruption == 0 {
+            changed.file_locations.remove(&file);
+            assert!(changed.file_names.contains_key(&file));
+        } else {
+            changed.file_names.insert(file.clone(), "different.txt".into());
+            if corruption == 2 {
+                // A consistent physical mirror still cannot disagree with main's live alias.
+                changed.file_locations.insert(file.clone(), "different.txt".into());
+            }
+        }
+        let bytes = canonical_json(&changed).unwrap();
+        let decoded: HistoryManifest = decode_strict(&bytes).unwrap();
+        assert!(decoded.validate().is_err());
+        assert_eq!(canonical_json(&decoded).unwrap(), bytes);
+    }
+    let admitted: HistoryManifest = decode_strict(&original_bytes).unwrap();
+    admitted.validate().unwrap();
+    assert_eq!(canonical_json(&admitted).unwrap(), original_bytes);
+}

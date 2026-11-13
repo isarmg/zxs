@@ -321,11 +321,13 @@ impl Engine {
             // Completion binds the just-published destination. Its body is no
             // longer the pre-save base; the saved context still fences reuse.
             let published;
+            let baseline;
             let entries = if workspace.state == WorkspaceState::Committed {
                 published = self.namespace_snapshot(&workspace.branch_id)?;
                 published.entries()
             } else {
-                self.workspace_namespace_entries(workspace)?
+                baseline = self.workspace_namespace_entries(workspace)?;
+                baseline.entries()
             };
             let projected = file_location::project(
                 self.state(),
@@ -339,7 +341,9 @@ impl Engine {
                 .ok_or(Error::PathChange(crate::PathChangeError::WorkspaceLocation))?;
             return validate_file_context(&self.state, workspace, &entry.file_id, key);
         }
-        let mut entry = self.workspace_namespace(workspace)?.get_key(key);
+        let baseline = self.workspace_namespace_entries(workspace)?;
+        let tree = crate::NamespaceTree::from_published_entries(baseline.entries());
+        let mut entry = tree.get_key(key);
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
@@ -565,9 +569,10 @@ impl Engine {
         // Reject invalid targets before publishing an immutable generation.
         // Otherwise an IS_DIRECTORY failure leaves {item}-{generation}.full
         // behind and a subsequent valid retry collides with those orphan bytes.
+        let baseline = self.workspace_namespace_entries(&w)?;
         let base = file_location::project(
             self.state(), self.admitted_current_namespaces()?, &w,
-            self.workspace_namespace_entries(&w)?, path,
+            baseline.entries(), path,
         )?;
         if let Some(view) = &self.current_namespaces {
             view.validate_upload_identity(&base, key, item)?;
@@ -860,9 +865,10 @@ impl Engine {
                 "range exceeds file budget",
             ));
         }
+        let baseline = self.workspace_namespace_entries(&w)?;
         let base = file_location::project(
             self.state(), self.admitted_current_namespaces()?, &w,
-            self.workspace_namespace_entries(&w)?, &parsed,
+            baseline.entries(), &parsed,
         )?;
         let base_entry = base.binary_search_by(|entry| entry.lookup_key().cmp(parsed.key()))
             .ok().map(|index| &base[index]);
@@ -1403,20 +1409,13 @@ impl crate::engine::PlanningContext<'_> {
                 let source_commits = state.commits.clone();
                 let current = source_commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "branch HEAD missing"))?;
-                let base = source_commits.get(&w.base_head)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "workspace base missing"))?;
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
                 // One explicit mutation-local index serves both conflict checks
                 // and staged replacements, reusing admitted source keys.
-                let current_entries = match engine.current_namespaces {
-                    Some(view) => view.branch_entries(&w.branch_id, &current.commit_id)?,
-                    None => current.entries.as_slice(),
-                };
-                let base_entries = match engine.current_namespaces {
-                    Some(view) => view.validate_workspace(engine.state, &w, engine.workspace_namespace_baselines.get(&w.workspace_id))?,
-                    None => base.entries.as_slice(),
-                };
+                let current_entries = engine.current_branch_entries(&w.branch_id)?;
+                let named_base = engine.workspace_namespace_entries(&w)?;
+                let base_entries = named_base.entries();
                 let projected_current;
                 let projected_base;
                 let (current_entries, base_entries) = if let Some(file) = w.files.values().next() {

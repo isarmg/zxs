@@ -41,7 +41,7 @@ impl<'a> ChildBoundaries<'a> {
 #[derive(PartialEq)]
 pub(super) struct OwnedEntry<'a> {
     entry_id: &'a str,
-    path: &'a str,
+    path: std::borrow::Cow<'a, str>,
     kind: NamespaceEntryKind,
     file_id: &'a str,
     version_id: &'a str,
@@ -51,6 +51,11 @@ pub(super) struct OwnedEntry<'a> {
 }
 
 impl<'a> OwnedEntry<'a> {
+    pub(super) fn with_current_path(mut self, path: String) -> Self {
+        self.path = std::borrow::Cow::Owned(path);
+        self
+    }
+
     pub(super) fn new(entry: &'a Entry, depth: usize, context: Option<&'a FileContext>) -> Self {
         let Entry {
             entry_id,
@@ -62,7 +67,7 @@ impl<'a> OwnedEntry<'a> {
         } = entry;
         Self {
             entry_id,
-            path: relative(path.as_str(), depth),
+            path: std::borrow::Cow::Borrowed(relative(path.as_str(), depth)),
             kind: *kind,
             file_id,
             version_id,

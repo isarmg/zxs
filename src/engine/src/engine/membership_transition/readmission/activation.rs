@@ -245,12 +245,12 @@ impl Engine {
         self._locks.insert(target_id, writer);
         self.config = config;
         self.disk_resources = Arc::new(resources);
-        self.current_namespaces = None;
+        self.named_namespaces.install_current(&mut self.current_namespaces, None);
         self.workspace_namespace_baselines.clear();
         self.membership_fence = None;
         self.pending_membership = None;
         self.journals.clear();
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         self.blocked = true;
@@ -341,7 +341,7 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_readmission_seal_{}", disk.disk_id))?;
         }
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         Ok(())

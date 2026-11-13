@@ -1,4 +1,6 @@
-use crate::container_storage::version_rename::{Prepared, finish, interrupted_path};
+use crate::container_storage::version_rename::{
+    CompletionBinding, Prepared, finish, interrupted_path,
+};
 use crate::container_storage::{VersionNameError, installed_version_path};
 use crate::disk::DiskRoot;
 use crate::{Error, FileVersion, State};
@@ -71,7 +73,12 @@ fn decided_version_rename_resumes_partial_leaves_and_keeps_bodies_ids_and_inodes
         recovered.apply(&root, &container, &mut |_| Ok(())).unwrap();
         let target = container.with_file_name(target_name.as_str());
         root.rename_noreplace_synced(&container, &target).unwrap();
-        finish(&root, &target).unwrap();
+        finish(&root, &target, &CompletionBinding {
+            file: file.parse().unwrap(),
+            history: history.parse().unwrap(),
+            sequence: storage_contract::Sequence::new(state.sequence),
+            target_name: Name::parse("latest.bin").unwrap(),
+        }).unwrap();
         for (id, inode, bytes) in before {
             let version = &state.versions[&id];
             let path = installed_version_path(&target, version).unwrap();
@@ -96,4 +103,150 @@ fn version_rename_rejects_an_existing_target_without_overwrite() {
     assert!(Prepared::capture(&root, &container, &state, &file, &history, &name).is_err());
     assert_eq!(std::fs::read(source).unwrap(), before);
     assert_eq!(std::fs::read(collision).unwrap(), b"unrelated");
+}
+
+#[test]
+fn completed_leaves_resume_before_and_after_outer_container_rename() {
+    let (_temp, root, state, file, history, container) = fixture();
+    let name = Name::parse("latest.bin").unwrap();
+    Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap().apply(&root, &container, &mut |_| Ok(())).unwrap();
+    // All leaves reached the new name, but the container still has its old name.
+    let recovered = Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap();
+    for version in state.versions.values() {
+        let path = interrupted_path(&root, &container, version).unwrap().unwrap();
+        assert_eq!(std::fs::read(path).unwrap().len() as u64, version.logical_size);
+    }
+    recovered.apply(&root, &container, &mut |_| Ok(())).unwrap();
+    let target = container.with_file_name(name.as_str());
+    root.rename_noreplace_synced(&container, &target).unwrap();
+    // Outer placement is complete, while FILE publication/intent cleanup can resume.
+    assert!(Prepared::capture(&root, &target, &state, &file, &history, &name)
+        .unwrap().is_none());
+    for version in state.versions.values() {
+        assert_eq!(interrupted_path(&root, &target, version).unwrap().unwrap(),
+            installed_version_path(&target, version).unwrap());
+    }
+    finish(&root, &target, &CompletionBinding {
+            file: file.parse().unwrap(),
+            history: history.parse().unwrap(),
+            sequence: storage_contract::Sequence::new(state.sequence),
+            target_name: Name::parse("latest.bin").unwrap(),
+        }).unwrap();
+    finish(&root, &target, &CompletionBinding {
+            file: file.parse().unwrap(),
+            history: history.parse().unwrap(),
+            sequence: storage_contract::Sequence::new(state.sequence),
+            target_name: Name::parse("latest.bin").unwrap(),
+        }).unwrap();
+}
+
+#[test]
+fn prepared_version_rename_rejects_replaced_source_inode_without_moving_it() {
+    let (_temp, root, state, file, history, container) = fixture();
+    let name = Name::parse("latest.bin").unwrap();
+    let prepared = Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap();
+    let version = state.versions.values().next().unwrap();
+    let source = installed_version_path(&container, version).unwrap();
+    let retained = source.with_extension("retained");
+    let original = std::fs::read(&source).unwrap();
+    root.rename_noreplace_synced(&source, &retained).unwrap();
+    root.write_atomic(&source, &original, false).unwrap();
+    assert!(prepared.apply(&root, &container, &mut |_| Ok(())).is_err());
+    let leaf = crate::container_storage::installed_version_leaf(version.storage_id, &name)
+        .unwrap();
+    assert!(!container.join("versions").join(leaf.as_path()).exists());
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    assert_eq!(std::fs::read(retained).unwrap(), original);
+}
+
+#[test]
+fn rename_reservation_covers_atomic_intent_and_retained_source_intent() {
+    let (_temp, root, state, file, history, container) = fixture();
+    let name = Name::parse("latest.bin").unwrap();
+    let prepared = Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap();
+    let fresh = prepared.reservation().unwrap();
+    assert!(fresh.0 > 0);
+    assert_eq!(fresh.1, 2);
+    assert!(prepared.apply(&root, &container, &mut |_| {
+        Err(Error::VersionNames(VersionNameError::Intent))
+    }).is_err());
+    let recovered = Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap();
+    let retained = recovered.reservation().unwrap();
+    assert_eq!(retained.0, fresh.0 * 2);
+    assert_eq!(retained.1, 2);
+}
+
+#[test]
+fn recovery_rejects_intent_subset_and_target_unbound_to_candidate() {
+    use crate::container_storage::version_rename::{Intent, intent_path};
+    for subset in [true, false] {
+        let (_temp, root, state, file, history, container) = fixture();
+        let name = Name::parse("latest.bin").unwrap();
+        let prepared = Prepared::capture(&root, &container, &state, &file, &history, &name)
+            .unwrap().unwrap();
+        assert!(prepared.apply(&root, &container, &mut |_| {
+            Err(Error::VersionNames(VersionNameError::Intent))
+        }).is_err());
+        let path = intent_path(&container);
+        let mut intent: Intent = storage_contract::decode_strict(
+            &std::fs::read(&path).unwrap(),
+        ).unwrap();
+        if subset {
+            intent.bodies.pop().unwrap();
+        } else {
+            intent.target_name = Name::parse("unselected.bin").unwrap();
+        }
+        let changed = storage_contract::canonical_json(&intent).unwrap();
+        root.write_atomic(&path, &changed, true).unwrap();
+        assert!(Prepared::capture(&root, &container, &state, &file, &history, &name).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), changed);
+        for version in state.versions.values() {
+            assert!(installed_version_path(&container, version).unwrap().is_file());
+        }
+    }
+}
+
+#[test]
+fn intent_cleanup_requires_the_callers_publication_binding() {
+    let (_temp, root, state, file, history, container) = fixture();
+    let name = Name::parse("latest.bin").unwrap();
+    Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap().apply(&root, &container, &mut |_| Ok(())).unwrap();
+    let target = container.with_file_name(name.as_str());
+    root.rename_noreplace_synced(&container, &target).unwrap();
+    let intent_path = crate::container_storage::version_rename::intent_path(&target);
+    let before = std::fs::read(&intent_path).unwrap();
+    let mut binding = CompletionBinding {
+        file: file.parse().unwrap(),
+        history: history.parse().unwrap(),
+        sequence: storage_contract::Sequence::new(10),
+        target_name: name,
+    };
+    assert!(finish(&root, &target, &binding).is_err());
+    assert_eq!(std::fs::read(&intent_path).unwrap(), before);
+    binding.sequence = storage_contract::Sequence::new(state.sequence);
+    binding.target_name = Name::parse("unselected.bin").unwrap();
+    assert!(finish(&root, &target, &binding).is_err());
+    assert_eq!(std::fs::read(&intent_path).unwrap(), before);
+}
+
+#[test]
+fn read_locator_rejects_container_outside_both_intent_endpoints() {
+    let (_temp, root, state, file, history, container) = fixture();
+    let name = Name::parse("latest.bin").unwrap();
+    let prepared = Prepared::capture(&root, &container, &state, &file, &history, &name)
+        .unwrap().unwrap();
+    assert!(prepared.apply(&root, &container, &mut |_| {
+        Err(Error::VersionNames(VersionNameError::Intent))
+    }).is_err());
+    let unrelated = container.with_file_name("unselected.bin");
+    root.rename_noreplace_synced(&container, &unrelated).unwrap();
+    for version in state.versions.values() {
+        assert!(interrupted_path(&root, &unrelated, version).is_err());
+    }
 }

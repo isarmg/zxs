@@ -397,7 +397,7 @@ impl Engine {
         self.disk_resources = Arc::new(DiskResources::generation_handles(&discovered, handles)?);
         self._locks.extend(locks);
         self.config = discovered;
-        self.current_namespaces = None;
+        self.named_namespaces.install_current(&mut self.current_namespaces, None);
         self.membership_fence = None;
         self.journals.clear();
         self.blocked = true;
@@ -540,13 +540,13 @@ impl Engine {
         // Replace in-memory handles, never release any predecessor writer lock.
         let resources = DiskResources::generation_handles(&config, handles)?;
         self.config = config;
-        self.current_namespaces = None;
+        self.named_namespaces.install_current(&mut self.current_namespaces, None);
         self.disk_resources = Arc::new(resources);
         self._locks.extend(locks);
         self.membership_fence = None;
         self.pending_membership = None;
         self.journals.clear();
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         self.blocked = true;
@@ -722,7 +722,7 @@ impl Engine {
                 disk.disk_id
             ))?;
         }
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         Ok(())

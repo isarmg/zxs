@@ -912,7 +912,17 @@ pub(crate) fn namespace_locations(
             if path.as_str() == moved.path() {
                 continue;
             }
-            if direct {
+            if renamed_file.is_some_and(|file| old.file_id == file.to_string()) {
+                // Every occurrence follows the same physical outcome, even if
+                // a later link in this operation is addressed through another alias.
+                let mut source_entry = moved.clone();
+                source_entry.relocate(name_policy::PortablePath::parse(from.as_str())?);
+                physical_path = namespace_location(
+                    physical_path, &source_entry, from.as_str(), destination.as_str(),
+                    DirectoryBatchKind::Rename, false,
+                );
+                renamed = true;
+            } else if direct {
                 physical_path = namespace_location(
                     physical_path,
                     &moved,

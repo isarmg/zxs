@@ -659,15 +659,21 @@ fn flat_directory_file_collision_still_uses_fixed_keys_inside_child_scope() {
 
 #[test]
 fn main_parent_spelling_keeps_projected_container_internal_path_budget() {
-    for suffix in [
-        "container.json",
-        "versions/v000001_20261106T120000Z_00000000.txt",
-    ] {
+    for exceeds_metadata_budget in [false, true] {
         let mut state = fixture_state();
-        let leaf = "a".repeat(200 - "Straße/".encode_utf16().count() - 1 - suffix.len());
+        let metadata_suffix = "container.json";
+        let metadata_limit = 200 - "STRASSE/".encode_utf16().count()
+            - 1 - metadata_suffix.len();
+        let leaf = "a".repeat(metadata_limit + usize::from(exceeds_metadata_budget));
         let logical = format!("Straße/{leaf}");
-        assert!(PortablePath::parse(&format!("{logical}/{suffix}")).is_ok());
+        assert!(PortablePath::parse(&format!("{logical}/{metadata_suffix}")).is_ok());
         let a = file(&mut state, 1, &logical);
+        let version = &state.versions[&a.version_id];
+        let body_suffix = format!("versions/{}-{leaf}", version.storage_id);
+        let expected_body = format!("STRASSE/{leaf}/{body_suffix}");
+        assert!(expected_body.encode_utf16().count() > 200);
+        platform_io::fs_safety::RelativePath::new(std::path::Path::new(&expected_body))
+            .unwrap();
         branch(
             &mut state,
             1,
@@ -676,10 +682,16 @@ fn main_parent_spelling_keeps_projected_container_internal_path_budget() {
             vec![directory(1, "STRASSE"), a],
             true,
         );
-        let expected = format!("STRASSE/{leaf}/{suffix}");
-        assert!(
-            matches!(plan(&state, &root(), ".zxs-extra"), Err(LayoutError::PhysicalPath { path, .. }) if path == expected)
-        );
+        let result = plan(&state, &root(), ".zxs-extra");
+        if exceeds_metadata_budget {
+            let expected = format!("STRASSE/{leaf}/{metadata_suffix}");
+            assert!(matches!(result,
+                Err(LayoutError::PhysicalPath { path, .. }) if path == expected));
+        } else {
+            // Internal identity/name leaves use the filesystem path budget,
+            // not a second application of the user's 200-unit path policy.
+            result.unwrap();
+        }
     }
 }
 

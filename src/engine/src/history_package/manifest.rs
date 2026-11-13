@@ -1274,15 +1274,25 @@ impl HistoryManifest {
         {
             return Err(invalid("file selection generation escapes the history"));
         }
+        if file_ids.iter().copied().ne(self.file_locations.keys().map(String::as_str)) {
+            return Err(invalid("canonical locations do not exactly cover retained files"));
+        }
+        let mut current_names = BTreeMap::new();
         for (file, location) in &self.file_locations {
-            if !file_ids.contains(file.as_str()) {
-                return Err(invalid("canonical file location escapes the history"));
-            }
-            name_policy::validate_path(location)?;
-            if self.file_names.get(file).map(String::as_str) != location.rsplit('/').next() {
+            let location = name_policy::PortablePath::parse(location)?;
+            let name = name_policy::Name::parse(location.file_name())?;
+            if self.file_names.get(file).map(String::as_str) != Some(name.as_str()) {
                 return Err(invalid(
                     "canonical file name differs from its physical location",
                 ));
+            }
+            current_names.insert(file.as_str(), name);
+        }
+        for entry in live.entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File) {
+            let name = current_names.get(entry.file_id.as_str())
+                .ok_or_else(|| invalid("current file occurrence has no canonical name"))?;
+            if entry.name() != name.as_str() {
+                return Err(invalid("current file occurrence differs from its canonical name"));
             }
         }
         let files = self.versions.values()
@@ -1345,10 +1355,9 @@ impl HistoryManifest {
             validate_id(id, "ver")?;
             validate_id(&version.file_id, "file")?;
             name_policy::validate_name(&version.creation_name)?;
-            let name = self.file_names.get(&version.file_id)
-                .ok_or_else(|| invalid("version has no current container name"))?;
-            let name = name_policy::Name::parse(name)?;
-            crate::container_storage::installed_version_leaf(version.storage_id, &name)?;
+            // Exact retained-file coverage and mirror agreement were admitted above.
+            let name = &current_names[version.file_id.as_str()];
+            crate::container_storage::installed_version_leaf(version.storage_id, name)?;
             let placement = self
                 .placements
                 .get(id)

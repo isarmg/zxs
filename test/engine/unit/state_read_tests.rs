@@ -17,6 +17,8 @@ enum Corruption {
     OrphanVersion,
     OrphanContentState,
     MissingPlacement,
+    MissingFileLocation,
+    DivergentFileName,
     OrphanFileSelection,
     OrphanFileNote,
     OrphanDirectorySelection,
@@ -58,6 +60,8 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
         OrphanVersion,
         OrphanContentState,
         MissingPlacement,
+        MissingFileLocation,
+        DivergentFileName,
         OrphanFileSelection,
         OrphanFileNote,
         OrphanDirectorySelection,
@@ -137,6 +141,15 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
             }
             MissingPlacement => {
                 state.placements.remove(&version);
+            }
+            MissingFileLocation => {
+                let file = &state.versions[&version].file_id;
+                assert!(state.file_names.contains_key(file));
+                state.file_locations.remove(file);
+            }
+            DivergentFileName => {
+                let file = state.versions[&version].file_id.clone();
+                state.file_names.insert(file, "not-the-current-name.txt".into());
             }
             OrphanFileSelection => {
                 state

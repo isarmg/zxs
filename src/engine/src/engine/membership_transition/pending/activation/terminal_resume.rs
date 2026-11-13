@@ -226,7 +226,7 @@ pub(in crate::engine::membership_transition::pending) fn activate(
     )?;
     drop(bootstrap);
     engine.blocked = true;
-    engine.state = Arc::clone(&generation.base);
+    engine.named_namespaces.install_state(&mut engine.state, Arc::clone(&generation.base));
     engine.snapshot = generation.snapshot();
     engine.next_slot = generation.first_sequence()?;
     engine.admit_disk_exit_io_exclusion()?;

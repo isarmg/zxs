@@ -152,13 +152,13 @@ impl Engine {
         let snapshot = generation.snapshot();
         let sequence = generation.first_sequence()?;
         self.config = config;
-        self.current_namespaces = None;
+        self.named_namespaces.install_current(&mut self.current_namespaces, None);
         self.disk_resources = Arc::new(resources);
         // No original journal is modified. Only the new G gets a writer later.
         self.journals.clear();
         self.membership_fence = None;
         self.pending_membership = None;
-        self.state = base;
+        self.named_namespaces.install_state(&mut self.state, base);
         self.snapshot = snapshot;
         self.next_slot = sequence;
         self.blocked = true;

@@ -8,6 +8,8 @@ use storage_contract::{ErrorCode, VersionId, VersionStorageId};
 pub enum VersionNameError {
     #[error("version filename rename differs from its retained inode-bound intent")]
     Intent,
+    #[error("version rename exceeds the shared retained payload descriptor budget")]
+    Descriptors,
     #[error("container has no current authoritative location")]
     MissingLocation,
     #[error("container name mirror differs from its current location")]
@@ -28,6 +30,7 @@ impl VersionNameError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::Collision => ErrorCode::NameCollision,
+            Self::Descriptors => ErrorCode::ResourceLimit,
             Self::Intent | Self::MissingLocation | Self::Mirror | Self::Name(_) | Self::Entry(_)
             | Self::Basename | Self::NameBudget => {
                 ErrorCode::ContainerLayoutInvalid
@@ -37,12 +40,20 @@ impl VersionNameError {
 }
 
 pub(crate) fn current_container_name(state: &State, file: &str) -> Result<Name> {
-    let location = state.file_locations.get(file)
+    container_name_from_locations(&state.file_locations, &state.file_names, file)
+}
+
+pub(crate) fn container_name_from_locations(
+    locations: &storage_contract::TrackedMap<String>,
+    names: &storage_contract::TrackedMap<String>,
+    file: &str,
+) -> Result<Name> {
+    let location = locations.get(file)
         .ok_or(Error::VersionNames(VersionNameError::MissingLocation))?;
     let location = name_policy::PortablePath::parse(location)
         .map_err(|source| Error::VersionNames(VersionNameError::Name(source)))?;
     let name = location.file_name();
-    if state.file_names.get(file).is_some_and(|mirror| mirror != name) {
+    if names.get(file).is_some_and(|mirror| mirror != name) {
         return Err(Error::VersionNames(VersionNameError::Mirror));
     }
     Name::parse(name).map_err(|source| Error::VersionNames(VersionNameError::Name(source)))
@@ -84,7 +95,9 @@ pub(crate) fn installed_version_path(
         .ok_or(Error::VersionNames(VersionNameError::Basename))?;
     let name = Name::parse(name)
         .map_err(|source| Error::VersionNames(VersionNameError::Name(source)))?;
-    Ok(container.join("versions").join(installed_version_leaf(version.storage_id, &name)?.as_path()))
+    Ok(container
+        .join(crate::persist::layout::VERSIONS.as_path())
+        .join(installed_version_leaf(version.storage_id, &name)?.as_path()))
 }
 
 pub(super) fn check_target_name(root: &crate::disk::DiskRoot, leaf: &EntryName) -> Result<()> {

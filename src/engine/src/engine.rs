@@ -123,7 +123,9 @@ pub use observations::{
 pub use operations::{OperationReadObservation, OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;
-pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
+pub(crate) use publication::{
+    DetachedPublication, PublishedDependencyReuse, PayloadProofReservation, payload_proof_budget,
+};
 mod workspace_commit;
 #[cfg(test)]
 pub(crate) use workspace_commit::native_workspace_commit_completed;
@@ -138,6 +140,7 @@ pub use directory_snapshot_source::{
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod read_view;
+pub(crate) mod named_namespaces;
 pub use read_view::ReadView;
 mod directory_history;
 mod directory_layout;
@@ -251,6 +254,7 @@ pub struct Engine {
     pub(crate) config: ValidatedConfig,
     pub(crate) disk_resources: Arc<DiskResources>,
     pub(crate) state: Arc<State>,
+    pub(crate) named_namespaces: named_namespaces::NameCache,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
     // Derived lookup only: the published State still proves every historical
     // plan, actor and request binding before a workspace can retire.
@@ -294,6 +298,7 @@ struct BusinessMetadataProjection(Arc<State>);
 
 pub struct MetadataView {
     state: BusinessMetadataProjection,
+    pub(crate) named_namespaces: named_namespaces::NameCache,
     pub(crate) current_namespaces: NamespaceReadView,
     history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
     history_action_max_entries: usize,
@@ -677,6 +682,7 @@ impl Engine {
             config,
             disk_resources,
             state: Arc::new(state),
+            named_namespaces: named_namespaces::NameCache::default(),
             workspaces: BTreeMap::new(),
             current_namespaces: None,
             workspace_namespace_baselines: BTreeMap::new(),
@@ -872,6 +878,7 @@ impl Engine {
                 topology_generation: 1,
                 ..State::default()
             }),
+            named_namespaces: named_namespaces::NameCache::default(),
             workspaces: BTreeMap::new(),
             current_namespaces: None,
             workspace_namespace_baselines: BTreeMap::new(),
@@ -1272,6 +1279,7 @@ impl Engine {
             .and_then(|roots| roots.projected_for(&self.state, &state.0));
         MetadataView {
             state,
+            named_namespaces: self.named_namespaces.seed(),
             current_namespaces: self.namespace_read_view(),
             history_window_roots,
             history_action_max_entries: self.config.max_entries,

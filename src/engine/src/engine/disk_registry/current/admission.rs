@@ -62,7 +62,7 @@ impl Engine {
         let snapshot = self.snapshot.as_deref().ok_or_else(pending_publication)?;
         let view = prepared.admit(&generation.base, &self.state, snapshot, publication)?;
         self.workspace_namespace_baselines.clear();
-        self.current_namespaces = Some(Arc::new(view));
+        self.named_namespaces.install_current(&mut self.current_namespaces, Some(Arc::new(view)));
         Ok(())
     }
 }

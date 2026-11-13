@@ -387,6 +387,7 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
 
     let mut renamed = pending.clone();
     renamed.file_names.insert(file.clone(), "renamed.md".into());
+    renamed.file_locations.insert(file.clone(), "renamed.md".into());
     synchronize_names(&config, &pending, &renamed).unwrap();
     let new_named = named.parent().unwrap().join("renamed.md");
     assert!(!new_named.join("pending-branches").exists());
@@ -731,8 +732,10 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
     previous
         .file_names
         .insert(file.clone(), "original.txt".into());
+    previous.file_locations.insert(file.clone(), "original.txt".into());
     let mut next = previous.clone();
     next.file_names.insert(file.clone(), "重命名.md".into());
+    next.file_locations.insert(file.clone(), "重命名.md".into());
     next.file_notes.insert(file.clone(), "文件备注".into());
     next.version_notes
         .insert(item.version_id.clone(), "版本备注".into());
@@ -862,41 +865,30 @@ fn capture_fixture() -> (State, String, String) {
 }
 
 #[test]
-fn capture_names_only_inserts_missing_fields_and_keeps_first_alias() {
+fn capture_names_keeps_first_alias_and_rejects_conflicting_name_authority() {
     let (mut state, _, file) = capture_fixture();
     capture_names(&mut state);
     assert_eq!(state.file_names[&file], "first.txt");
     assert_eq!(state.file_locations[&file], "folder/first.txt");
+    assert_eq!(current_container_name(&state, &file).unwrap().as_str(), "first.txt");
 
-    state.file_names.insert(file.clone(), "retained.txt".into());
-    state.file_locations.remove(&file);
-    capture_names(&mut state);
-    assert_eq!(state.file_names[&file], "retained.txt");
-    assert_eq!(state.file_locations[&file], "folder/first.txt");
-
-    state.file_names.remove(&file);
-    state
-        .file_locations
-        .insert(file.clone(), "retained/location.txt".into());
-    capture_names(&mut state);
-    assert_eq!(state.file_names[&file], "first.txt");
-    assert_eq!(state.file_locations[&file], "retained/location.txt");
-
+    let admitted = state.clone();
+    for missing_location in [false, true] {
+        let mut invalid = admitted.clone();
+        invalid.file_names.insert(file.clone(), "retained.txt".into());
+        if missing_location {
+            invalid.file_locations.remove(&file);
+        }
+        let before = canonical_json(&invalid).unwrap();
+        let error = current_container_name(&invalid, &file).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
+        assert_eq!(canonical_json(&invalid).unwrap(), before);
+    }
     let before = state.clone();
     state.begin_tracking();
     capture_names(&mut state);
-    assert!(
-        state
-            .file_names
-            .changes_since(&before.file_names)
-            .is_empty()
-    );
-    assert!(
-        state
-            .file_locations
-            .changes_since(&before.file_locations)
-            .is_empty()
-    );
+    assert!(state.file_names.changes_since(&before.file_names).is_empty());
+    assert!(state.file_locations.changes_since(&before.file_locations).is_empty());
 }
 
 #[test]

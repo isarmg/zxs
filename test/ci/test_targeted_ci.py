@@ -2612,3 +2612,32 @@ class ContainerPathFactSelection(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ContainerCurrentNameSelection(unittest.TestCase):
+    def test_new_name_boundaries_keep_the_same_complete_targeted_scope(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        paths = [
+            'src/contract/src/version_storage_id.rs',
+            'src/engine/src/business/namespace/container_name.rs',
+            'src/engine/src/container_storage/version_names.rs',
+            'src/engine/src/container_storage/version_rename.rs',
+            'test/engine/integration/branch_alias_operations/current_name_scenarios.rs',
+            'docs/adr/container-current-name.md',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(policy, [path], shardable=True)
+                self.assertIn('container-current-name', plan['groups'])
+                self.assertCountEqual(origin_selections(plan, 'container-current-name'),
+                                      policy['groups']['container-current-name']['rust_targets'])
+        targets = policy['groups']['container-current-name']['rust_targets']
+        self.assertTrue(any('container_storage::version_rename::tests::' in
+                            target.get('prefixes', []) for target in targets))
+        self.assertTrue(any(target.get('exact') == [
+            'historical_selection_keeps_current_download_and_installed_names']
+                            for target in targets))
+        self.assertTrue(any(target.get('compile_target') == 'wasm32-unknown-unknown'
+                            for target in targets))
+        self.assertTrue(all(target.get('name') != 'recursive_backup_paths'
+                            for target in targets))

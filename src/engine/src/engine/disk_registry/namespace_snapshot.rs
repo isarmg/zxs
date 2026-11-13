@@ -2,10 +2,7 @@
 //! These values carry data and stale-read witnesses, never serving authority.
 use super::{Engine, VerifiedDiskRegistry};
 use crate::{BranchState, Commit, Entry, Error, ErrorCode, Result};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 
 /// Shared entry storage. Constructing this data does not admit it as a namespace.
 #[derive(Clone, Debug)]
@@ -22,13 +19,14 @@ impl NamespaceEntries {
     }
 }
 
-/// An O(1) capture for directory-choice scans outside the engine lock. The
-/// shared tables exclude State, commits, versions and unrelated namespace data.
+/// Shared directory-choice data for scans outside the engine lock. The first
+/// capture indexes current scope heads; each visited scope lazily projects names.
+/// Frozen sources are shared, without retaining the full State or version table.
 /// This is read data only; callers still reauthorize and recheck their scan.
 #[derive(Clone)]
 pub struct DirectoryNamespaceView {
     branches: storage_contract::TrackedMap<crate::DirectoryBranch>,
-    projected: Option<Arc<BTreeMap<String, Arc<super::current::CurrentScope>>>>,
+    named: Arc<crate::engine::named_namespaces::NamedNamespaces>,
 }
 impl DirectoryNamespaceView {
     pub fn entries(&self, branch_id: &str) -> Result<&[Entry]> {
@@ -38,19 +36,8 @@ impl DirectoryNamespaceView {
                 "directory branch not found",
             )
         })?;
-        match &self.projected {
-            Some(scopes) => scopes
-                .get(branch_id)
-                .filter(|scope| scope.head == branch.head_tree_id)
-                .map(|scope| scope.entries.as_slice())
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorCode::WorkspaceChanged,
-                        "current directory namespace head differs",
-                    )
-                }),
-            None => Ok(&branch.entries),
-        }
+        self.named.directory(branch_id.parse()?, branch.head_tree_id.parse()?)
+            .map(|rows| rows.entries())
     }
 }
 
@@ -132,17 +119,17 @@ pub struct NamespaceSnapshotWitness {
 }
 
 impl Engine {
-    /// Capture shared directory metadata and its current projection without
-    /// enumerating branches or copying entries while the engine is borrowed.
+    /// Reuse the publication-bound scope index, or construct it on first access.
+    /// Directory entries are projected only when the captured view visits them.
     pub fn directory_namespace_view(&self) -> Result<DirectoryNamespaceView> {
-        let current = self.admitted_current_namespaces()?;
         Ok(DirectoryNamespaceView {
             branches: self.state.directory_branches.clone(),
-            projected: current.map(|view| Arc::clone(&view.directories)),
+            named: Arc::clone(self.named_namespaces()?),
         })
     }
 
-    /// Capture the same current entries as namespace_tree, without copying them.
+    /// Capture the same current entries as namespace_tree. A scope copies entries
+    /// only on its first access when authoritative names differ from its source.
     /// Errors match current namespace admission and branch/head lookup failures.
     pub fn namespace_snapshot(&self, branch_id: &str) -> Result<NamespaceSnapshot> {
         let branch = self
@@ -156,35 +143,10 @@ impl Engine {
                 "branch moved to another history",
             ));
         }
-        let (entries, registry) = match self.admitted_current_namespaces()? {
-            Some(view) => {
-                let scope = view
-                    .branches
-                    .get(branch_id)
-                    .filter(|scope| scope.head == branch.head_commit_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::WorkspaceChanged,
-                            "current namespace head differs",
-                        )
-                    })?;
-                (
-                    NamespaceEntries::Projected(Arc::clone(&scope.entries)),
-                    Some(Arc::downgrade(&view.registry_state)),
-                )
-            }
-            None => (
-                NamespaceEntries::Commit(
-                    self.state
-                        .commits
-                        .get_shared(&branch.head_commit_id)
-                        .ok_or_else(|| {
-                            Error::new(ErrorCode::StateInvalid, "branch HEAD missing")
-                        })?,
-                ),
-                None,
-            ),
-        };
+        let entries = self.named_namespaces()?
+            .branch(branch_id.parse()?, branch.head_commit_id.parse()?)?.share();
+        let registry = self.admitted_current_namespaces()?
+            .map(|view| Arc::downgrade(&view.registry_state));
         Ok(NamespaceSnapshot {
             repository: self.state.histories[&branch.history_tree_id]
                 .repository_id
@@ -220,30 +182,33 @@ impl Engine {
         {
             return false;
         }
-        match (
-            self.namespace_read_view(),
-            &witness.entries,
-            &witness.registry,
-        ) {
-            (
-                super::current::NamespaceReadView::Initial,
-                NamespaceWitnessEntries::Commit(expected),
-                None,
-            ) => self
-                .state
-                .commits
-                .get_shared(&witness.head)
-                .is_some_and(|commit| expected.ptr_eq(&Arc::downgrade(&commit))),
-            (
-                super::current::NamespaceReadView::Published(view),
-                NamespaceWitnessEntries::Projected(expected),
-                Some(registry),
-            ) => {
+        let named = match self.named_namespaces() {
+            Ok(named) => named,
+            Err(_) => return false,
+        };
+        let rows = match witness.branch.parse().and_then(|id| {
+            witness.head.parse().map(|head| (id, head))
+        }) {
+            Ok((id, head)) => match named.branch(id, head) {
+                Ok(rows) => rows.share(),
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+        let same_rows = match (&witness.entries, &rows) {
+            (NamespaceWitnessEntries::Commit(expected), NamespaceEntries::Commit(actual)) => {
+                expected.ptr_eq(&Arc::downgrade(actual))
+            }
+            (NamespaceWitnessEntries::Projected(expected), NamespaceEntries::Projected(actual)) => {
+                expected.ptr_eq(&Arc::downgrade(actual))
+            }
+            (NamespaceWitnessEntries::Commit(_), NamespaceEntries::Projected(_))
+            | (NamespaceWitnessEntries::Projected(_), NamespaceEntries::Commit(_)) => false,
+        };
+        same_rows && match (self.namespace_read_view(), &witness.registry) {
+            (super::current::NamespaceReadView::Initial, None) => true,
+            (super::current::NamespaceReadView::Published(view), Some(registry)) => {
                 registry.ptr_eq(&Arc::downgrade(&view.registry_state))
-                    && view.branches.get(&witness.branch).is_some_and(|scope| {
-                        scope.head == witness.head
-                            && expected.ptr_eq(&Arc::downgrade(&scope.entries))
-                    })
             }
             _ => false,
         }

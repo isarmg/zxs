@@ -1636,7 +1636,7 @@
       ]
     },
     "engine-integer-errors": {
-      "reason": "Explicit integer error selection preserves storage sequence admission, historical plan range rejection, history projection counts and cursor error order without changing wire codes or sources. Engine tests currently enable fault-injection through dev dependencies; separate check targets compile product consumers, not their complete integration-test or test-harness closure.",
+      "reason": "Explicit integer and typed version-storage identity admission preserves strict wire rejection, historical plan range errors, projection counts and cursor error order. Old numbered-leaf admission is retired; product feature checks remain separate from test-harness evidence.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -1648,11 +1648,11 @@
             "history_package::manifest::integer_tests::"
           ],
           "exact": [
-            "container_storage::tests::raw_storage_sequence_parser_retains_format_errors",
-            "container_storage::tests::identity_counts_each_file_independently_with_required_numbered_names",
-            "container_storage::tests::identity_preserves_number_width_and_exhaustion_without_global_sequence_coupling",
-            "container_storage::tests::current_version_requires_storage_name_and_creation_time",
-            "container_storage::tests::version_sequence_admission_retains_overflow_before_digest_and_calendar_errors",
+            "container_storage::tests::raw_storage_identity_parser_retains_format_errors",
+            "container_storage::tests::identity_is_independent_of_current_name_and_global_sequence",
+            "container_storage::tests::identity_allocation_rejects_retained_collision_only_in_its_container",
+            "container_storage::tests::current_version_requires_storage_id_and_creation_time",
+            "container_storage::tests::version_storage_identity_admission_rejects_bad_wire_before_calendar_validation",
             "historical_save::tests::historical_edits_materialize_only_written_files_without_changing_the_source_head",
             "historical_save::tests::historical_placeholders_need_no_old_payload_and_written_replacements_materialize",
             "historical_save::tests::historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherited",
@@ -3066,6 +3066,116 @@
           ],
           "max_tests": 8,
           "timeout_seconds": 900
+        }
+      ]
+    },
+    "container-current-name": {
+      "reason": "One current file-container name across SMB occurrences and historical selection; immutable local version identity, inode-bound no-clobber rename recovery, strict new format, and matching server/Web/schema boundaries. Only related tests and feature checks run; this is not a backup performance or full-workspace pass.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "prefixes": [
+            "version_storage_id::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::namespace::container_name::tests::",
+            "container_storage::version_names::tests::",
+            "container_storage::version_rename::tests::",
+            "tests::version_identity_tests::",
+            "engine::history_window::projection::tests::"
+          ],
+          "exact": [
+            "engine::detached_history::tests::detached_discovery_uses_current_container_name_for_pre_rename_versions",
+            "engine::publication::verified_payloads::tests::version_rename_uses_shared_descriptor_budget_before_persisting_intent",
+            "history_package::tests::decoded_manifest_requires_current_location_for_every_retained_file"
+          ],
+          "max_tests": 64,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "branch_alias_operations",
+          "whole": true,
+          "max_tests": 192,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "directory_layout_recovery_boundaries",
+          "whole": true,
+          "max_tests": 64,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "kind": "test",
+          "name": "http_engine",
+          "exact": [
+            "historical_selection_keeps_current_download_and_installed_names"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "history_window_encode::tests::"
+          ],
+          "max_tests": 32,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "prefixes": [
+            "files::history::ingress::tests::"
+          ],
+          "max_tests": 64,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "contract-check",
+          "manifest": "tools/contract-check/Cargo.toml",
+          "kind": "bin",
+          "name": "contract-check",
+          "exact": [
+            "tests::checked_in_contracts_and_document_examples_are_consistent",
+            "history_window_tests::current_installed_names_share_suffix_budgets_and_reject_stale_projections"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
         }
       ]
     }
@@ -8768,6 +8878,66 @@
       "path": "test/engine/unit/backup_generation_encoding_probe.rs",
       "groups": [
         "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/contract/src/version_storage_id.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/contract/unit/version_storage_id.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/container_name.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/container_name_tests.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/version_names.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/version_rename.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/version_names.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/version_rename.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/branch_alias_operations/current_name_scenarios.rs",
+      "groups": [
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "docs/adr/container-current-name.md",
+      "groups": [
+        "container-current-name"
       ]
     }
   ],

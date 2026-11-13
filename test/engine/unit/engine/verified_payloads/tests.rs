@@ -735,6 +735,8 @@ fn name_projection_uses_the_owner_but_payload_admission_reports_a_corrupt_seal()
     let mut next = engine.state().clone();
     next.file_names
         .insert(version.file_id.clone(), "renamed.txt".into());
+    next.file_locations
+        .insert(version.file_id.clone(), "renamed.txt".into());
     let disk = engine
         .disk(&candidate.versions[0].placement.route_slot_ids[0])
         .unwrap();
@@ -1172,3 +1174,32 @@ fn incomplete_private_version_admission_cannot_be_truncated_by_zip() {
 
 #[path = "guarded_proof_tests.rs"]
 mod guarded_proof_tests;
+
+#[test]
+fn version_rename_uses_shared_descriptor_budget_before_persisting_intent() {
+    let (_temp, engine, candidate) = fixture();
+    let version = &candidate.versions[0].version;
+    let mut next = engine.state().clone();
+    next.file_names.insert(version.file_id.clone(), "renamed.txt".into());
+    next.file_locations.insert(version.file_id.clone(), "renamed.txt".into());
+    let transition = crate::state_projection::ProjectionTransition::new(
+        engine.state(), &next, None,
+    ).unwrap();
+    {
+        let budget = test_budget(0);
+        let result = crate::container_storage::prepare_names(
+            &engine.config, &engine.disk_resources, &transition, MAX_METADATA,
+        );
+        assert!(matches!(result, Err(Error::VersionNames(
+            crate::VersionNameError::Descriptors
+        ))));
+        assert_eq!(budget.held(), 0);
+    }
+    let budget = test_budget(LEGACY_DESCRIPTOR_BUDGET);
+    let prepared = crate::container_storage::prepare_names(
+        &engine.config, &engine.disk_resources, &transition, MAX_METADATA,
+    ).unwrap();
+    assert!(budget.held() > 0);
+    drop(prepared);
+    assert_eq!(budget.held(), 0);
+}

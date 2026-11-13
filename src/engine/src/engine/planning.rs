@@ -20,6 +20,7 @@ pub(crate) struct PlanningContext<'a> {
     pub(crate) config: &'a ValidatedConfig,
     pub(crate) disk_resources: &'a Arc<DiskResources>,
     pub(crate) state: &'a Arc<State>,
+    pub(crate) named_namespaces: &'a super::named_namespaces::NameCache,
     pub(crate) current_namespaces: Option<&'a Arc<super::CurrentNamespaces>>,
     pub(crate) workspace_namespace_baselines:
         &'a std::collections::BTreeMap<String, super::WorkspaceNamespaceBaseline>,
@@ -39,6 +40,7 @@ impl Engine {
             config: &self.config,
             disk_resources: &self.disk_resources,
             state: &self.state,
+            named_namespaces: &self.named_namespaces,
             current_namespaces: self.current_namespaces.as_ref(),
             workspace_namespace_baselines: &self.workspace_namespace_baselines,
             snapshot: &self.snapshot,

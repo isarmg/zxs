@@ -57,7 +57,7 @@ fn renamed_targets(pool: &mut Pool) -> (String, String) {
 }
 
 #[test]
-fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
+fn copied_file_aliases_keep_frozen_parents_with_one_current_container_spelling() {
     for reverse in [false, true] {
         let mut pool = Pool::new();
         let (before, after) = renamed_targets(&mut pool);
@@ -67,7 +67,7 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
         let current = pool.engine.list_tree(&pool.repo.main_branch_id).unwrap();
         let mut items = vec![
             pool.mapping(&before, source.path.as_str(), &before, "folder/Copied.txt"),
-            pool.mapping(&before, source.path.as_str(), &after, "renamed/copied.txt"),
+            pool.mapping(&before, source.path.as_str(), &after, "renamed/Copied.txt"),
         ];
         if reverse {
             items.reverse();
@@ -83,13 +83,13 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
             .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
             .unwrap();
         let left = pool.entry(&before, "folder/Copied.txt");
-        let right = pool.entry(&after, "renamed/copied.txt");
+        let right = pool.entry(&after, "renamed/Copied.txt");
         assert_eq!(left.entry_id, right.entry_id);
         assert_eq!(left.file_id, right.file_id);
         assert_eq!(left.version_id, right.version_id);
         assert_ne!(left.file_id, source.file_id);
         assert_eq!(left.name(), "Copied.txt");
-        assert_eq!(right.name(), "copied.txt");
+        assert_eq!(right.name(), "Copied.txt");
         assert_eq!(left.lookup_key(), "folder/copied.txt");
         assert_eq!(right.lookup_key(), "renamed/copied.txt");
         assert_eq!(
@@ -186,26 +186,32 @@ fn copied_folder_aliases_share_ids_without_reusing_another_targets_paths() {
 }
 
 #[test]
-fn copied_file_case_only_targets_preserve_each_requested_alias_name() {
+fn copied_file_case_only_alias_names_reject_the_entire_copy_without_mutation() {
     let mut pool = Pool::new();
     let (before, after) = renamed_targets(&mut pool);
-    pool.batch(
-        storage_contract::DirectoryBatchKind::Copy,
-        vec![
-            pool.mapping(&before, "source/nested/report.txt", &before, "Copy.TXT"),
-            pool.mapping(&before, "source/nested/report.txt", &after, "copy.txt"),
+    let source = pool.entry(&before, "source/nested/report.txt");
+    let request = DirectoryNamespaceBatch {
+        kind: storage_contract::DirectoryBatchKind::Copy,
+        items: vec![
+            pool.mapping(&before, source.path.as_str(), &before, "Copy.TXT"),
+            pool.mapping(&before, source.path.as_str(), &after, "copy.txt"),
         ],
-    );
-    let left = pool.entry(&before, "Copy.TXT");
-    let right = pool.entry(&after, "copy.txt");
-    assert_eq!(left.file_id, right.file_id);
-    assert_eq!(left.version_id, right.version_id);
-    assert_eq!(left.lookup_key(), right.lookup_key());
-    assert_eq!(
-        pool.engine.state().file_locations[&left.file_id],
-        "Copy.TXT"
-    );
-    assert_eq!(pool.engine.state().file_names[&left.file_id], "Copy.TXT");
+    };
+    let state = storage_engine::canonical_json(pool.engine.state()).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    for _ in 0..2 {
+        let error = pool.engine.directory_namespace_batch(
+            &pool.repo.repository_id, &request, "admin", operation,
+        ).unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::BatchMappingConflict);
+        assert_eq!(storage_engine::canonical_json(pool.engine.state()).unwrap(), state);
+        assert_eq!(pool.bytes(&source.version_id), b"source body");
+        assert!(!pool.engine.state().operations.contains_key(&operation));
+    }
+    pool.reopen(|engine| {
+        assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), state);
+        assert!(!engine.state().operations.contains_key(&operation));
+    });
 }
 
 #[test]

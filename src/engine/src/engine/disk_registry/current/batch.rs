@@ -322,7 +322,7 @@ impl CurrentNamespaces {
             // D3 can filter an existing selected head without materializing a
             // selection tree first. Reuse the already admitted head projection.
             let projection = self.directory_projection(state, id)?;
-            let source = projection.branch().clone();
+            let source = projection.raw_branch().clone();
             for (directory, reference) in &source.directory_refs {
                 selected_tree(
                     state,
@@ -360,8 +360,15 @@ impl CurrentNamespaces {
                     )
                 })?
         };
-        let restored = rebase(&source.entries, &source.path, path)?;
-        if restored != descendants(&owner.entries, &name_policy::path_key(path)) {
+        let mut restored = rebase(&source.entries, &source.path, path)?;
+        let names = crate::business::namespace::container_name::current_names(state, &restored)?;
+        crate::business::namespace::container_name::apply_file_names(&mut restored, &names)?;
+        let mut owned = descendants(&owner.entries, &name_policy::path_key(path)).to_vec();
+        let owner_names = crate::business::namespace::container_name::current_names(state, &owned)?;
+        crate::business::namespace::container_name::apply_file_names(&mut owned, &owner_names)?;
+        // Raw source/tree identity was admitted above. Only the globally current
+        // file leaf is projected before exact owner occurrence comparison.
+        if restored != owned {
             return Err(if selected == &branch.head_tree_id {
                 invalid(
                     "selected batch composition differs from its exact current owner occurrences",

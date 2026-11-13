@@ -324,9 +324,6 @@ fn relocate_current_files(
     event: &MoveEvent<'_>,
 ) -> Result<Vec<crate::persist::path_changes::PathChanged>> {
     let mut path_changes = Vec::new();
-    if !unit.copy_history {
-        relocate_existing_locations(next, unit)?;
-    }
     let mut files = BTreeSet::new();
     let aliased_files = unit
         .entries
@@ -437,6 +434,7 @@ fn refresh_working(
     unit: &MoveUnit,
     target: &Repository,
     operation: OperationId,
+    path_changes: &[crate::persist::path_changes::PathChanged],
 ) -> Result<()> {
     let mut counter = 0u64;
     let mut ids = |prefix: &str| {
@@ -465,6 +463,13 @@ fn refresh_working(
         target_paths.sort();
         target_paths.dedup();
     }
+    let target_id = target.repository_id.parse::<storage_contract::RepositoryId>()?;
+    target_paths.extend(path_changes.iter()
+        .flat_map(|change| [&change.before, &change.after])
+        .filter(|location| location.repository_id == target_id)
+        .map(|location| location.path.as_str().to_owned()));
+    target_paths.sort();
+    target_paths.dedup();
     directory::record_directory_edits_with_ids(
         next,
         &target.repository_id,
@@ -557,6 +562,14 @@ fn compose(
             target_entries[index].clone_from(arrival);
         }
     }
+    let before_names = target_entries.clone();
+    let name_changes = if unit.copy_history {
+        Vec::new()
+    } else {
+        relocate_existing_locations(&mut next, &unit)?;
+        let names = namespace::container_name::current_names(&next, &target_entries)?;
+        namespace::container_name::apply_file_names(&mut target_entries, &names)?
+    };
     let commit = publish_namespace(
         &mut next,
         &target,
@@ -616,7 +629,7 @@ fn compose(
             .expect("invariant: new source commit exists")
             .namespace_deletions = namespace::deletion_record(removed, route.created_at);
     }
-    let path_changes = relocate_current_files(
+    let mut path_changes = relocate_current_files(
         previous,
         &mut next,
         &unit,
@@ -625,6 +638,45 @@ fn compose(
         &arrived,
         &event,
     )?;
+    if !name_changes.is_empty() {
+        let after_names = next.commits[&commit].entries.clone();
+        let mut contexts = Vec::new();
+        for change in &name_changes {
+            let old = namespace::find_unordered_key(&before_names, change.before.key())
+                .ok_or_else(crate::persist::path_changes::invalid)?;
+            let new = namespace::find_unordered_key(&after_names, change.after.key())
+                .ok_or_else(crate::persist::path_changes::invalid)?;
+            let context = directory::context_at_key(&next, &target.repository_id, old.lookup_key());
+            let mut ordinal = 0u64;
+            let changed = file_paths::record_change_with_ids(
+                &mut next,
+                &target.repository_id,
+                &target.repository_id,
+                file_paths::PathChange { old, new, after_entries: &after_names, context },
+                principal,
+                operation,
+                route.created_at,
+                &mut |prefix| {
+                    ordinal += 1;
+                    IdentityScope { operation, member: Some(&old.file_id) }.generated(
+                        prefix, &format!("name:{}:{ordinal}", old.lookup_key()),
+                    )
+                },
+            )?;
+            path_changes.push(changed.fact);
+            contexts.push((
+                directory::context_key_from_key(&target.repository_id, new.lookup_key()),
+                changed.context,
+            ));
+        }
+        for change in &name_changes {
+            next.file_contexts.remove(&directory::context_key_from_key(
+                &target.repository_id, change.before.key(),
+            ));
+        }
+        next.file_contexts.extend(contexts);
+        path_changes.sort_by_key(|change| change.event_id);
+    }
     let mut imported_deletions = Vec::new();
     if let Some(graph) = &graph {
         for original in previous
@@ -717,7 +769,7 @@ fn compose(
             displaced_deletions.push(node);
         }
     }
-    refresh_working(&mut next, &unit, &target, operation)?;
+    refresh_working(&mut next, &unit, &target, operation, &path_changes)?;
     crate::container_storage::capture_changed_names(previous, &mut next);
     let root = unit
         .entries

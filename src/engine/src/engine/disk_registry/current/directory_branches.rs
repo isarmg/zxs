@@ -477,8 +477,15 @@ impl CurrentDirectoryProjection {
         Ok(())
     }
 
-    pub(crate) fn branch(&self) -> &DirectoryBranch {
+    /// Frozen/current admission evidence, not a runtime path lookup source.
+    pub(crate) fn raw_branch(&self) -> &DirectoryBranch {
         &self.branch
+    }
+
+    pub(crate) fn named_branch(&self, state: &State) -> Result<DirectoryBranch> {
+        let mut branch = self.branch.clone();
+        crate::business::namespace::container_name::normalize_directory_branch(state, &mut branch)?;
+        Ok(branch)
     }
 
     pub(crate) fn path(&self) -> &str {
@@ -623,7 +630,7 @@ impl CurrentNamespaces {
             .ok_or_else(stale)?;
         self.require_directory_branch_write(previous, id)?;
         let projection = self.directory_projection(previous, id)?;
-        let selected = projection.branch();
+        let selected = projection.raw_branch();
         let repo = previous
             .repositories
             .get(&selected.repository_id)

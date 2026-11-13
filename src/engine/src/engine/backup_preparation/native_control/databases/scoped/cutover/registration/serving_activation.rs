@@ -573,11 +573,11 @@ impl Engine {
         self.config = config;
         self.disk_resources = resources;
         self.journals = journals;
-        self.state = Arc::new(pending.published.into_state());
+        self.named_namespaces.install_state(&mut self.state, Arc::new(pending.published.into_state()));
         self.snapshot = Some(snapshot);
         self.next_slot = next_slot;
         self.backup_serving = Some(admitted);
-        self.current_namespaces = Some(pending.current);
+        self.named_namespaces.install_current(&mut self.current_namespaces, Some(pending.current));
         self.workspace_namespace_baselines.clear();
         self.published_state_base = None;
         self.metadata_integrity.invalidate();

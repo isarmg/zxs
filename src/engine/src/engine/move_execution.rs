@@ -187,8 +187,8 @@ impl Engine {
             selection.retire(self, &published)?;
             let result = published.outcome.result().clone();
             let snapshot = published.candidate.snapshot_hash.clone();
-            self.state = std::sync::Arc::new(published.outcome.into_state());
-            self.current_namespaces = next_namespaces;
+            self.named_namespaces.install_state(&mut self.state, std::sync::Arc::new(published.outcome.into_state()));
+            self.named_namespaces.install_current(&mut self.current_namespaces, next_namespaces);
             self.bind_recovered_history_roots(roots);
             self.snapshot = Some(snapshot);
             self.published_state_base = None;

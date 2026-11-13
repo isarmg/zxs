@@ -653,7 +653,7 @@ impl Engine {
         if !rejected.is_empty() {
             self.disk_resources = Arc::new(self.disk_resources.excluding(&rejected));
         }
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         Ok(warnings)

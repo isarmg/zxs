@@ -10,6 +10,8 @@ use storage_engine::{
 mod batch_planning_scenarios;
 #[path = "branch_alias_operations/copy_alias_scenarios.rs"]
 mod copy_alias_scenarios;
+#[path = "branch_alias_operations/current_name_scenarios.rs"]
+mod current_name_scenarios;
 #[path = "branch_alias_operations/deletion_rebase_scenarios.rs"]
 mod deletion_rebase_scenarios;
 #[path = "../support/directory_git_fixture.rs"]
@@ -377,10 +379,14 @@ fn batch_alias_rename_keeps_one_canonical_owner_and_no_op_has_no_subtree() {
     assert_eq!(p.bytes(&original.version_id), b"original");
     let trees = p.engine.state().directory_trees.len();
     let head = p.branch(&retained).head_tree_id;
-    p.batch(
+    let no_op = p.batch(
         storage_contract::DirectoryBatchKind::Rename,
         vec![p.mapping(&retained, "a/new.txt", &retained, "a/new.txt")],
     );
+    assert_eq!(no_op.result["path_changes"].as_array().unwrap().len(), 0);
+    assert_eq!(no_op.result["transfers"].as_array().unwrap().len(), 1);
+    assert_eq!(no_op.result["count"], "1");
+    assert_eq!(no_op.result["action"], "rename");
     assert_eq!(p.engine.state().directory_trees.len(), trees);
     assert_eq!(p.branch(&retained).head_tree_id, head);
     assert_eq!(
@@ -553,7 +559,6 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
         .unwrap();
     for (path, destination) in [
         ("a/report.txt", "a/renamed.txt"),
-        ("b/report.txt", "b/renamed.txt"),
     ] {
         p.engine
             .namespace_operation(
@@ -760,7 +765,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
 }
 
 #[test]
-fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
+fn workspace_stale_alias_source_rejects_the_complete_namespace_decision() {
     let mut p = Pool::new();
     let (n, l, original) = selected_aliases(&mut p);
     let before = p.engine.list_tree(&p.repo.main_branch_id).unwrap();
@@ -803,13 +808,13 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
-            message: "Conflicting canonical names".into(),
+            message: "Stale source after whole-container rename".into(),
             request_digest: None,
         })
         .unwrap_err();
     assert_eq!(
         error.code(),
-        storage_contract::ErrorCode::BatchMappingConflict
+        storage_contract::ErrorCode::EntryNotFound
     );
     assert_eq!(
         json_codec::to_value(p.engine.list_tree(&p.repo.main_branch_id).unwrap()).unwrap(),
@@ -1043,8 +1048,6 @@ fn chained_alias_renames_preserve_distinct_contexts_and_one_physical_owner() {
         .unwrap();
     for (path, destination) in [
         ("a/report.txt", "a/temporary.txt"),
-        ("a/temporary.txt", "a/final.txt"),
-        ("b/report.txt", "b/temporary.txt"),
         ("b/temporary.txt", "b/final.txt"),
     ] {
         p.engine
@@ -1146,9 +1149,10 @@ fn renaming_both_alias_directories_moves_only_the_actual_physical_owner() {
 }
 
 #[test]
-fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
+fn exact_no_op_rename_uses_latest_alias_name_and_history_selection_keeps_it() {
     let mut p = Pool::new();
-    let (_, _, original) = selected_aliases(&mut p);
+    let (frozen, _, original) = selected_aliases(&mut p);
+    let frozen_head = p.branch(&frozen).head_tree_id;
     p.engine
         .file_namespace(
             &p.repo.repository_id,
@@ -1166,9 +1170,16 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
         p.engine.state().file_locations[&original.file_id],
         "b/new.txt"
     );
+    assert_eq!(p.current_entry("a/new.txt").file_id, original.file_id);
+    assert_eq!(p.current_entry("b/new.txt").file_id, original.file_id);
+    let current = p.engine.list_tree(&p.repo.main_branch_id).unwrap();
+    assert!(current.iter().filter(|entry| entry.file_id == original.file_id)
+        .all(|entry| entry.name() == "new.txt"));
+    assert_eq!(p.branch(&frozen).head_tree_id, frozen_head);
+    assert_eq!(p.entry(&frozen, "a/report.txt").version_id, original.version_id);
     let before = p
         .engine
-        .file_context(&p.repo.repository_id, "b/report.txt")
+        .file_context(&p.repo.repository_id, "b/new.txt")
         .unwrap();
     let workspace = p
         .engine
@@ -1179,29 +1190,63 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
             &workspace.workspace_id,
             NamespaceOperation::parse(
                 storage_contract::NamespaceOperationKind::Rename,
-                "b/report.txt",
-                Some("b/report.txt"),
+                "b/new.txt",
+                Some("b/new.txt"),
             )
             .unwrap(),
         )
         .unwrap();
-    p.commit(workspace);
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let request = CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: operation,
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "Latest-name no-op".into(),
+        request_digest: None,
+    };
+    let before_unauthorized = storage_engine::canonical_json(p.engine.state()).unwrap();
+    let mut unauthorized = request.clone();
+    unauthorized.principal = "other-actor".into();
+    unauthorized.operation_id = storage_contract::OperationId::generate().unwrap();
+    assert_eq!(
+        p.engine.commit_workspace(unauthorized).unwrap_err().code(),
+        storage_contract::ErrorCode::PermissionDenied,
+    );
+    assert_eq!(
+        storage_engine::canonical_json(p.engine.state()).unwrap(),
+        before_unauthorized,
+    );
+    let receipt = p.engine.commit_workspace(request.clone()).unwrap();
+    let published = storage_engine::canonical_json(p.engine.state()).unwrap();
+    assert_eq!(p.engine.commit_workspace(request).unwrap(), receipt);
+    assert_eq!(storage_engine::canonical_json(p.engine.state()).unwrap(), published);
     assert_eq!(
         p.engine.state().file_locations[&original.file_id],
         "b/new.txt"
     );
     assert_eq!(
         p.engine
-            .file_context(&p.repo.repository_id, "b/report.txt")
+            .file_context(&p.repo.repository_id, "b/new.txt")
             .unwrap(),
         before
     );
     assert_eq!(p.bytes(&original.version_id), b"original");
+    // The retained branch still records the old path for audit. Selecting it
+    // projects its content under the one current container name.
+    p.select("", "retained");
+    assert_eq!(p.current_entry("a/new.txt").version_id, original.version_id);
+    assert!(p.engine.list_tree(&p.repo.main_branch_id).unwrap().iter()
+        .filter(|entry| entry.file_id == original.file_id)
+        .all(|entry| entry.name() == "new.txt"));
+    let branch = p.repo.main_branch_id.clone();
     p.reopen(|engine| {
-        assert_eq!(
-            engine.state().file_locations[&original.file_id],
-            "b/new.txt"
-        )
+        assert_eq!(engine.state().file_names[&original.file_id], "new.txt");
+        let entries = engine.list_tree(&branch).unwrap();
+        assert!(entries.iter().any(|entry| entry.file_id == original.file_id));
+        assert!(entries.iter().filter(|entry| entry.file_id == original.file_id)
+            .all(|entry| entry.name() == "new.txt"));
     });
 }
 

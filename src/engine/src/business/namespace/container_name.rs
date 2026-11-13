@@ -12,6 +12,8 @@ pub enum RenameError {
     Path(#[source] name_policy::Error),
     #[error("current container name collides at {0}")]
     Collision(PortablePath),
+    #[error("one container cannot receive different names in the same mapping: {0}")]
+    ConflictingNames(FileId),
 }
 
 impl RenameError {
@@ -20,6 +22,7 @@ impl RenameError {
             Self::Identity(source) => source.code(),
             Self::Path(source) => storage_contract::ErrorCode::from(source),
             Self::Collision(_) => storage_contract::ErrorCode::NameCollision,
+            Self::ConflictingNames(_) => storage_contract::ErrorCode::BatchMappingConflict,
         }
     }
 }
@@ -175,3 +178,29 @@ pub(crate) fn operation_files(
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/business/namespace/container_name_tests.rs"]
 mod tests;
+
+/// Derive a runtime working source only after its frozen occurrence proof is
+/// admitted. Contexts follow the exact old occurrence key, never another alias.
+pub(crate) fn normalize_directory_branch(
+    state: &crate::State,
+    branch: &mut crate::DirectoryBranch,
+) -> crate::Result<()> {
+    let names = current_names(state, &branch.entries)?;
+    let mut entries = branch.entries.clone();
+    let changes = apply_file_names(&mut entries, &names)?;
+    let mut contexts = branch.file_contexts.clone();
+    let mut moved = Vec::with_capacity(changes.len());
+    for change in changes {
+        let context = contexts.remove(change.before.key())
+            .ok_or_else(crate::persist::path_changes::invalid)?;
+        moved.push((change.after.key().to_owned(), context));
+    }
+    for (key, context) in moved {
+        if contexts.insert(key, context).is_some() {
+            return Err(crate::persist::path_changes::invalid());
+        }
+    }
+    branch.entries = entries;
+    branch.file_contexts = contexts;
+    Ok(())
+}

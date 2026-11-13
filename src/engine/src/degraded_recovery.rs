@@ -964,7 +964,7 @@ impl Engine {
         self.complete_candidate(&candidate, &plan.candidate_hash, &next, Some(publication))?;
         next.operations
             .insert(candidate.operation_id, result.clone());
-        self.state = std::sync::Arc::new(next);
+        self.named_namespaces.install_state(&mut self.state, std::sync::Arc::new(next));
         self.bind_recovered_history_roots(roots);
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.next_slot = self.next_slot.max(

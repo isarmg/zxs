@@ -984,7 +984,7 @@ fn assert_captured_container_tag_identity(fixtures: &Path) {
     let history_wire = read(&fixtures.join("file-container-tags-history.json")).unwrap();
     // These checks retain the captured tag identity and graph evidence only;
     // they do not certify its old physical names against the current schema.
-    semantics("HistoryWindowPage", &history_wire).unwrap();
+    assert!(semantics("HistoryWindowPage", &history_wire).is_err());
     let history: HistoryWindowPage =
         storage_contract::decode_strict(&json_codec::to_vec(&history_wire).unwrap()).unwrap();
     let HistoryWindowPage::Nodes {
@@ -995,6 +995,7 @@ fn assert_captured_container_tag_identity(fixtures: &Path) {
     } = history else {
         panic!("captured container history must be a node page");
     };
+    history_window::graph_projection(&history_wire, &identity).unwrap();
     assert_eq!(nodes.len(), 5);
     assert_eq!(edges.len(), 6);
     let snapshot: Snapshot = storage_contract::decode_strict(

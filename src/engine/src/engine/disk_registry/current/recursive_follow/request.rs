@@ -335,7 +335,24 @@ fn project_entries(before: &[Entry], moves: &[Move]) -> Result<BTreeMap<String, 
             }
         }
     }
-    Ok(expected)
+    // A file rename changes the shared container name, including occurrences
+    // outside the selected directory. Only explicitly named file identities
+    // contribute names; unrelated locations remain exact.
+    let mut names = BTreeMap::new();
+    for change in moves {
+        if change.source.kind == NamespaceEntryKind::File {
+            let file = change.source.file_id.parse()?;
+            let name = name_policy::Name::parse(change.target.file_name())?;
+            if let Some(previous) = names.insert(file, name.clone())
+                && previous != name
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    let mut entries = expected.into_values().collect::<Vec<_>>();
+    crate::business::namespace::container_name::apply_file_names(&mut entries, &names)?;
+    Ok(entries.into_iter().map(|entry| (entry.lookup_key().to_owned(), entry)).collect())
 }
 
 fn verify_entries(

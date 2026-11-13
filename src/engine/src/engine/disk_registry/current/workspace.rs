@@ -18,6 +18,7 @@ struct AdmissionRecord {
     #[serialization(with = "storage_contract::u64_string")]
     fencing_token: u64,
     entries_hash: String,
+    names: BTreeMap<storage_contract::FileId, name_policy::Name>,
 }
 
 impl WorkspaceNamespaceBaseline {
@@ -31,6 +32,7 @@ impl WorkspaceNamespaceBaseline {
             principal: self.principal.clone(),
             fencing_token: self.fencing_token,
             entries_hash: self.entries_hash.clone(),
+            names: self.names.clone(),
         }
     }
 }
@@ -112,7 +114,7 @@ impl Engine {
             } else {
                 commit.entries.as_slice()
             };
-            if object_hash("current-workspace-namespace", entries)? != record.entries_hash {
+            if named_entries_hash(entries, &record.names)? != record.entries_hash {
                 return Err(Error::new(
                     ErrorCode::PublicationInvalid,
                     "workspace admission namespace digest differs",
@@ -127,6 +129,7 @@ impl Engine {
                 principal: record.principal,
                 fencing_token: record.fencing_token,
                 entries_hash: record.entries_hash,
+                names: record.names,
             };
             if baselines.insert(record.workspace_id, baseline).is_some() {
                 return Err(Error::new(
@@ -138,4 +141,54 @@ impl Engine {
         self.workspace_namespace_baselines = baselines;
         Ok(())
     }
+}
+
+/// The receipt carries the names at admission, not today's names. Exact file
+/// coverage prevents a supplied partial map from silently preserving old aliases.
+pub(super) fn named_entries_hash(
+    entries: &[Entry],
+    names: &BTreeMap<storage_contract::FileId, name_policy::Name>,
+) -> Result<String> {
+    let files = entries.iter().filter(|entry| entry.kind == crate::NamespaceEntryKind::File)
+        .map(|entry| Ok(entry.file_id.parse::<storage_contract::FileId>()?))
+        .collect::<Result<BTreeSet<_>>>()?;
+    if files.iter().ne(names.keys()) {
+        return Err(crate::persist::path_changes::invalid());
+    }
+    let mut projected = entries.to_vec();
+    crate::business::namespace::container_name::apply_file_names(&mut projected, names)?;
+    Ok(object_hash("current-workspace-namespace", &projected)?)
+}
+
+/// A new durable receipt must describe the previous admitted Current, not a
+/// namespace/name map asserted by the receipt itself. Recovery of old receipts
+/// uses their original source and saved names only after this publication proof.
+pub(super) fn verify_admissions(
+    view: &CurrentNamespaces,
+    previous: &State,
+    next: &State,
+) -> Result<()> {
+    for (id, result) in next.operations.iter() {
+        if result.kind != ADMISSION_KIND || previous.operations.contains_key(id) {
+            continue;
+        }
+        let value = result.result.get("namespace_admission")
+            .ok_or_else(crate::persist::path_changes::invalid)?;
+        let record: AdmissionRecord = json_codec::from_value(value.clone())?;
+        let scope = view.writable_scope(previous, &record.branch_id)?;
+        let names = crate::business::namespace::container_name::current_names(
+            previous, scope.entries.as_ref(),
+        )?;
+        if record.registry != view.registry || record.mask_hash != view.mask_hash
+            || record.head != scope.head || record.names != names
+            || record.entries_hash != named_entries_hash(scope.entries.as_ref(), &names)?
+            || next.operation_principals.get(id) != Some(&record.principal)
+            || result.request_digest != Engine::native_request_digest(
+                ADMISSION_KIND, &record.principal, &json_codec::to_value(&record)?,
+            )?
+        {
+            return Err(crate::persist::path_changes::invalid());
+        }
+    }
+    Ok(())
 }

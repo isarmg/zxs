@@ -150,9 +150,9 @@ impl Engine {
         self.config = config;
         self.membership_fence = None;
         self.journals.clear();
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
-        self.current_namespaces = None;
+        self.named_namespaces.install_current(&mut self.current_namespaces, None);
         self.next_slot = generation.first_sequence()?;
         self.blocked = true;
         self.promote_disk_exit_resources()?;
@@ -432,7 +432,7 @@ impl Engine {
         // authenticated frozen boundary before replaying this generation's
         // journal, just as ordinary Add promotion does. The archive is not a
         // replacement for any current journal; those were checked above.
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         Ok(())

@@ -6,9 +6,9 @@ use json_codec::json;
 use std::collections::BTreeMap;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
-use verified_payloads::{
-    PayloadPreparation, PayloadProofReservation, VerifiedPayloadSet, payload_proof_budget,
-};
+use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
+
+pub(crate) use verified_payloads::{PayloadProofReservation, payload_proof_budget};
 
 type ExistingCopies<'a> = Vec<Option<RetainedExisting<'a>>>;
 
@@ -623,8 +623,8 @@ impl Engine {
                 .context(storage_contract::ErrorCode::InDoubt, message)
                 .retryable());
         }
-        let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
-        self.current_namespaces = next_current_namespaces;
+        let previous = self.named_namespaces.install_state(&mut self.state, std::sync::Arc::new(next));
+        self.named_namespaces.install_current(&mut self.current_namespaces, next_current_namespaces);
         self.history_window_roots = Some(super::history_window::HistoryRootBindings::published(
             &self.state,
             history_basis.clone(),

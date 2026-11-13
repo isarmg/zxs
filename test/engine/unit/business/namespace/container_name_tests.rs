@@ -69,3 +69,89 @@ fn current_names_admit_atomic_swaps_case_changes_and_exact_no_ops() {
     assert_eq!(changes[0].after.as_str(), "A.txt");
     assert!(plan_file_names(&entries, &BTreeMap::from([name(1, "a.txt")])).unwrap().is_empty());
 }
+
+#[test]
+fn namespace_file_rename_updates_aliases_and_chained_source_identity() {
+    let mut entries = vec![file("a/old.txt", 1), file("b/old.txt", 1)];
+    crate::business::ensure_parents(
+        &mut entries, &PortablePath::parse("a/old.txt").unwrap(),
+    ).unwrap();
+    crate::business::ensure_parents(
+        &mut entries, &PortablePath::parse("b/old.txt").unwrap(),
+    ).unwrap();
+    let before = entries.clone();
+    let operations = [
+        crate::NamespaceOperation::parse(
+            crate::NamespaceOperationKind::Rename, "a/old.txt", Some("a/new.txt"),
+        ).unwrap(),
+        crate::NamespaceOperation::parse(
+            crate::NamespaceOperationKind::Rename, "b/new.txt", Some("b/final.txt"),
+        ).unwrap(),
+    ];
+    let files = crate::business::namespace::container_name::operation_files(
+        &before, &operations,
+    ).unwrap();
+    assert_eq!(files, vec![Some(name(1, "unused").0); 2]);
+    for operation in &operations {
+        crate::business::apply_namespace(&mut entries, operation).unwrap();
+    }
+    let files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path.as_str(), "a/final.txt");
+    assert_eq!(files[1].path.as_str(), "b/final.txt");
+    for file in files {
+        assert_eq!(file.version_id, before[0].version_id);
+        assert_eq!(file.file_id, before[0].file_id);
+    }
+}
+
+#[test]
+fn namespace_rename_rejects_a_collision_at_another_occurrence() {
+    let mut entries = vec![file("a/old.txt", 1), file("b/old.txt", 1), file("b/new.txt", 2)];
+    let operation = crate::NamespaceOperation::parse(
+        crate::NamespaceOperationKind::Rename, "a/old.txt", Some("a/new.txt"),
+    ).unwrap();
+    assert_eq!(
+        crate::business::apply_namespace(&mut entries, &operation).unwrap_err().code(),
+        storage_contract::ErrorCode::NameCollision,
+    );
+}
+
+#[test]
+fn directory_source_names_move_each_alias_context_without_rewriting_frozen_source() {
+    let entries = vec![file("a/old", 1), file("b/stale", 1)];
+    let context = |node: &str| crate::FileContext {
+        branch_id: "br_00000000000000000000000000000001".into(),
+        node_id: Some(node.into()),
+        inherited_from: None,
+        selection_generation: 0,
+    };
+    let mut branch = crate::DirectoryBranch {
+        directory_branch_id: "dbr_00000000000000000000000000000001".into(),
+        repository_id: "repo_00000000000000000000000000000001".into(),
+        directory_id: "entry_00000000000000000000000000000002".into(),
+        path: String::new(), name: "main".into(), parent_branch_id: None,
+        head_tree_id: "dtree_00000000000000000000000000000001".into(),
+        commit_id: "commit_00000000000000000000000000000001".into(),
+        entries,
+        file_contexts: BTreeMap::from([
+            ("a/old".into(), context("first")), ("b/stale".into(), context("second")),
+        ]),
+        file_branches: BTreeMap::new(), inherited_files: BTreeMap::new(),
+        directory_refs: BTreeMap::new(), materialized: true, sequence: 1,
+    };
+    let original = branch.clone();
+    let mut state = crate::State::default();
+    let id = branch.entries[0].file_id.clone();
+    state.file_locations.insert(id.clone(), "latest".into());
+    state.file_names.insert(id, "latest".into());
+    crate::business::namespace::container_name::normalize_directory_branch(&state, &mut branch)
+        .unwrap();
+    assert_eq!(branch.entries[0].path(), "a/latest");
+    assert_eq!(branch.entries[1].path(), "b/latest");
+    assert_eq!(branch.file_contexts["a/latest"], original.file_contexts["a/old"]);
+    assert_eq!(branch.file_contexts["b/latest"], original.file_contexts["b/stale"]);
+    assert_eq!(original.entries[0].path(), "a/old");
+    assert_eq!(branch.head_tree_id, original.head_tree_id);
+}

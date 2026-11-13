@@ -9,7 +9,8 @@ mod version_names;
 mod version_rename;
 pub use version_names::VersionNameError;
 pub(crate) use version_names::{
-    allocate_version_storage_id, current_container_name, installed_version_leaf,
+    allocate_version_storage_id, container_name_from_locations, current_container_name,
+    installed_version_leaf,
     installed_version_name, installed_version_path,
 };
 mod directory_database;
@@ -1016,7 +1017,7 @@ struct PreparedName {
     length: usize,
     database: Option<file_database::install::PreparedFile>,
     version_names: Option<version_rename::Prepared>,
-    finish_version_names: bool,
+    finish_version_names: Option<version_rename::CompletionBinding>,
 }
 impl PreparedNames {
     /// Exact FILE write set from the candidate's projection, before probing
@@ -1083,6 +1084,10 @@ impl PreparedNames {
                     .0
                     .checked_add(database.reservation().0)
                     .ok_or_else(|| invalid("unpublished FILE reservation overflow"))?;
+                if let Some(names) = &item.version_names {
+                    entry.0 = entry.0.checked_add(names.reservation()?.0)
+                        .ok_or_else(|| invalid("version rename reservation overflow"))?;
+                }
                 entry.1 = entry
                     .1
                     .checked_add(database.byte_len() as u64 + 8192)
@@ -1232,8 +1237,8 @@ impl PreparedNames {
             if let Some(database) = item.database {
                 database.apply(root, &named, observe)?;
             }
-            if item.finish_version_names {
-                version_rename::finish(root, &named)?;
+            if let Some(expected) = &item.finish_version_names {
+                version_rename::finish(root, &named, expected)?;
             }
         }
         Ok(receipt)
@@ -1608,6 +1613,9 @@ fn prepare_names_inner(
                     &name_policy::Name::parse(name)?,
                 )?
             };
+            if let Some(names) = &version_names {
+                reservations.add(held, &history, names.reservation()?)?;
+            }
             staged.items.push(PreparedName {
                 disk: Arc::clone(held),
                 history,
@@ -1619,7 +1627,16 @@ fn prepare_names_inner(
                 length: bytes.len(),
                 database,
                 version_names,
-                finish_version_names: !skip_shared,
+                finish_version_names: if skip_shared {
+                    None
+                } else {
+                    Some(version_rename::CompletionBinding {
+                        file: file.parse()?,
+                        history: history_id.parse()?,
+                        sequence: storage_contract::Sequence::new(next.sequence),
+                        target_name: name_policy::Name::parse(name)?,
+                    })
+                },
             });
         }
     }

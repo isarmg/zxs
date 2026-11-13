@@ -158,7 +158,9 @@ impl Fixture {
             mask.prepare_current_namespaces(&successor).unwrap()
         };
         // Internal source fixture, never a production installer or authority token.
-        self.engine.current_namespaces = Some(Arc::new(prepared.view));
+        self.engine.named_namespaces.install_current(
+            &mut self.engine.current_namespaces, Some(Arc::new(prepared.view)),
+        );
         self.engine.workspace_namespace_baselines.clear();
     }
 }
@@ -431,6 +433,7 @@ fn membership_registry_current_workspace_baseline_recovers_only_from_published_r
             .engine
             .workspace_namespace_entries(&workspace)
             .unwrap()
+            .entries()
             .iter()
             .all(|entry| entry.path() != "dir/a")
     );
@@ -801,8 +804,8 @@ fn membership_registry_current_cold_workspace_admission_survives_later_head_and_
         .engine
         .workspace_namespace_entries(&completed)
         .unwrap();
-    assert!(baseline.iter().all(|entry| entry.path() != "dir/a"));
-    assert!(baseline.iter().any(|entry| entry == &fixture.retained));
+    assert!(baseline.entries().iter().all(|entry| entry.path() != "dir/a"));
+    assert!(baseline.entries().iter().any(|entry| entry == &fixture.retained));
 }
 
 #[test]
@@ -1127,7 +1130,9 @@ fn membership_registry_current_snapshot_witness_changes_at_projection_not_auth_o
     let next = current
         .advance(fixture.engine.state(), fixture.engine.state())
         .unwrap();
-    fixture.engine.current_namespaces = Some(Arc::new(next));
+    fixture.engine.named_namespaces.install_current(
+        &mut fixture.engine.current_namespaces, Some(Arc::new(next)),
+    );
     drop(owned);
     assert!(
         fixture
@@ -1275,8 +1280,10 @@ fn membership_registry_current_same_registry_activation_does_not_readmit_old_wor
     let mut published = source;
     published.sequence += 1;
     carried.activation_sequence = published.sequence;
-    fixture.engine.state = Arc::new(published);
-    fixture.engine.current_namespaces = Some(Arc::new(carried));
+    fixture.engine.named_namespaces.install_state(&mut fixture.engine.state, Arc::new(published));
+    fixture.engine.named_namespaces.install_current(
+        &mut fixture.engine.current_namespaces, Some(Arc::new(carried)),
+    );
     fixture.engine.workspace_namespace_baselines.clear();
     fixture
         .engine
@@ -1292,3 +1299,6 @@ fn membership_registry_current_same_registry_activation_does_not_readmit_old_wor
     );
     assert!(fixture.engine.workspace(&workspace.workspace_id).is_ok());
 }
+
+#[path = "current_namespace_workspace_names_tests.rs"]
+mod workspace_names;

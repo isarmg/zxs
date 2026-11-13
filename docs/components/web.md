@@ -160,16 +160,18 @@ Web 系统管理不再提供独立的仓库 SMB 绑定编辑或查询表单；�
 
 ## 真实文件容器
 
-新版本正文是独立普通文件，位于：
+当前名称合同按[唯一当前名称 ADR](../adr/container-current-name.md)实施中，尚待准确提交的 GitHub 定向验证，不表示完整运行时投影或浏览器已验收。正文是独立普通文件；未激活目录共享布局的合成示意为：
 
 ```text
-histories/<history-id>/file-containers/<file-id>/<当前文件名>/versions/
-    v000001_20261018T133000Z_ab12cd34.txt
+histories/<history-id>/file-containers/<file-id>/namespace/<实际归属目录>/<当前文件名>/versions/
+    <storage_id>-<当前文件名>
 ```
 
-稳定外层 `file-id` 保持不变，内层目录随业务改名真实重命名。内部版本名记录文件内顺序、UTC 时间、内容散列短前缀和保存时的扩展名；改名不会重写旧版本文件名或不可变证明。版本说明、校验和及发布证明仍在独立的 `histories/<history-id>/versions/<version-id>/`。
+共享布局的实际位置仍由集中定位记录决定。稳定 `file-id` 和严格 15 位小写 ASCII 字母或数字的 `storage_id` 不随改名变化。容器名就是 SMB 暴露的文件名；改名同步所有活动 alias 的叶名、容器目录和所有仍有正文的内部版本叶名。版本正文、inode、版本说明及证明不因此改变。当前名称只能取 `file_locations` 末段，`file_names` 是一致镜像，不回退到冻结路径或 `creation_name`。
 
-当前名称、文件备注、版本备注与选中分支由已发布 State 持久恢复，`container.json` 是供离线浏览的可重建缓存，不代替证明。当前版本记录必须包含 `storage_name` 和 `created_at`，不保留缺失字段的旧格式读取或隐式全盘迁移。准备阶段与独立历史包使用的 `content/<creation_name>` 是当前中间布局，不是旧格式兼容入口。详细规则见[存储布局](../08-full-storage-and-disk-format.md#s08-02)。
+选中改名前的正文节点仍显示最新容器名；下载和历史读取 DTO 的 `download_name` 也使用最新名，`storage_name` 是 `storage_id-current_name` 的只读派生叶名，不是独立名称。入口共享验证严格 ID、名称政策及两字段后缀的逐字相等；前缀不占用户名称预算，真实文件系统组件限制由安装入口负责。冻结节点的原始 path/previous_path 仍是审计证据，不为显示改写。
+
+版本记录必须包含 `storage_id` 和 `created_at`，拒绝旧 `storage_name`、缺失字段和隐式迁移。`creation_name` 只保留原创建来源和 `content/<creation_name>` 准备材料语义。`container.json` 是从已发布 State 重建的缓存，不是名称或发布证明的第二权威。原 capture/golden 保留原字节，合成名称示例不冒充新捕获。详见[存储布局](../08-full-storage-and-disk-format.md#s08-02)。
 
 ## 模块与公共界面
 

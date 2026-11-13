@@ -279,7 +279,7 @@ impl Engine {
             ));
         }
         self.workspace_namespace_baselines.clear();
-        self.current_namespaces = Some(Arc::clone(&admission.first));
+        self.named_namespaces.install_current(&mut self.current_namespaces, Some(Arc::clone(&admission.first)));
         Ok(())
     }
 }

@@ -215,9 +215,9 @@ impl Engine {
         };
         // The seed is read-only and borrows this verified publication view only
         // for admission. Replay must still start from its original prefix.
-        let original = std::mem::replace(&mut self.state, state);
+        let original = self.named_namespaces.install_state(&mut self.state, state);
         let admission = self.seed_workspace_recovery();
-        self.state = original;
+        self.named_namespaces.install_state(&mut self.state, original);
         admission
     }
 

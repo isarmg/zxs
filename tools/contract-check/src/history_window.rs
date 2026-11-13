@@ -43,20 +43,23 @@ fn inline_fields(value: &Value) -> Result {
     if let Some(note) = value.get("note") {
         storage_contract::validate_note(text(note)?)?;
     }
-    for field in [
-        "path",
-        "previous_path",
-        "download_name",
-        "storage_name",
-        "name",
-    ] {
-        if let Some(name) = value.get(field).filter(|value| !value.is_null()) {
-            let name = text(name)?;
+    for field in ["path", "previous_path"] {
+        if let Some(path) = value.get(field).filter(|value| !value.is_null()) {
+            let path = text(path)?;
             require(
-                !name.is_empty() && name.len() <= 768 && name.encode_utf16().count() <= 200,
-                "history inline name byte/unit budget",
+                !path.is_empty() && path.len() <= 768 && path.encode_utf16().count() <= 200,
+                "history inline path byte/unit budget",
             )?;
         }
+    }
+    if value.get("download_name").is_some() || value.get("storage_name").is_some() {
+        storage_contract::validate_installed_version_name(
+            text(&value["storage_name"])?,
+            text(&value["download_name"])?,
+        )?;
+    }
+    if let Some(name) = value.get("name") {
+        storage_contract::validate_branch_name(text(name)?)?;
     }
     Ok(())
 }
@@ -139,12 +142,14 @@ pub(super) fn validate(name: &str, value: &Value) -> Result {
     }
     if kind == "nodes" {
         inline_fields(&value["context"])?;
-        nodes(value, &identity)?;
+        graph_projection(value, &identity)?;
     }
     Ok(())
 }
 
-fn nodes(value: &Value, identity: &HistoryPageIdentity) -> Result {
+// This graph-only check also preserves identity evidence from archived captures;
+// it deliberately does not certify their names against the current wire contract.
+pub(super) fn graph_projection(value: &Value, identity: &HistoryPageIdentity) -> Result {
     let nodes = array(&value["nodes"])?;
     let mut ids = BTreeSet::new();
     for node in nodes {

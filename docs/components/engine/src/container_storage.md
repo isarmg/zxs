@@ -1,6 +1,6 @@
 # 普通文件版本容器
 
-本模块把正文与不可变证明分开，正文使用可直接读取的普通文件，容器重命名使用真实目录操作。
+本模块把正文与不可变证明分开，正文使用可直接读取的普通文件，容器重命名使用真实目录操作。当前名称合同按[唯一当前名称 ADR](../../../adr/container-current-name.md)实施中，尚待准确提交的 GitHub 定向验证；下列布局为合成说明，不是运行验收或真实捕获。
 
 ```text
 histories/<history-id>/
@@ -9,16 +9,16 @@ histories/<history-id>/
     └── namespace/<实际归属目录>/<当前文件名>/
         ├── container.json      # 从已发布 State 重建的名字/备注/选择缓存
         └── versions/
-            └── v000001_20261018T133000Z_ab12cd34.txt
+            └── 000000000000001-<当前文件名>
 ```
 
-版本名由文件内顺序、UTC 时间、内容散列前八位和原扩展名组成；时间来自 Rust `time` 包。文件版本顺序独立于原有全局审计序列。未激活目录共享布局时，`State.file_locations` 保存每文件锚点内的归属路径，`file_names` 保存该投影名称。激活后的主盘实际位置由稳定 main 工作树及集中定位记录决定，两个 State 字段仍保存业务归属，不充当物理路径定位器。分支条目的路径可以与其不同；按稳定文件、版本身份读取材料。当前版本证明必须携带 `storage_name` 和 RFC3339 `created_at`，缺失或 null 在解码时拒绝。首次安装暂存的直接命名容器仍按稳定身份发现，决定后的当前布局投影把它移动到命名空间位置；这是现行发布与崩溃重试流程，不是旧版迁移。
+FileVersion 持久化严格 15 位小写 ASCII 字母或数字的 `storage_id`，不再保存独立 `storage_name`。已安装叶名为 `storage_id-current_name`；同容器身份碰撞在分配及准入时拒绝。`file_locations` 末段是唯一当前名称，`file_names` 仅为必须吻合的镜像，不作缺失位置的回退。激活目录共享布局后实际位置由集中定位记录决定，业务归属不替代物理定位器。同 FileId 的活动 alias 叶名同步，父目录仍属于各 occurrence；冻结提交与节点路径不改写。正文选择、下载和历史读取始终使用最新容器名，不回到 `creation_name`。版本证明必须携带 `storage_id` 和 RFC3339 `created_at`；缺失、null 或旧字段拒绝。首次安装暂存容器和决定后命名空间安装属于现行流程，不是旧版迁移。
 
-- `version_identity`：验证文件标识、相对路径和内容散列，创建唯一顺序名称与 RFC3339 时间。
+- `version_identity`：验证文件标识、相对路径和内容散列，创建稳定 storage_id 与 RFC3339 时间；容器内碰撞须明确拒绝。
 - `content_path`：按稳定文件标识查找唯一私有命名目录；正文缺失时返回预期路径供既有修复流程识别，多个目录或符号链接明确失败。当前准备过程和离线历史包使用 `versions/<version-id>/content/<creation_name>` 保存待安装正文；读取保留这条现行路径。
 - `install_version_content`：消耗 `PreparedContent`。新复制路径持有 `VerifiedCopy`，其中的输出文件已在复制时核对长度、完整散列与校验清单承诺，并完成只读模式和文件同步；安装沿用这次验证，不再全量读回。现有磁盘正文和重试目标仍核对实际长度、完整散列并同步。使用已有安全目录封装及文件描述符相对 `renameat2(NOREPLACE)`，分别同步源和目标父目录；不创建硬链接、reflink 或第二份持久正文。
-- `capture_names`：只为缺少记录的文件初始化名字和位置；切换分支和读取旧路径不会改动实体归属。实际移动、重命名由对应业务操作明确更新位置和名字；删除保留最后位置。
-- `synchronize_names`：仅为名字、位置、备注、选择、继承引用、版本、放置或内容状态变化的文件更新容器缓存及真实改名。跨目录移动真实迁移同一个容器及所有版本，不复制正文。位置投影在决定后执行并幂等重放；中途失败后仍按稳定身份找到唯一实体，不新建分支占位文件。
+- `capture_names`：只为缺少记录的文件初始化名字和位置；切换分支和读取旧路径不会改动实体归属。实际移动、重命名由对应业务操作明确更新位置和一致镜像；删除保留最后位置。
+- `synchronize_names`：仅为名字、位置、备注、选择、继承引用、版本、放置或内容状态变化的文件更新容器缓存及真实改名。跨目录移动真实迁移同一个容器及所有版本，不复制正文。改名同时更新所有仍有正文的 `storage_id-current_name` 叶名，稳定 ID、正文与 inode 不变；有界 inode 绑定意图约束部分完成后的无覆盖重试。位置投影在决定后执行并幂等重放；中途失败后仍按稳定身份找到唯一实体，不新建分支占位文件。
 
 受影响文件分类复用现有事务写集，精确键仍逐项比较，失去 lineage 时扫描前后权威记录；范围、保留成本与 source-only 验证状态见[容器名称写集](../../../architecture/container-name-write-sets.md)。
 
@@ -28,11 +28,11 @@ histories/<history-id>/
 
 container.json 的 inherited_branches 记录来源、可见 version_id、空 own_version_id 和继承状态，path_contexts 记录当前各逻辑路径独立的写入目标与继承意图。文件有多个别名时不能用单个文件级选择推断所有路径；容器缓存只用 path_contexts 表达精确选择，不再输出旧 selected_branch_id 摘要。所有缓存都不替代发布快照、历史清单或版本签名证明。恢复只重建缓存，不重建空 stub。缺失正文和元数据继承不会创建空容器。
 
-文件改名新增不可变 FilePathNode，记录旧、新路径并引用同一个真实版本；文件夹改名为受影响的每个文件分别登记节点。path_nodes 缓存这些节点及备注，版本记录的 parent_node_ids 同时覆盖后续正文写入与改名节点之间的父子关系。节点本身不新增正文、版本证明或 FULL 回执。历史包保存节点及混合父子关系，验证同文件归属、冻结正文对应关系和无环性；正文清除后保留节点及 PURGED 版本记录，避免元数据历史永久钉住旧正文。
+路径变化由外部命名空间的不可变 PathChanged 事实记录，保留准确前后位置、来源身份和授权作用域；不新增正文或伪造文件内部路径节点。内部容器名变化不是历史正文选择，旧节点选择也不回写冻结路径证据。原路径节点设计已由当前 path-facts 及唯一当前名称合同取代，不保留旧格式读取。
 
-不再读取无命名版本字段的旧正文，不迁移 legacy 正文，也不清理 pending-branches。检测到 `legacy` 或 `pending-branches` 旧容器结构时返回 `FORMAT_UNSUPPORTED`，原字节、空占位文件和目录均保留。新分支创建、恢复、改名和历史包导入都不生成 stub。目录组合/子树或文件路径节点存在时旧拆分接口明确拒绝，避免漏掉映射。
+不再读取无命名版本字段的旧正文，不迁移 legacy 正文，也不清理 pending-branches。检测到 `legacy` 或 `pending-branches` 旧容器结构时返回 `FORMAT_UNSUPPORTED`，原字节、空占位文件和目录均保留。新分支创建、恢复、改名和历史包导入都不生成 stub。旧拆分接口仍受当前历史闭包准入限制，不能以改名绕过目录组合和子树映射检查。
 
-实现直接复用本项目的 `disk::{private_dir, existing_private_dir, open_regular, write_json, sync_dir}` 与 `platform-io` 安全文件系统原语；没有复制兄弟仓库的存储协议或脚本。依赖 `rustix` 和 `time` 的真实包名保留。
+实现直接复用本项目的 `disk::{private_dir, existing_private_dir, open_regular, write_json, sync_dir}` 与 `platform-io` 安全文件系统原语；没有复制兄弟仓库的存储协议或脚本。具体安全原语与依赖以当前实现为准。
 
 `held_directory` 将 `existing_private_dir` 已准入的目录直接交给
 [`OpenAt2Root::from_private_directory`](../../platform.md#admitted-directory-handoff)，

@@ -149,12 +149,15 @@ impl Engine {
                 .path()
                 .to_owned()
         };
-        Ok(DirectoryBranchPreview {
-            branch: projection
-                .as_ref()
-                .map_or_else(|| branch.clone(), |projection| projection.branch().clone()),
-            path,
-        })
+        let branch = match projection.as_ref() {
+            Some(projection) => projection.named_branch(&self.state)?,
+            None => {
+                let mut source = branch.clone();
+                super::namespace::container_name::normalize_directory_branch(&self.state, &mut source)?;
+                source
+            }
+        };
+        Ok(DirectoryBranchPreview { branch, path })
     }
 }
 

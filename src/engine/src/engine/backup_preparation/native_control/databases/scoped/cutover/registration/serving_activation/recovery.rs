@@ -277,7 +277,7 @@ impl Engine {
             .config
             .generation()
             .expect("invariant: native Backup startup");
-        self.state = Arc::clone(&generation.base);
+        self.named_namespaces.install_state(&mut self.state, Arc::clone(&generation.base));
         self.snapshot = generation.snapshot();
         self.next_slot = generation.first_sequence()?;
         Ok(Vec::new())

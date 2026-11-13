@@ -171,10 +171,14 @@ pub(crate) fn workspace_upload_locations(
     current: &[Entry],
     workspace: &Workspace,
 ) -> Result<BTreeMap<String, name_policy::PortablePath>> {
+    let renamed_files = container_name::operation_files(current, &workspace.namespace_operations)?;
     workspace.files.values().map(|file| {
+        let original = current.iter().find(|entry| entry.lookup_key() == file.path.key());
+        let file_id = original.filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .map(|entry| entry.file_id.parse::<storage_contract::FileId>()).transpose()?;
         let mut path = current.binary_search_by(|entry| entry.lookup_key().cmp(file.path.key()))
             .ok().map(|index| current[index].path.clone()).unwrap_or_else(|| file.path.clone());
-        for operation in &workspace.namespace_operations {
+        for (operation, renamed_file) in workspace.namespace_operations.iter().zip(&renamed_files) {
             match operation {
                 NamespaceOperation::Mkdir { .. } => {}
                 NamespaceOperation::Delete { .. } if path.key() != operation.key() => {}
@@ -191,6 +195,12 @@ pub(crate) fn workspace_upload_locations(
                         path = destination.clone();
                     } else if is_descendant(path.key(), source.key()) {
                         path = path.rebase(source.as_str().split('/').count(), destination)?;
+                    } else if file_id.is_some() && file_id == *renamed_file {
+                        let name = name_policy::Name::parse(destination.file_name())?;
+                        path = match path.parent() {
+                            Some(parent) => parent.join_name(&name)?,
+                            None => name_policy::PortablePath::from_name(&name)?,
+                        };
                     }
                 }
             }

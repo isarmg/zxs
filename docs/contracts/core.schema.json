@@ -4087,9 +4087,9 @@
         },
         "download_name": {
           "type": "string",
-          "maxLength": 768,
-          "x-maxUtf8Bytes": 768,
-          "x-maxUtf16Units": 200,
+          "maxLength": 240,
+          "x-maxUtf8Bytes": 240,
+          "x-maxUtf16Units": 240,
           "x-namePolicy": "PortableName"
         },
         "storage_name": {
@@ -4231,9 +4231,9 @@
         },
         "download_name": {
           "type": "string",
-          "maxLength": 768,
-          "x-maxUtf8Bytes": 768,
-          "x-maxUtf16Units": 200,
+          "maxLength": 240,
+          "x-maxUtf8Bytes": 240,
+          "x-maxUtf16Units": 240,
           "x-namePolicy": "PortableName"
         },
         "storage_name": {

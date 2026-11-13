@@ -71,6 +71,10 @@ fn read(root: &DiskRoot, container: &Path) -> Result<Option<(Intent, Vec<u8>)>> 
         }
     }
     check_directory(root, container, &intent)?;
+    let basename = container.file_name().and_then(|name| name.to_str()).ok_or_else(invalid)?;
+    if basename != intent.source_name.as_str() && basename != intent.target_name.as_str() {
+        return Err(invalid());
+    }
     Ok(Some((intent, bytes)))
 }
 
@@ -112,14 +116,35 @@ fn position(root: &DiskRoot, container: &Path, intent: &Intent, body: &Body) -> 
     Ok((path, complete))
 }
 
+struct HeldBody {
+    file: ReadFile,
+    // Fields drop in order: close the descriptor before returning its lease.
+    _reservation: crate::engine::PayloadProofReservation,
+}
+
+fn hold_body(root: &DiskRoot, path: &Path, version: &FileVersion) -> Result<HeldBody> {
+    let reservation = crate::engine::payload_proof_budget().reserve(1)
+        .ok_or(Error::VersionNames(VersionNameError::Descriptors))?;
+    let file = verify_body(root, path, version)?;
+    Ok(HeldBody { file, _reservation: reservation })
+}
+
 pub(super) struct Prepared {
     intent: Intent,
     original: Option<Vec<u8>>,
-    held: Vec<ReadFile>,
+    held: Vec<HeldBody>,
 }
 
 impl Prepared {
-    /// Read-only preparation; intent persistence belongs only to the decided tail.
+    /// Atomic replacement keeps the previous intent until the new inode is durable.
+    pub(super) fn reservation(&self) -> Result<(u64, usize)> {
+        let bytes = crate::disk::encode_metadata(&self.intent, MAX_BYTES)?;
+        let retained = self.original.as_ref().map_or(0, |old| old.len() as u64);
+        Ok((bytes.len() as u64 + retained, 2))
+    }
+
+    /// Preparation verifies and flushes existing bodies but does not change names.
+    /// Intent persistence belongs only to the decided tail.
     pub(super) fn capture(
         root: &DiskRoot,
         container: &Path,
@@ -135,9 +160,25 @@ impl Prepared {
         let existing = read(root, container)?;
         if let Some((intent, _)) = &existing {
             if intent.file != file_id || intent.history != history_id
-                || intent.sequence.get() > state.sequence
+                || intent.sequence.get() != state.sequence
+                || &intent.target_name != target_name
             {
                 return Err(invalid());
+            }
+            // The disk intent is not an authority for the work set. Reconstruct
+            // coverage from the admitted candidate and actual source/target leaves.
+            let listed: BTreeSet<_> = intent.bodies.iter().map(|body| body.storage).collect();
+            let versions = container.join(crate::persist::layout::VERSIONS.as_path());
+            for version in state.versions.values().filter(|version| {
+                version.file_id == file && version.history_tree_id == history
+            }) {
+                let source = installed_version_leaf(version.storage_id, &intent.source_name)?;
+                let target = installed_version_leaf(version.storage_id, &intent.target_name)?;
+                let present = root.optional_metadata(&versions.join(source.as_path()))?.is_some()
+                    || root.optional_metadata(&versions.join(target.as_path()))?.is_some();
+                if present && !listed.contains(&version.storage_id) {
+                    return Err(invalid());
+                }
             }
             let mut complete = true;
             let mut held = Vec::new();
@@ -150,12 +191,9 @@ impl Prepared {
                 }
                 let (path, done) = position(root, container, intent, body)?;
                 complete &= done;
-                held.push(verify_body(root, &path, version)?);
+                held.push(hold_body(root, &path, version)?);
             }
             if !complete || source_name != intent.target_name {
-                if &intent.target_name != target_name || intent.sequence.get() != state.sequence {
-                    return Err(invalid());
-                }
                 return Ok(Some(Self {
                     intent: intent.clone(),
                     original: existing.map(|(_, bytes)| bytes),
@@ -198,8 +236,8 @@ impl Prepared {
                 // A missing copy or a cleared body is not manufactured by a name change.
                 continue;
             }
-            let original = verify_body(root, &source, version)?;
-            let metadata = original.metadata()?;
+            let original = hold_body(root, &source, version)?;
+            let metadata = original.file.metadata()?;
             let identity = FileIdentity::from_metadata(&metadata);
             intent.bodies.push(Body {
                 version: version.version_id.parse()?,
@@ -233,7 +271,7 @@ impl Prepared {
         root.sync_dir(container)?;
         observe("version-names-intent")?;
         for (body, held) in self.intent.bodies.iter().zip(&self.held) {
-            let identity = FileIdentity::from_metadata(&held.metadata()?);
+            let identity = FileIdentity::from_metadata(&held.file.metadata()?);
             if identity.device != body.device || identity.inode != body.inode {
                 return Err(invalid());
             }
@@ -272,11 +310,28 @@ pub(super) fn interrupted_path(
     position(root, container, &intent, body).map(|(path, _)| Some(path))
 }
 
+/// Expected publication facts retained by the caller's prepared candidate,
+/// never reconstructed from the mutable locator being cleaned up.
+pub(super) struct CompletionBinding {
+    pub(super) file: FileId,
+    pub(super) history: HistoryTreeId,
+    pub(super) sequence: Sequence,
+    pub(super) target_name: Name,
+}
+
 /// Remove only the exact completed intent after the outer container and FILE
 /// metadata have reached their target. Interrupted cleanup is harmless.
-pub(super) fn finish(root: &DiskRoot, container: &Path) -> Result<()> {
+pub(super) fn finish(
+    root: &DiskRoot,
+    container: &Path,
+    expected: &CompletionBinding,
+) -> Result<()> {
     let Some((intent, bytes)) = read(root, container)? else { return Ok(()); };
-    if container.file_name().and_then(|name| name.to_str()) != Some(intent.target_name.as_str()) {
+    if intent.file != expected.file || intent.history != expected.history
+        || intent.sequence != expected.sequence || intent.target_name != expected.target_name
+        || container.file_name().and_then(|name| name.to_str())
+            != Some(expected.target_name.as_str())
+    {
         return Err(invalid());
     }
     for body in &intent.bodies {

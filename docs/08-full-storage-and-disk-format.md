@@ -41,6 +41,8 @@
 
 ## 8.2 单盘布局
 
+以下名称合同按[文件容器唯一当前名称 ADR](adr/container-current-name.md)实施中，尚待准确提交的 GitHub 定向验证，不表示运行时投影、恢复或备份已验收。布局和 JSON 中的 ID、名称及摘要均为合成说明占位，不是新真实捕获。
+
 ```text
 <disk-root>/
 ├── README.txt
@@ -53,11 +55,11 @@
 │   │   ├── commit-proof.json
 │   │   └── publication-proof.json
 │   └── file-containers/<file-id>/
-│       └── 报告.docx/
+│       └── namespace/<实际归属目录>/报告.docx/
 │           ├── container.json
 │           └── versions/
-│               ├── v000001_20261018T133000Z_ab12cd34.docx
-│               └── v000002_20261018T134500Z_ef56ab78.docx
+│               ├── 000000000000001-报告.docx
+│               └── 000000000000002-报告.docx
 ├── metadata/application-log/journal.bin
 ├── metadata/objects/<object-type>/<hash前两位>/<hash>.json
 ├── metadata/pool-membership/config.json
@@ -70,17 +72,17 @@
 
 不可变元数据对象按散列前两位分桶，每类最多 256 个桶，完整散列文件名、规范编码、摘要和日志引用保持不变。当前格式只接受 `metadata/objects/<object-type>/<hash前两位>/<hash>.json`；目标地址存在旧平铺对象时拒绝读取与写入，清点拒绝非分片项，不自动迁移、删除或复用平铺对象。按准确摘要修复当前格式的依赖仍然有效；离线导出只读且不修复。目录枚举和恢复检查点必须拒绝链接及错误分桶。
 
-`versions/<version-id>/` 保留不可变版本说明、校验及发布证明；正文唯一实体位于 `file-containers/<file-id>/<当前文件名>/versions/<storage_name>`，是可以直接读取的普通文件。外层 `file-id` 为稳定身份，内层是实际目录，不是界面别名。业务改名真正重命名该内层目录；历史版本文件的内部名称及已有证明保持不变。下载当前或历史版本时使用该文件当前的业务名称，已删除文件保留最后登记的名称。
+`versions/<version-id>/` 保留不可变版本说明、校验及发布证明；正文是可以直接读取的普通文件。未激活目录共享布局时，命名空间位置为 `file-containers/<file-id>/namespace/<实际归属目录>/<当前文件名>/versions/<storage_id>-<当前文件名>`；共享布局的实际位置仍由其集中定位记录确定。外层 `file-id` 和 `storage_id` 是稳定身份，当前容器名就是 SMB 文件名。改名同步所有活动 occurrence 的叶名、实体容器目录及所有仍有正文的内部版本叶名，保留正文、inode、版本身份及证明。下载或选中改名前的正文节点仍使用最新名称，冻结路径证据不改写。`file_locations` 末段是唯一当前名称，`file_names` 只作一致镜像；删除保留最后位置，读取不从历史路径或 `creation_name` 回退。
 
 位置投影的 namespace 根维护内部标记 `.zxs-namespace.json`。新候选在复制正文副本前预检实际主盘及备份投影的根部分量冲突，按[命名约束](05-naming-and-paths.md)在决定前返回 `NAME_COLLISION`，保留现有状态、正文和工作材料；不改标记或容器格式，不迁移或清除历史材料。已经发布的历史投影仍按固定身份和现有布局校验重放，不重新套用新请求的准入检查。
 
-版本内部名称为 `v<文件内序号>_<UTC时间>_<内容散列前8位>.<扩展名>`，例如 `v000001_20261018T133000Z_ab12cd34.docx`；序号至少六位，按同一文件已有版本递增，不等同于全局 `version_sequence` 审计序。时间另以 RFC3339 写入 `created_at`。新版本扩展名采用当前文件名；没有扩展名时不追加句点。它们不使用容器目录名称作为版本身份。
+版本持久化 `storage_id` 为严格 15 位小写 ASCII 字母或数字，在本容器内唯一；分配和准入明确拒绝碰撞，不把截断摘要当唯一性证明。已安装叶名逐字派生为 `storage_id-current_name`，不再编码顺序、UTC 时间、内容短散列或原扩展名。`version_sequence` 和 RFC3339 `created_at` 保留各自审计语义；`creation_name` 保留创建时来源及准备材料名称，不作为当前显示名。历史读取 DTO 的 `storage_name` 仅为派生的真实叶名，其名称后缀与 `download_name` 逐字一致。
 
 分支的 pending_file_versions 是已发布的继承归属记录，不对应空文件。新创建、恢复和导入均不生成 pending-branches/*.pending，也不为继承引用新建空容器。容器内出现 pending-branches 或 legacy 项时返回 FORMAT_UNSUPPORTED，保留包括零字节占位文件在内的原始材料，不自动清理或迁移。container.json 的 inherited_branches 是来源引用缓存，可见 version_id 等于父真实 ID，自有版本为空。
 
 文件备注、版本备注、当前名称和选中分支在已发布 State 中持久化；容器内 `container.json` 只是从该状态重建的浏览缓存，标记 `cache_only`，不替代不可变 `version.json`、校验和或本盘证明。修改备注不改写旧版本描述。缓存的完整 JSON 在 ACCEPT 前通过实际编码器校验单对象大小，并暂存在匿名文件中；准备过程不更改已发布的物理名称。新事务若超过缓存读取上限，会在写入决定记录前返回 RESOURCE_LIMIT，保留原发布状态。名字与缓存投影在事务决定后、PUBLICATION 前执行；中断后可以按已确定决定重放，不能把单次目录重命名成功当作发布完成。
 
-`storage_name` 与 `created_at` 是当前版本结构的必需字段，缺失时拒绝读取，不回退到旧正文布局。准备、修复或历史包处理中的 `content/<creation_name>` 是相应流程的中间材料路径，不构成旧盘格式兼容承诺。新版本准备正文验证后在同一文件系统上独占重命名到容器，并同步源、目标目录；正常完成后不保留第二份准备正文。
+`storage_id` 与 `created_at` 是当前版本结构的必需字段，旧 `storage_name` 字段拒绝，缺失时拒绝读取，不回退到旧正文布局。准备、修复或历史包处理中的 `content/<creation_name>` 是相应流程的中间材料路径，不构成旧盘格式兼容承诺。新版本准备正文验证后在同一文件系统上独占重命名到容器，并同步源、目标目录；正常完成后不保留第二份准备正文。
 
 每份有效副本包括完整内容、版本说明、校验及本盘证明。commit-proof 证明候选和本盘内容准备，publication-proof 携带[第 10.10 节](10-transactions-and-recovery.md#s10-10)的公开决定及本盘验证闭包。只有前者时，不把文件标为已完成正常发布。不允许从其他盘、其他树或在线服务补齐内容或必需证明后才声称本盘可以独立恢复。
 
@@ -104,7 +106,7 @@ SQLite 采用封闭的 `identity` 与 `records` 两个 STRICT 表，格式标识
 
 ### 普通文件容器的内部数据库
 
-实际存在的文件容器以同一安全安装器维护 `.zxs-file.sqlite`，作用域为一个 `(history_tree_id,file_id)`，随稳定容器整体移动。`file-local-retained-graph` 保存版本、独立分支、标签、备注、无路径节点锚点、合并引用、当前 D 和已撤销 D 的历史 delete/undo 投影；不保存外部路径、前一路径、命名空间提交或磁盘路由。当前格式和真实边界详见[文件内部数据库](design/file-local-database.md)。
+实际存在的文件容器以同一安全安装器维护 `.zxs-file.sqlite`，作用域为一个 `(history_tree_id,file_id)`，随稳定容器整体移动。`file-local-container-current-name` 保存版本、独立分支、标签、备注、无路径节点锚点、合并引用、当前 D 和已撤销 D 的历史 delete/undo 投影；不保存外部路径、前一路径、命名空间提交或磁盘路由。当前格式和真实边界详见[文件内部数据库](design/file-local-database.md)。
 
 准备在决定前完成，安装仅在 Finalize 后或最终已准入 State 修复时进行。历史前缀不回写本库。文件与目录库的保留额度按同一磁盘/历史合并，不能分别通过后超额。缺失库可从已准入 State 重建；未知库保持原物并拒绝操作。格式自摘要不是完整历史证明，安装始终绑定精确期望字节。
 
@@ -126,7 +128,7 @@ SQLite 采用封闭的 `identity` 与 `records` 两个 STRICT 表，格式标识
   "checksum_chunk_bytes": 262144,
   "checksum_manifest_hash": "<分段校验清单哈希>",
   "creation_name": "报告.docx",
-  "storage_name": "v000002_20261018T134500Z_ef56ab78.docx",
+  "storage_id": "000000000000002",
   "created_at": "2026-10-18T13:45:00Z",
   "source_version_ids": ["version-example-001"],
   "created_as_full_checkpoint": false
@@ -143,7 +145,7 @@ SQLite 采用封闭的 `identity` 与 `records` 两个 STRICT 表，格式标识
 }
 ```
 
-例中 ID 和摘要是占位符，不是真实测试向量，`storage_name` 的短散列必须与实际 `content_hash` 前八位一致。`storage_name`、`created_at` 是当前结构的必需字段；缺失时拒绝读取，不回退到旧正文布局。source_version_ids 仅表示审计来源；读取不访问源版本。健康与清除状态由事务日志和事件决定，不能原地改写 version.json 掩盖损坏或删除。
+例中 ID、15 位 storage_id 和摘要都是合成占位符，不是真实测试向量或实际内容摘要。`storage_id`、`created_at` 是当前结构的必需字段；拒绝缺失、null 及旧 `storage_name`，不回退到旧正文布局。source_version_ids 仅表示审计来源；读取不访问源版本。健康与清除状态由事务日志和事件决定，不能原地改写 version.json 掩盖损坏或删除。改名的有界 inode 绑定意图、无覆盖安装和准确重试合同见上述 ADR；静态说明不代替实际故障尾验。
 
 <a id="s08-04"></a>
 

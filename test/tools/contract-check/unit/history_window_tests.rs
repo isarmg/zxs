@@ -485,3 +485,38 @@ fn directory_staging_schemas_match_public_wire_types() {
     );
     assert_shared_history_shape("DirectoryCommitBody", &json_codec::to_value(body).unwrap());
 }
+
+#[test]
+fn current_installed_names_share_suffix_budgets_and_reject_stale_projections() {
+    let mut core = read(&root().join("docs/contracts/core.schema.json")).unwrap();
+    let mut api = read(&root().join("docs/contracts/openapi.json")).unwrap();
+    core["$ref"] = "#/$defs/HistoryWindowPage".into();
+    api["$ref"] = "#/components/schemas/HistoryWindowPage".into();
+    let core = validator(&core).unwrap();
+    let api = validator(&api).unwrap();
+    for fixture_name in ["nodes", "versions"] {
+        let mut page = fixture(fixture_name);
+        for name in ["x".repeat(240), "界".repeat(80)] {
+            page[fixture_name][0]["download_name"] = name.clone().into();
+            page[fixture_name][0]["storage_name"] = format!("000000000000001-{name}").into();
+            assert!(core.is_valid(&page));
+            assert!(api.is_valid(&page));
+            semantics("HistoryWindowPage", &page).unwrap();
+        }
+        page[fixture_name][0]["download_name"] = "file.txt".into();
+        for stored in ["v000001_file.txt", "00000000000000A-file.txt", "000000000000001-old.txt"] {
+            page[fixture_name][0]["storage_name"] = stored.into();
+            assert!(semantics("HistoryWindowPage", &page).is_err());
+            // JSON Schema cannot express equality with the sibling download name;
+            // the shared semantic helper owns that relation.
+            assert_eq!(core.is_valid(&page), stored.ends_with("-old.txt"));
+            assert_eq!(api.is_valid(&page), stored.ends_with("-old.txt"));
+        }
+        let name = "x".repeat(241);
+        page[fixture_name][0]["download_name"] = name.clone().into();
+        page[fixture_name][0]["storage_name"] = format!("000000000000001-{name}").into();
+        assert!(!core.is_valid(&page));
+        assert!(!api.is_valid(&page));
+        assert!(semantics("HistoryWindowPage", &page).is_err());
+    }
+}

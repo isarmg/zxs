@@ -77,7 +77,7 @@ impl<'a> NamespaceTree<'a> {
     // form through HistoryManifest::from_state; admitted history uses the same
     // validator. No arbitrary Commit, mutable State or entry slice is accepted
     // by the public or crate-wide API, and queries never repeat that validation.
-    fn from_published_entries(entries: &'a [Entry]) -> Self {
+    pub(in crate::business) fn from_published_entries(entries: &'a [Entry]) -> Self {
         Self {
             entries,
             deletions: None,
@@ -197,11 +197,6 @@ impl Engine {
             .ok_or_else(|| Error::new(ErrorCode::EntryNotFound, "object is absent at this path"))
     }
 
-    pub(crate) fn workspace_namespace(&self, workspace: &Workspace) -> Result<NamespaceTree<'_>> {
-        self.workspace_namespace_entries(workspace)
-            .map(NamespaceTree::from_published_entries)
-    }
-
     /// Borrow the current published namespace with the same admission and
     /// errors as `list_tree_ref`, but with logarithmic normalized-key lookup.
     pub fn namespace_tree(&self, branch_id: &str) -> Result<NamespaceTree<'_>> {
@@ -243,10 +238,8 @@ impl MetadataView {
             .commits
             .get(&branch.head_commit_id)
             .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "branch HEAD missing"))?;
-        let entries = match self.current_namespaces.admitted()? {
-            Some(view) => view.branch_entries(branch_id, &commit.commit_id)?,
-            None => &commit.entries,
-        };
+        let entries = self.named_namespaces()?
+            .branch(branch_id.parse()?, commit.commit_id.parse()?)?.entries();
         Ok(NamespaceTree {
             entries,
             deletions: Some(&state.file_deletions),
