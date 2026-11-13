@@ -9,3 +9,4 @@ pub(crate) mod store;
 pub(crate) mod projection;
 
 pub(crate) mod ledger;
+pub(crate) mod io;

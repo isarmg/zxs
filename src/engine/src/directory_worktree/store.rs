@@ -1,5 +1,7 @@
 //! Sparse worktrees start with no files and retain edits independently of source.
 use crate::directory_worktree::lifecycle::WorktreeId;
+use crate::directory_worktree::projection::WorkingFile;
+use std::io::Seek;
 use crate::disk::{DirectoryCreateOutcome, DirectoryIoError, DiskRoot};
 use crate::persist::layout::worktree as layout;
 use crate::working_tree::records::{file_identity, local_entity};
@@ -17,6 +19,12 @@ pub(crate) enum WorktreeStoreError {
     Disk(#[source] crate::Error),
     #[error("worktree belongs to another original snapshot or parent directory")]
     Source,
+    #[error("worktree edited payload verification failed")]
+    Payload(#[source] platform_io::payload::Error),
+    #[error("worktree edited payload I/O failed")]
+    Io(#[source] std::io::Error),
+    #[error("worktree edited payload differs from its sealed physical entity")]
+    MaterialIdentity,
 }
 
 #[derive(Debug, error_definition::Error)]
@@ -129,6 +137,23 @@ impl HeldSparseWorktree {
 
     pub(crate) fn binding(&self) -> SparseWorktreeBinding {
         self.binding
+    }
+
+    /// Resolve only the exact previously sealed edit. The file remains managed
+    /// by its original disk gate; no raw descriptor or external path escapes.
+    pub(crate) fn open_material(&self, material: &WorkingFile)
+        -> Result<crate::ReadFile, WorktreeStoreError>
+    {
+        let mut file = self.directory.open_read_entry(&material.leaf)
+            .map_err(WorktreeStoreError::Disk)?;
+        let verified = file.verify_full(platform_io::payload::Expectation {
+            bytes: material.file.size, blake3: Some(material.file.content_hash.digest()),
+        }).map_err(WorktreeStoreError::Payload)?;
+        if verified.identity != file_identity(material.entity) {
+            return Err(WorktreeStoreError::MaterialIdentity);
+        }
+        file.rewind().map_err(WorktreeStoreError::Io)?;
+        Ok(file)
     }
 
     /// Mutable sparse material, not a complete directory listing or permission

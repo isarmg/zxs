@@ -357,13 +357,8 @@ impl<'a> HeldWorktreeLedger<'a> {
             if name.as_os_str().to_str() != Some(edit.leaf.as_str()) {
                 return Err(LedgerError::Binding);
             }
-            let mut file = instance.directory().open_read_entry(&name).map_err(LedgerError::Disk)?;
-            let receipt = file.verify_full(Expectation {
-                bytes: edit.material.size, blake3: Some(edit.material.content_hash.digest()),
-            }).map_err(LedgerError::Payload)?;
-            if receipt.identity != file_identity(edit.entity) {
-                return Err(LedgerError::Binding);
-            }
+            let file = instance.open_material(&edit.file_edit()?)
+                .map_err(LedgerError::Instance)?;
             if matches!(access, EditAccess::Seal) {
                 file.sync_all().map_err(LedgerError::Io)?;
             }

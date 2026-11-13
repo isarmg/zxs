@@ -3070,7 +3070,7 @@
       ]
     },
     "directory-history-worktree": {
-      "reason": "Independent sparse worktree lifecycle and source provenance, anchored immutable transition ledger, sealed edits, bounded idempotent replay, no-overwrite append and fail-closed checkpoint recovery; SMB publication and MOVE recovery are separate pending integration.",
+      "reason": "Sparse worktree lifecycle and fixed source provenance; anchored transition ledger with sealed edits, exact per-file results and dirty baselines; inode-bound original/edited/published read views and bounded logical directory pages. Live SMB registration, MOVE recovery and initial container import remain separate integration.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -3082,9 +3082,10 @@
             "disk::owned::worktree_io::tests::",
             "directory_worktree::store::tests::",
             "directory_worktree::projection::tests::",
-            "directory_worktree::ledger::tests::"
+            "directory_worktree::ledger::tests::",
+            "directory_worktree::io::tests::"
           ],
-          "max_tests": 56,
+          "max_tests": 72,
           "timeout_seconds": 900
         }
       ]
