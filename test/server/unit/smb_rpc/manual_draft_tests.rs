@@ -1,8 +1,42 @@
 use super::*;
 
+fn manual_engine(root: &Path) -> Engine {
+    let system = root.join("state");
+    let disk = root.join("p");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    Engine::initialize_manual_container_storage(
+        &system, Config::development([disk]).unwrap(), OperationId::generate().unwrap(),
+    ).unwrap()
+}
+
+fn manual_fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = manual_engine(temp.path());
+    let repo = engine.create_repository(
+        &storage_contract::RepositoryName::parse("files").unwrap(),
+        "P01", 1, "alice", OperationId::generate().unwrap(),
+    ).unwrap();
+    let workspace = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "report.txt", b"old").unwrap();
+    engine.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate().unwrap(),
+        principal: "alice".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "initial".into(),
+        request_digest: None,
+    }).unwrap();
+    let (fixture, shared, backend) = fixture_backend(temp, engine);
+    (fixture, shared, backend, repo.main_branch_id)
+}
+
 #[test]
 fn manual_flush_close_and_reopen_writer_keep_shared_body_without_advancing_head() {
-    let (_root, shared, _backend, branch) = fixture();
+    let (_root, shared, _backend, branch) = manual_fixture();
     let identity = identity(&shared);
     let entry = session(Arc::clone(&shared), &branch).entries().unwrap().remove(0);
     let context = crate::ReadContainerEdit {
@@ -72,11 +106,9 @@ fn manual_flush_close_and_reopen_writer_keep_shared_body_without_advancing_head(
 
 fn shared_alias_fixture() -> (Fixture, Arc<Shared>, String) {
     let temp = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(&temp.path().join("state"), Config::development([
-        temp.path().join("p"), temp.path().join("b"), temp.path().join("c"),
-    ]).unwrap()).unwrap();
+    let mut engine = manual_engine(temp.path());
     let repo = engine.create_repository(&storage_contract::RepositoryName::parse("aliases").unwrap(),
-        "P01", 3, "alice", OperationId::generate().unwrap()).unwrap();
+        "P01", 1, "alice", OperationId::generate().unwrap()).unwrap();
     for (path, bytes) in [("a/report.txt", b"original".as_slice()), ("b/keep", b"keep".as_slice())] {
         let work = engine.create_workspace(&repo.main_branch_id, "alice").unwrap();
         engine.stage_bytes(&work.workspace_id, path, bytes).unwrap();

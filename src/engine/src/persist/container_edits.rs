@@ -33,12 +33,38 @@ pub(crate) fn publish(
     principal: &Principal,
     operation: OperationId,
 ) -> crate::Result<OperationResult> {
+    crate::engine::container_drafts::format::require_manual_storage(&engine.config)?;
     let body = json_codec::to_value(request).map_err(codec)?;
     engine.mutate(EDIT_KIND, principal.as_str(), operation, body, |engine, next, _| {
         let replacement = plan_edit(engine.state(), request)?;
         next.container_edits.insert(request.file(), replacement.clone());
         json_codec::to_value(Body { request, replacement }).map_err(codec)
     })
+}
+
+pub(crate) fn save_receipt(
+    engine: &Engine,
+    file: storage_contract::FileId,
+    revision: &storage_contract::container_edit::DraftRevision,
+    principal: &Principal,
+) -> crate::Result<Option<OperationResult>> {
+    let conflict = || Error::ContainerDrafts(DraftError::ReplayConflict);
+    if principal != &revision.principal {
+        return Err(conflict());
+    }
+    let Some(receipt) = engine.state().operations.get(&revision.operation) else {
+        return Ok(None);
+    };
+    let request = EditCommand::Save { file, revision: revision.clone() };
+    let body = json_codec::to_value(&request).map_err(codec)?;
+    let digest = Engine::native_request_digest(EDIT_KIND, principal.as_str(), &body)?;
+    if receipt.kind != EDIT_KIND || receipt.request_digest != digest
+        || engine.operation_owner(revision.operation)?.as_deref() != Some(principal.as_str())
+        || decode(receipt)?.request != request
+    {
+        return Err(conflict());
+    }
+    Ok(Some(receipt.clone()))
 }
 
 pub(crate) fn decode(receipt: &OperationResult) -> crate::Result<Envelope> {

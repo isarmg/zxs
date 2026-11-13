@@ -415,6 +415,9 @@ fn flush_writer(
         ));
     }
     if let Some(container) = &writer.container {
+        if container.edit.mode() == storage_contract::container_edit::CommitMode::Manual {
+            return flush_container_draft(shared, identity, branch, max_file_bytes, writer);
+        }
         let current = shared.backend.read_container_edit(identity, container.context.clone())?;
         if current.mode() != container.edit.mode() {
             return Err(ApiError::conflict(storage_contract::ErrorCode::WorkspaceChanged,
@@ -505,29 +508,28 @@ fn flush_container_draft(
     if writer.file.metadata().map_err(ApiError::io)?.len() > max_file_bytes {
         return Err(ApiError::limit("file exceeds SMB byte limit"));
     }
-    let (hash, size) = draft_fingerprint(&writer.file)?;
-    if size > max_file_bytes { return Err(ApiError::limit("file exceeds SMB byte limit")); }
-    let container = writer.container.as_mut()
-        .expect("invariant: manual flush has an admitted container");
-    if container.revision.is_none() {
-        container.revision = Some(storage_contract::container_edit::DraftRevision {
-            operation: writer.operation_id, expected_generation: container.edit.generation(),
-            principal: identity.principal.parse().map_err(ApiError::invalid_authenticated_principal)?,
-            base: container.base.clone(), content_hash: hash, size,
-        });
-        // Freeze the exact request before the durable publication can occur.
+    let has_revision = writer.container.as_ref()
+        .expect("invariant: manual flush has an admitted container").revision.is_some();
+    if !has_revision {
+        let revision = manual_recovery::freeze(shared, identity, writer, max_file_bytes)?;
+        writer.container.as_mut().unwrap().revision = Some(revision);
         recovery_record(writer, &identity.principal, branch)?;
     }
-    let container = writer.container.as_ref().unwrap();
-    let revision = container.revision.as_ref().unwrap().clone();
-    let persisted = shared.backend.persist_container_draft(identity, crate::PersistContainerDraft {
-        context: container.context.clone(), revision: revision.clone(),
-    }, &writer.file)?;
+    let revision = writer.container.as_ref().unwrap().revision.as_ref().unwrap().clone();
+    let (outcome, _) = manual_recovery::save_frozen(
+        shared, identity, revision.operation, max_file_bytes, true,
+    )?;
+    match outcome {
+        manual_recovery::RecordOutcome::Saved(_) => {}
+        manual_recovery::RecordOutcome::Unresolved => {
+            unreachable!("invariant: resume either saves the frozen request or returns an error")
+        }
+    }
     let (actual_hash, actual_size) = draft_fingerprint(&writer.file)?;
     let container = writer.container.as_mut().unwrap();
     let generation = revision.expected_generation.next().map_err(ApiError::exhausted_generation)?;
     container.edit = storage_contract::container_edit::ContainerEdit::ManualDirty {
-        generation, draft: persisted.revision,
+        generation, draft: revision.clone(),
     };
     container.persisted = true;
     writer.dirty = actual_hash != revision.content_hash || actual_size != revision.size;

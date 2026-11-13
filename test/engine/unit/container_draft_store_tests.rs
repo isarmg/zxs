@@ -89,8 +89,12 @@ fn draft_body_reopens_after_restart_without_creating_history_or_selecting_itself
     let held = disk(&engine);
     let history = held.root.path().join("histories");
     let original = image(&history);
+    let file_parent = directory(&held, file, &revision).parent().unwrap().to_owned();
+    assert_eq!(fs::symlink_metadata(&file_parent).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound);
     let prepared = prepare(&held, file, revision.expected_generation, &revision,
         source(&temp, b"working draft"), limits()).unwrap();
+    assert!(fs::symlink_metadata(&file_parent).unwrap().is_dir());
     assert_eq!(prepared.file(), file);
     assert_eq!(prepared.expected(), revision.expected_generation);
     assert_eq!(prepared.revision(), &revision);

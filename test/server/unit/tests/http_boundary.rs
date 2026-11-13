@@ -697,6 +697,13 @@ impl Backend for PanickingBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         panic!("private directory scope panic detail")
     }
+    fn container_draft_save_receipt(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        panic!("private directory scope panic detail")
+    }
     fn persist_container_draft(
         &self,
         _identity: &crate::auth::Identity,

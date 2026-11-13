@@ -320,6 +320,13 @@ impl Backend for TestBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn container_draft_save_receipt(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn persist_container_draft(
         &self,
         _identity: &crate::auth::Identity,
@@ -1621,6 +1628,13 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             request: crate::SetContainerCommitMode,
         ) -> Result<storage_contract::OperationResult, crate::ApiError> {
             self.delegate.set_container_commit_mode(identity, request)
+        }
+        fn container_draft_save_receipt(
+            &self,
+            identity: &crate::auth::Identity,
+            request: crate::PersistContainerDraft,
+        ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+            self.delegate.container_draft_save_receipt(identity, request)
         }
         fn persist_container_draft(
             &self,

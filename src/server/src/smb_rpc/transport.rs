@@ -194,7 +194,8 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
             ));
         }
         let operation_id = match &request {
-            Request::Namespace { operation_id, .. } => Some(operation_id.clone()),
+            Request::Namespace { operation_id, .. }
+            | Request::RecoverManualDraft { operation_id, .. } => Some(operation_id.clone()),
             _ => None,
         };
         match session.dispatch(request) {

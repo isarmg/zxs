@@ -21,6 +21,8 @@ pub enum DraftError {
     Format(crate::authority_selection::manual::ManualFormatError),
     #[error("container {0} has no retained content identity")]
     FileMissing(FileId),
+    #[error("container draft operation belongs to a different request or principal")]
+    ReplayConflict,
     #[error("container edit publication differs from its original request")]
     Publication,
     #[error("container edit receipt encoding failed")]
@@ -36,6 +38,7 @@ impl DraftError {
         match self {
             Self::Format(error) => error.code(),
             Self::FileMissing(_) => crate::ErrorCode::FileNotFound,
+            Self::ReplayConflict => crate::ErrorCode::IdempotencyKeyReused,
             Self::Publication | Self::Encoding(_) => crate::ErrorCode::PublicationInvalid,
             Self::Generation(_) => crate::ErrorCode::ResourceLimit,
             Self::Store(store::StoreError::Engine(error)) => error.code(),
@@ -102,6 +105,17 @@ impl Engine {
         current(&self.state, file)
     }
 
+    /// Query the original save decision without reopening a draft or changing state.
+    /// The caller independently authorizes access to the file and original principal.
+    pub fn container_draft_save_receipt(
+        &self,
+        file: FileId,
+        revision: &DraftRevision,
+        principal: &Principal,
+    ) -> crate::Result<Option<OperationResult>> {
+        crate::persist::container_edits::save_receipt(self, file, revision, principal)
+    }
+
     pub fn set_container_commit_mode(
         &mut self,
         request: &SetCommitMode,
@@ -165,6 +179,7 @@ impl Engine {
         revision: &DraftRevision,
         source: std::fs::File,
     ) -> crate::Result<OperationResult> {
+        format::require_manual_storage(&self.config)?;
         self.require_write()?;
         let request = EditCommand::Save { file, revision: revision.clone() };
         if self.state.operations.contains_key(&revision.operation) {

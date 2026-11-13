@@ -1016,6 +1016,13 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::SealedWorkspace, ApiError> {
         self.prepare_container_draft_commit_admitted(identity, request)
     }
+    fn container_draft_save_receipt(
+        &self,
+        identity: &Identity,
+        request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
+        self.container_draft_save_receipt_admitted(identity, request)
+    }
     fn persist_container_draft(
         &self, identity: &Identity, request: crate::PersistContainerDraft,
         source: &std::fs::File,

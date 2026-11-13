@@ -1,23 +1,35 @@
 use crate::{CommitRequest, Config, Engine, OperationId};
 use storage_contract::container_edit::{CommitMode, DraftRevision, SetCommitMode};
 use storage_contract::{ContentHash, FileId, Generation, Principal};
-use std::{fs, io::Read};
+use std::{fs, io::Read, os::unix::fs::PermissionsExt};
 
 #[test]
 fn manual_flush_is_shared_after_cold_open_without_publishing_history() {
-    exercise_manual_commit(false);
+    exercise_manual_commit(false, false);
 }
 
 #[test]
 fn explicit_public_file_commit_consumes_exact_shared_draft_after_cold_open() {
-    exercise_manual_commit(true);
+    exercise_manual_commit(true, false);
 }
 
-fn exercise_manual_commit(public: bool) {
+#[test]
+fn explicit_file_commit_materializes_selected_historical_branch_only_after_draft_save() {
+    exercise_manual_commit(true, true);
+}
+
+fn exercise_manual_commit(public: bool, historical: bool) {
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");
-    let config = Config::development([temporary.path().join("disk")]).unwrap();
-    let mut engine = Engine::initialize(&system, config).unwrap();
+    let disk = temporary.path().join("disk");
+    for path in [&system, &disk] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::development([disk]).unwrap();
+    let mut engine = Engine::initialize_manual_container_storage(
+        &system, config, OperationId::generate().unwrap(),
+    ).unwrap();
     let principal = Principal::new("alice".into()).unwrap();
     let repository = engine.create_repository(
         &storage_contract::RepositoryName::parse("files").unwrap(),
@@ -37,6 +49,34 @@ fn exercise_manual_commit(public: bool) {
     }).unwrap();
     let entry = engine.list_tree(&repository.main_branch_id).unwrap().remove(0);
     let file: FileId = entry.file_id.parse().unwrap();
+    let selected_history = if historical {
+        let newer = engine.create_workspace(&repository.main_branch_id, principal.as_str())
+            .unwrap();
+        engine.stage_bytes(&newer.workspace_id, "note.txt", b"newer history").unwrap();
+        engine.commit_workspace(CommitRequest {
+            workspace_id: newer.workspace_id,
+            operation_id: OperationId::generate().unwrap(),
+            principal: principal.as_str().to_owned(),
+            expected_head: newer.base_head,
+            fencing_token: newer.fencing_token,
+            message: "advance before selecting old node".into(),
+            request_digest: None,
+        }).unwrap();
+        let branch = engine.create_file_branch_from_node(
+            &entry.file_id, &entry.version_id, &entry.version_id,
+            &storage_contract::BranchName::parse("historical manual draft").unwrap(),
+            principal.as_str(), OperationId::generate().unwrap(),
+        ).unwrap().result["branch_id"].as_str().unwrap().to_owned();
+        engine.select_file_branch_at(
+            &repository.repository_id, entry.location(), &entry.file_id, &branch,
+            principal.as_str(), OperationId::generate().unwrap(),
+        ).unwrap();
+        assert_eq!(engine.state().branches[&branch].pending_file_versions[&entry.file_id],
+            entry.version_id);
+        Some(branch)
+    } else {
+        None
+    };
     assert_eq!(engine.container_edit(file).unwrap().mode(), CommitMode::Automatic);
     engine.set_container_commit_mode(
         &SetCommitMode { file, expected_generation: Generation::new(0), mode: CommitMode::Manual },
@@ -164,6 +204,16 @@ fn exercise_manual_commit(public: bool) {
     assert!(engine.open_container_draft(file).unwrap().is_none());
     assert_eq!(engine.container_edit(file).unwrap().mode(), CommitMode::Manual);
     assert_eq!(engine.state().versions.len(), versions.len() + 1);
+    if let Some(selected) = &selected_history {
+        let branch = &engine.state().branches[selected];
+        assert!(!branch.pending_file_versions.contains_key(&entry.file_id));
+        assert!(branch.file_node_id.is_none());
+        assert_eq!(engine.state().branches.len(), branches.len());
+        let latest = engine.list_tree(&repository.main_branch_id).unwrap().remove(0);
+        assert_ne!(latest.version_id, entry.version_id);
+        assert_eq!(engine.state().file_node_parents[&latest.version_id],
+            vec![entry.version_id.clone()]);
+    }
     let committed_versions = engine.state().versions.clone();
     let committed_branches = engine.state().branches.clone();
     drop(engine);
@@ -198,7 +248,10 @@ fn exercise_manual_commit(public: bool) {
         content_hash: ContentHash::from_digest(blake3::hash(b"discard this draft")),
         size: b"discard this draft".len() as u64,
     };
-    engine.save_container_draft(file, &revision, fs::File::open(source).unwrap()).unwrap();
+    assert!(engine.container_draft_save_receipt(file, &revision, &principal).unwrap().is_none());
+    let saved = engine.save_container_draft(
+        file, &revision, fs::File::open(source).unwrap(),
+    ).unwrap();
     let dirty = engine.container_edit(file).unwrap();
     engine.discard_container_draft(
         file, dirty.generation(), revision.operation, &principal, OperationId::generate().unwrap(),
@@ -206,6 +259,15 @@ fn exercise_manual_commit(public: bool) {
     drop(engine);
     let engine = Engine::open(&system).unwrap();
     assert!(engine.open_container_draft(file).unwrap().is_none());
+    let before_query = engine.state().clone();
+    assert_eq!(engine.container_draft_save_receipt(file, &revision, &principal).unwrap(),
+        Some(saved));
+    let mut changed = revision.clone();
+    changed.size += 1;
+    assert!(engine.container_draft_save_receipt(file, &changed, &principal).is_err());
+    let other = Principal::new("other".into()).unwrap();
+    assert!(engine.container_draft_save_receipt(file, &revision, &other).is_err());
+    assert_eq!(*engine.state(), before_query);
     assert_eq!(engine.state().versions, committed_versions);
     assert_eq!(engine.state().branches, committed_branches);
 }

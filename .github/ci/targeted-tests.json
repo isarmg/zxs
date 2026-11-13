@@ -1,5 +1,50 @@
 {
   "groups": {
+    "container-manual-recovery": {
+      "reason": "Frozen original manual-save query/resume across daemon restart and real RPC, bounded helper online CLI, and the complete SMB protocol library. Preserve default-share, close, namespace, admission, binding and captured snapshot consumers; this excludes the later Working/partial-freeze design.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "smb_rpc::tests::manual_recovery_tests::",
+            "smb_rpc::tests::close_tests::",
+            "smb_rpc::tests::snapshot_semantics_tests::",
+            "smb_rpc::tests::default_share_tests::",
+            "smb_rpc::tests::namespace_tests::",
+            "smb_rpc::tests::admission_tests::",
+            "smb_rpc::tests::binding_tests::",
+            "smb_rpc::tests::bounded_lifecycle_tests::"
+          ],
+          "max_tests": 96,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "prefixes": [
+            "smb_manual_recovery::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "smb-protocol",
+          "manifest": "src/smb/Cargo.toml",
+          "kind": "lib",
+          "whole": true,
+          "max_tests": 192,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "history-package-audit-guard": {
       "reason": "Preserve native and retained permanent path audit through package export/restore; reject unrepresentable partial original batches before any output writes while retaining audit-free package support.",
       "python_tests": [],
@@ -3645,12 +3690,13 @@
           ],
           "prefixes": [
             "http_container_drafts::tests::",
-            "smb_rpc::tests::manual_draft_tests::"
+            "smb_rpc::tests::manual_draft_tests::",
+            "backend_workspace::tests::"
           ],
           "exact": [
             "authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation"
           ],
-          "max_tests": 8,
+          "max_tests": 9,
           "timeout_seconds": 900
         },
         {
@@ -3729,7 +3775,7 @@
           "exact": [
             "disk::admission::upload::tests::managed_upload_source_remains_revocable_on_a_different_target_disk"
           ],
-          "max_tests": 8,
+          "max_tests": 9,
           "timeout_seconds": 900
         },
         {
@@ -3744,9 +3790,408 @@
           "timeout_seconds": 300
         }
       ]
+    },
+    "rust-toolchain-upgrade": {
+      "reason": "Pinned stable Rust 1.100.0 and inherited first-party MSRV; compile native product consumers and WASM, execute the complete bounded SMB protocol library and toolchain policy regressions. This is a compiler smoke scope, not full behavioural or release acceptance.",
+      "python_tests": [
+        "test_rust_toolchain"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-client",
+          "manifest": "src/client/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "smb-protocol",
+          "manifest": "src/smb/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "zxs"
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "zxs-helper"
+        },
+        {
+          "package": "web-app",
+          "manifest": "src/web/Cargo.toml",
+          "mode": "check",
+          "compile_target": "wasm32-unknown-unknown"
+        },
+        {
+          "package": "smb-protocol",
+          "manifest": "src/smb/Cargo.toml",
+          "whole": true,
+          "max_tests": 192
+        }
+      ]
     }
   },
   "rules": [
+    {
+      "path": "test/server/unit/auth/password_change_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/authorized_backend.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_admission.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_listing.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_workspace.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/read_projection/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/revocation_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_auth/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_container_drafts.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/http_spool.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/management.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/sockets.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/http_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/close_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_draft_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/namespace_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/snapshot_semantics_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/telemetry/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/tests/http_boundary.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/transfer/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "helper/src/main.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "helper/src/smb_manual_recovery.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "helper/Cargo.toml",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "Cargo.lock",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/smb/src/client.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/smb/src/protocol.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_container_drafts.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_methods.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/container_drafts.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/manual_recovery.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share/directory.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/transport.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/handles.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/session.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/publication.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/metadata.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/helper/unit/smb_manual_recovery_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_recovery_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager/backup_namespace.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/read_projection.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/default_share/directory.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/transport.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "Cargo.lock",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "helper/Cargo.toml",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "helper/src/main.rs",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "src/smb/src/client.rs",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "src/smb/src/protocol.rs",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": ".github/architecture-policy.json",
+      "groups": [
+        "ci-selection"
+      ]
+    },
     {
       "path": "src/web/src/files/container_edit/storage.rs",
       "groups": [
@@ -3786,14 +4231,6 @@
     {
       "path": "src/web/src/ui.rs",
       "groups": [
-        "container-manual-drafts-consumers"
-      ]
-    },
-    {
-      "path": "src/server/src/backend_workspace.rs",
-      "groups": [
-        "portable-path-consumers",
-        "container-tags-http",
         "container-manual-drafts-consumers"
       ]
     },
@@ -10299,7 +10736,9 @@
     },
     {
       "path": "src/engine/src/engine/container_drafts/commit.rs",
-      "groups": ["container-manual-drafts"]
+      "groups": [
+        "container-manual-drafts"
+      ]
     },
     {
       "path": "src/engine/src/engine/container_drafts/store.rs",
@@ -10310,7 +10749,9 @@
     {
       "path": "src/engine/src/persist/container_edits.rs",
       "groups": [
-        "container-manual-drafts"
+        "container-manual-drafts",
+        "container-manual-fresh-format",
+        "container-manual-drafts-consumers"
       ]
     },
     {
@@ -10660,6 +11101,20 @@
       ]
     },
     {
+      "path": "test/server/unit/backend_workspace.rs",
+      "groups": [
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_workspace.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
       "path": "src/server/src/smb_rpc/session.rs",
       "groups": [
         "portable-path-consumers",
@@ -10757,7 +11212,25 @@
       "groups": [
         "container-manual-fresh-format"
       ]
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "Cargo.toml",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "test/ci/test_rust_toolchain.py",
+      "groups": [
+        "rust-toolchain-upgrade"
+      ]
     }
   ],
-  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted. Directory rename recovery selects native request/receipt/editor behavior plus product native and WASM library compilation and existing server rename regressions. Live browser storage failures, refresh/cross-tab behavior and cold engine replay are not verified by those Web tests. Directory-history Web retirement compiles the migrated unsolicited-preview probe but does not execute a live browser. The node-card palette/Node host probe and history-title-row Python modules are not selected in this retirement change; shared file-node behavior is covered by the selected native modules, not by a claimed browser or palette pass. Directory snapshot source preview rules activate only for the new source and test paths. The policy preparation change alone executes existing CI selection regressions and no absent Rust tests. A later implementation selection covers only the named Engine and protected HTTP preview tests and product compilation; ordinary-filesystem capture, .zxs initialization, snapshot publication, restore/removal, live SMB clients and complete backup/layout integration remain unexecuted. Working-directory prerequisites do not activate the new storage format, attach a live mixed work tree, initialize .zxs or implement FILE/Backup migration. Structural catalog validation is not complete logical inventory authority. The independent bind-mount test and initialization-ledger, mixed snapshot, cold FILE-installation and Backup integration scenarios remain unexecuted. The selected ordinary working-directory fault parent invokes the existing isolated directory-retry script. Its exact ignored children are checked by the script and recorded in raw output, not counted as additional directly selected Rust tests; other ignored tests remain outside this selection. Legacy directory staging retirement removes only Web initialization/staging/commit writers and dedicated browser flows. Existing server and Engine operations remain for subsequent slices. File-container branches, tags, nodes, ordinary path handling, directory-layout repair and current branch read contexts remain. Browser assertions are compiled and native fixture/guard tests run; a live browser interaction is not executed by this group. Version-publication location extraction preserves the current active disk layout and does not activate a unified DISK/FILE proof source. Selected new proof and metadata-context tests and existing read/scrub/tombstone tests do not establish new-format startup, mixed repository initialization or FILE installation recovery. These require later integrated changes and their own targeted evidence. Legacy directory branch Web retirement removes only the old client write and exclusive recovery chains. File-container branch/default/node behavior, ordinary namespace recovery and current directory read context remain. The browser probe JavaScript and live browser flows are not executed by this selection; native fixture/guard tests and product/native/WASM compilation are selected. Server/Engine old branch operations and new .zxs branches require later changes. Backup image entry-budget tests exercise the real planning limit without installing 100,000 filesystem entries. Existing ordinary storage fixtures and one selected native Backup transaction cover their original small temporary layouts; full multi-level rename, common-data/deleted-data/zxs-data migration and complete three-scope recovery remain unexecuted. Backup database snapshot checks compare complete object-local SQLite bytes and reuse original object storage and one native Backup transaction regression. They do not establish independent SYSTEM/DISK/FILE authority, historical format migration, new physical layout or disk-name/UUID rename publication. The retained native Backup transaction timed out in run #1268; bounded direct-stderr phase/progress diagnostics preserve its original assertions and 900-second limit, without claiming a root cause or successful recovery. Disk source-name preview checks are read-only geometry and held-root observations. Configured basenames are not authenticated name records, before/after are prospective paths rather than current locators, and the result is always preview_only. HTTP/Web integration, persistent name reservation, actual directory rename, three-directory layout publication and cross-disk recovery remain unimplemented and unexecuted. Directory-label HTTP retirement removes only PATCH routing and HTTP decoding/execution. Backend types/adapters, Engine operations and persisted data remain. Selected HTTP and queue/panic regressions do not establish complete backend retirement, cold recovery, Chrome or live SMB behavior. Container-history DAG admission verifies only the visible bounded response graph, not complete cross-page or retained history; native editor/error completion tests and product compilation do not execute a live browser or establish operation timelines/container-level labels. Lifecycle mapping is prepared before its implementation paths are published; policy-only changes do not execute absent tests. Contract/Engine and HTTP/Web are separate coherent publication batches because their existing overlapping consumers exceed the single-plan budget when combined. TASKS and documentation updates run in a separate batch because their ci-selection mapping would exceed the HTTP/Web Python budget. Each original selection and budget remains. Lifecycle pages expose verified deletion/undo/already-deleted import evidence and direct local path facts, not a complete operation history. The path-fact selection covers complete typed receipt and stable-reference admission, real writes/Current replay, pathless FILE, retained copy and strict old-format refusal. Target summaries and responses have separate byte budgets; neither bounds the entire ledger scan or captured State. Live Chrome, large-source timing/allocation measurements and full recovery matrices remain unexecuted. Container-tags coverage is one atomic cross-crate submission with all existing selections retained and deterministic same-SHA bounded shards. Selected regressions cover typed container CAS, snapshots/FILE/SYSTEM/history ownership, Current/cold replay, independent copy and refusal of prior pool/archive formats; this is not backward compatibility or automatic migration. Foreign prepared-graph and maintenance split regressions include nonempty source labels and generation reset; foreign graphs are not installed, so their tests do not establish post-installation bidirectional writes. Native Web tests, WASM compilation and selected browser-runner Node observer fixtures do not execute live Chrome. Complete pool recovery and the original long Backup transaction require their own successful evidence, not inference from format-refusal tests."
+  "unexecuted": "Only mapped behaviour modules and selected CI regressions run. Ignored tests, full workspace, other engine recovery/transition scenarios, web/browser, Samba SDK, foundation, quality and security suites remain unexecuted. Cross-package and cross-feature completeness requires a separately requested targeted expansion or explicit manual full CI. Paged-deletion checks cover native test harnesses and WASM compilation; browser interaction, full SMB SDK and unrelated Engine scenarios are outside this group. Typed-name checks cover the selected naming, repository-name, foreign mapping/intent, historical-save, listing and HTTP alias modules; cross-target checks compile only the named consumers. Every original overlapping selection retains its own inventory budget and timeout. Note-boundary checks cover the selected note unit and HTTP regressions and a server compile check without default features. Other HTTP endpoints remain outside the note-boundary group. Setup-request checks cover only setup, API session and management read queue behaviour modules; the WASM check records compilation, not passing tests or browser execution. Principal checks cover the selected native session and recovery modules plus WASM compilation; live browser storage and cross-tab lock execution remain outside these selections. Checkpoint layout adds a product library compile check and a separate explicit fault-injection test build; the existing engine dev-dependency still enables injection for all test harnesses, so these are not product-feature runtime tests. The complete checkpoint module and every original overlapping selection retain independent budgets and timeouts. Version metadata checks select only the named read, authorization, HTTP and SMB behavior tests. Engine product compilation is separate from test harnesses whose dev-dependencies enable fault injection. New borrow compile-fail doctests, full target/feature matrices, external SMB SDK and allocation/performance measurements remain unexecuted. Directory rename recovery selects native request/receipt/editor behavior plus product native and WASM library compilation and existing server rename regressions. Live browser storage failures, refresh/cross-tab behavior and cold engine replay are not verified by those Web tests. Directory-history Web retirement compiles the migrated unsolicited-preview probe but does not execute a live browser. The node-card palette/Node host probe and history-title-row Python modules are not selected in this retirement change; shared file-node behavior is covered by the selected native modules, not by a claimed browser or palette pass. Directory snapshot source preview rules activate only for the new source and test paths. The policy preparation change alone executes existing CI selection regressions and no absent Rust tests. A later implementation selection covers only the named Engine and protected HTTP preview tests and product compilation; ordinary-filesystem capture, .zxs initialization, snapshot publication, restore/removal, live SMB clients and complete backup/layout integration remain unexecuted. Working-directory prerequisites do not activate the new storage format, attach a live mixed work tree, initialize .zxs or implement FILE/Backup migration. Structural catalog validation is not complete logical inventory authority. The independent bind-mount test and initialization-ledger, mixed snapshot, cold FILE-installation and Backup integration scenarios remain unexecuted. The selected ordinary working-directory fault parent invokes the existing isolated directory-retry script. Its exact ignored children are checked by the script and recorded in raw output, not counted as additional directly selected Rust tests; other ignored tests remain outside this selection. Legacy directory staging retirement removes only Web initialization/staging/commit writers and dedicated browser flows. Existing server and Engine operations remain for subsequent slices. File-container branches, tags, nodes, ordinary path handling, directory-layout repair and current branch read contexts remain. Browser assertions are compiled and native fixture/guard tests run; a live browser interaction is not executed by this group. Version-publication location extraction preserves the current active disk layout and does not activate a unified DISK/FILE proof source. Selected new proof and metadata-context tests and existing read/scrub/tombstone tests do not establish new-format startup, mixed repository initialization or FILE installation recovery. These require later integrated changes and their own targeted evidence. Legacy directory branch Web retirement removes only the old client write and exclusive recovery chains. File-container branch/default/node behavior, ordinary namespace recovery and current directory read context remain. The browser probe JavaScript and live browser flows are not executed by this selection; native fixture/guard tests and product/native/WASM compilation are selected. Server/Engine old branch operations and new .zxs branches require later changes. Backup image entry-budget tests exercise the real planning limit without installing 100,000 filesystem entries. Existing ordinary storage fixtures and one selected native Backup transaction cover their original small temporary layouts; full multi-level rename, common-data/deleted-data/zxs-data migration and complete three-scope recovery remain unexecuted. Backup database snapshot checks compare complete object-local SQLite bytes and reuse original object storage and one native Backup transaction regression. They do not establish independent SYSTEM/DISK/FILE authority, historical format migration, new physical layout or disk-name/UUID rename publication. The retained native Backup transaction timed out in run #1268; bounded direct-stderr phase/progress diagnostics preserve its original assertions and 900-second limit, without claiming a root cause or successful recovery. Disk source-name preview checks are read-only geometry and held-root observations. Configured basenames are not authenticated name records, before/after are prospective paths rather than current locators, and the result is always preview_only. HTTP/Web integration, persistent name reservation, actual directory rename, three-directory layout publication and cross-disk recovery remain unimplemented and unexecuted. Directory-label HTTP retirement removes only PATCH routing and HTTP decoding/execution. Backend types/adapters, Engine operations and persisted data remain. Selected HTTP and queue/panic regressions do not establish complete backend retirement, cold recovery, Chrome or live SMB behavior. Container-history DAG admission verifies only the visible bounded response graph, not complete cross-page or retained history; native editor/error completion tests and product compilation do not execute a live browser or establish operation timelines/container-level labels. Lifecycle mapping is prepared before its implementation paths are published; policy-only changes do not execute absent tests. Contract/Engine and HTTP/Web are separate coherent publication batches because their existing overlapping consumers exceed the single-plan budget when combined. TASKS and documentation updates run in a separate batch because their ci-selection mapping would exceed the HTTP/Web Python budget. Each original selection and budget remains. Lifecycle pages expose verified deletion/undo/already-deleted import evidence and direct local path facts, not a complete operation history. The path-fact selection covers complete typed receipt and stable-reference admission, real writes/Current replay, pathless FILE, retained copy and strict old-format refusal. Target summaries and responses have separate byte budgets; neither bounds the entire ledger scan or captured State. Live Chrome, large-source timing/allocation measurements and full recovery matrices remain unexecuted. Container-tags coverage is one atomic cross-crate submission with all existing selections retained and deterministic same-SHA bounded shards. Selected regressions cover typed container CAS, snapshots/FILE/SYSTEM/history ownership, Current/cold replay, independent copy and refusal of prior pool/archive formats; this is not backward compatibility or automatic migration. Foreign prepared-graph and maintenance split regressions include nonempty source labels and generation reset; foreign graphs are not installed, so their tests do not establish post-installation bidirectional writes. Native Web tests, WASM compilation and selected browser-runner Node observer fixtures do not execute live Chrome. Complete pool recovery and the original long Backup transaction require their own successful evidence, not inference from format-refusal tests. Rust toolchain upgrade coverage is native product/WASM compiler smoke plus SMB protocol tests; Clippy/rustfmt, Samba SDK ABI, full runtime/feature matrix, release ELF/browser and historical pinned benchmark reruns remain unexecuted."
 }

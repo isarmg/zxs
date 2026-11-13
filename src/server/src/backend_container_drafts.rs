@@ -3,7 +3,7 @@ use data_serialization::{Deserialize, Serialize};
 use storage_contract::{FileId, Generation, OperationId, RepositoryId};
 use storage_contract::container_edit::{CommitMode, ContainerEdit, DraftBase};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct ReadContainerEdit {
     pub file: FileId,
@@ -31,6 +31,7 @@ pub struct CurrentContainerContent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct PersistContainerDraft {
+    pub entry: storage_contract::EntryId,
     pub context: ReadContainerEdit,
     pub revision: storage_contract::container_edit::DraftRevision,
 }

@@ -22,6 +22,8 @@ impl Session {
     }
 }
 
+#[path = "manual_recovery_tests.rs"]
+mod manual_recovery_tests;
 #[path = "manual_draft_tests.rs"]
 mod manual_draft_tests;
 #[path = "admission_tests.rs"]
@@ -490,13 +492,26 @@ impl Backend for LostCommitReply {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.set_container_commit_mode(identity, request)
     }
+    fn container_draft_save_receipt(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        self.inner.container_draft_save_receipt(identity, request)
+    }
     fn persist_container_draft(
         &self,
         identity: &crate::auth::Identity,
         request: crate::PersistContainerDraft,
         source: &std::fs::File,
     ) -> Result<crate::DraftPersisted, crate::ApiError> {
-        self.inner.persist_container_draft(identity, request, source)
+        let result = self.inner.persist_container_draft(identity, request, source)?;
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::new(
+                io::ErrorKind::ConnectionReset, "injected lost manual save response",
+            )));
+        }
+        Ok(result)
     }
     fn current_container_content(
         &self,

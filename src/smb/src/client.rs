@@ -578,7 +578,8 @@ impl Client {
                 // every clone fails instead of consuming a stale response.
                 *connection = None;
                 return Err(match request {
-                    Request::Namespace { operation_id, .. } => io::Error::new(
+                    Request::Namespace { operation_id, .. }
+                    | Request::RecoverManualDraft { operation_id, .. } => io::Error::new(
                         error.kind(),
                         RemoteError {
                             code: RemoteErrorCode::RpcOutcomeUnknown,
@@ -621,6 +622,14 @@ impl Client {
     /// Revocation, unavailable bytes, transport and malformed replies fail the
     /// read. On failure the buffer can contain a verified prefix, which callers
     /// must not report as a successful complete read.
+    pub fn recover_manual_draft(
+        &self,
+        operation: storage_contract::OperationId,
+        resume: bool,
+    ) -> io::Result<Value> {
+        self.call(Request::RecoverManualDraft { operation_id: operation.to_string(), resume })
+    }
+
     pub fn read(&self, handle: u64, mut offset: u64, output: &mut [u8]) -> io::Result<usize> {
         let mut copied = 0;
         loop {

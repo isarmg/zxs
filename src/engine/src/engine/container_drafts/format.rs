@@ -12,6 +12,34 @@ use storage_contract::working_tree::{LocalEntityIdentity, MaterialCommitment};
 
 const MAX_BYTES: usize = 1024 * 1024;
 
+/// Only a completed fresh-format admission authorizes this new persisted state.
+/// A plain Config, an old initializer, or a selector alone is not that proof.
+pub(crate) fn require_manual_storage(config: &ValidatedConfig) -> Result<()> {
+    if config.manual_selection().is_none() || config.manual_completion().is_none() {
+        return Err(format_error(ManualFormatError::UnsupportedReader));
+    }
+    Ok(())
+}
+
+/// Rebind a decoded saved Config only to the original completed SYSTEM proof.
+/// Neither the decoded Config nor the DISK selector can create that permission.
+pub(crate) fn admit_saved_genesis(
+    saved: ValidatedConfig,
+    projected: &ValidatedConfig,
+    seal: &crate::disk::DiskSeal,
+    selector_bytes: &[u8],
+) -> Result<ValidatedConfig> {
+    let selection = projected.manual_selection()
+        .ok_or_else(|| format_error(ManualFormatError::UnsupportedReader))?;
+    let completion = projected.manual_completion()
+        .ok_or_else(|| format_error(ManualFormatError::UnsupportedReader))?;
+    if selector_bytes != selection.canonical_bytes().map_err(format_error)? {
+        return Err(format_error(ManualFormatError::Changed));
+    }
+    selection.require_config(&saved).map_err(format_error)?;
+    admit_local(saved, seal, selector_bytes)?.with_manual_completion(completion.clone())
+}
+
 fn identity(value: FileIdentity) -> LocalEntityIdentity {
     LocalEntityIdentity::new(value.device, value.inode)
 }

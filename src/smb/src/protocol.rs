@@ -137,6 +137,10 @@ pub enum Request<O = String> {
         handle: u64,
         restart: bool,
     },
+    RecoverManualDraft {
+        operation_id: O,
+        resume: bool,
+    },
     Namespace {
         operation_id: O,
         kind: NamespaceOperation,
@@ -206,6 +210,9 @@ impl Request<String> {
             Self::Abort { handle } => Request::Abort { handle },
             Self::Stat { path } => Request::Stat { path },
             Self::ReadDirectory { handle, restart } => Request::ReadDirectory { handle, restart },
+            Self::RecoverManualDraft { operation_id, resume } => Request::RecoverManualDraft {
+                operation_id: operation_id.parse()?, resume,
+            },
             Self::Namespace {
                 operation_id,
                 kind,

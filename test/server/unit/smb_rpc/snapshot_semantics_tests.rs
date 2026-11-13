@@ -361,6 +361,13 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         self.inner.set_container_commit_mode(identity, request)
     }
+    fn container_draft_save_receipt(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        self.inner.container_draft_save_receipt(identity, request)
+    }
     fn persist_container_draft(
         &self,
         identity: &crate::auth::Identity,

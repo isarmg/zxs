@@ -2862,8 +2862,11 @@ class ContainerManualDraftSelection(unittest.TestCase):
                                       self.policy['groups'][group]['rust_targets'])
         engine, contract = self.policy['groups'][group]['rust_targets']
         self.assertEqual((engine['package'], engine['kind'], engine['prefixes']),
-                         ('storage-engine', 'lib', ['engine::container_drafts::']))
-        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (8, 900))
+                         ('storage-engine', 'lib', [
+                             'engine::container_drafts::tests::',
+                             'engine::container_drafts::store::tests::',
+                         ]))
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (9, 900))
         self.assertEqual(engine['exact'], [
             'disk::admission::upload::tests::'
             'managed_upload_source_remains_revocable_on_a_different_target_disk',
@@ -2882,6 +2885,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             'src/server/src/file_manager.rs', 'src/server/src/http_container_drafts.rs',
             'src/server/src/lib.rs', 'src/server/src/transfer.rs',
             'test/server/unit/authorized_backend.rs', 'test/server/unit/http_container_drafts.rs',
+            'test/server/unit/backend_workspace.rs',
             'test/server/integration/http_engine.rs',
             'test/server/integration/http_engine/container_drafts.rs',
             'src/client/src/container_edit.rs', 'src/client/src/lib.rs',
@@ -2907,6 +2911,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
                          ('storage-server', 'lib', ['core']))
         self.assertEqual(native['prefixes'], [
             'http_container_drafts::tests::', 'smb_rpc::tests::manual_draft_tests::',
+            'backend_workspace::tests::',
         ])
         self.assertEqual(native['exact'], [
             'authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation',
@@ -2914,16 +2919,33 @@ class ContainerManualDraftSelection(unittest.TestCase):
         self.assertEqual((http['package'], http['kind'], http['name'], http['features']),
                          ('storage-server', 'test', 'http_engine', ['core']))
         self.assertEqual(http['prefixes'], ['container_drafts::'])
-        for target in [native, http]:
-            self.assertEqual((target['max_tests'], target['timeout_seconds']), (8, 900))
+        self.assertEqual((native['max_tests'], native['timeout_seconds']), (9, 900))
+        self.assertEqual((http['max_tests'], http['timeout_seconds']), (8, 900))
         self.assertEqual((no_core['package'], no_core['kind'], no_core['mode']),
                          ('storage-server', 'lib', 'check'))
         self.assertFalse(no_core['default_features'])
         self.assertEqual(no_core['features'], [])
         self.assertEqual(client['prefixes'], ['container_edit::tests::'])
-        self.assertEqual(web['prefixes'], ['files::container_edit::tests::'])
-        for target in [client, web]:
-            self.assertEqual((target['max_tests'], target['timeout_seconds']), (4, 600))
+        self.assertEqual(web['prefixes'], ['files::container_edit::'])
+        self.assertEqual((client['max_tests'], client['timeout_seconds']), (4, 600))
+        self.assertEqual((web['max_tests'], web['timeout_seconds']), (16, 900))
+
+    def test_manual_publication_gate_includes_real_fresh_and_consumer_behaviors(self):
+        plan = CI.select_plan(self.policy, ['src/engine/src/persist/container_edits.rs'],
+                              shardable=True)
+        for group in ['container-manual-drafts', 'container-manual-fresh-format',
+                      'container-manual-drafts-consumers']:
+            with self.subTest(group=group):
+                self.assertIn(group, plan['groups'])
+                self.assertCountEqual(origin_selections(plan, group),
+                                      self.policy['groups'][group]['rust_targets'])
+        fresh = self.policy['groups']['container-manual-fresh-format']['rust_targets']
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(fresh[0]['prefixes'], [
+            'authority_selection::manual::tests::',
+            'engine::container_drafts::format::tests::',
+        ])
+        self.assertEqual((fresh[0]['max_tests'], fresh[0]['timeout_seconds']), (8, 900))
 
     def test_production_extensions_never_replace_original_consumer_selections(self):
         for path, retained, added in [
@@ -2940,3 +2962,57 @@ class ContainerManualDraftSelection(unittest.TestCase):
         ]:
             with self.subTest(path=path):
                 assert_path_group_extension(self, self.policy, [path], retained, added)
+
+
+class FrozenManualRecoverySelection(unittest.TestCase):
+    def test_frozen_rpc_helper_and_all_original_consumer_origins_are_selected(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'container-manual-recovery'
+        paths = [
+            'helper/src/main.rs',
+            'helper/src/smb_manual_recovery.rs',
+            'helper/Cargo.toml',
+            'Cargo.lock',
+            'src/smb/src/client.rs',
+            'src/smb/src/protocol.rs',
+            'src/server/src/backend_container_drafts.rs',
+            'src/server/src/backend_methods.rs',
+            'src/server/src/engine_backend.rs',
+            'src/server/src/engine_backend/container_drafts.rs',
+            'src/server/src/smb_rpc.rs',
+            'src/server/src/smb_rpc/manual_recovery.rs',
+            'src/server/src/smb_rpc/default_share.rs',
+            'src/server/src/smb_rpc/default_share/directory.rs',
+            'src/server/src/smb_rpc/transport.rs',
+            'src/server/src/smb_rpc/handles.rs',
+            'src/server/src/smb_rpc/session.rs',
+            'src/server/src/smb_rpc/publication.rs',
+            'src/server/src/smb_rpc/metadata.rs',
+            'test/helper/unit/smb_manual_recovery_tests.rs',
+            'test/server/unit/smb_rpc/manual_recovery_tests.rs',
+            'test/server/unit/smb_rpc/tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], None, [group])
+        server, helper, protocol = policy['groups'][group]['rust_targets']
+        self.assertEqual(server['features'], ['core'])
+        self.assertEqual(server['prefixes'], [
+            'smb_rpc::tests::manual_recovery_tests::',
+            'smb_rpc::tests::close_tests::',
+            'smb_rpc::tests::snapshot_semantics_tests::',
+            'smb_rpc::tests::default_share_tests::',
+            'smb_rpc::tests::namespace_tests::',
+            'smb_rpc::tests::admission_tests::',
+            'smb_rpc::tests::binding_tests::',
+            'smb_rpc::tests::bounded_lifecycle_tests::',
+        ])
+        self.assertEqual((server['max_tests'], server['timeout_seconds']), (96, 900))
+        self.assertEqual((helper['package'], helper['kind'], helper['name']),
+                         ('storage-helper', 'bin', 'zxs-helper'))
+        self.assertEqual(helper['prefixes'], ['smb_manual_recovery::tests::'])
+        self.assertEqual((helper['max_tests'], helper['timeout_seconds']), (8, 900))
+        self.assertEqual((protocol['package'], protocol['manifest'], protocol['kind']),
+                         ('smb-protocol', 'src/smb/Cargo.toml', 'lib'))
+        self.assertTrue(protocol['whole'])
+        self.assertEqual((protocol['max_tests'], protocol['timeout_seconds']), (192, 900))

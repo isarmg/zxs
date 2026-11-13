@@ -32,6 +32,7 @@ mod default_share;
 mod directory;
 mod handles;
 mod metadata;
+pub(crate) mod manual_recovery;
 mod namespace;
 mod object_move;
 mod path_reservation;

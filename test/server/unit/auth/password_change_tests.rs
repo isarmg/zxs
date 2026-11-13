@@ -271,6 +271,13 @@ impl crate::Backend for UnusedBackend {
     ) -> Result<storage_contract::OperationResult, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn container_draft_save_receipt(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn persist_container_draft(
         &self,
         _identity: &crate::auth::Identity,

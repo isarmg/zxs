@@ -748,6 +748,24 @@ fn verify_held_genesis(
                     "genesis projection differs from fixed saved registration authority",
                 ));
             }
+            let stored = decode_seal(
+                &held
+                    .root
+                    .read_bytes(
+                        &held.disk.root.join(layout::DISK_IDENTITY.as_path()),
+                        MAX_METADATA,
+                    )?,
+            )?;
+            let saved = if projected.manual_selection().is_some() {
+                let selector = held.root.read_bytes(
+                    &held.disk.root.join(layout::MANUAL_DISK_SELECTION.as_path()), MAX_METADATA,
+                )?;
+                crate::engine::container_drafts::format::admit_saved_genesis(
+                    saved, projected, &stored, &selector,
+                )?
+            } else {
+                saved
+            };
             let disk = saved
                 .metadata_members()
                 .find(|disk| disk.disk_id == held.disk.disk_id)
@@ -758,14 +776,6 @@ fn verify_held_genesis(
                     )
                 })?;
             let expected = identity_at(&saved, disk, &held.root.directory(held.root.path())?)?;
-            let stored = decode_seal(
-                &held
-                    .root
-                    .read_bytes(
-                        &held.disk.root.join(layout::DISK_IDENTITY.as_path()),
-                        MAX_METADATA,
-                    )?,
-            )?;
             validate_stored_seal(&stored, &expected)?;
             if selected.is_none() {
                 selected = Some(saved);

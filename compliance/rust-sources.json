@@ -79506,11 +79506,11 @@
     "16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "6614c732be4234259b355b2ae73950bdbb5667433c8196abc9fd3c88f041ab8b"
+    "Cargo.lock": "391764327b7299a002387a14a3738c7c15954cd075590145c0455cc928cd3936"
   },
   "manifests_sha256": {
-    "Cargo.toml": "ca1ffbb2fa59327067c99eefc52fc780340292a72686d1305d6291a4fcf82d08",
-    "helper/Cargo.toml": "0071473a5f84c7a69d9c1cd6514124f7aeaf0eff192de976c1477592806d02a6",
+    "Cargo.toml": "64edd59e133ee22b07d36a5ea4499453b7b343c59fb280f97ef59244bef269ae",
+    "helper/Cargo.toml": "aee409a556dbe7d0a8b412b61c6bc2e59571cea724acc7aba2d5c7ed19d265ce",
     "src/auth/Cargo.toml": "30c13cd13b7760139354761dc800d6a939702af7e638e8139cb32e73a3378839",
     "src/client/Cargo.toml": "948ee09545561370e0041bcdda5ff3641b5239a6ceadbeb774ee061b7ccfc12b",
     "src/contract/Cargo.toml": "db3403209d0526713bb87c658b10020c592d0dd32b8c2c5c42fc1f0419909cfc",

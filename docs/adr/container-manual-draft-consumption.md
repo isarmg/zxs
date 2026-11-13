@@ -92,3 +92,12 @@ inode、空正文及锁后路径身份。没有该运行时证明的旧管理入
 新增接缝回归分别在预准入后替换 bootstrap 根，以及取得根准入后替换 writer，
 要求失败且完整磁盘 bytes/inode/mode 不变。仅静态审查，未执行测试；这不代表
 SYSTEM SQLite/WAL 或全部恢复路径已经改为持有式访问。
+
+### 冷开 saved Config 的格式证明传递（未运行）
+
+固定 locator probe 仍先验原盘实体、原登记和固定 quorum。随后从 DISK 解码的 Config
+本身不含 manual 权威；仅原已完成 SYSTEM 准入可以将其与相同 canonical selector
+及新 seal 绑定，派生用于该次 held seal 比较的配置。原 seal 全字段相等检查、voter
+集合、locator restriction 及后续 publication/current 验收不变。无完成证明或旧 seal
+拒绝，普通旧 Genesis 入口不获得升级权限。已有实际 FILE cold/read 与 draft 冷开回归
+保持；初始化回归扩原证明缺失、旧 seal、改坏 selector 全盘不写证据，尚未运行。

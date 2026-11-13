@@ -111,6 +111,7 @@
       "runtime": [
         "authentication",
         "platform-io",
+        "smb-protocol",
         "storage-engine"
       ],
       "build": [],

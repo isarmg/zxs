@@ -15,6 +15,8 @@ use json_codec::json;
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ApiErrorSource {
     #[error("{0}")]
+    ManualDraftRecovery(#[source] crate::smb_rpc::manual_recovery::RecoveryError),
+    #[error("{0}")]
     GenerationExhausted(#[source] storage_contract::GenerationExhausted),
     #[error("{0}")]
     ContainerTagsWire(#[source] crate::operation_wire::ContainerTagsWireError),

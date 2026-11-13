@@ -1,9 +1,28 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
+
+fn manual_application(root: &Path) -> Router {
+    let system = root.join("system");
+    let disk = root.join("d1");
+    for path in [&system, &disk] {
+        std::fs::create_dir(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = Config::development([disk]).unwrap();
+    let engine = Engine::initialize_manual_container_storage(
+        &system, config, storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let backend = Arc::new(EngineBackend::new(engine));
+    let auth = backend.protect_auth(
+        AuthStore::initialize(&system, "admin", "integration-test-password").unwrap(),
+    ).unwrap();
+    storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap()
+}
 
 #[tokio::test]
 async fn manual_policy_is_context_bound_and_survives_cold_open_without_new_history() {
     let root = tempfile::tempdir().unwrap();
-    let app = application(root.path());
+    let app = manual_application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "file.txt", b"original").await;
     let listing = success(&app, &token, "GET",
@@ -51,7 +70,7 @@ async fn manual_policy_is_context_bound_and_survives_cold_open_without_new_histo
 #[tokio::test]
 async fn cold_current_http_reads_shared_draft_without_changing_historical_bytes_or_head() {
     let root = tempfile::tempdir().unwrap();
-    let app = application(root.path());
+    let app = manual_application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     manager_upload(&app, &token, "file.txt", b"original").await;
     let listing = success(&app, &token, "GET",

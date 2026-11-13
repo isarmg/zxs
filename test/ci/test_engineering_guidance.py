@@ -16,5 +16,6 @@ def load_tests(loader, tests, pattern):
     return unittest.TestSuite([
         loader.loadTestsFromTestCase(PROJECTION.HappyPaths),
         loader.loadTestsFromTestCase(PROJECTION.ProjectionIsolation),
+        loader.loadTestsFromTestCase(PROJECTION.ContextFailures),
         loader.loadTestsFromTestCase(MAINTENANCE.HttpMaintenanceManager),
     ])

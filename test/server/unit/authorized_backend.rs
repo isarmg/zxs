@@ -457,6 +457,7 @@ impl Backend for RecordingBackend {
             json!({"branch_id":command.branch_id,"source_commit_id":command.source_commit_id}),
         )?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: "created-workspace".into(),
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: command.branch_id,
@@ -490,6 +491,7 @@ impl Backend for RecordingBackend {
     ) -> Result<storage_contract::Workspace, ApiError> {
         self.record("workspace", Some(identity), json!({"workspace":workspace}))?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: workspace.into(),
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: "branch".into(),
@@ -832,6 +834,14 @@ impl Backend for RecordingBackend {
         self.record("set_container_commit_mode", Some(identity), json!(request))?;
         Ok(recorded_operation(request.operation_id, "set_container_commit_mode"))
     }
+    fn container_draft_save_receipt(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, crate::ApiError> {
+        self.record("container_draft_save_receipt", Some(identity), json!(request))?;
+        Err(crate::ApiError::unsupported())
+    }
     fn persist_container_draft(
         &self,
         identity: &crate::auth::Identity,
@@ -904,6 +914,7 @@ impl Backend for RecordingBackend {
         )?;
         Ok(crate::DiskWriteSession {
             workspace: storage_contract::Workspace {
+                container_draft_commit: None,
                 workspace_id: "disk-workspace".into(),
                 purpose: storage_contract::WorkspacePurpose::Normal,
                 branch_id: "namespace-branch".into(),
@@ -1500,6 +1511,7 @@ impl Backend for RecordingBackend {
             json!({"workspace_id":command.workspace_id,"change":command.change}),
         )?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: command.workspace_id,
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: "branch".into(),
@@ -3393,7 +3405,7 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
     let revision = storage_contract::container_edit::DraftRevision {
         operation: storage_contract::OperationId::from_random([14; 16]),
         expected_generation: storage_contract::Generation::new(7),
-        principal: storage_contract::Principal::new(fixture.identity.principal.clone()).unwrap(),
+        principal: storage_contract::Principal::new(fixture.identity.principal.clone().into()).unwrap(),
         base: storage_contract::container_edit::DraftBase {
             entry: storage_contract::EntryId::from_random([15; 16]),
             repository: request.repository,
@@ -3405,7 +3417,9 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
         content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"draft")),
         size: 5,
     };
-    let persist = crate::PersistContainerDraft { context: request.clone(), revision };
+    let persist = crate::PersistContainerDraft {
+        entry: revision.base.entry, context: request.clone(), revision,
+    };
     let prepare = crate::PrepareContainerDraftCommit {
         context: request.clone(), expected_generation: storage_contract::Generation::new(8),
         draft_operation: persist.revision.operation,
@@ -3424,12 +3438,14 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
             .persist_container_draft(&fixture.identity, persist.clone(), &source).err().unwrap()),
         ("prepare_container_draft_commit", fixture.backend
             .prepare_container_draft_commit(&fixture.identity, prepare.clone()).err().unwrap()),
+        ("container_draft_save_receipt", fixture.backend
+            .container_draft_save_receipt(&fixture.identity, persist.clone()).err().unwrap()),
     ];
     for (method, error) in errors {
         assert_error(error, method);
     }
     let calls = std::mem::take(&mut *fixture.probe.calls.lock().unwrap());
-    assert_eq!(calls.len(), 5);
+    assert_eq!(calls.len(), 6);
     for call in &calls {
         assert_identity(call.identity.as_ref(), &fixture.identity);
     }
@@ -3438,7 +3454,10 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
     assert_eq!(calls[2].arguments, json!(request));
     assert_eq!(calls[3].arguments, json!(persist));
     assert_eq!(calls[4].arguments, json!(prepare));
+    assert_eq!(calls[5].arguments, json!(persist));
     fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    assert_eq!(fixture.backend.container_draft_save_receipt(&fixture.identity, persist.clone())
+        .err().unwrap().status, 401);
     assert_eq!(fixture.backend.read_container_edit(&fixture.identity, request.clone())
         .err().unwrap().status, 401);
     assert_eq!(fixture.backend.set_container_commit_mode(&fixture.identity, mode)

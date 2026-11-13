@@ -174,6 +174,12 @@ macro_rules! methods {
                     request: $crate::PrepareContainerDraftCommit,
                 ) -> Result<storage_contract::SealedWorkspace, $crate::ApiError>;
 
+                fn container_draft_save_receipt(
+                    &self,
+                    identity: &$crate::Identity,
+                    request: $crate::PersistContainerDraft,
+                ) -> Result<Option<storage_contract::OperationResult>, $crate::ApiError>;
+
                 fn persist_container_draft(
                     &self,
                     identity: &$crate::Identity,

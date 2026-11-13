@@ -1,4 +1,4 @@
-//! Offline auxiliary utility. Stop the daemon before using it.
+//! Offline maintenance and an explicit online SMB recovery client.
 mod account;
 mod authority;
 mod configuration;
@@ -13,6 +13,7 @@ mod maintenance;
 mod object_databases;
 mod private_io;
 mod scrub;
+mod smb_manual_recovery;
 mod system_program;
 use command_line::{Parser, Subcommand};
 use json_codec::json;
@@ -23,7 +24,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 #[command(
     name = "zxs-helper",
     version,
-    about = "Offline auxiliary tool; stop ZXS before use",
+    about = "Offline maintenance (stop ZXS); smb-manual-recovery is online-only",
     after_help = "restore-system requires a majority of the configured original metadata members (one for a single-disk pool).
 Recovery preview/commit only accepts decided, unpublished operations with all original disks accessible. It requires a reviewed digest and explicit permanent-loss acknowledgement; it is not a reset or missing-disk replacement.
 Offline export validates one published version, not the entire pool or current permissions.
@@ -31,7 +32,7 @@ Disk-databases reads selected local SQLite inventories without SYSTEM; local con
 Object-database exports object-local metadata and reconstructs standalone rescue SQLite from that archive; it never installs an active database or grants authority.
 With no command, start the root-only, unauthenticated maintenance Web console on 0.0.0.0:9040. Use a trusted isolated network and exit after use.
 The matching release helper can install its embedded ZXS executable at /usr/local/bin/zxs and explicitly install its sealed same-source VFS at the fixed Debian Samba path, without overwriting different bytes or starting services.
-Every helper operation holds the /zxs lifetime lease until exit. A root launch prepares the missing lease directory without initializing accounts or storage.
+All offline helper operations hold the /zxs lifetime lease until exit. The explicit smb-manual-recovery client instead connects to the running authenticated local bridge and never opens storage. A root launch prepares the missing lease directory without initializing accounts or storage.
 A missing nonlogin Unix service account and same-name primary group can be explicitly prepared through the fixed systemd-sysusers program. Existing accounts are never modified. A selected non-root local account can receive an empty private data layout; this creates no administrator, database or disk.
 Systemd/Samba configuration can be prepared as an inactive bundle or installed at fixed paths without overwriting different files, reloading, starting or enabling services.
 The independent Web console can create the first management-only administrator in the exact new empty private layout; no storage is initialized.
@@ -65,6 +66,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Query or explicitly resume an original manual SMB save through the running daemon.
+    SmbManualRecovery(smb_manual_recovery::Options),
     /// Manually serve the independent maintenance console; no login or autostart.
     Serve(console::Options),
     /// Inspect or install the matching embedded ZXS/VFS bytes; no implicit service setup.
@@ -171,6 +174,10 @@ fn print(value: impl data_serialization::Serialize) -> Result<()> {
     Ok(())
 }
 impl Args {
+    fn requires_host_lease(&self) -> bool {
+        !matches!(self.command, Some(Command::SmbManualRecovery(_)))
+    }
+
     fn workspace_limits(&self) -> Result<Option<storage_engine::RetainedWorkspaceLimits>> {
         match (
             self.max_retained_workspaces,
@@ -223,7 +230,11 @@ fn main() {
         .log_internal_errors(false)
         .init();
     let result: Result<()> = (|| {
-        let _lifetime = host::enter()?;
+        let _lifetime = if args.requires_host_lease() {
+            Some(host::enter()?)
+        } else {
+            None
+        };
         if let Some(handoff) = run(args)? {
             handoff.execute()?;
         }
@@ -265,6 +276,7 @@ fn run(args: Args) -> Result<Option<deployment::activation::Handoff>> {
         .command
         .unwrap_or_else(|| Command::Serve(console::Options::default()));
     match command {
+        Command::SmbManualRecovery(options) => smb_manual_recovery::run(options),
         Command::Serve(options) => return console::run(options),
         Command::Install { command } => installation::run(command),
         Command::Initialization { command } => initialization::run(command),

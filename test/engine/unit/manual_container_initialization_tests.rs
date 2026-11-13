@@ -34,7 +34,7 @@ fn image(path: &std::path::Path) -> BTreeMap<std::path::PathBuf, (u64, u32, Vec<
 
 #[test]
 fn fresh_manual_format_cold_reads_real_content_and_retries_original_initialization() {
-    let (_temp, system, config) = roots();
+    let (temp, system, config) = roots();
     let operation = OperationId::generate().unwrap();
     let mut engine = Engine::initialize_manual_container_storage(&system, config.clone(), operation)
         .unwrap();
@@ -53,6 +53,29 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
         message: "first content".into(), request_digest: None,
     }).unwrap();
     let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let decoded = crate::ValidatedConfig::try_from(config.clone()).unwrap();
+    assert!(decoded.manual_selection().is_none());
+    assert!(decoded.manual_completion().is_none());
+    let selector = fs::read(config.disks[0].root.join(
+        crate::persist::layout::MANUAL_DISK_SELECTION.as_path(),
+    )).unwrap();
+    let seal = crate::disk::decode_seal(&fs::read(config.disks[0].root.join(
+        crate::persist::layout::DISK_IDENTITY.as_path(),
+    )).unwrap()).unwrap();
+    let before = image(temp.path());
+    let admitted = crate::engine::container_drafts::format::admit_saved_genesis(
+        decoded.clone(), &engine.config, &seal, &selector,
+    ).unwrap();
+    assert_eq!(admitted.manual_completion(), engine.config.manual_completion());
+    assert!(crate::engine::container_drafts::format::admit_saved_genesis(
+        decoded.clone(), &decoded, &seal, &selector,
+    ).is_err());
+    let mut wrong_seal = seal.clone();
+    wrong_seal.format = crate::disk::DiskSealFormat::ManagedDirectory;
+    assert!(crate::engine::container_drafts::format::admit_saved_genesis(
+        decoded, &engine.config, &wrong_seal, &selector,
+    ).is_err());
+    assert_eq!(image(temp.path()), before);
     drop(engine);
     let engine = Engine::open(&system).unwrap();
     let mut content = engine.open_content(&entry.version_id).unwrap();
@@ -63,12 +86,64 @@ fn fresh_manual_format_cold_reads_real_content_and_retries_original_initializati
     drop(engine);
     let engine = Engine::initialize_manual_container_storage(&system, config, operation).unwrap();
     assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap()[0].version_id, entry.version_id);
+    let selector_path = engine.config.disks[0].root.join(
+        crate::persist::layout::MANUAL_DISK_SELECTION.as_path(),
+    );
+    drop(engine);
+    let mut changed_selector = selector;
+    changed_selector.push(b' ');
+    fs::write(selector_path, changed_selector).unwrap();
+    let before = image(temp.path());
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(image(temp.path()), before);
 }
 
 #[test]
 fn old_or_unknown_roots_are_not_upgraded_or_repaired() {
     let (temp, system, config) = roots();
-    let old = Engine::initialize(&system, config.clone()).unwrap();
+    let mut old = Engine::initialize(&system, config.clone()).unwrap();
+    let repo = old.create_repository(
+        &storage_contract::RepositoryName::parse("old files").unwrap(), "P01", 1, "alice",
+        OperationId::generate().unwrap(),
+    ).unwrap();
+    let workspace = old.create_workspace(&repo.main_branch_id, "alice").unwrap();
+    old.stage_bytes(&workspace.workspace_id, "note.txt", b"original history").unwrap();
+    old.commit_workspace(CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate().unwrap(),
+        principal: "alice".into(), expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token, message: "original".into(), request_digest: None,
+    }).unwrap();
+    let entry = old.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let file = entry.file_id.parse().unwrap();
+    let principal = storage_contract::Principal::new("alice".into()).unwrap();
+    let source = temp.path().join("retained-draft-input");
+    fs::write(&source, b"unpublished").unwrap();
+    let revision = storage_contract::container_edit::DraftRevision {
+        operation: OperationId::generate().unwrap(),
+        expected_generation: storage_contract::Generation::new(0),
+        principal: principal.clone(),
+        base: old.current_container_draft_base(
+            file, repo.repository_id.parse().unwrap(), entry.entry_id.parse().unwrap(),
+        ).unwrap(),
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"unpublished")),
+        size: 11,
+    };
+    let before = image(temp.path());
+    let state = old.state().clone();
+    for result in [
+        old.set_container_commit_mode(&storage_contract::container_edit::SetCommitMode {
+            file, expected_generation: storage_contract::Generation::new(0),
+            mode: storage_contract::container_edit::CommitMode::Manual,
+        }, &principal, OperationId::generate().unwrap()),
+        old.save_container_draft(file, &revision, fs::File::open(&source).unwrap()),
+        old.discard_container_draft(file, storage_contract::Generation::new(0), revision.operation,
+            &principal, OperationId::generate().unwrap()),
+    ] {
+        assert_eq!(result.unwrap_err().code(), storage_contract::ErrorCode::FormatUnsupported);
+        assert_eq!(old.state(), &state);
+        assert_eq!(image(temp.path()), before);
+    }
     drop(old);
     let before = image(temp.path());
     assert!(Engine::initialize_manual_container_storage(

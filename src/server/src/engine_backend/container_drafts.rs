@@ -80,6 +80,31 @@ impl EngineBackend {
             &principal, request.operation_id).map_err(error)
     }
 
+    pub(super) fn container_draft_save_receipt_admitted(
+        &self,
+        identity: &Identity,
+        request: crate::PersistContainerDraft,
+    ) -> Result<Option<storage_contract::OperationResult>, ApiError> {
+        let (mut engine, current) = self.lock_current(identity)?;
+        super::application::Application::new(&mut engine, &current)
+            .authorize_file(&request.context.file.to_string())?;
+        if request.revision.principal.as_str() != current.principal {
+            return Err(ApiError::forbidden());
+        }
+        // Original-result inspection is not current-write authority. Do not
+        // require an unchanged mode, path, base or generation to read it.
+        if let Some(binding) = &current.smb_binding {
+            if binding.repository_id != request.context.repository.to_string() {
+                return Err(ApiError::forbidden());
+            }
+        }
+        let principal = current.principal.parse()
+            .map_err(ApiError::invalid_authenticated_principal)?;
+        engine.container_draft_save_receipt(
+            request.context.file, &request.revision, &principal,
+        ).map_err(error)
+    }
+
     pub(super) fn persist_container_draft_admitted(
         &self, identity: &Identity, request: crate::PersistContainerDraft,
         source: &std::fs::File,
@@ -88,6 +113,11 @@ impl EngineBackend {
         super::application::Application::new(&mut engine, &current)
             .authorize_file(&request.context.file.to_string())?;
         let base = context(&engine, &current, &request.context, true)?;
+        if base.entry != request.entry {
+            return Err(error(storage_engine::Error::ContainerEdit(
+                storage_contract::container_edit::EditConflict::SourceChanged,
+            )));
+        }
         if request.revision.principal.as_str() != current.principal {
             return Err(ApiError::forbidden());
         }
