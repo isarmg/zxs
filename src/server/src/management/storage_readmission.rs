@@ -385,19 +385,20 @@ impl ManagementBackend {
             state.status = StorageState::RecoveryRequired;
         }
         let recovered = (|| {
+            let system = self.inner.storage_system()?;
             let engine = if let Some(source) =
-                storage_engine::Engine::readmission_recovery_status(&self.inner.data_root)
+                storage_engine::Engine::readmission_recovery_status(system.path())
                     .map_err(crate::engine_backend::error)?
             {
                 crate::engine_backend::storage_readmission::verify_status(&source, intent)?;
                 storage_engine::Engine::resume_disk_readmission_transition(
-                    &self.inner.data_root,
+                    system.path(),
                     &source,
                     self.inner.retained_workspace_limits,
                 )
             } else {
-                storage_engine::Engine::open_for_recovery_with_workspace_limits(
-                    &self.inner.data_root,
+                storage_engine::Engine::open_storage_for_recovery_held(
+                    system,
                     self.inner.retained_workspace_limits,
                 )
             }

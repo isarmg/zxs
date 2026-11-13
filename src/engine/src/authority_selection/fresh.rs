@@ -225,6 +225,27 @@ impl SelectionGuard {
         self.fresh = Some(expected);
         Ok(self)
     }
+    /// SYSTEM-only permission for the activation locator probe. DISK admission
+    /// remains the consumer's later held-resource responsibility.
+    pub(crate) fn admit_system_selection(
+        mut self,
+        config: &ValidatedConfig,
+        operation: OperationId,
+    ) -> crate::Result<Self> {
+        let original = FreshSelection::read(&self.directory)
+            .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?
+            .ok_or_else(|| crate::Error::FreshBootstrap(Box::new(FreshBootstrapError::Incomplete)))?;
+        original.require_directory(&self.directory)
+            .map_err(|error| crate::Error::FreshBootstrap(Box::new(error)))?;
+        original.require_config(config)?;
+        if original.operation != operation {
+            return Err(crate::Error::FreshBootstrap(Box::new(FreshBootstrapError::Changed)));
+        }
+        self.fresh = Some(original);
+        self.first_write = false;
+        Ok(self)
+    }
+
     pub(crate) fn recover_fresh(
         self, config: &ValidatedConfig,
     ) -> Result<Self> {

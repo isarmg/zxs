@@ -58,7 +58,9 @@ impl ExclusiveExit {
                 TerminalManagement::open(system.path()).map_err(crate::engine_backend::error)?,
             ))
         } else {
-            let engine = Engine::open(system.path()).map_err(crate::engine_backend::error)?;
+            let engine = Engine::open_storage_held(
+                system.try_clone().map_err(storage_error)?, None,
+            ).map_err(crate::engine_backend::error)?;
             let backend = EngineBackend::new(engine);
             backend.set_management_auth(auth.clone())?;
             Source::Active(Box::new(backend))

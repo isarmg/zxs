@@ -122,7 +122,9 @@ impl ExclusiveTerminalReadmission {
             }
             return Ok(None);
         }
-        let engine = Engine::open(self.system.path()).map_err(crate::engine_backend::error)?;
+        let engine = Engine::open_storage_held(
+            self.system.try_clone().map_err(storage_error)?, None,
+        ).map_err(crate::engine_backend::error)?;
         self.engine_result(engine, record).map(Some)
     }
     fn engine_result(

@@ -5,6 +5,7 @@
 use crate::backend_methods::forward_managed_backend_methods;
 use crate::{
     ApiError, Backend, InternalDiskObservation,
+    setup_recovery::SetupRecovery,
     auth::{AuthStore, Identity},
     engine_backend::EngineBackend,
 };
@@ -63,6 +64,7 @@ impl State {
 }
 struct Inner {
     data_root: PathBuf,
+    storage_system: Option<platform_io::fs_safety::PrivateDirectory>,
     management_root: PathBuf,
     authority_preparation: AuthorityPreparation,
     state: Mutex<State>,
@@ -288,10 +290,16 @@ fn open_service_inner(
             auth = AuthStore::unavailable();
         }
     }
+    let storage_system = match &preparation {
+        Preparation::ExplicitLibraryRecovery => None,
+        Preparation::Existing(prepared) => {
+            Some(prepared.system_directory().map_err(preparation_error)?)
+        }
+    };
     let authority_preparation = match preparation {
         Preparation::ExplicitLibraryRecovery => AuthorityPreparation::ExplicitLibraryRecovery,
         Preparation::Existing(prepared) => {
-            AuthorityPreparation::Existing(prepared.system_directory().map_err(preparation_error)?)
+            AuthorityPreparation::Existing(prepared.control_directory().map_err(preparation_error)?)
         }
     };
     let backend = Arc::new(ManagementBackend {
@@ -300,6 +308,7 @@ fn open_service_inner(
         drain: Mutex::new(()),
         inner: Arc::new(Inner {
             data_root: data_root.into(),
+            storage_system,
             management_root: management_root.into(),
             authority_preparation,
             state: Mutex::new(State {
@@ -364,6 +373,32 @@ impl Drop for RecoveryPermit<'_> {
     }
 }
 impl Inner {
+    fn storage_system_if_bound(
+        &self,
+    ) -> Result<Option<platform_io::fs_safety::PrivateDirectory>, ApiError> {
+        let setup = SetupRecovery::new(
+            self.data_root.clone(), self.management_root.clone(), BTreeMap::new(),
+        )?;
+        let admitted = setup.storage_system_if_bound()?;
+        if let Some(held) = &self.storage_system {
+            held.verify_identity().map_err(crate::upload_fs_error)?;
+            // The original startup capability remains owned by Inner. The
+            // durable control binding is re-admitted before each cold owner.
+            setup.storage_system()?;
+            return held.try_clone().map(Some).map_err(crate::upload_fs_error);
+        }
+        Ok(admitted)
+    }
+
+    fn storage_system(&self) -> Result<platform_io::fs_safety::PrivateDirectory, ApiError> {
+        if let Some(system) = self.storage_system_if_bound()? {
+            return Ok(system);
+        }
+        SetupRecovery::new(
+            self.data_root.clone(), self.management_root.clone(), BTreeMap::new(),
+        )?.storage_system()
+    }
+
     fn set(&self, backend: Option<Arc<EngineBackend>>, status: StorageState) {
         {
             let mut state = self.state.lock().expect("service state lock poisoned");
@@ -601,16 +636,15 @@ impl Inner {
                 self.set(None, StorageState::Unconfigured);
                 return Ok(());
             }
-            let engine = match storage_engine::Engine::open_with_workspace_limits(
-                &self.data_root,
+            let engine = match storage_engine::Engine::open_storage_held(
+                self.storage_system()?,
                 self.retained_workspace_limits,
             ) {
                 Ok(engine) => engine,
                 Err(error) => {
                     tracing::warn!(error = ?error,"storage recovery failed");
-                    let status = if !self
-                        .data_root
-                        .join("config.json")
+                    let status = if !setup.storage_system()?
+                        .path().join("config.json")
                         .try_exists()
                         .map_err(ApiError::io)?
                     {
@@ -1127,10 +1161,12 @@ impl Backend for ManagementBackend {
             })?;
             // Cold terminal state is selected from SYSTEM before any directory
             // browsing, including when its management owner has not opened yet.
-            if storage_engine::TerminalManagement::requires_management(&self.inner.data_root)
-                .map_err(crate::engine_backend::error)?
-                && crate::lock(&self.inner.state).backend.terminal().is_none()
-            {
+            let terminal = match self.inner.storage_system_if_bound()? {
+                Some(system) => storage_engine::TerminalManagement::requires_management(system.path())
+                    .map_err(crate::engine_backend::error)?,
+                None => false,
+            };
+            if terminal && crate::lock(&self.inner.state).backend.terminal().is_none() {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::RecoveryRequired,
                     "open the terminal management authority before selecting fresh directories",

@@ -684,7 +684,7 @@ class TargetedSelection(unittest.TestCase):
                         'kind': 'lib',
                         'features': ['fault-injection'],
                         'prefixes': ['engine::snapshot_initialization::execution_tests::'],
-                        'max_tests': 5,
+                        'max_tests': 7,
                         'timeout_seconds': 900,
                     },
                 ])
@@ -3118,7 +3118,7 @@ class CurrentBackupPublicationAttackSelection(unittest.TestCase):
             'manifest': 'src/engine/Cargo.toml',
             'kind': 'lib',
             'prefixes': ['engine::disk_registry::current::backup_configuration::tests::'],
-            'max_tests': 16,
+            'max_tests': 29,
             'timeout_seconds': 900,
         }])
 class DirectoryBootstrapColdProofSelection(unittest.TestCase):
@@ -3128,7 +3128,7 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
         target, = policy['groups'][group]['rust_targets']
         self.assertEqual(target['prefixes'],
                          ['engine::snapshot_initialization::bootstrap::tests::'])
-        self.assertEqual(target['max_tests'], 12)
+        self.assertEqual(target['max_tests'], 15)
         self.assertEqual(target['timeout_seconds'], 900)
         self.assertEqual(target['exact'], [
             'disk::discovery::tests::'
@@ -3140,7 +3140,10 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
             path = 'src/engine/src/engine/disk_lifecycle/bootstrap/' + source
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path],
-                                            ['held-directory-layout'], [group])
+                                            ['held-directory-layout'], [group] + (
+                                                ['storage-setup-system-binding',
+                                                 'storage-system-product-consumers']
+                                                if source == 'runtime.rs' else []))
 
 
 class DirectoryBootstrapDecisionSelection(unittest.TestCase):
@@ -3152,4 +3155,69 @@ class DirectoryBootstrapDecisionSelection(unittest.TestCase):
         ]:
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path],
-                                            ['directory-storage-bootstrap'], [])
+                                            ['directory-storage-bootstrap'],
+                                            ['storage-setup-system-binding',
+                                             'storage-system-product-consumers'])
+
+
+class StorageSystemProductSelection(unittest.TestCase):
+    def test_bound_system_producers_retain_complete_product_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        added = ['storage-setup-system-binding', 'storage-system-product-consumers']
+        for path in [
+            'src/engine/src/engine.rs',
+            'src/engine/src/authority_selection/fresh.rs',
+            'src/engine/src/engine/snapshot_initialization/bootstrap/pending.rs',
+            'src/server/src/setup_recovery.rs',
+            'src/server/src/setup_recovery/activation.rs',
+            'src/server/src/setup_recovery/storage_system.rs',
+            'src/server/src/startup_admission.rs',
+            'src/server/src/management.rs',
+            'src/server/src/management/storage_lifecycle/exclusive.rs',
+            'src/server/src/offline/initialization/storage/worker.rs',
+            'src/server/src/offline/disk_removal/worker.rs',
+            'src/server/src/offline/disk_readmission/worker.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], None, added)
+        setup, = policy['groups'][added[0]]['rust_targets']
+        self.assertEqual(setup['prefixes'], [
+            'setup_recovery::tests::',
+            'setup_recovery::activation::tests::',
+            'setup_recovery::storage_system::tests::',
+        ])
+        self.assertEqual((setup['max_tests'], setup['timeout_seconds']), (128, 900))
+        general, domain, offline, core_free = policy['groups'][added[1]]['rust_targets']
+        self.assertEqual(general['prefixes'], [
+            'startup_admission::tests::', 'service_lifecycle::tests::',
+            'management::management_tests::', 'management::authority_tests::',
+            'management::admission_tests::', 'management::recovery_admission_tests::',
+            'management::shutdown_tests::', 'management::disk_card_tests::',
+        ])
+        self.assertEqual(domain['prefixes'], [
+            'management::' + name + '::' for name in [
+                'disk_notes', 'foreign_plan',
+                'foreign_preview', 'independent_preview', 'ordinary_conversion',
+                'terminal_readmission', 'terminal_resume',
+                'integrity_scrub', 'storage_addition', 'storage_configuration',
+                'storage_lifecycle', 'storage_readmission',
+            ]
+        ])
+        self.assertEqual(offline['prefixes'], [
+            'offline::initialization::storage::', 'offline::disk_removal::',
+            'offline::disk_readmission::',
+        ])
+        self.assertEqual((offline['kind'], offline['name']), ('bin', 'zxs'))
+        for target, maximum in [(general, 128), (domain, 192), (offline, 64)]:
+            self.assertEqual(target['features'], ['core'])
+            self.assertEqual((target['max_tests'], target['timeout_seconds']), (maximum, 900))
+        self.assertEqual(core_free['mode'], 'check')
+        self.assertFalse(core_free['default_features'])
+
+    def test_binding_fixture_selects_real_setup_without_unrelated_consumer_expansion(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/setup_recovery/storage_system_tests.rs',
+        ], [], ['storage-setup-system-binding'])
+        plan = CI.select_plan(policy, ['test/server/unit/startup_admission_tests.rs'])
+        self.assertEqual(plan['groups'], ['storage-system-product-consumers'])

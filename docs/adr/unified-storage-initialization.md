@@ -23,11 +23,19 @@
   的结果，原操作号、固定内部主体与根承诺进入 Candidate 对应的 State 快照。安装证明持有
   该 Candidate / Publication，每个 DISK 留同一份证明；Complete 仅在全部证明和成员收据
   复验后写入。冷开还读取并验证首快照的完整 operation / principal 闭包。
-- 原操作显式重试目前仅能从所有 DISK 已完整安装的证明重建缺失 Complete。
-  Accept / Finalize / 部分 proof 写入中断仍保留并拒绝，尚未实现完整阶段恢复。
+- 原操作显式重试可以从所有 DISK 完整安装证明重建缺失 Complete；新增 PendingBootstrapAdmission
+  也可先从原持有成员 journal 的完整首个 PREPARE / ACCEPT / FINALIZE 收据、相同 Candidate
+  及完整初始 State 闭包证明同一决定，再沿原描述符完成缺少的 publication / DISK proof / Complete。
+  任何成员缺 FINALIZE、损坏尾部或冲突证明仍保留并拒绝，不降低成员数或重选候选。
+  准入发生在 Engine/cache 构造之前，转交原 writer 锁与 journal；不会先重建 SQLite 再猜决定。
 - 首写后无完整身份记录的中断材料仍保留并拒绝；需补决定前后逐边界恢复。
-  已补真实完整决定、删除 Complete 后原操作重试，以及缺失/损坏 DISK proof 的拒绝回归，
-  但这些回归尚未运行。
+  已补从真实初始化 journal 保留原 FINALIZE 前缀的原操作恢复、损坏尾部零修复拒绝回归；
+  这是保留实际收据的边界重建，不是已运行的故障注入结果。所有新增回归尚未运行。
+- server 使用独立 control 根登记的 storage-system 子根；初始化与普通/保留 pending 冷开入口
+  消费原 SYSTEM / DISK 描述符。激活前 SYSTEM-only probe 只检查原 selector、完成决定和
+  bootstrap locator，不触及 DISK；之后完整资源准入仍重新验证所有 DISK 安装证明。
+  首账号完成使用完整 pristine State 对照；激活完成回执重试允许已安装认证后继，但仍要求
+  原 bootstrap 登记与初始 locator 生命周期，不能再重拿自己已持有的 SYSTEM 锁。
 - SYSTEM SQLite / WAL / SHM 仍有独立路径型消费者，本次不能称全流程 held。
 - 旧初始化入口退休会使仍依赖旧建池方式的测试及消费者显式失败；必须逐消费者调整真实
   fresh 准入，不能重新开放兼容来消除失败。

@@ -15,6 +15,7 @@ use std::{
 use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedConfig};
 
 mod activation;
+mod storage_system;
 mod discovery;
 pub use activation::{
     StorageActivationRequest, StorageActivationState, StorageActivationStatus,
@@ -136,6 +137,7 @@ pub struct PresetSetupRequest {
 #[serialization(deny_unknown_fields)]
 struct SetupIntent {
     version: u32,
+    storage_system: storage_system::StorageSystemBinding,
     config: ValidatedConfig,
     disk_ids: Vec<String>,
     bootstrap_binding: String,
@@ -156,6 +158,7 @@ pub struct LocalBootstrapPermit {
 
 pub struct SetupRecovery {
     data_root: PathBuf,
+    control_directory: platform_io::fs_safety::PrivateDirectory,
     management_root: PathBuf,
     disks: BTreeMap<String, PathBuf>,
     discovery_root: crate::storage_directories::DiscoveryRoot,
@@ -224,8 +227,11 @@ impl SetupRecovery {
             }
             canonical.insert(id, resolved);
         }
+        let control_directory = platform_io::fs_safety::PrivateDirectory::open_existing(&data_root)
+            .map_err(control_publication_error)?;
         Ok(Self {
             data_root,
+            control_directory,
             management_root,
             disks: canonical,
             discovery_root: Default::default(),
@@ -399,6 +405,7 @@ impl SetupRecovery {
     }
 
     fn lock(&self) -> Result<File, ApiError> {
+        self.control_directory.verify_identity().map_err(control_publication_error)?;
         // Deployment provisions the system directory; HTTP never chooses it.
         if checked_directory(&self.data_root)? != self.data_root {
             return Err(ApiError::conflict(
@@ -454,6 +461,24 @@ impl SetupRecovery {
                 Ok(path.clone())
             })
             .collect()
+    }
+
+    fn selected_held(&self, ids: &[String]) -> Result<Vec<File>, ApiError> {
+        let paths = self.selected(ids)?;
+        ids.iter().zip(paths).map(|(id, path)| {
+            let file = File::from(rustix::fs::open(
+                &path,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            ).map_err(std::io::Error::from).map_err(ApiError::io)?);
+            let metadata = file.metadata().map_err(ApiError::io)?;
+            if self.identities.get(id) != Some(&(metadata.dev(), metadata.ino())) {
+                return Err(ApiError::conflict(storage_contract::ErrorCode::DiskChanged,
+                    "selected disk changed before held initialization"));
+            }
+            Ok(file)
+        }).collect()
     }
 
     /// Serialized, fail-closed setup. The intent is synced BEFORE disk writes.
@@ -522,14 +547,23 @@ impl SetupRecovery {
         let config = config
             .with_workspace_limits(self.retained_workspace_limits)
             .map_err(engine_error)?;
+        let directories = self.selected_held(&disk_ids)?;
+        let operation = storage_contract::OperationId::generate()
+            .map_err(ApiError::invalid_source)?;
+        let (storage_system, system) = storage_system::StorageSystemBinding::create(
+            &self.control_directory, operation,
+        )?;
         let intent = SetupIntent {
             version: 2,
+            storage_system,
             config: config.clone(),
             disk_ids,
             bootstrap_binding: permit.binding.to_hex().to_string(),
         };
         self.write_control("setup-intent.json", &intent)?;
-        let engine = Engine::initialize_validated(&self.data_root, config).map_err(engine_error)?;
+        let engine = Engine::initialize_storage_held(
+            system, config, intent.storage_system.operation, directories,
+        ).map_err(engine_error)?;
         self.write_ready(&intent)?;
         // Disk I/O may outlive or revoke the original local authorization.
         // Never publish account authority after that authorization is gone.
@@ -637,9 +671,8 @@ impl SetupRecovery {
         &self,
         name: &str,
     ) -> Result<T, ApiError> {
-        use platform_io::fs_safety::{EntryName, PrivateDirectory, linux::open_private_regular};
-        let directory =
-            PrivateDirectory::open_existing(&self.data_root).map_err(control_publication_error)?;
+        use platform_io::fs_safety::{EntryName, linux::open_private_regular};
+        let directory = self.control_directory.try_clone().map_err(control_publication_error)?;
         let name = EntryName::new(name).map_err(ApiError::invalid_source)?;
         let mut file =
             open_private_regular(&directory, &name).map_err(control_publication_error)?;
@@ -672,8 +705,7 @@ impl SetupRecovery {
         if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
             return Err(ApiError::invalid("setup control record exceeds limit"));
         }
-        let directory = platform_io::fs_safety::PrivateDirectory::open_existing(&self.data_root)
-            .map_err(control_publication_error)?;
+        let directory = self.control_directory.try_clone().map_err(control_publication_error)?;
         let name =
             platform_io::fs_safety::EntryName::new(name).map_err(ApiError::invalid_source)?;
         platform_io::fs_safety::AtomicFile::create(&directory, &name, &bytes)
@@ -725,7 +757,8 @@ impl SetupRecovery {
                 "no matching protected initialization intent",
             ));
         }
-        let config: Config = read_control(&self.data_root.join("config.json"))?;
+        let system = intent.storage_system.open(&self.data_root)?;
+        let config = storage_system::read_configuration(&system)?;
         if value_digest(&config)? != value_digest(&intent.config)?
             || ready.disk_digests.len() != intent.disk_ids.len()
         {
@@ -759,7 +792,7 @@ impl SetupRecovery {
                 ));
             }
         }
-        let workspaces = self.data_root.join("workspaces");
+        let workspaces = system.path().join("workspaces");
         checked_directory(&workspaces)?;
         if fs::read_dir(&workspaces)
             .map_err(ApiError::io)?
@@ -793,21 +826,17 @@ impl SetupRecovery {
         authentication::validate_password(&request.password).map_err(ApiError::invalid_source)?;
         let _lock = self.lock()?;
         self.verify_permit(permit)?;
-        self.completion_proof()?;
+        let intent = self.completion_proof()?;
+        let system = self.storage_system()?;
         let mut engine = Engine::open_for_recovery_with_workspace_limits(
-            &self.data_root,
+            system.path(),
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
         crate::engine_backend::report_recovery_warnings(&mut engine);
-        let pristine = storage_engine::State {
-            topology_generation: 1,
-            ..Default::default()
-        };
-        if engine.is_read_only()
-            || engine.auth_state().is_some()
-            || value_digest(engine.state())? != value_digest(&pristine)?
-        {
+        engine.require_pristine_storage_initialization(intent.storage_system.operation)
+            .map_err(engine_error)?;
+        if engine.is_read_only() || engine.auth_state().is_some() {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::SetupContentChanged,
                 "only a pristine unpublished installation can be completed",
@@ -842,8 +871,9 @@ impl SetupRecovery {
         revalidate: impl FnOnce(&Identity) -> Result<(), ApiError>,
     ) -> Result<storage_engine::RecoveryPlan, ApiError> {
         let _lock = self.lock()?;
+        let system = self.storage_system()?;
         let mut engine = Engine::open_for_recovery_with_workspace_limits(
-            &self.data_root,
+            system.path(),
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
@@ -870,8 +900,9 @@ impl SetupRecovery {
             ));
         }
         let _lock = self.lock()?;
+        let system = self.storage_system()?;
         let mut engine = Engine::open_for_recovery_with_workspace_limits(
-            &self.data_root,
+            system.path(),
             self.retained_workspace_limits,
         )
         .map_err(engine_error)?;
@@ -954,8 +985,8 @@ impl SetupRecovery {
                 "restore requires authorized metadata members; the original configuration determines quorum",
             ));
         }
-        if self
-            .data_root
+        let system = self.storage_system()?;
+        if system.path()
             .join("config.json")
             .symlink_metadata()
             .is_ok()
@@ -967,7 +998,7 @@ impl SetupRecovery {
         }
         let disks = self.selected(&request.disk_ids)?;
         let mut engine = Engine::restore_from_disks_with_workspace_limits(
-            &self.data_root,
+            system.path(),
             &disks,
             self.retained_workspace_limits,
         )

@@ -251,14 +251,17 @@ impl Inner {
         }
         // Only cold owners use this SYSTEM discriminator. Opening SYSTEM while
         // a live pending owner holds its writer would violate exclusivity.
-        if let Some(proof) = TerminalManagement::metadata_resume_recovery(&self.data_root)
+        if let Some(proof) = TerminalManagement::metadata_resume_recovery(
+            self.storage_system()?.path(),
+        )
             .map_err(crate::engine_backend::error)?
         {
             recovery_binding(&proof, intent)?;
             return Ok(());
         }
         let terminal =
-            TerminalManagement::open(&self.data_root).map_err(crate::engine_backend::error)?;
+            TerminalManagement::open(self.storage_system()?.path())
+                    .map_err(crate::engine_backend::error)?;
         require_preview(&terminal, &identity.principal, intent)
     }
 
@@ -320,11 +323,14 @@ impl Inner {
         intent: &mut StoredReadmission,
         directory: &PrivateDirectory,
     ) -> Result<ResumeOwner, ApiError> {
-        let proof = TerminalManagement::metadata_resume_recovery(&self.data_root)
+        let proof = TerminalManagement::metadata_resume_recovery(
+            self.storage_system()?.path(),
+        )
             .map_err(crate::engine_backend::error)?;
         let Some(proof) = proof else {
             let terminal =
-                TerminalManagement::open(&self.data_root).map_err(crate::engine_backend::error)?;
+                TerminalManagement::open(self.storage_system()?.path())
+                    .map_err(crate::engine_backend::error)?;
             return self
                 .prepare_terminal_readmission(identity, intent, terminal, directory)
                 .map(|pending| ResumeOwner::Pending(Box::new(pending)));
@@ -334,7 +340,9 @@ impl Inner {
         save(directory, intent)?;
         self.current_management_identity(identity)?;
         let management = self.with_terminal_authorization(identity, || {
-            TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)
+            TerminalManagement::open_metadata_resume_checked(
+                        self.storage_system()?.path(), &proof,
+                    )
         })?;
         match proof.phase {
             TerminalMetadataResumePhase::ResupplyDirectories => {

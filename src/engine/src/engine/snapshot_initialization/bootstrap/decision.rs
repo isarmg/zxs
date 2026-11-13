@@ -31,7 +31,37 @@ fn roots_commitment(record: &RootRecord) -> crate::Result<MaterialCommitment> {
     Ok(MaterialCommitment::from_digest(hash.finalize()))
 }
 
+fn initial_result(record: &RootRecord) -> crate::Result<OperationResult> {
+    Ok(OperationResult {
+        operation_id: record.operation,
+        kind: KIND.into(),
+        commit_id: None,
+        history_tree_id: None,
+        branch_id: None,
+        commit_state: crate::CommitState::Published,
+        protection_at_publish: crate::ProtectionAtPublish::NotApplicable,
+        current_health: crate::CurrentHealth::Healthy,
+        request_digest: roots_commitment(record)?.to_string(),
+        sequence: 1,
+        result: storage_contract::decode_strict(&record.bytes().map_err(failure)?)?,
+    })
+}
+
 impl BootstrapDecision {
+    pub(super) fn verify_membership(&self, config: &crate::ValidatedConfig) -> crate::Result<()> {
+        config.verify_candidate_membership(&self.candidate)
+    }
+
+    pub(super) fn from_decided(
+        candidate: Candidate,
+        publication: Publication,
+        record: &RootRecord,
+    ) -> crate::Result<Self> {
+        let proof = Self { roots: roots_commitment(record)?, candidate, publication };
+        proof.verify(record)?;
+        Ok(proof)
+    }
+
     pub(super) fn decode(bytes: &[u8], record: &RootRecord) -> crate::Result<Self> {
         let proof: Self = storage_contract::decode_strict(bytes)?;
         if storage_contract::canonical_json(&proof)? != bytes
@@ -79,19 +109,7 @@ impl Engine {
         }
         let mut next = (*self.state).clone();
         next.sequence = 1;
-        let result = OperationResult {
-            operation_id: record.operation,
-            kind: KIND.into(),
-            commit_id: None,
-            history_tree_id: None,
-            branch_id: None,
-            commit_state: crate::CommitState::Published,
-            protection_at_publish: crate::ProtectionAtPublish::NotApplicable,
-            current_health: crate::CurrentHealth::Healthy,
-            request_digest: roots_commitment(record)?.to_string(),
-            sequence: 1,
-            result: storage_contract::decode_strict(&record.bytes().map_err(failure)?)?,
-        };
+        let result = initial_result(record)?;
         next.operations.insert(record.operation, result.clone());
         next.operation_principals.insert(record.operation, PRINCIPAL.to_owned());
         let prepared = self.prepare_publication(next, Vec::new(), result, MAX_BYTES)?;
@@ -154,34 +172,10 @@ impl BootstrapDecision {
                 crate::journal::verify_publication_seal(
                     &self.candidate, &self.publication, &seal,
                 )?;
-                let mut used = 0usize;
-                let mut charge = |count: usize| -> crate::Result<()> {
-                    used = used.checked_add(count)
-                        .ok_or_else(|| failure(FreshBootstrapError::Format))?;
-                    if used > MAX_BYTES {
-                        return Err(failure(FreshBootstrapError::Format));
-                    }
-                    Ok(())
-                };
-                let snapshot = crate::journal::load_object_observed_at(
-                    &handle.root, disk, "snapshot", &self.candidate.snapshot_hash, &mut charge,
-                )?;
-                let state = crate::journal::resolve_admitted_snapshot(snapshot, |kind, hash| {
-                    crate::journal::load_authenticated_object_observed_at(
-                        &handle.root, disk, kind, hash, &mut charge,
-                    )
-                })?;
-                let mut expected = State {
-                    topology_generation: 1,
-                    sequence: 1,
-                    ..State::default()
-                };
-                expected.operations.insert(record.operation, self.publication.result.clone());
-                expected.operation_principals.insert(record.operation, PRINCIPAL.to_owned());
-                if state.state() != &expected {
+                let state = read_initial_state(&handle.root, disk, &self.candidate, record)?;
+                if state.operations.get(&record.operation) != Some(&self.publication.result) {
                     return Err(rejected());
                 }
-
             }
         }
         Ok(())
@@ -338,4 +332,49 @@ impl Engine {
             &self.config, &record, &selector.canonical_bytes()?, Some(&self.disk_resources),
         ).map_err(failure)
     }
+}
+
+/// Resolve and admit the complete initial graph under a per-member byte budget.
+/// No caller can authorize a different root set with a matching operation ID.
+pub(super) fn read_initial_state(
+    root: &crate::disk::DiskRoot,
+    disk: &crate::DiskConfig,
+    candidate: &Candidate,
+    record: &RootRecord,
+) -> crate::Result<State> {
+    if candidate.operation_id != record.operation || candidate.sequence != 1
+        || candidate.previous_snapshot.is_some() || candidate.generation().is_some()
+        || candidate.directory_material().is_some() || !candidate.versions.is_empty()
+        || candidate.request_digest != roots_commitment(record)?.to_string()
+    {
+        return Err(rejected());
+    }
+    let mut used = 0usize;
+    let mut charge = |count: usize| -> crate::Result<()> {
+        used = used.checked_add(count).ok_or_else(|| failure(FreshBootstrapError::Format))?;
+        if used > MAX_BYTES {
+            return Err(failure(FreshBootstrapError::Format));
+        }
+        Ok(())
+    };
+    let snapshot = crate::journal::load_object_observed_at(
+        root, disk, "snapshot", &candidate.snapshot_hash, &mut charge,
+    )?;
+    let state = crate::journal::resolve_admitted_snapshot(snapshot, |kind, hash| {
+        crate::journal::load_authenticated_object_observed_at(root, disk, kind, hash, &mut charge)
+    })?;
+    let mut expected = State { topology_generation: 1, sequence: 1, ..State::default() };
+    expected.operations.insert(record.operation, initial_result(record)?);
+    expected.operation_principals.insert(record.operation, PRINCIPAL.to_owned());
+    if state.state() != &expected {
+        return Err(rejected());
+    }
+    Ok(state.into_state())
+}
+
+pub(super) fn initial_state(record: &RootRecord) -> crate::Result<State> {
+    let mut expected = State { topology_generation: 1, sequence: 1, ..State::default() };
+    expected.operations.insert(record.operation, initial_result(record)?);
+    expected.operation_principals.insert(record.operation, PRINCIPAL.to_owned());
+    Ok(expected)
 }

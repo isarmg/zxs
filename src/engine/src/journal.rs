@@ -206,6 +206,26 @@ impl OpenJournal {
         io.require_configured(config)?;
         Self::scan_directory(io, JournalNamespace::Active)
     }
+    /// A fresh bootstrap has one bounded initial decision, not an arbitrary
+    /// retained history. Preserve the scanned original descriptors for replay.
+    pub(crate) fn scan_initial_at(
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        config: &ValidatedConfig,
+        maximum: usize,
+    ) -> Result<Self> {
+        let path = crate::engine::membership_transition::pending::activation::log_path(config, disk);
+        let mut io = root.journal_directory(path.parent().expect("invariant: journal parent"))?;
+        io.require_configured(config)?;
+        let scan = io.scan_bounded(JournalNamespace::Active, maximum)?;
+        Ok(Self {
+            namespace: JournalNamespace::Active,
+            io,
+            scan,
+            #[cfg(feature = "fault-injection")]
+            opening_fault: None,
+        })
+    }
     fn scan_directory(mut io: JournalIo, namespace: JournalNamespace) -> Result<Self> {
         let scan = io.scan(namespace)?;
         Ok(Self {

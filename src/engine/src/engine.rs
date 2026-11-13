@@ -685,36 +685,61 @@ impl Engine {
         mode: RecoveryMode,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        // Keep the original locator lock through cold recovery. Fresh recovery
-        // does not call the generic discovery path or reacquire this lock.
-        let mut bootstrap_guard = None;
-        let (engine, warnings) = if crate::authority_selection::has_fresh_selector(root)? {
-            let root = existing_private_dir(root)?.path().to_path_buf();
-            let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
-                .with_workspace_limits(workspace_limits)?;
-            let selection = crate::authority_selection::SelectionGuard::acquire(&root)?
-                .recover_fresh(&config)
-                .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
-            let selected = selection.fresh_selection()
-                .ok_or_else(|| Error::FreshBootstrap(Box::new(
-                    crate::authority_selection::FreshBootstrapError::Changed,
-                )))?;
-            let config = config.with_fresh_bootstrap(selected)?;
-            let proof = snapshot_initialization::bootstrap::require_complete(&root, &config)?;
-            let config = config.with_fresh_completion(proof);
-            let store = disk_lifecycle::bootstrap::runtime::open_store_for_config(&root, &config)?;
-            store.reload(&config.pool_id)
-                .map_err(disk_lifecycle::bootstrap::runtime::management_error)?;
-            bootstrap_guard = Some(store);
-            let resources = Arc::new(DiskResources::open(&config, true)?);
-            let locks = config::acquire_locks_selected(&root, &resources, selection)?;
-            (Self::recovery_resources_with_locks(root, config, resources, locks)?, Vec::new())
-        } else {
-            let (root, config) = Self::recovery_projection(root, workspace_limits)?;
-            Self::prepare_workspace_recovery(root, config)?
-        };
-        let result = Self::finish_open(engine, warnings, mode);
-        drop(bootstrap_guard);
+        Self::open_mode_held(
+            platform_io::fs_safety::PrivateDirectory::open_existing(root)?,
+            mode,
+            workspace_limits,
+        )
+    }
+
+    /// The caller's selected SYSTEM descriptor is retained by writer ownership.
+    /// This does not claim that every SQLite/WAL consumer is descriptor-relative.
+    pub fn open_storage_held(
+        system: platform_io::fs_safety::PrivateDirectory,
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        Self::open_mode_held(system, RecoveryMode::CompletePending, workspace_limits)
+    }
+
+    /// Management recovery preserves pending decisions while retaining SYSTEM.
+    pub fn open_storage_for_recovery_held(
+        system: platform_io::fs_safety::PrivateDirectory,
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        Self::open_mode_held(system, RecoveryMode::PreservePending, workspace_limits)
+    }
+
+    fn open_mode_held(
+        system: platform_io::fs_safety::PrivateDirectory,
+        mode: RecoveryMode,
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+    ) -> Result<Self> {
+        system.verify_identity()?;
+        let root = system.path().to_owned();
+        let saved: Config = storage_contract::decode_strict(
+            &system.read_bounded(&layout::SYSTEM_CONFIG, crate::disk::MAX_METADATA)?,
+        )?;
+        let config = ValidatedConfig::try_from(saved)?.with_workspace_limits(workspace_limits)?;
+        let selection = crate::authority_selection::SelectionGuard::acquire_held(system)?
+            .recover_fresh(&config)
+            .map_err(|error| Error::FreshBootstrap(Box::new(error)))?;
+        let selected = selection.fresh_selection().ok_or_else(|| {
+            Error::FreshBootstrap(Box::new(crate::authority_selection::FreshBootstrapError::Changed))
+        })?;
+        let config = config.with_fresh_bootstrap(selected)?;
+        let system = selection.selected_directory()?;
+        let proof = snapshot_initialization::bootstrap::require_complete_resources(
+            &system, &config, None,
+        )?;
+        let config = config.with_fresh_completion(proof);
+        let bootstrap = disk_lifecycle::bootstrap::runtime::open_store_for_config(&root, &config)?;
+        bootstrap.reload(&config.pool_id)
+            .map_err(disk_lifecycle::bootstrap::runtime::management_error)?;
+        let resources = Arc::new(DiskResources::open(&config, true)?);
+        let locks = config::acquire_locks_selected(&root, &resources, selection)?;
+        let engine = Self::recovery_resources_with_locks(root, config, resources, locks)?;
+        let result = Self::finish_open(engine, Vec::new(), mode);
+        drop(bootstrap);
         result
     }
 

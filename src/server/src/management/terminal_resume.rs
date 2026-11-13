@@ -522,11 +522,14 @@ impl Inner {
         directories: Option<Vec<PendingMemberDirectory>>,
         directory: &PrivateDirectory,
     ) -> Result<ResumeOwner, ApiError> {
-        let proof = TerminalManagement::metadata_resume_recovery(&self.data_root)
+        let proof = TerminalManagement::metadata_resume_recovery(
+            self.storage_system()?.path(),
+        )
             .map_err(crate::engine_backend::error)?;
         let Some(proof) = proof else {
             let terminal =
-                TerminalManagement::open(&self.data_root).map_err(crate::engine_backend::error)?;
+                TerminalManagement::open(self.storage_system()?.path())
+                    .map_err(crate::engine_backend::error)?;
             if let Some(result) = terminal.operation(intent.status.operation_id) {
                 if terminal
                     .state()
@@ -552,7 +555,9 @@ impl Inner {
         match proof.phase {
             TerminalMetadataResumePhase::ResupplyDirectories => {
                 let management = self.with_terminal_authorization(identity, || {
-                    TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)
+                    TerminalManagement::open_metadata_resume_checked(
+                        self.storage_system()?.path(), &proof,
+                    )
                 })?;
                 let held = match directories {
                     Some(held) => held,
@@ -575,7 +580,9 @@ impl Inner {
                 // Activation consumed its pending owner. Restore through the
                 // protected selector, not the HTTP progress field.
                 let engine = self.with_terminal_authorization(identity, || {
-                    TerminalManagement::open_metadata_resume_checked(&self.data_root, &proof)?
+                    TerminalManagement::open_metadata_resume_checked(
+                        self.storage_system()?.path(), &proof,
+                    )?
                         .complete_metadata_resume_held(self.retained_workspace_limits)
                 })?;
                 self.install_resumed_engine(identity, intent, engine)

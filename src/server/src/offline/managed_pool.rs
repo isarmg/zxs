@@ -28,7 +28,7 @@ impl ManagedPool {
         let prepared =
             PreparedService::open(Path::new(layout::STATE), Path::new(layout::MANAGEMENT))?;
         let auth = AuthStore::open_system_management_directory(layout.management()?)?;
-        let engine = Engine::open(Path::new(layout::STATE))?;
+        let engine = Engine::open_storage_held(prepared.system_directory()?, None)?;
         if engine.config().mode != Mode::Production {
             return Err(
                 "helper membership maintenance requires an existing production pool".into(),

@@ -57,11 +57,12 @@ pub enum Error {
 /// never create or chmod paths and are not a lock against external root admin.
 /// The normal entry also owns its host-wide ServiceLease for this whole period.
 pub struct PreparedService {
+    control: PrivateDirectory,
     system: PrivateDirectory,
     management: PrivateDirectory,
 }
 impl PreparedService {
-    /// Read only SYSTEM and management directory metadata. No candidate/data
+    /// Read only bound control, SYSTEM and management metadata. No candidate/data
     /// disk, Engine, credential writer, bootstrap or socket is opened here.
     ///
     /// # Errors
@@ -69,10 +70,16 @@ impl PreparedService {
     /// initial activation, or malformed current lifecycle evidence are retained
     /// as distinct failures. Existing authentication or disk faults are still
     /// diagnosed by the normal management/Engine owners, never reset here.
-    pub fn open(system: &Path, management: &Path) -> Result<Self, Error> {
-        let system = open_directory(system)?;
+    pub fn open(control_root: &Path, management: &Path) -> Result<Self, Error> {
+        let control = open_directory(control_root)?;
         let management = open_directory(management)?;
-        let prepared = Self { system, management };
+        let setup = SetupRecovery::new(
+            control.path().to_owned(), management.path().to_owned(), BTreeMap::new(),
+        ).map_err(|source| Error::Activation { source })?;
+        let system = setup.storage_system_if_bound()
+            .map_err(|source| Error::Activation { source })?
+            .ok_or(Error::StorageNotPrepared)?;
+        let prepared = Self { control, system, management };
         prepared.recheck()?;
         // Select a terminal or interrupted membership owner before activation
         // proof could consult a superseded configuration. Only SYSTEM is read;
@@ -86,22 +93,13 @@ impl PreparedService {
         if read_optional(&prepared.system, "config.json", MAX_CONFIGURATION_BYTES)?.is_none() {
             return Err(Error::StorageNotPrepared);
         }
-        if let Some(intent) = read_optional(&prepared.system, INITIALIZATION, 4096)?
+        if let Some(intent) = read_optional(&prepared.control, INITIALIZATION, 4096)?
             && (intent != crate::setup_recovery::management_initialization_record()
-                || read_optional(&prepared.system, AUTHORITY, 4096)?.as_deref()
+                || read_optional(&prepared.control, AUTHORITY, 4096)?.as_deref()
                     != Some(crate::management::MANAGEMENT_AUTHORITY_BYTES))
         {
             return Err(Error::InitialAuthority);
         }
-        // Existing recovered systems without an initial helper activation
-        // intent retain their current core recovery semantics. This does not
-        // accept any legacy format or invent missing credentials/readiness.
-        let setup = SetupRecovery::new(
-            prepared.system.path().to_owned(),
-            prepared.management.path().to_owned(),
-            BTreeMap::new(),
-        )
-        .map_err(|source| Error::Activation { source })?;
         setup
             .activation_admitted()
             .map_err(|source| Error::Activation { source })?;
@@ -110,7 +108,7 @@ impl PreparedService {
     }
 
     pub(crate) fn roots(&self) -> (&Path, &Path) {
-        (self.system.path(), self.management.path())
+        (self.control.path(), self.management.path())
     }
     pub(crate) fn credential_directory(&self) -> Result<PrivateDirectory, Error> {
         self.recheck()?;
@@ -121,7 +119,14 @@ impl PreparedService {
                 source,
             })
     }
-    pub(crate) fn system_directory(&self) -> Result<PrivateDirectory, Error> {
+    pub(crate) fn control_directory(&self) -> Result<PrivateDirectory, Error> {
+        self.recheck()?;
+        self.control.try_clone().map_err(|source| Error::Directory {
+            path: self.control.path().to_owned(), source,
+        })
+    }
+    /// Return the held SYSTEM selected by the strict control-root binding.
+    pub fn system_directory(&self) -> Result<PrivateDirectory, Error> {
         self.recheck()?;
         self.system.try_clone().map_err(|source| Error::Directory {
             path: self.system.path().to_owned(),
@@ -130,7 +135,7 @@ impl PreparedService {
     }
     pub(crate) fn require_current_authority(&self) -> Result<(), Error> {
         self.recheck()?;
-        require_existing_authority(&self.system)
+        require_existing_authority(&self.control)
     }
 
     /// Revalidate captured names at process use/teardown boundaries. Holding an
@@ -140,7 +145,7 @@ impl PreparedService {
     /// Returns the concrete unsafe/rebound directory failure without accepting
     /// a new path as the earlier prepared installation.
     pub fn recheck(&self) -> Result<(), Error> {
-        for directory in [&self.system, &self.management] {
+        for directory in [&self.control, &self.system, &self.management] {
             directory
                 .verify_identity()
                 .map_err(|source| Error::Directory {

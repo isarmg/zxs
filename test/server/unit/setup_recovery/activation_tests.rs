@@ -50,6 +50,10 @@ fn service_at(base: &Path, ids: &[&str]) -> SetupRecovery {
         .with_discovery_root(discovery.to_str().unwrap().parse().unwrap())
         .allow_development_mode()
 }
+fn storage_path(service: &SetupRecovery) -> PathBuf {
+    service.storage_system().unwrap().path().to_owned()
+}
+
 fn admin() -> Identity {
     Identity {
         admission_session: None,
@@ -118,7 +122,7 @@ fn management_initialization_needs_no_storage_directory_or_pool() {
         f.service.storage_status().state,
         StorageActivationState::Pending
     );
-    assert!(!f.service.data_root.join("config.json").exists());
+    assert!(f.service.storage_system_if_bound().unwrap().is_none());
     assert!(!f.service.data_root.join("workspaces").exists());
     assert!(!f.service.data_root.join(ACTIVATION_INTENT).exists());
 }
@@ -203,7 +207,7 @@ fn first_pair_genesis_retains_fixed_quorum_and_reopens() {
         f.service.storage_status().state,
         StorageActivationState::Active
     );
-    let engine = Engine::open(&f.service.data_root).unwrap();
+    let engine = Engine::open(&storage_path(&f.service)).unwrap();
     assert_eq!(engine.config().disks.len(), 2);
     assert!(
         engine
@@ -231,7 +235,7 @@ fn interrupted_independent_roots_complete_without_rebinding_or_backup_edges() {
         |_| Err(ApiError::unauthorized()),
     );
     assert!(failure.is_err());
-    let original: Config = read_control(&f.service.data_root.join("config.json")).unwrap();
+    let original: Config = read_control(&storage_path(&f.service).join("config.json")).unwrap();
     let seals = original
         .disks
         .iter()
@@ -302,7 +306,7 @@ fn competing_first_activations_publish_one_identity_and_preserve_the_losing_root
         storage_contract::ErrorCode::SetupBusy | storage_contract::ErrorCode::RecoveryRequired
     ));
     f.service.activation_admitted().unwrap();
-    let engine = Engine::open(&f.service.data_root).unwrap();
+    let engine = Engine::open(&storage_path(&f.service)).unwrap();
     let [disk] = engine.config().disks.as_slice() else {
         panic!("exactly one first activation must win")
     };
@@ -470,7 +474,7 @@ fn revoked_authority_after_storage_creation_never_completes_activation() {
         )
         .unwrap_err();
     assert_eq!(error.status, ::http::StatusCode::UNAUTHORIZED);
-    assert!(f.service.data_root.join("config.json").exists());
+    assert!(storage_path(&f.service).join("config.json").exists());
     assert!(!f.service.data_root.join(ACTIVATION_COMPLETE).exists());
     assert!(f.service.activation_admitted().is_err());
 }
@@ -487,7 +491,7 @@ fn missing_config_after_activation_never_looks_unconfigured() {
             |_| Ok(()),
         )
         .unwrap();
-    fs::remove_file(f.service.data_root.join("config.json")).unwrap();
+    fs::remove_file(storage_path(&f.service).join("config.json")).unwrap();
     assert_eq!(
         f.service.status().state,
         InstallationState::RecoveryRequired
@@ -516,7 +520,7 @@ fn changed_config_or_seal_blocks_completion_without_resetting_data() {
             |_| Err(ApiError::unauthorized()),
         );
         let path = if change_config {
-            f.service.data_root.join("config.json")
+            storage_path(&f.service).join("config.json")
         } else {
             f.service.disks["one"].join("disk.json")
         };
@@ -567,15 +571,22 @@ fn activated_engine(service: &SetupRecovery, data_only_target: bool) -> Engine {
     )
     .unwrap();
     config.disks[0].metadata_member = !data_only_target;
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let (storage_system, system) =
+        crate::setup_recovery::storage_system::StorageSystemBinding::create(
+            &service.control_directory, operation,
+        ).unwrap();
     let intent = StorageActivationIntent {
         format: ActivationFormat::InitialStorage,
+        storage_system,
         config: ValidatedConfig::try_from(config).unwrap(),
         selections: request.selections,
     };
     service.write_control(ACTIVATION_INTENT, &intent).unwrap();
     let directories = service.activation_directories(&intent).unwrap();
-    let engine =
-        Engine::initialize_held(&service.data_root, intent.config.clone(), directories).unwrap();
+    let engine = Engine::initialize_storage_held(
+        system, intent.config.clone(), operation, directories,
+    ).unwrap();
     service
         .write_activation_ready(&intent, service.activation_seals(&intent).unwrap())
         .unwrap();
@@ -687,7 +698,7 @@ fn lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equ
         ] {
             let f = fixture();
             let mut engine = activated_engine(&f.service, data_only);
-            let original = fs::read(f.service.data_root.join("config.json")).unwrap();
+            let original = fs::read(storage_path(&f.service).join("config.json")).unwrap();
             exit_activation_target(&mut engine, action);
             if data_only {
                 let initial: Config = json_codec::from_slice(&original).unwrap();
@@ -699,7 +710,7 @@ fn lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equ
                 assert!(f.service.activation_admitted().is_ok());
             }
             drop(engine);
-            fs::write(f.service.data_root.join("config.json"), original).unwrap();
+            fs::write(storage_path(&f.service).join("config.json"), original).unwrap();
             let detached = f._temp.path().join("physically-detached");
             fs::rename(&f.service.disks["one"], &detached).unwrap();
             let seal = fs::read(detached.join("disk.json")).unwrap();
@@ -727,12 +738,15 @@ fn initial_probe_guard_survives_until_real_held_resources_and_writer_lock_take_o
     lose_activation_completion(&f.service, "missing");
     let proof = f.service.activation_proof().unwrap();
     assert!(
-        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).is_err()
+        Engine::begin_initial_storage_activation_probe(
+            f.service.storage_system().unwrap(), &proof.intent.config,
+            proof.intent.storage_system.operation,
+        ).is_err()
     );
     let directories = f.service.activation_directories(&proof.intent).unwrap();
     let engine =
         Engine::open_initial_activation_for_recovery_held(proof.probe, None, directories).unwrap();
-    assert!(Engine::open(&f.service.data_root).is_err());
+    assert!(Engine::open(&storage_path(&f.service)).is_err());
     drop(engine);
     f.service
         .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
@@ -761,7 +775,7 @@ fn failed_initial_probe_transfer_releases_raw_directories_and_the_guard() {
     let proof = f.service.activation_proof().unwrap();
     let directories = f.service.activation_directories(&proof.intent).unwrap();
     assert_eq!(target_directory_handles(&f.service.disks["one"]), 1);
-    let path = f.service.data_root.join("config.json");
+    let path = storage_path(&f.service).join("config.json");
     let original = fs::read(&path).unwrap();
     let mut changed: Config = json_codec::from_slice(&original).unwrap();
     changed.max_workspaces += 1;
@@ -771,7 +785,10 @@ fn failed_initial_probe_transfer_releases_raw_directories_and_the_guard() {
     );
     assert_eq!(target_directory_handles(&f.service.disks["one"]), 0);
     let guard =
-        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).unwrap();
+        Engine::begin_initial_storage_activation_probe(
+            f.service.storage_system().unwrap(), &proof.intent.config,
+            proof.intent.storage_system.operation,
+        ).unwrap();
     drop(guard);
     fs::write(path, original).unwrap();
     f.service
@@ -780,10 +797,10 @@ fn failed_initial_probe_transfer_releases_raw_directories_and_the_guard() {
 }
 
 fn damage_activation_locator(service: &SetupRecovery, mode: &str) {
-    let locator = service.data_root.join("bootstrap-discovery");
+    let locator = storage_path(&service).join("bootstrap-discovery");
     match mode {
         "intact" => (),
-        "missing" => fs::rename(&locator, service.data_root.join("lost-locator")).unwrap(),
+        "missing" => fs::rename(&locator, storage_path(&service).join("lost-locator")).unwrap(),
         "head-missing" => fs::remove_file(locator.join("head.json")).unwrap(),
         "history-missing" => {
             fs::remove_file(locator.join("record-00000000000000000001.json")).unwrap()
@@ -810,7 +827,7 @@ fn activation_completion_never_probes_stopped_or_uncertain_initial_roots() {
     let data_only = std::env::var("ZXS_ACTIVATION_PROBE_DATA_ONLY").unwrap() == "1";
     let service = service_at(&base, &["one", "two", "three"]);
     let mut engine = activated_engine(&service, data_only);
-    let original = fs::read(service.data_root.join("config.json")).unwrap();
+    let original = fs::read(storage_path(&service).join("config.json")).unwrap();
     match action.as_str() {
         "initial" => (),
         "add" => add_activation_successor(&mut engine, &base),
@@ -833,7 +850,7 @@ fn activation_completion_never_probes_stopped_or_uncertain_initial_roots() {
     }
     drop(engine);
     // Both stale and byte-equivalent Config projections must stay restricted.
-    fs::write(service.data_root.join("config.json"), original).unwrap();
+    fs::write(storage_path(&service).join("config.json"), original).unwrap();
     let permits_completion = action == "initial" && locator == "intact";
     if !permits_completion {
         fs::rename(&service.disks["one"], base.join("physically-detached")).unwrap();
@@ -928,7 +945,7 @@ fn activation_completion_replays_published_auth_without_recreating_account_or_wh
         )
         .unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
-    let engine = Engine::open(&f.service.data_root).unwrap();
+    let engine = Engine::open(&storage_path(&f.service)).unwrap();
     let sequence = engine.state().sequence;
     assert!(sequence > 0);
     assert_eq!(engine.auth_state(), Some(snapshot.clone()));
@@ -954,7 +971,7 @@ fn activation_completion_replays_published_auth_without_recreating_account_or_wh
         fs::read(f.service.management_root.join("management-auth.json")).unwrap(),
         credentials
     );
-    let engine = Engine::open(&f.service.data_root).unwrap();
+    let engine = Engine::open(&storage_path(&f.service)).unwrap();
     assert_eq!(engine.state().sequence, sequence);
     assert_eq!(engine.auth_state(), Some(snapshot));
 }

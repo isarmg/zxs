@@ -88,27 +88,19 @@ fn management_only_is_not_storage_preparation() {
     assert_eq!(snapshot(fixture.temp.path()), before);
 }
 #[test]
-fn established_configuration_fault_keeps_existing_diagnostic_owner() {
+fn unbound_legacy_configuration_is_preserved_without_adoption() {
     let fixture = Fixture::new();
     fixture.configuration_evidence();
     let before = snapshot(fixture.temp.path());
-    let prepared = fixture.open().unwrap();
-    prepared.recheck().unwrap();
-    assert!(matches!(
-        prepared.require_current_authority(),
-        Err(Error::InitialAuthority)
-    ));
+    assert!(matches!(fixture.open(), Err(Error::Activation { .. })));
     assert_eq!(snapshot(fixture.temp.path()), before);
 }
 #[test]
 fn current_initial_management_requires_its_exact_authority() {
     for authority in [None, Some(b"unexpected".as_slice())] {
         let fixture = Fixture::new();
-        fixture.configuration_evidence();
-        write_private(
-            &fixture.system.join(INITIALIZATION),
-            &crate::setup_recovery::management_initialization_record(),
-        );
+        activate_first(&fixture, true).unwrap();
+        fs::remove_file(fixture.system.join(AUTHORITY)).unwrap();
         if let Some(bytes) = authority {
             write_private(&fixture.system.join(AUTHORITY), bytes);
         }
@@ -120,12 +112,8 @@ fn current_initial_management_requires_its_exact_authority() {
 #[test]
 fn malformed_initial_intent_is_not_an_established_pool() {
     let fixture = Fixture::new();
-    fixture.configuration_evidence();
-    write_private(&fixture.system.join(INITIALIZATION), b"{}");
-    write_private(
-        &fixture.system.join(AUTHORITY),
-        crate::management::MANAGEMENT_AUTHORITY_BYTES,
-    );
+    activate_first(&fixture, true).unwrap();
+    fs::write(fixture.system.join(INITIALIZATION), b"{}").unwrap();
     assert!(matches!(fixture.open(), Err(Error::InitialAuthority)));
 }
 #[test]
@@ -134,10 +122,7 @@ fn configuration_link_and_unsafe_private_mode_are_not_repaired() {
     std::os::unix::fs::symlink("missing", fixture.system.join("config.json")).unwrap();
     assert!(matches!(
         fixture.open(),
-        Err(Error::Evidence {
-            name: "config.json",
-            ..
-        })
+        Err(Error::Activation { .. })
     ));
     assert!(
         fs::symlink_metadata(fixture.system.join("config.json"))
@@ -161,13 +146,9 @@ fn configuration_link_and_unsafe_private_mode_are_not_repaired() {
 #[test]
 fn captured_roots_and_authority_cannot_be_silently_replaced() {
     let fixture = Fixture::new();
-    fixture.configuration_evidence();
-    write_private(
-        &fixture.system.join(AUTHORITY),
-        crate::management::MANAGEMENT_AUTHORITY_BYTES,
-    );
+    activate_first(&fixture, true).unwrap();
     let prepared = fixture.open().unwrap();
-    let held = prepared.system_directory().unwrap();
+    let held = prepared.control_directory().unwrap();
     require_existing_authority(&held).unwrap();
     fs::remove_file(fixture.system.join(AUTHORITY)).unwrap();
     assert!(matches!(
@@ -281,4 +262,33 @@ fn interrupted_initial_activation_is_not_bootstrapped_by_normal_entry() {
             .join("storage-activation-complete.json")
             .exists()
     );
+}
+
+#[test]
+fn unbound_empty_storage_child_is_preserved_and_never_adopted() {
+    let fixture = Fixture::new();
+    let child = fixture.system.join("storage-system");
+    fs::DirBuilder::new().mode(0o700).create(&child).unwrap();
+    let before = snapshot(fixture.temp.path());
+    assert!(matches!(fixture.open(), Err(Error::Activation { .. })));
+    assert!(child.is_dir());
+    assert_eq!(snapshot(fixture.temp.path()), before);
+}
+
+#[test]
+fn prepared_control_and_storage_capabilities_are_distinct_and_child_rebind_fails() {
+    let fixture = Fixture::new();
+    activate_first(&fixture, true).unwrap();
+    let prepared = fixture.open().unwrap();
+    let control = prepared.control_directory().unwrap();
+    let storage = prepared.system_directory().unwrap();
+    assert_eq!(prepared.roots().0, control.path());
+    assert_ne!(control.path(), storage.path());
+    require_existing_authority(&control).unwrap();
+    fs::rename(storage.path(), fixture.temp.path().join("retained-storage")).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(storage.path()).unwrap();
+    let before = snapshot(fixture.temp.path());
+    assert!(prepared.system_directory().is_err());
+    assert!(fixture.open().is_err());
+    assert_eq!(snapshot(fixture.temp.path()), before);
 }

@@ -34,7 +34,7 @@
             "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
             "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
           ],
-          "max_tests": 12,
+          "max_tests": 15,
           "timeout_seconds": 900
         }
       ]
@@ -78,7 +78,7 @@
           "prefixes": [
             "engine::disk_registry::current::backup_configuration::tests::"
           ],
-          "max_tests": 16,
+          "max_tests": 29,
           "timeout_seconds": 900
         }
       ]
@@ -3936,6 +3936,101 @@
           "manifest": "src/smb/Cargo.toml",
           "whole": true,
           "max_tests": 192
+        }
+      ]
+    },
+    "storage-setup-system-binding": {
+      "reason": "New control/SYSTEM binding and held fresh initialization, exact activation replay and authorization rejection; no old-root adoption or implicit migration. Full setup/activation regressions remain selected.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "setup_recovery::tests::",
+            "setup_recovery::activation::tests::",
+            "setup_recovery::storage_system::tests::"
+          ],
+          "max_tests": 128,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "storage-system-product-consumers": {
+      "reason": "Exercise bound SYSTEM/control separation across retained startup, management authorization and lifecycle, maintenance workers and core-free compilation. Full consumer modules remain selected; neither successful compilation nor a refused unbound recovery substitutes for positive disaster recovery.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "startup_admission::tests::",
+            "service_lifecycle::tests::",
+            "management::management_tests::",
+            "management::authority_tests::",
+            "management::admission_tests::",
+            "management::recovery_admission_tests::",
+            "management::shutdown_tests::",
+            "management::disk_card_tests::"
+          ],
+          "max_tests": 128,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::disk_notes::",
+            "management::foreign_plan::",
+            "management::foreign_preview::",
+            "management::independent_preview::",
+            "management::ordinary_conversion::",
+            "management::terminal_readmission::",
+            "management::terminal_resume::",
+            "management::integrity_scrub::",
+            "management::storage_addition::",
+            "management::storage_configuration::",
+            "management::storage_lifecycle::",
+            "management::storage_readmission::"
+          ],
+          "max_tests": 192,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "features": [
+            "core"
+          ],
+          "name": "zxs",
+          "prefixes": [
+            "offline::initialization::storage::",
+            "offline::disk_removal::",
+            "offline::disk_readmission::"
+          ],
+          "max_tests": 64,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
         }
       ]
     }
@@ -11751,6 +11846,419 @@
       "path": "test/ci/test_rust_toolchain.py",
       "groups": [
         "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/storage_system.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/storage_system/layout.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery_tests.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/activation_tests.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/storage_system_tests.rs",
+      "groups": [
+        "storage-setup-system-binding"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/pending.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/storage_system.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/storage_system/layout.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/startup_admission.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/backup_transaction.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_lifecycle/exclusive.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_readmission.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_readmission/exclusive.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/terminal_backend.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/terminal_readmission.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/management/terminal_resume.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_readmission/worker.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_removal/worker.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/initialization/storage/worker.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/managed_pool.rs",
+      "groups": [
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/startup_admission_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/management.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/service_lifecycle/sockets.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_authority_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_admission_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_recovery_admission_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_shutdown_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_resume.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/ordinary_conversion.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_lifecycle.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/integrity_scrub_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/exclusive_terminal_readmission.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_configuration.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/foreign_intent.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/disk_cards.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_readmission.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/exclusive_exit.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/disk_notes.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/foreign_plan.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_addition.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_resume_mixed.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/independent_preview.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/foreign_preview.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_readmission.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/integrity_scrub/scheduling_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/integrity_scrub/cadence_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/initialization/storage_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/initialization/storage_directory_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/disk_removal_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/disk_readmission_tests.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/terminal_removal_inspection.rs",
+      "groups": [
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/pending.rs",
+      "groups": [
+        "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "directory-storage-bootstrap"
       ]
     }
   ],

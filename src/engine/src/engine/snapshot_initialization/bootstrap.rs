@@ -16,6 +16,7 @@ use storage_contract::working_tree::{
 use storage_contract::Generation;
 
 mod decision;
+mod pending;
 
 const ROOTS: &str = "fresh-directory-roots-v1.json";
 const COMPLETE: &str = "fresh-directory-bootstrap-complete-v1.json";
@@ -228,6 +229,107 @@ impl FreshBootstrap {
         })
     }
 
+    fn reopen_complete(self, system: &PrivateDirectory) -> Result<Engine> {
+        let locks = crate::engine::config::acquire_locks_selected(
+            &self.root, &self.resources, self.selection,
+        ).map_err(engine_error)?;
+        Self::finish_completed(
+            self.root, self.config, self.resources, locks, self._directory_locks, system, None,
+        )
+    }
+
+    fn finish_completed(
+        root: std::path::PathBuf,
+        config: ValidatedConfig,
+        resources: Arc<DiskResources>,
+        locks: crate::disk::WriterLocks,
+        directory_locks: Vec<AdvisoryLock>,
+        system: &PrivateDirectory,
+        bootstrap: Option<crate::engine::disk_lifecycle::bootstrap::store::BootstrapStore>,
+    ) -> Result<Engine> {
+        let proof = require_complete_resources(system, &config, Some(&resources))
+            .map_err(engine_error)?;
+        let config = config.with_fresh_completion(proof);
+        let bootstrap = match bootstrap {
+            Some(held) => held,
+            None => crate::engine::disk_lifecycle::bootstrap::runtime::open_store_for_config(
+                &root, &config,
+            ).map_err(engine_error)?,
+        };
+        let engine = Engine::recovery_resources_with_locks(root, config, resources, locks)
+            .map_err(engine_error)?;
+        let engine = Engine::finish_open(
+            engine, Vec::new(), crate::engine::recovery::RecoveryMode::CompletePending,
+        ).map_err(engine_error)?;
+        drop(bootstrap);
+        drop(directory_locks);
+        Ok(engine)
+    }
+
+    fn resume_registered(self, system: &PrivateDirectory, record: &RootRecord) -> Result<Engine> {
+        let selected = self.selection.fresh_selection().ok_or(FreshBootstrapError::Changed)?;
+        if record.operation != selected.operation
+            || record.selection != selected.commitment().map_err(engine_error)?
+        {
+            return Err(FreshBootstrapError::Changed);
+        }
+        verify_roots(&self.config, record, &selected.canonical_bytes().map_err(engine_error)?,
+            Some(&self.resources))?;
+        let mut all_installed = true;
+        for disk in &self.config.disks {
+            let root = &self.resources.get(disk).map_err(engine_error)?.root;
+            if root.optional_metadata(&disk.root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path()))
+                .map_err(engine_error)?.is_none()
+            {
+                all_installed = false;
+            }
+        }
+        let locks = crate::engine::config::acquire_locks_selected(
+            &self.root, &self.resources, self.selection,
+        ).map_err(engine_error)?;
+        let bootstrap = hold_registered_bootstrap(system, record).map_err(engine_error)?;
+        if all_installed {
+            // Verification is read-only; only the last missing SYSTEM marker is
+            // restored after all original decision evidence has been admitted.
+            decision::restore_completion(system, &self.config, &self.resources, record)
+                .map_err(engine_error)?;
+            return Self::finish_completed(
+                self.root, self.config, self.resources, locks, self._directory_locks, system,
+                Some(bootstrap),
+            );
+        }
+        let writer = locks.system_identity().map_err(engine_error)?;
+        let (bootstrap_root, bootstrap_writer) = bootstrap_identity(system)?;
+        if record.system_writer != LocalEntityIdentity::new(writer.device, writer.inode)
+            || record.bootstrap_root != bootstrap_root || record.bootstrap_writer != bootstrap_writer
+        {
+            return Err(FreshBootstrapError::Changed);
+        }
+        let admitted = pending::PendingBootstrapAdmission::admit(
+            &self.config, &self.resources, record,
+        ).map_err(engine_error)?;
+        // No Engine/cache exists until the bounded original journal and full
+        // initial State admission above has succeeded for every configured member.
+        let (candidate, next, publication, journals) = admitted.into_parts().map_err(engine_error)?;
+        let hash = storage_contract::object_hash("candidate", &candidate)
+            .map_err(FreshBootstrapError::Codec)?;
+        let mut engine = Engine::recovery_resources_with_locks(
+            self.root, self.config, self.resources, locks,
+        ).map_err(engine_error)?;
+        engine.journals = journals;
+        engine.complete_candidate(&candidate, &hash, &next, Some(publication))
+            .map_err(engine_error)?;
+        let proof = require_complete_resources(system, &engine.config, Some(&engine.disk_resources))
+            .map_err(engine_error)?;
+        engine.config = engine.config.clone().with_fresh_completion(proof);
+        let engine = Engine::finish_open(
+            engine, Vec::new(), crate::engine::recovery::RecoveryMode::CompletePending,
+        ).map_err(engine_error)?;
+        drop(bootstrap);
+        drop(self._directory_locks);
+        Ok(engine)
+    }
+
     /// Retry before the first payload-side write is exact. After any unrecorded
     /// partial initialization this returns Incomplete and leaves every byte intact.
     pub(crate) fn initialize(self) -> crate::Result<Engine> {
@@ -236,12 +338,7 @@ impl FreshBootstrap {
     fn initialize_inner(self) -> Result<Engine> {
         let system = self.selection.selected_directory().map_err(engine_error)?;
         match system.read_bounded(&name(COMPLETE)?, MAX_BYTES) {
-            Ok(_) => {
-                require_complete(&self.root, &self.config).map_err(engine_error)?;
-                let path = self.root.clone();
-                drop(self);
-                return Engine::open(&path).map_err(engine_error);
-            }
+            Ok(_) => return self.reopen_complete(&system),
             Err(platform_io::fs_safety::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(FreshBootstrapError::Filesystem(error)),
@@ -249,18 +346,7 @@ impl FreshBootstrap {
         match system.read_bounded(&name(ROOTS)?, MAX_BYTES) {
             Ok(bytes) => {
                 let record = RootRecord::decode(&bytes)?;
-                // Recover only a fully retained permanent installation. The
-                // original selector operation was already compared in prepare.
-                let locks = crate::engine::config::acquire_locks_selected(
-                    &self.root, &self.resources, self.selection,
-                ).map_err(engine_error)?;
-                decision::restore_completion(&system, &self.config, &self.resources, &record)
-                    .map_err(engine_error)?;
-                let path = self.root;
-                drop(locks);
-                drop(self.resources);
-                drop(self._directory_locks);
-                return Engine::open(&path).map_err(engine_error);
+                return self.resume_registered(&system, &record);
             }
             Err(platform_io::fs_safety::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -552,6 +638,24 @@ impl Engine {
 
     /// Initialize only explicitly selected, existing empty private roots in the
     /// new directory format. Old and interrupted unclaimed material is preserved.
+    /// Retain the caller's original SYSTEM and DISK descriptors. SQLite/WAL
+    /// consumers remain separately anchored by completion checks, not this name.
+    pub fn initialize_storage_held(
+        system: PrivateDirectory,
+        config: ValidatedConfig,
+        operation: OperationId,
+        directories: Vec<std::fs::File>,
+    ) -> crate::Result<Self> {
+        if directories.len() != config.disks.len() {
+            return Err(failure(FreshBootstrapError::Changed));
+        }
+        let directories = directories.into_iter().zip(&config.disks)
+            .map(|(directory, disk)| PrivateDirectory::from_directory(directory, disk.root.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        FreshBootstrap::prepare_held(system, config, operation, directories)
+            .map_err(failure)?.initialize()
+    }
+
     pub fn initialize_storage(
         root: &Path, config: crate::Config, operation: OperationId,
     ) -> crate::Result<Self> {
@@ -584,7 +688,7 @@ fn require_complete_held(
     require_complete_resources(system, config, Some(resources)).map(|_| ())
 }
 
-fn require_complete_resources(
+pub(in crate::engine) fn require_complete_resources(
     system: &PrivateDirectory, config: &ValidatedConfig, resources: Option<&DiskResources>,
 ) -> crate::Result<CompletionProof> {
     let inspect = || -> Result<CompletionProof> {
@@ -592,6 +696,11 @@ fn require_complete_resources(
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
+        if config.fresh_completion().is_some_and(|proof| {
+            proof.commitment != completion_commitment(&complete)
+        }) {
+            return Err(FreshBootstrapError::Changed);
+        }
         let selector = crate::authority_selection::FreshSelection::read(&system)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         selector.require_directory(&system)?;
@@ -639,3 +748,82 @@ fn require_complete_resources(
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/fresh_directory_bootstrap_tests.rs"]
 mod tests;
+
+/// SYSTEM-only preflight before the activation locator permits storage probes.
+/// This does not validate DISK installation or grant content/read authority.
+pub(in crate::engine) fn admit_system_completion(
+    system: &PrivateDirectory,
+    config: &ValidatedConfig,
+) -> crate::Result<CompletionProof> {
+    let selected = crate::authority_selection::FreshSelection::read(system).map_err(failure)?
+        .ok_or_else(|| failure(FreshBootstrapError::Incomplete))?;
+    selected.require_directory(system).map_err(failure)?;
+    selected.require_config(config)?;
+    let roots = system.read_bounded(&name(ROOTS).map_err(failure)?, MAX_BYTES)?;
+    let complete = system.read_bounded(&name(COMPLETE).map_err(failure)?, MAX_BYTES)?;
+    let record = RootRecord::decode(&roots).map_err(failure)?;
+    let decision = decision::BootstrapDecision::decode(&complete, &record)?;
+    decision.verify_membership(config)?;
+    if record.operation != selected.operation || record.selection != selected.commitment()? {
+        return Err(failure(FreshBootstrapError::Changed));
+    }
+    let writer = system.open_payload(&layout::CONTROL_WRITER_LOCK,
+        platform_io::fs_safety::PayloadOpenMode::Existing)?;
+    let observed = platform_io::fs_safety::linux::FileIdentity::from_fd(&writer)?;
+    let (bootstrap_root, bootstrap_writer) = bootstrap_identity(system).map_err(failure)?;
+    if record.system_writer != LocalEntityIdentity::new(observed.device, observed.inode)
+        || writer.metadata()?.len() != 0 || bootstrap_root != record.bootstrap_root
+        || bootstrap_writer != record.bootstrap_writer
+    {
+        return Err(failure(FreshBootstrapError::Changed));
+    }
+    Ok(CompletionProof {
+        commitment: completion_commitment(&complete), system: selected.system,
+        bootstrap_root, bootstrap_writer,
+    })
+}
+
+impl Engine {
+    pub(in crate::engine) fn require_storage_registration(
+        &self, operation: OperationId,
+    ) -> crate::Result<()> {
+        let record = read_verified_roots(self)?;
+        let initial = decision::initial_state(&record)?;
+        if record.operation != operation
+            || self.state.operations.get(&operation) != initial.operations.get(&operation)
+            || self.state.operation_principals.get(&operation)
+                != initial.operation_principals.get(&operation)
+        {
+            return Err(failure(FreshBootstrapError::Changed));
+        }
+        Ok(())
+    }
+
+    pub fn require_pristine_storage_initialization(&self, operation: OperationId) -> crate::Result<()> {
+        let record = read_verified_roots(self)?;
+        if record.operation != operation || self.state.as_ref() != &decision::initial_state(&record)? {
+            return Err(failure(FreshBootstrapError::Changed));
+        }
+        Ok(())
+    }
+}
+
+/// Hold only the original locator writer. This is not completion authority;
+/// callers must separately admit the permanent bootstrap decision before repair.
+fn hold_registered_bootstrap(
+    system: &PrivateDirectory,
+    record: &RootRecord,
+) -> crate::Result<crate::engine::disk_lifecycle::bootstrap::store::BootstrapStore> {
+    let root = OpenAt2Root::from_private_directory(system.try_clone()?, MountPolicy::SameMount)?;
+    let name = EntryName::new(crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY)?;
+    let directory = root.open_directory(&name.as_relative())?;
+    let observed = platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)?;
+    if record.bootstrap_root != LocalEntityIdentity::new(observed.device, observed.inode) {
+        return Err(failure(FreshBootstrapError::Changed));
+    }
+    crate::engine::disk_lifecycle::bootstrap::store::BootstrapStore::hold_existing(
+        directory,
+        system.path().join(name.as_path()),
+        record.bootstrap_writer,
+    ).map_err(crate::engine::disk_lifecycle::bootstrap::runtime::management_error)
+}

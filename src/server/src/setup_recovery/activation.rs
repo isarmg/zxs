@@ -64,8 +64,9 @@ enum ActivationFormat {
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct StorageActivationIntent {
+pub(super) struct StorageActivationIntent {
     format: ActivationFormat,
+    pub(super) storage_system: crate::setup_recovery::storage_system::StorageSystemBinding,
     config: ValidatedConfig,
     selections: Vec<storage_contract::storage_directories::CandidateSelection>,
 }
@@ -106,7 +107,9 @@ impl SetupRecovery {
     }
 
     pub(super) fn installation_state(&self) -> Result<InstallationState, ApiError> {
-        if present(&self.data_root.join("config.json"))? {
+        if let Some(system) = self.storage_system_if_bound()?
+            && crate::setup_recovery::storage_system::configuration_present(&system)?
+        {
             return Ok(InstallationState::Existing);
         }
         if present(&self.data_root.join(ACTIVATION_INTENT))?
@@ -199,7 +202,12 @@ impl SetupRecovery {
     }
 
     pub fn storage_status(&self) -> StorageActivationStatus {
-        match storage_engine::TerminalManagement::requires_management(&self.data_root) {
+        let terminal = self.storage_system_if_bound().and_then(|system| match system {
+            Some(system) => storage_engine::TerminalManagement::requires_management(system.path())
+                .map_err(engine_error),
+            None => Ok(false),
+        });
+        match terminal {
             Ok(false) => {}
             terminal => {
                 // Until ManagementBackend admits the full authority, report a
@@ -246,6 +254,7 @@ impl SetupRecovery {
     /// Call before ordinary background Engine::open. A config file created by
     /// an interrupted genesis is not permission to admit user storage writes.
     pub fn activation_admitted(&self) -> Result<(), ApiError> {
+        let _system = self.storage_system_if_bound()?;
         if !present(&self.data_root.join(ACTIVATION_INTENT))? {
             if present(&self.data_root.join(ACTIVATION_COMPLETE))?
                 || (present(&self.data_root.join(MANAGEMENT_INTENT))?
@@ -322,14 +331,22 @@ impl SetupRecovery {
             .and_then(|config| config.with_workspace_limits(self.retained_workspace_limits))
             .map_err(engine_error)?;
         revalidate(identity)?;
+        let operation = storage_contract::OperationId::generate()
+            .map_err(ApiError::invalid_source)?;
+        let (storage_system, system) =
+            crate::setup_recovery::storage_system::StorageSystemBinding::create(
+                &self.control_directory, operation,
+            )?;
         let intent = StorageActivationIntent {
             format: ActivationFormat::InitialStorage,
+            storage_system,
             config: config.clone(),
             selections: request.selections,
         };
         self.write_control(ACTIVATION_INTENT, &intent)?;
-        let engine =
-            Engine::initialize_held(&self.data_root, config, directories).map_err(engine_error)?;
+        let engine = Engine::initialize_storage_held(
+            system, config, intent.storage_system.operation, directories,
+        ).map_err(engine_error)?;
         self.write_activation_ready(&intent, self.activation_seals(&intent)?)?;
         revalidate(identity)?;
         install(engine)?;
@@ -427,12 +444,25 @@ impl SetupRecovery {
                 "pending storage decisions require recovery before activation completion",
             ));
         }
-        let proof = self.activation_proof()?;
-        if !present(&self.data_root.join(ACTIVATION_READY))? {
-            self.write_activation_ready(&proof.intent, proof.disk_seals)?;
+        let current: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
+        if value_digest(&current)? != value_digest(&proof.intent)? {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
+                "storage activation intent changed during held recovery"));
         }
-        let intent_digest = value_digest(&proof.intent)?;
-        drop(proof.probe);
+        engine.require_initial_storage_activation(
+            &current.config, current.storage_system.operation,
+        ).map_err(engine_error)?;
+        // Engine owns the original SYSTEM selection now. Reacquiring a probe
+        // would conflict with our own lock; recheck evidence under that owner.
+        let seals = self.activation_evidence(&current)?;
+        if seals != proof.disk_seals {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
+                "storage activation seals changed during held recovery"));
+        }
+        if !present(&self.data_root.join(ACTIVATION_READY))? {
+            self.write_activation_ready(&current, seals)?;
+        }
+        let intent_digest = value_digest(&current)?;
         revalidate(identity)?;
         install(engine)?;
         if completed {
@@ -449,7 +479,8 @@ impl SetupRecovery {
         &self,
         intent: &StorageActivationIntent,
     ) -> Result<(), ApiError> {
-        let config: Config = read_control(&self.data_root.join("config.json"))?;
+        let system = intent.storage_system.open(&self.data_root)?;
+        let config = crate::setup_recovery::storage_system::read_configuration(&system)?;
         if value_digest(&config)? != value_digest(&intent.config)?
             && !crate::management::storage_configuration::admits_configuration(
                 &self.management_root,
@@ -469,7 +500,8 @@ impl SetupRecovery {
         &self,
         intent: &StorageActivationIntent,
     ) -> Result<storage_engine::InitialActivationProbeGuard, ApiError> {
-        let config: Config = read_control(&self.data_root.join("config.json"))?;
+        let system = intent.storage_system.open(&self.data_root)?;
+        let config = crate::setup_recovery::storage_system::read_configuration(&system)?;
         // Successor management intents admit ordinary startup, never a replay
         // of original selections. Equal Config bytes do not exclude a data-only
         // Exit or a stale projection, so the held locator check is mandatory.
@@ -479,8 +511,9 @@ impl SetupRecovery {
                 "initial activation configuration differs from its retained intent",
             ));
         }
-        Engine::begin_initial_activation_probe(&self.data_root, &intent.config)
-            .map_err(engine_error)
+        Engine::begin_initial_storage_activation_probe(
+            system, &intent.config, intent.storage_system.operation,
+        ).map_err(engine_error)
     }
 
     fn activation_directories(
@@ -569,7 +602,24 @@ impl SetupRecovery {
         }
         let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
         let probe = self.initial_activation_probe(&intent)?;
-        let seals = self.activation_seals(&intent)?;
+        let seals = self.activation_evidence(&intent)?;
+        Ok(InitialActivationProof {
+            intent,
+            disk_seals: seals,
+            probe,
+        })
+    }
+
+    fn activation_evidence(
+        &self,
+        intent: &StorageActivationIntent,
+    ) -> Result<BTreeMap<String, String>, ApiError> {
+        self.management_intent()?;
+        if !self.management_authority_present()? {
+            return Err(ApiError::unauthorized());
+        }
+        let _system = intent.storage_system.open(&self.data_root)?;
+        let seals = self.activation_seals(intent)?;
         if present(&self.data_root.join(ACTIVATION_READY))? {
             let ready: StorageActivationReady = self.read_durable_control(ACTIVATION_READY)?;
             if ready.intent_digest != value_digest(&intent)? || ready.disk_seals != seals {
@@ -579,11 +629,7 @@ impl SetupRecovery {
                 ));
             }
         }
-        Ok(InitialActivationProof {
-            intent,
-            disk_seals: seals,
-            probe,
-        })
+        Ok(seals)
     }
 }
 

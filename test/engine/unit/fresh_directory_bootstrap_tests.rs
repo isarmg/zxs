@@ -429,6 +429,11 @@ fn incomplete_disk_installation_proof_never_authorizes_completion_repair() {
         let proof = config.disks[1].root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path());
         if missing {
             fs::rename(&proof, config.disks[1].root.join("preserved-original-proof")).unwrap();
+            // A missing known output is now repairable only from a complete
+            // initial journal decision; incomplete journal evidence is not.
+            let log = crate::journal::log_path(&config.disks[1]);
+            let length = fs::metadata(&log).unwrap().len();
+            fs::OpenOptions::new().write(true).open(log).unwrap().set_len(length - 1).unwrap();
         } else {
             fs::set_permissions(&proof, fs::Permissions::from_mode(0o600)).unwrap();
             fs::write(&proof, b"{}\n").unwrap();
@@ -438,4 +443,101 @@ fn incomplete_disk_installation_proof_never_authorizes_completion_repair() {
         assert_eq!(image(temp.path()), before);
         assert!(!system.join(COMPLETE).exists());
     }
+}
+
+#[test]
+fn original_finalized_journals_resume_without_completion_or_disk_installation_proofs() {
+    use std::fs::OpenOptions;
+    let (temp, system, config) = fixture();
+    let operation = OperationId::generate().unwrap();
+    let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+    let original = engine.state().clone();
+    let admitted_config = engine.config.clone();
+    let roots = engine.directory_storage_roots().unwrap();
+    let completion = fs::read(system.join(COMPLETE)).unwrap();
+    drop(engine);
+    fs::remove_file(system.join(COMPLETE)).unwrap();
+    // Retain precisely the actual PREPARE/ACCEPT/FINALIZE bytes, not fabricated
+    // receipts. This is the durable boundary immediately before publication.
+    for disk in &config.disks {
+        fs::remove_file(disk.root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path())).unwrap();
+        let root = crate::disk::DiskRoot::open(&disk.root).unwrap();
+        let scan = crate::journal::scan_configured_at(
+            &root, disk, &admitted_config,
+        ).unwrap();
+        assert_eq!(scan.records.len(), 4);
+        let length = scan.records.iter().take(3).map(|(record, _)| {
+            12 + storage_contract::canonical_json(record).unwrap().len() as u64 + 32
+        }).sum::<u64>();
+        let log = crate::journal::log_path(disk);
+        OpenOptions::new().write(true).open(log).unwrap().set_len(length).unwrap();
+        fs::remove_file(crate::journal::publication_seal_path(
+            disk, &scan.records[0].0.candidate_hash,
+        )).unwrap();
+    }
+    let before = image(temp.path());
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(image(temp.path()), before);
+    let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+    assert_eq!(engine.state(), &original);
+    assert_eq!(engine.directory_storage_roots().unwrap(), roots);
+    assert_eq!(fs::read(system.join(COMPLETE)).unwrap(), completion);
+    drop(engine);
+    let reopened = Engine::initialize_storage(&system, config, operation).unwrap();
+    assert_eq!(reopened.state(), &original);
+}
+
+#[test]
+fn incomplete_initial_journal_is_rejected_before_any_cache_or_material_repair() {
+    let (temp, system, config) = fixture();
+    let operation = OperationId::generate().unwrap();
+    let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+    drop(engine);
+    fs::remove_file(system.join(COMPLETE)).unwrap();
+    fs::remove_file(config.disks[0].root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path())).unwrap();
+    let log = crate::journal::log_path(&config.disks[1]);
+    let size = fs::metadata(&log).unwrap().len();
+    std::fs::OpenOptions::new().write(true).open(log).unwrap().set_len(size - 1).unwrap();
+    let before = image(temp.path());
+    assert!(Engine::initialize_storage(&system, config, operation).is_err());
+    assert_eq!(image(temp.path()), before);
+}
+
+#[test]
+fn system_only_activation_probe_precedes_disk_access_and_preserves_pristine_state_proof() {
+    let (temp, system, config) = fixture();
+    let operation = OperationId::generate().unwrap();
+    let engine = Engine::initialize_storage(&system, config.clone(), operation).unwrap();
+    engine.require_pristine_storage_initialization(operation).unwrap();
+    drop(engine);
+    let missing = config.disks[0].root.with_extension("held-original");
+    fs::rename(&config.disks[0].root, &missing).unwrap();
+    let before = image(temp.path());
+    let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
+    let probe = Engine::begin_initial_storage_activation_probe(
+        PrivateDirectory::open_existing(&system).unwrap(), &admitted, operation,
+    ).unwrap();
+    assert_eq!(image(temp.path()), before);
+    drop(probe);
+    fs::rename(missing, &config.disks[0].root).unwrap();
+    let probe = Engine::begin_initial_storage_activation_probe(
+        PrivateDirectory::open_existing(&system).unwrap(), &admitted, operation,
+    ).unwrap();
+    let handles = config.disks.iter().map(|disk| {
+        opened(PrivateDirectory::open_existing(&disk.root).unwrap()).unwrap().into_directory()
+    }).collect();
+    let mut engine = Engine::open_initial_activation_for_recovery_held(probe, None, handles).unwrap();
+    engine.require_pristine_storage_initialization(operation).unwrap();
+    engine.create_repository(
+        &storage_contract::RepositoryName::parse("explicit successor").unwrap(),
+        "P01", 1, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let state = engine.state().clone();
+    let before = image(temp.path());
+    assert!(engine.require_pristine_storage_initialization(operation).is_err());
+    // Activation receipt retry permits ordinary/authentication successors while
+    // keeping the original storage registration and locator lifecycle fixed.
+    engine.require_initial_storage_activation(&admitted, operation).unwrap();
+    assert_eq!(engine.state(), &state);
+    assert_eq!(image(temp.path()), before);
 }

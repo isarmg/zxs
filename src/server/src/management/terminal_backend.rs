@@ -108,14 +108,17 @@ impl Inner {
                 return Ok(false);
             }
         }
-        if !TerminalManagement::requires_management(&self.data_root)
+        let Some(system) = self.storage_system_if_bound()? else {
+            return Ok(false);
+        };
+        if !TerminalManagement::requires_management(system.path())
             .map_err(crate::engine_backend::error)?
         {
             return Ok(false);
         }
-        if TerminalManagement::metadata_resume_requested(&self.data_root)
+        if TerminalManagement::metadata_resume_requested(system.path())
             .map_err(crate::engine_backend::error)?
-            && TerminalManagement::metadata_resume_recovery(&self.data_root)
+            && TerminalManagement::metadata_resume_recovery(system.path())
                 .map_err(crate::engine_backend::error)?
                 .is_some()
         {
@@ -126,7 +129,7 @@ impl Inner {
             return Ok(true);
         }
         let terminal =
-            TerminalManagement::open(&self.data_root).map_err(crate::engine_backend::error)?;
+            TerminalManagement::open(system.path()).map_err(crate::engine_backend::error)?;
         self.install_terminal(terminal);
         Ok(true)
     }

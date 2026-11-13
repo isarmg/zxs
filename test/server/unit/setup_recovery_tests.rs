@@ -38,6 +38,10 @@ fn fixture_with_disks(ids: &[&str]) -> Fixture {
             .allow_development_mode(),
     }
 }
+fn initialize_source_storage(root: &Path, config: Config) -> storage_engine::Result<Engine> {
+    Engine::initialize_storage(root, config, storage_contract::OperationId::generate()?)
+}
+
 fn permit(service: &SetupRecovery) -> LocalBootstrapPermit {
     service
         .authorize_bootstrap("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -196,7 +200,7 @@ fn partial_setup_is_fenced_and_success_never_reinitializes() {
         storage_contract::ErrorCode::InjectedFailure
     );
     assert!(f.service.data_root.join("setup-intent.json").exists());
-    fs::remove_file(f.service.data_root.join("config.json")).unwrap();
+    fs::remove_file(f.service.storage_system().unwrap().path().join("config.json")).unwrap();
     assert_eq!(
         f.service.status().state,
         InstallationState::RecoveryRequired
@@ -393,7 +397,7 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
         f.service.disks["three"].clone(),
     ])
     .unwrap();
-    drop(Engine::initialize(&f.service.data_root, config).unwrap());
+    drop(initialize_source_storage(&f.service.data_root, config).unwrap());
     fs::rename(
         &f.service.disks["three"],
         f.service.disks["three"].with_extension("offline"),
@@ -496,7 +500,7 @@ fn completes_only_bound_pre_authority_interruption() {
     let f = fixture();
     interrupted(&f);
     // A normal daemon probe must not consume eligibility for pristine setup.
-    drop(Engine::open(&f.service.data_root).unwrap());
+    drop(Engine::open(f.service.storage_system().unwrap().path()).unwrap());
     assert!(f.service.status().completion_available);
     let mut called = false;
     f.service
@@ -526,7 +530,7 @@ fn completes_only_bound_pre_authority_interruption() {
 fn completion_cannot_reset_old_pool_or_partial_authority_or_changed_data() {
     let f = fixture();
     drop(
-        Engine::initialize(
+        initialize_source_storage(
             &f.service.data_root,
             Config::development([
                 f.service.disks["one"].clone(),
@@ -847,7 +851,7 @@ fn bootstrap_selection_order_never_infers_backup_edges() {
                 Ok(())
             })
             .unwrap();
-        let reopened = Engine::open(&f.service.data_root).unwrap();
+        let reopened = Engine::open(f.service.storage_system().unwrap().path()).unwrap();
         assert_eq!(reopened.config().mode, mode);
         for (index, disk) in reopened.config().disks.iter().enumerate() {
             assert_eq!(disk.disk_id, identities[index]);
@@ -908,7 +912,7 @@ fn production_setup_accepts_a_managed_directory_and_retains_selection_fences() {
             Ok(())
         })
         .unwrap();
-    assert!(f.service.data_root.join("config.json").exists());
+    assert!(f.service.storage_system().unwrap().path().join("config.json").exists());
     assert_eq!(f.service.status().state, InstallationState::Existing);
     let f = fixture_with_disks(&["one"]);
     fs::remove_dir(&f.service.disks["one"]).unwrap();
@@ -958,7 +962,7 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
     for ids in [&["one"][..], &["one", "two", "three"][..]] {
         let f = fixture_with_disks(ids);
         drop(
-            Engine::initialize(
+            initialize_source_storage(
                 &f.service.data_root,
                 Config::development(
                     ids.iter()
@@ -1111,7 +1115,7 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
 
 fn recoverable_fixture() -> Fixture {
     let mut f = fixture_with_disks(&["one"]);
-    let mut engine = Engine::initialize(
+    let mut engine = initialize_source_storage(
         &f.service.data_root,
         Config::development(vec![f.service.disks["one"].clone()]).unwrap(),
     )
@@ -1480,4 +1484,23 @@ fn control_record_publication_failure_preserves_evidence_and_storage_error_sourc
         fs::read(f.service.data_root.join("publication-test.json")).unwrap(),
         before
     );
+}
+
+
+#[test]
+fn unbound_disaster_recovery_preserves_source_and_target_without_publishing_credentials() {
+    let f = recoverable_fixture();
+    // The setup lock is a control artifact, not a storage SYSTEM or recovery proof.
+    drop(f.service.lock().unwrap());
+    let control_before = tree_digest(&f.service.data_root).unwrap();
+    let source_before = tree_digest(&f.service.disks["one"]).unwrap();
+    let error = f.service.restore_authenticated(
+        &admin(),
+        RestoreRequest { disk_ids: vec!["one".into()], accept_stale_credentials: false },
+        |_| panic!("unbound recovery must not publish credentials"),
+    ).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::SetupProofInvalid);
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), control_before);
+    assert_eq!(tree_digest(&f.service.disks["one"]).unwrap(), source_before);
+    assert!(f.service.storage_system_if_bound().unwrap().is_none());
 }

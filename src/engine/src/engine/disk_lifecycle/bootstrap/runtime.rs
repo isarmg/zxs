@@ -3,7 +3,6 @@ use super::{store::BootstrapStore, *};
 use crate::{
     Engine, Error, ErrorCode, ValidatedConfig,
     disk::{DiskHandle, DiskResources, existing_private_dir},
-    engine::membership_transition::pending::activation::discover_startup_in_store,
 };
 use platform_io::fs_safety::{
     EntryName,
@@ -116,6 +115,37 @@ pub struct InitialActivationProbeGuard {
     root: PathBuf,
     config: ValidatedConfig,
     store: BootstrapStore,
+    selection: crate::authority_selection::SelectionGuard,
+}
+
+fn require_initial_locator(
+    root: &Path,
+    config: &ValidatedConfig,
+    store: &BootstrapStore,
+) -> crate::Result<()> {
+    crate::engine::membership_transition::pending::activation::exit::stop_plan::require_no_pending_stop(
+        root, store,
+    )?;
+    let locator = store.reload(&config.pool_id).map_err(management_error)?;
+    if config.generation().is_some()
+        || locator.head.generation != 1
+        || !locator.record.stops.is_empty()
+        || locator.record.roots.len() != config.disks.len()
+        || config.disks.iter().any(|disk| {
+            !locator.record.roots.iter().any(|observed| {
+                observed.disk_id == disk.disk_id
+                    && observed.slot_id == disk.slot_id
+                    && observed.binding_generation == disk.binding_generation
+                    && Path::new(&observed.path) == disk.root.as_path()
+                    && observed.metadata_member == disk.metadata_member
+            })
+        })
+    {
+        return Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::Changed,
+        )));
+    }
+    Ok(())
 }
 
 impl Engine {
@@ -129,33 +159,56 @@ impl Engine {
         root: &Path,
         config: &ValidatedConfig,
     ) -> crate::Result<InitialActivationProbeGuard> {
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let store = open_store(&root)?;
-        crate::engine::membership_transition::pending::activation::exit::stop_plan::require_no_pending_stop(&root, &store)?;
-        let locator = store.reload(&config.pool_id).map_err(management_error)?;
-        if config.generation().is_some()
-            || locator.head.generation != 1
-            || !locator.record.stops.is_empty()
-            || locator.record.roots.len() != config.disks.len()
-            || config.disks.iter().any(|disk| {
-                !locator.record.roots.iter().any(|observed| {
-                    observed.disk_id == disk.disk_id
-                        && observed.slot_id == disk.slot_id
-                        && observed.binding_generation == disk.binding_generation
-                        && Path::new(&observed.path) == disk.root.as_path()
-                        && observed.metadata_member == disk.metadata_member
-                })
-            })
+        let system = existing_private_dir(root)?;
+        let selected = crate::authority_selection::FreshSelection::read(&system)
+            .map_err(|error| Error::FreshBootstrap(Box::new(error)))?
+            .ok_or_else(|| Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::UnsupportedReader,
+            )))?;
+        Self::begin_initial_storage_activation_probe(system, config, selected.operation)
+    }
+
+    /// Recheck initial activation while retaining the already-owned SYSTEM lock.
+    pub fn require_initial_storage_activation(
+        &self,
+        config: &ValidatedConfig,
+        operation: crate::OperationId,
+    ) -> crate::Result<()> {
+        self.require_storage_registration(operation)?;
+        if storage_contract::canonical_json(config)?
+            != storage_contract::canonical_json(&self.config)?
         {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "initial activation cannot probe roots after locator lifecycle changes",
-            ));
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Changed,
+            )));
         }
+        let store = open_store_for_config(&self.root, &self.config)?;
+        require_initial_locator(&self.root, &self.config, &store)
+    }
+
+    pub fn begin_initial_storage_activation_probe(
+        system: platform_io::fs_safety::PrivateDirectory,
+        config: &ValidatedConfig,
+        operation: crate::OperationId,
+    ) -> crate::Result<InitialActivationProbeGuard> {
+        let root = system.path().to_owned();
+        let selection = crate::authority_selection::SelectionGuard::acquire_held(system)?
+            .admit_system_selection(config, operation)?;
+        let selected = selection.fresh_selection().ok_or_else(|| Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::Changed,
+        )))?;
+        let config = config.clone().with_fresh_bootstrap(selected)?;
+        let proof = crate::engine::snapshot_initialization::bootstrap::admit_system_completion(
+            &selection.selected_directory()?, &config,
+        )?;
+        let config = config.with_fresh_completion(proof);
+        let store = open_store_for_config(&root, &config)?;
+        require_initial_locator(&root, &config, &store)?;
         Ok(InitialActivationProbeGuard {
             root,
-            config: config.clone(),
+            config,
             store,
+            selection,
         })
     }
 
@@ -172,31 +225,21 @@ impl Engine {
         workspace_limits: Option<crate::RetainedWorkspaceLimits>,
         directories: Vec<std::fs::File>,
     ) -> crate::Result<Self> {
-        // The closure owns every raw directory. Its error paths drop them before
-        // admission is released; success has transferred them to registered
-        // resources and acquired the Engine's actual system/disk writer locks.
-        let prepared = (|| {
-            let (root, projected) = Self::recovery_projection(&admission.root, workspace_limits)?;
-            if storage_contract::canonical_json(&projected)?
-                != storage_contract::canonical_json(&admission.config)?
-            {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "initial activation configuration changed during probe admission",
-                ));
-            }
-            let config = discover_startup_in_store(&admission.store, projected)?;
-            if config.generation().is_some() {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "a discovered successor cannot complete initial storage activation",
-                ));
-            }
-            let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
-            Self::prepare_recovery_resources(root, config, resources)
-        })();
-        drop(admission);
-        Self::finish_held_recovery(prepared?)
+        let config = admission.config.with_workspace_limits(workspace_limits)?;
+        let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
+        let system = admission.selection.selected_directory()?;
+        crate::engine::snapshot_initialization::bootstrap::require_complete_resources(
+            &system, &config, Some(&resources),
+        )?;
+        let locks = crate::engine::config::acquire_locks_selected(
+            &admission.root, &resources, admission.selection,
+        )?;
+        let engine = Self::recovery_resources_with_locks(admission.root, config, resources, locks)?;
+        let result = Self::finish_open(
+            engine, Vec::new(), crate::engine::recovery::RecoveryMode::CompletePending,
+        );
+        drop(admission.store);
+        result
     }
 }
 

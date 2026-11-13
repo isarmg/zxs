@@ -50,7 +50,7 @@ impl Target {
             PreparedService::open(Path::new(layout::STATE), Path::new(layout::MANAGEMENT))?;
         let auth = AuthStore::open_system_management_directory(layout.management()?)?;
         let control = ExclusiveExit::open(
-            layout.state()?,
+            prepared.system_directory()?,
             layout.management()?,
             auth.reader(),
             auth.sole_identity()?,

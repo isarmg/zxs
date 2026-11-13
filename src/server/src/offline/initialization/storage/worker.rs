@@ -192,6 +192,10 @@ fn initialize(target: &Target, plan: &Plan) -> Result<Materialized> {
 }
 fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Materialized> {
     target.plan(plan)?;
+    let system = target.setup.storage_system()?;
+    if engine.root() != system.path() {
+        return Err("initialized engine differs from the original bound storage SYSTEM".into());
+    }
     if engine.is_read_only()
         || engine.read().sequence() > 1
         || engine
@@ -267,6 +271,7 @@ fn materialize(mut engine: Engine, target: &Target, plan: &Plan) -> Result<Mater
             "system SQLite projection is not current; first storage cannot be completed".into(),
         );
     }
+    system.verify_identity()?;
     target.plan(plan)?;
     Ok(Materialized {
         pool_id: engine.config().pool_id.clone(),

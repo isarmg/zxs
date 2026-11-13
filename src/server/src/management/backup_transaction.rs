@@ -182,7 +182,7 @@ impl Inner {
                 let actor = inner.current_management_identity(&identity)?;
                 if crate::lock(&inner.state).backend.engine().is_none() {
                     let engine = storage_engine::Engine::resume_backup_transaction_at_with_workspace_limits(
-                        &inner.data_root, operation, &actor.principal, inner.retained_workspace_limits,
+                        inner.storage_system()?.path(), operation, &actor.principal, inner.retained_workspace_limits,
                     ).map_err(crate::engine_backend::error)?;
                     // Keep all recovered writer owners, but do not admit ordinary
                     // requests until existing primary-auth/capability/ready gates pass.
