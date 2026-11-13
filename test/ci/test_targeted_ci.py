@@ -362,7 +362,10 @@ class TargetedSelection(unittest.TestCase):
             'test/engine/unit/engine/provenance_publication_tests.rs',
             CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        plan = assert_path_group_extension(self, self.policy, paths,
+            ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+             'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
+            ['directory-snapshot-initialization'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -549,6 +552,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema',
+            'directory-snapshot-initialization', 'directory-storage-bootstrap',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -624,7 +628,10 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['directory-snapshot-initialization']
+                         if path == 'src/engine/src/engine/directory_snapshot_source.rs' else [])
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-source-preview'], added)
                 self.assertEqual(plan['groups'], ['directory-snapshot-source-preview'])
                 self.assertEqual(plan['python_tests'], [])
                 self.assertEqual(len(plan['rust_targets']), 3)
@@ -667,8 +674,12 @@ class TargetedSelection(unittest.TestCase):
                                     for target in plan['rust_targets']))
 
     def test_layout_and_ci_changes_union_groups_once(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
-                            'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
+        plan = assert_path_group_extension(self, self.policy,
+            ['src/engine/src/persist/layout.rs', 'src/engine/src/journal.rs',
+             '.github/workflows/ci.yml'],
+            ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
+             'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
+            ['directory-snapshot-initialization'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -2680,7 +2691,10 @@ class ContainerPathFactSelection(unittest.TestCase):
             'test/engine/unit/working_tree/snapshot/store_tests.rs',
         ]:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['directory-snapshot-initialization']
+                         if path == 'src/engine/src/working_tree/snapshot/store.rs' else [])
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['directory-snapshot-material'], added)
                 self.assertEqual(plan['groups'], ['directory-snapshot-material'])
                 self.assertEqual(plan['python_tests'], [])
                 engine, product = plan['rust_targets']
