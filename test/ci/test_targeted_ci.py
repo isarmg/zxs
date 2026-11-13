@@ -2934,3 +2934,16 @@ class ContainerManualDraftSelection(unittest.TestCase):
         ]:
             with self.subTest(path=path):
                 assert_path_group_extension(self, self.policy, [path], retained, added)
+
+
+class ManualDraftSmbAdmissionSelection(unittest.TestCase):
+    def test_metadata_and_session_keep_all_reviewed_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        groups = [
+            'portable-path-consumers', 'container-tags-http',
+            'note-target-consumers', 'container-manual-drafts-consumers',
+        ]
+        for path in ['src/server/src/smb_rpc/metadata.rs',
+                     'src/server/src/smb_rpc/session.rs']:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], groups, [])
