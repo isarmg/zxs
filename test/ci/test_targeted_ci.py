@@ -3184,3 +3184,41 @@ class ManualBodyRetirementSelection(unittest.TestCase):
         regression, = policy['groups']['manual-body-retirement-regressions']['rust_targets']
         self.assertEqual(regression['prefixes'], ['engine::container_drafts::tests::retirement::'])
         self.assertEqual((regression['max_tests'], regression['timeout_seconds']), (7, 900))
+
+
+class DraftReceiptPreflightSelection(unittest.TestCase):
+    def test_preflight_keeps_checkpoint_and_all_draft_retirement_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        path = 'src/engine/src/engine/recovery/workspace_receipts.rs'
+        assert_path_group_extension(self, policy, [path], [
+            'container-tags-engine', 'held-directory-layout',
+            'container-path-facts-engine', 'container-lifecycle-engine',
+        ], [
+            'container-manual-drafts', 'container-manual-drafts-consumers',
+            'container-manual-fresh-format', 'container-manual-recovery',
+            'container-unchanged-save', 'portable-path-consumers',
+            'version-metadata-read', 'current-name-layout-consumers',
+            'manual-body-retirement-consumers',
+        ])
+        draft = policy['groups']['container-manual-drafts']['rust_targets'][0]
+        self.assertEqual(draft['prefixes'], [
+            'engine::container_drafts::tests::',
+            'engine::container_drafts::store::tests::',
+        ])
+        self.assertEqual((draft['max_tests'], draft['timeout_seconds']), (19, 900))
+        # The full draft prefix includes all seven retirement tests, and the
+        # store prefix includes pin/clone and both held-inode identity tests.
+        server = policy['groups']['container-manual-drafts-consumers']['rust_targets'][0]
+        self.assertIn('smb_rpc::tests::manual_draft_tests::', server['prefixes'])
+        self.assertEqual((server['max_tests'], server['timeout_seconds']), (11, 900))
+        capacity, = policy['groups']['container-manual-retained-capacity']['rust_targets']
+        self.assertEqual(capacity['prefixes'], ['smb_rpc::tests::manual_draft_tests::capacity::'])
+        self.assertEqual((capacity['max_tests'], capacity['timeout_seconds']), (2, 900))
+        checkpoint = policy['groups']['held-directory-layout']['rust_targets']
+        self.assertTrue(any('engine::recovery_checkpoint::tests::' in target.get('prefixes', [])
+                            for target in checkpoint))
+        engine, transfer = policy['groups']['manual-body-retirement-consumers']['rust_targets']
+        self.assertEqual((engine['max_tests'], engine['timeout_seconds']), (64, 900))
+        self.assertEqual(transfer['prefixes'], ['transfer::tests::'])
+        # Actual cab8 inventory was 40; preserve the reviewed ceiling of 41.
+        self.assertEqual((transfer['max_tests'], transfer['timeout_seconds']), (41, 900))

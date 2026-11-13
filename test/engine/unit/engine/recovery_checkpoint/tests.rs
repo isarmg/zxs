@@ -131,6 +131,12 @@ fn same_length_legacy_payload_changes_invalidate_coverage() {
 fn clean_checkpoint_reopens_decode_one_snapshot_and_preserve_state() {
     let (_temp, root, config) = setup();
     let (engine, full) = reopen(&root);
+    // Non-manual histories must retain the checkpoint fast path. The absence
+    // of edits does not confer a published-draft retirement capability.
+    assert!(engine.state().container_edits.is_empty());
+    assert!(engine.state().operations.values().all(|receipt| {
+        receipt.kind != crate::engine::container_drafts::EDIT_KIND
+    }));
     let expected = canonical_json(engine.state()).unwrap();
     assert!(full.recovery_after_histories(&config) >= 6);
     assert!(config.disks.iter().all(|d| path(d).exists()));

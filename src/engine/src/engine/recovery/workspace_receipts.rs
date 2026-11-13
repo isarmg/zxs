@@ -29,7 +29,6 @@ impl Engine {
         let mut previous_state = Arc::clone(&self.state);
         let mut namespaces = self.current_namespaces.as_deref().cloned();
         let mut published = None;
-        let mut draft_prefix = (*self.state).clone();
         for (sequence, candidates) in &prepared.records {
             let mut active = candidates.iter().filter(|(hash, receipts)| {
                 self.move_completion.as_ref().is_some_and(|selected| {
@@ -157,20 +156,6 @@ impl Engine {
                 }
                 candidate.snapshot = Some(shared);
             }
-            // Retirement authority requires the complete original edit-state
-            // chain, not just a later snapshot claiming an older save succeeded.
-            // These checks supplement, never replace, apply's transition checks.
-            previous_state = Arc::new((*previous_state).clone());
-            let draft_snapshot = match candidate.snapshot.take() {
-                Some(snapshot) => snapshot.into_admitted(),
-                None => verified_recovery_snapshot_at(
-                    &self.disk_resources, &prepared.online, &candidate.candidate.snapshot_hash,
-                )?,
-            };
-            let draft_state = draft_snapshot.for_candidate(&candidate.candidate)?.state();
-            crate::engine::container_drafts::verify_transition(&draft_prefix, draft_state)?;
-            draft_prefix = draft_state.clone();
-            candidate.snapshot = Some(draft_snapshot.into_shared());
             previous = Some(candidate.candidate.snapshot_hash.clone());
             published = Some(*sequence);
             // Keep only the latest proven slot, plus at most the first pending
@@ -229,20 +214,61 @@ impl Engine {
             Arc::clone(&self.state)
         };
         self.verify_selected_draft_bodies(&state)?;
+        // An authenticated final State is only a trigger for the expensive
+        // original-transition proof. It never grants retirement authority by
+        // itself, and the no-edit path must not produce such a capability.
+        let draft_successors = match published {
+            Some(sequence) if !state.container_edits.is_empty()
+                || state.operations.values().any(|receipt| {
+                    receipt.kind == crate::engine::container_drafts::EDIT_KIND
+                }) => Some(self.verify_published_draft_prefix(prepared, sequence, &state)?),
+            Some(_) | None => None,
+        };
         // The seed is read-only and borrows this verified publication view only
         // for admission. Replay must still start from its original prefix.
         let original = self.named_namespaces.install_state(&mut self.state, state);
         let admission = self.seed_workspace_recovery();
         self.named_namespaces.install_state(&mut self.state, original);
         admission?;
-        if published.is_some() {
-            prepared.draft_successors = Some(
-                super::super::container_drafts::retirement::PublishedDraftSuccessors::capture(
-                    &draft_prefix,
-                ),
-            );
-        }
+        prepared.draft_successors = draft_successors;
         Ok(())
+    }
+
+    // Only the first pass in this invocation may supply published_through:
+    // it denotes a unique, complete publication-barrier prefix in these same
+    // immutable records. This is not an arbitrary journal-range admission API.
+    fn verify_published_draft_prefix(
+        &self,
+        prepared: &PreparedRecovery,
+        published_through: u64,
+        expected: &State,
+    ) -> Result<super::super::container_drafts::retirement::PublishedDraftSuccessors> {
+        let mut prefix = (*self.state).clone();
+        // The first pass already authenticated every candidate link and complete
+        // publication barrier through this exact slot. Reuse its immutable
+        // records, not a local inventory, and retain only one State at a time.
+        for (_, candidates) in prepared.records.range(..=published_through) {
+            let Some((hash, _)) = candidates.iter().find(|(_, receipts)| {
+                receipts.iter().any(|receipt| {
+                    matches!(receipt.record.record_type, RecordType::Accept | RecordType::Publication)
+                })
+            }) else {
+                continue;
+            };
+            let candidate: Candidate = verified_object_at(
+                &self.disk_resources, &prepared.online, "candidate", hash,
+            )?;
+            let admitted = verified_recovery_snapshot_at(
+                &self.disk_resources, &prepared.online, &candidate.snapshot_hash,
+            )?;
+            let next = admitted.for_candidate(&candidate)?;
+            crate::engine::container_drafts::verify_transition(&prefix, next.state())?;
+            prefix = next.state().clone();
+        }
+        if &prefix != expected {
+            return Err(crate::engine::container_drafts::invalid());
+        }
+        Ok(super::super::container_drafts::retirement::PublishedDraftSuccessors::capture(&prefix))
     }
 
     pub(super) fn read_workspace_receipt_candidate(
