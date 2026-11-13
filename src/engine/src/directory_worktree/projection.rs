@@ -1,4 +1,5 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
+use data_serialization::{Deserialize, Serialize};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotFileSource,
     SnapshotManifestError, SnapshotReference,
@@ -44,6 +45,9 @@ pub(crate) enum ContainerPublication {
         entity: LocalEntityIdentity,
     },
     SnapshotOnly { file: FileId },
+    /// The exact version already has a verified file-publication result. Its
+    /// body can still MOVE for a directory commit without another FILE node.
+    Retained { file: SnapshotFile, source: SnapshotFileSource },
 }
 
 #[derive(Debug, PartialEq)]
@@ -62,6 +66,14 @@ pub(crate) enum Transfer<'a> {
         container: ContainerPublication,
     },
 }
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct FileResult {
+    pub(crate) path: PortablePath,
+    pub(crate) material: SnapshotFile,
+    pub(crate) source: SnapshotFileSource,
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct PublishedFileSource {
     pub(crate) path: PortablePath,
@@ -85,11 +97,14 @@ pub(crate) enum ProjectionError {
     PublishedView,
     #[error("complete worktree material exceeds snapshot admission or conflicts")]
     Material(#[source] SnapshotManifestError),
+    #[error("published file baseline is not bound to this sparse occurrence or version")]
+    FileResult,
 }
 
 pub(crate) struct SparseProjection<'a> {
     source: &'a AdmittedSnapshotManifest,
     edits: BTreeMap<usize, WorkingFile>,
+    results: BTreeMap<usize, FileResult>,
 }
 impl<'a> SparseProjection<'a> {
     /// The complete original manifest supplies untouched files and empty dirs.
@@ -122,7 +137,45 @@ impl<'a> SparseProjection<'a> {
             (source.entries()[*index].path.clone(), material.file)
         }).collect::<Vec<_>>();
         source.validate_material_replacements(&replacements).map_err(ProjectionError::Material)?;
-        Ok(Self { source, edits: by_index })
+        Ok(Self { source, edits: by_index, results: BTreeMap::new() })
+    }
+
+    /// Results come from the exact independently verified completion records,
+    /// never from content matching or the container's current default branch.
+    pub(crate) fn admit_with_results(
+        source: &'a AdmittedSnapshotManifest,
+        edits: Vec<FileEdit>,
+        results: &[FileResult],
+    ) -> Result<Self, ProjectionError> {
+        let mut view = Self::admit(source, edits)?;
+        for (position, result) in results.iter().enumerate() {
+            if position > 0 && results[position - 1].path.key() >= result.path.key() {
+                return Err(ProjectionError::FileResult);
+            }
+            let index = source.entries().binary_search_by(|entry| {
+                entry.path.key().cmp(result.path.key())
+            }).map_err(|_| ProjectionError::FileResult)?;
+            let entry = &source.entries()[index];
+            let SnapshotEntryContent::File { material, source: origin } = entry.content else {
+                return Err(ProjectionError::FileResult);
+            };
+            let edited = view.edits.get(&index).ok_or(ProjectionError::FileResult)?;
+            if entry.path != result.path || material.file_id != result.material.file_id
+                || (edited.file.version_id == result.material.version_id
+                    && edited.file != result.material)
+                || (origin == SnapshotFileSource::SnapshotOnly
+                    && result.source != SnapshotFileSource::SnapshotOnly)
+            {
+                return Err(ProjectionError::FileResult);
+            }
+            if let SnapshotFileSource::Container { node, .. } = result.source {
+                if node != FileNodeId::Version(result.material.version_id) {
+                    return Err(ProjectionError::FileResult);
+                }
+            }
+            view.results.insert(index, result.clone());
+        }
+        Ok(view)
     }
 
     pub(crate) fn route(&self, path: &LookupPath) -> Option<ReadRoute<'_>> {
@@ -153,23 +206,34 @@ impl<'a> SparseProjection<'a> {
                     material: file, source,
                 } => match self.edits.get(&index) {
                     Some(material) => {
-                        let container = match source {
-                            SnapshotFileSource::SnapshotOnly => {
-                                ContainerPublication::SnapshotOnly { file: file.file_id }
-                            }
-                            SnapshotFileSource::Container { branch, node } => {
-                                match locate(file.file_id)? {
-                                    ContainerPresence::Present { entity } => {
-                                        ContainerPublication::Update {
-                                            file: file.file_id,
-                                            source_version: file.version_id,
-                                            source_branch: branch,
-                                            source_node: node,
-                                            entity,
+                        let baseline = self.results.get(&index);
+                        let (file, source) = match baseline {
+                            Some(saved) => (saved.material, saved.source),
+                            None => (file, source),
+                        };
+                        let container = if baseline.is_some()
+                            && file.version_id == material.file.version_id
+                        {
+                            ContainerPublication::Retained { file, source }
+                        } else {
+                            match source {
+                                SnapshotFileSource::SnapshotOnly => {
+                                    ContainerPublication::SnapshotOnly { file: file.file_id }
+                                }
+                                SnapshotFileSource::Container { branch, node } => {
+                                    match locate(file.file_id)? {
+                                        ContainerPresence::Present { entity } => {
+                                            ContainerPublication::Update {
+                                                file: file.file_id,
+                                                source_version: file.version_id,
+                                                source_branch: branch,
+                                                source_node: node,
+                                                entity,
+                                            }
                                         }
-                                    }
-                                    ContainerPresence::Absent => {
-                                        ContainerPublication::SnapshotOnly { file: file.file_id }
+                                        ContainerPresence::Absent => {
+                                            ContainerPublication::SnapshotOnly { file: file.file_id }
+                                        }
                                     }
                                 }
                             }
@@ -227,6 +291,10 @@ impl<'a> SparseProjection<'a> {
                     if selected.next().is_some() {
                         return Err(ProjectionError::PublishedView);
                     }
+                    let source = match self.results.get(&index) {
+                        Some(saved) => saved.source,
+                        None => source,
+                    };
                     if source == SnapshotFileSource::SnapshotOnly
                         && published_source != SnapshotFileSource::SnapshotOnly
                     {

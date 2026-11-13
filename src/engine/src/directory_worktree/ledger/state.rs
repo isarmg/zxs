@@ -1,9 +1,9 @@
 use super::record::{Checkpoint, EditRecord, Event, Genesis, commitment};
 use super::LedgerError;
 use crate::directory_worktree::lifecycle::{
-    Phase, Publication, PublicationMode, Worktree,
+    Phase, Publication, PublicationMode, PublicationScope, Worktree,
 };
-use crate::directory_worktree::projection::SparseProjection;
+use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use crate::working_tree::snapshot::AdmittedSnapshotManifest;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::OperationId;
@@ -22,7 +22,7 @@ impl Event {
             Self::Restored { operation, .. } => {
                 (*operation, OperationKind::Restore, Stage::Requested)
             }
-            Self::Completed { publication } => (
+            Self::Completed { publication, .. } => (
                 publication.intent.operation,
                 match publication.intent.mode {
                     PublicationMode::DirectoryCommit { .. } => OperationKind::Commit,
@@ -38,6 +38,7 @@ impl Event {
 pub(super) struct State {
     pub(super) worktree: Worktree,
     pub(super) edits: Vec<EditRecord>,
+    pub(super) file_results: Vec<FileResult>,
     creation: OperationId,
     versions: BTreeSet<storage_contract::VersionId>,
     operations: BTreeMap<OperationId, OperationKind>,
@@ -50,6 +51,7 @@ impl State {
                 genesis.binding.worktree(), genesis.source, genesis.mount.clone(),
             ),
             edits: Vec::new(),
+            file_results: Vec::new(),
             creation: genesis.binding.operation(),
             versions: BTreeSet::new(),
             operations: BTreeMap::new(),
@@ -76,7 +78,7 @@ impl State {
         source: &AdmittedSnapshotManifest,
         event: &Event,
         checkpoint: Checkpoint,
-        verify: &mut impl FnMut(&Publication) -> Result<(), LedgerError>,
+        verify: &mut impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
         if self.prior(event)?.is_some() {
             return Err(LedgerError::Chain);
@@ -85,7 +87,8 @@ impl State {
         match event {
             Event::Edits { expected, edits, .. } => {
                 self.expected(*expected)?;
-                if matches!(self.worktree.phase(), Phase::Active { saved: Some(_) }) {
+                if matches!(self.worktree.phase(), Phase::Active { saved: Some(publication) }
+                    if matches!(publication.scope, PublicationScope::Directory { .. })) {
                     return Err(LedgerError::RebaseRequired);
                 }
                 if edits.is_empty() {
@@ -116,7 +119,8 @@ impl State {
             }
             Event::Commit { expected, current_head, fork_branch, .. } => {
                 self.expected(*expected)?;
-                if matches!(self.worktree.phase(), Phase::Active { saved: Some(_) }) {
+                if matches!(self.worktree.phase(), Phase::Active { saved: Some(publication) }
+                    if matches!(publication.scope, PublicationScope::Directory { .. })) {
                     return Err(LedgerError::RebaseRequired);
                 }
                 self.worktree.prepare_commit(operation, *current_head, *fork_branch)
@@ -126,12 +130,40 @@ impl State {
                 self.expected(*expected)?;
                 self.worktree.prepare_delete(operation).map_err(LedgerError::Lifecycle)?;
             }
-            Event::Completed { publication } => {
+            Event::Completed { publication, files } => {
                 let mut next = self.worktree.clone();
                 next.complete_publication(*publication).map_err(LedgerError::Lifecycle)?;
-                // A JSON completion field never publishes FILE or directory nodes.
-                verify(publication)?;
+                let dirty = self.dirty_edits();
+                if files.len() != dirty.len() {
+                    return Err(LedgerError::FileResults);
+                }
+                let mut results = self.file_results.clone();
+                for (file, edit) in files.iter().zip(dirty) {
+                    if file.path != edit.path || file.material != edit.material {
+                        return Err(LedgerError::FileResults);
+                    }
+                    match results.binary_search_by(|saved| saved.path.key().cmp(file.path.key())) {
+                        Ok(index) => {
+                            if results[index].source
+                                == crate::working_tree::snapshot::SnapshotFileSource::SnapshotOnly
+                                && file.source != results[index].source
+                            {
+                                return Err(LedgerError::FileResults);
+                            }
+                            results[index] = file.clone();
+                        }
+                        Err(index) => results.insert(index, file.clone()),
+                    }
+                }
+                let edits = self.edits.iter().map(EditRecord::file_edit)
+                    .collect::<Result<Vec<_>, _>>()?;
+                SparseProjection::admit_with_results(source, edits, &results)
+                    .map_err(LedgerError::Projection)?;
+                // Verify the exact per-file results as well as the overall
+                // publication; matching local JSON cannot manufacture receipts.
+                verify(publication, files)?;
                 self.worktree = next;
+                self.file_results = results;
             }
             Event::Restored { mount, .. } => {
                 self.worktree.restore(mount.clone(), false).map_err(LedgerError::Lifecycle)?;
@@ -140,6 +172,16 @@ impl State {
         self.operations.insert(operation, kind);
         self.results.insert((operation, stage), (event_commitment(event)?, checkpoint));
         Ok(())
+    }
+    pub(super) fn dirty_edits(&self) -> Vec<&EditRecord> {
+        self.edits.iter().filter(|edit| {
+            // A previously verified version result suppresses republication.
+            // Explicit writes always allocate a fresh version; no body hash
+            // is consulted to infer whether a user operation occurred.
+            !self.file_results.iter().any(|saved| {
+                saved.path == edit.path && saved.material.version_id == edit.material.version_id
+            })
+        }).collect()
     }
     fn expected(&self, revision: crate::directory_worktree::lifecycle::Revision)
         -> Result<(), LedgerError>

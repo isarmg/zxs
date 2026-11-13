@@ -1,6 +1,6 @@
 use super::LedgerError;
 use crate::directory_worktree::lifecycle::{Mount, Publication, Revision, SnapshotSource};
-use crate::directory_worktree::projection::{FileEdit, WorkingFile};
+use crate::directory_worktree::projection::{FileEdit, FileResult, WorkingFile};
 use crate::directory_worktree::store::SparseWorktreeBinding;
 use crate::working_tree::snapshot::SnapshotFile;
 use data_serialization::{Deserialize, Deserializer, Serialize};
@@ -21,7 +21,7 @@ pub(crate) struct EditRecord {
     pub(crate) entity: LocalEntityIdentity,
 }
 impl EditRecord {
-    pub(super) fn file_edit(&self) -> Result<FileEdit, LedgerError> {
+    pub(crate) fn file_edit(&self) -> Result<FileEdit, LedgerError> {
         Ok(FileEdit {
             path: self.path.clone(),
             material: WorkingFile {
@@ -46,7 +46,7 @@ pub(crate) enum Event {
         fork_branch: SnapshotBranchId,
     },
     Delete { operation: OperationId, expected: Revision },
-    Completed { publication: Publication },
+    Completed { publication: Publication, files: Vec<FileResult> },
     /// The repository namespace owner has reserved this free mount under its fence.
     Restored { operation: OperationId, mount: Mount },
 }

@@ -1,3 +1,4 @@
+use crate::directory_worktree::projection::{FileResult, SparseProjection};
 use super::record::{Body, Checkpoint, Event, Format, Frame, Genesis};
 use super::state::State;
 use super::{LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
@@ -59,14 +60,21 @@ impl PendingPublication<'_> {
     pub(crate) fn edits(&self) -> &[super::record::EditRecord] {
         self.ledger.edits()
     }
+    pub(crate) fn file_results(&self) -> &[FileResult] {
+        self.ledger.file_results()
+    }
+    pub(crate) fn dirty_edits(&self) -> Vec<&super::record::EditRecord> {
+        self.ledger.dirty_edits()
+    }
     /// Resume partial body transfers using the publisher's independent decision
     /// first. Only its exact verified permanent result can finish this ledger.
     pub(crate) fn finish(
         &mut self,
         publication: Publication,
-        verify: impl FnMut(&Publication) -> Result<(), LedgerError>,
+        files: Vec<FileResult>,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
     ) -> Result<Checkpoint, LedgerError> {
-        self.ledger.append(Event::Completed { publication }, verify)
+        self.ledger.append(Event::Completed { publication, files }, verify)
     }
 }
 
@@ -169,7 +177,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         source: &'a HeldSnapshotNode,
         binding: Binding,
         expected: Checkpoint,
-        verify: impl FnMut(&Publication) -> Result<(), LedgerError>,
+        verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
     ) -> Result<Self, LedgerError> {
         match Self::recover(source, binding, expected, verify)? {
             RecoveredLedger::Ready(ledger) => Ok(ledger),
@@ -181,7 +189,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         source: &'a HeldSnapshotNode,
         binding: Binding,
         expected: Checkpoint,
-        mut verify: impl FnMut(&Publication) -> Result<(), LedgerError>,
+        mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
     ) -> Result<RecoveredLedger<'a>, LedgerError> {
         if source.manifest().reference() != binding.source
             || expected.sequence.get() >= MAX_FRAMES
@@ -265,7 +273,7 @@ impl<'a> HeldWorktreeLedger<'a> {
     pub(crate) fn append(
         &mut self,
         event: Event,
-        mut verify: impl FnMut(&Publication) -> Result<(), LedgerError>,
+        mut verify: impl FnMut(&Publication, &[FileResult]) -> Result<(), LedgerError>,
     ) -> Result<Checkpoint, LedgerError> {
         if matches!(self.append, AppendState::Uncertain) {
             return Err(LedgerError::Uncertain);
@@ -282,13 +290,6 @@ impl<'a> HeldWorktreeLedger<'a> {
         ).map_err(LedgerError::Directory)?;
         verify_inventory(&self.directory, self.checkpoint)?;
         self.append = AppendState::Ready;
-        if self.state.prior(&event)?.is_some() {
-            return Ok(self.checkpoint);
-        }
-        let sequence = self.checkpoint.sequence.next().map_err(LedgerError::Sequence)?;
-        if sequence.get() >= MAX_FRAMES {
-            return Err(LedgerError::Budget);
-        }
         if let Event::Edits { edits, .. } = &event {
             if edits.len() > self.source.manifest().entries().len() {
                 return Err(LedgerError::Budget);
@@ -299,6 +300,23 @@ impl<'a> HeldWorktreeLedger<'a> {
                     .and_then(|bytes| bytes.checked_add(edit.leaf.as_str().len()))
                     .filter(|bytes| *bytes <= 2 * 1024 * 1024).ok_or(LedgerError::Budget)?;
             }
+        }
+        if let Event::Completed { files, .. } = &event {
+            if files.len() > self.state.edits.len() {
+                return Err(LedgerError::Budget);
+            }
+            let mut path_bytes = 0usize;
+            for file in files {
+                path_bytes = path_bytes.checked_add(file.path.as_str().len())
+                    .filter(|bytes| *bytes <= 1024 * 1024).ok_or(LedgerError::Budget)?;
+            }
+        }
+        if self.state.prior(&event)?.is_some() {
+            return Ok(self.checkpoint);
+        }
+        let sequence = self.checkpoint.sequence.next().map_err(LedgerError::Sequence)?;
+        if sequence.get() >= MAX_FRAMES {
+            return Err(LedgerError::Budget);
         }
         let frame = Frame {
             format: Format::WorktreeTransitions, sequence,
@@ -311,7 +329,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         next.apply(self.source.manifest(), &event, checkpoint, &mut verify)?;
         match &event {
             Event::Edits { edits, .. } => self.verify_edits(edits, EditAccess::Seal)?,
-            Event::Completed { publication }
+            Event::Completed { publication, .. }
                 if matches!(publication.scope, PublicationScope::FilesOnly) => {
                     self.verify_edits(&self.state.edits, EditAccess::ReadOnly)?;
                 }
@@ -369,6 +387,19 @@ impl<'a> HeldWorktreeLedger<'a> {
     }
     pub(crate) fn worktree(&self) -> &Worktree {
         &self.state.worktree
+    }
+    pub(crate) fn file_results(&self) -> &[FileResult] {
+        &self.state.file_results
+    }
+    pub(crate) fn dirty_edits(&self) -> Vec<&super::record::EditRecord> {
+        self.state.dirty_edits()
+    }
+    pub(crate) fn projection(&self) -> Result<SparseProjection<'_>, LedgerError> {
+        let edits = self.state.edits.iter().map(super::record::EditRecord::file_edit)
+            .collect::<Result<Vec<_>, _>>()?;
+        SparseProjection::admit_with_results(
+            self.source.manifest(), edits, &self.state.file_results,
+        ).map_err(LedgerError::Projection)
     }
     pub(crate) fn edits(&self) -> &[super::record::EditRecord] {
         &self.state.edits

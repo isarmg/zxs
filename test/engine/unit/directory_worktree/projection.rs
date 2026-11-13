@@ -246,3 +246,75 @@ fn replacement_admission_counts_unchanged_original_bytes_before_any_publication(
     assert!(matches!(SparseProjection::admit(&source, vec![changed]),
         Err(ProjectionError::Material(SnapshotManifestError::Budget))));
 }
+
+#[test]
+fn a_later_write_uses_the_last_confirmed_file_branch_node_and_version() {
+    let source = source();
+    let saved = edit(b"first saved edit");
+    let branch = BranchId::from_random([91; 16]);
+    let result = FileResult {
+        path: saved.path.clone(), material: saved.material.file,
+        source: SnapshotFileSource::Container {
+            branch, node: FileNodeId::Version(saved.material.file.version_id),
+        },
+    };
+    let mut later = edit(b"second explicit write");
+    later.material.file.version_id = VersionId::from_random([92; 16]);
+    let view = SparseProjection::admit_with_results(&source, vec![later], &[result.clone()]).unwrap();
+    let plan = view.plan(|_| Ok::<_, ()>(ContainerPresence::Present {
+        entity: LocalEntityIdentity::new(9, 10),
+    })).unwrap();
+    let Transfer::MoveWorking { container: ContainerPublication::Update {
+        source_version, source_branch, source_node, ..
+    }, .. } = plan[0].transfer else { panic!("later write must update its known container") };
+    assert_eq!(source_version, result.material.version_id);
+    assert_eq!(source_branch, branch);
+    assert_eq!(source_node, FileNodeId::Version(result.material.version_id));
+}
+
+#[test]
+fn a_saved_version_moves_into_directory_snapshot_without_another_file_node_or_lookup() {
+    let source = source();
+    let saved = edit(b"saved edit");
+    let result = FileResult {
+        path: saved.path.clone(), material: saved.material.file,
+        source: SnapshotFileSource::Container {
+            branch: BranchId::from_random([91; 16]),
+            node: FileNodeId::Version(saved.material.file.version_id),
+        },
+    };
+    let view = SparseProjection::admit_with_results(&source, vec![saved], &[result.clone()]).unwrap();
+    let plan = view.plan(|_| -> Result<ContainerPresence, ()> {
+        panic!("the recorded FILE version must not be recreated")
+    }).unwrap();
+    assert!(matches!(plan[0].transfer, Transfer::MoveWorking {
+        container: ContainerPublication::Retained { file, source }, ..
+    } if file == result.material && source == result.source));
+}
+
+#[test]
+fn invalid_file_result_occurrence_material_or_version_node_cannot_rebind_a_source() {
+    let source = source();
+    let saved = edit(b"saved edit");
+    let result = FileResult {
+        path: saved.path.clone(), material: saved.material.file,
+        source: SnapshotFileSource::Container {
+            branch: BranchId::from_random([91; 16]),
+            node: FileNodeId::Version(saved.material.file.version_id),
+        },
+    };
+    let mut wrong_path = result.clone();
+    wrong_path.path = PortablePath::parse("B.txt").unwrap();
+    let mut wrong_material = result.clone();
+    wrong_material.material.size += 1;
+    let mut wrong_node = result;
+    wrong_node.source = SnapshotFileSource::Container {
+        branch: BranchId::from_random([91; 16]),
+        node: FileNodeId::Version(VersionId::from_random([93; 16])),
+    };
+    for wrong in [wrong_path, wrong_material, wrong_node] {
+        assert!(matches!(SparseProjection::admit_with_results(
+            &source, vec![saved.clone()], &[wrong],
+        ), Err(ProjectionError::FileResult)));
+    }
+}

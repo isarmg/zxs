@@ -55,6 +55,8 @@ pub(crate) enum LedgerError {
     Stale,
     #[error("the completed directory view must be rebound before accepting further edits")]
     RebaseRequired,
+    #[error("worktree completion does not exactly cover its dirty file versions")]
+    FileResults,
     #[error("worktree ledger has an uncertain append; reopen the decided checkpoint")]
     Uncertain,
     #[error("worktree has a frozen publication that requires its original publisher to resume")]
