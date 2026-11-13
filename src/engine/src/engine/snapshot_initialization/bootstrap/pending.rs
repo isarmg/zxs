@@ -36,7 +36,23 @@ impl PendingBootstrapAdmission {
         let mut publication_rows = Vec::new();
         for disk in members {
             let handle = resources.get(disk)?;
-            config.verify_root_membership(&handle.root, disk)?;
+            // The SYSTEM completion output is precisely what this path may
+            // restore. Admit the fixed Genesis anchor from the original seal
+            // and selector, not from a fabricated completed SYSTEM capability.
+            let saved: crate::Config = handle.root.read_json_observed(
+                &disk.root.join("metadata/pool-membership/config.json"), &mut |_| Ok(()),
+            )?;
+            let selector = handle.root.read_bytes(
+                &disk.root.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_BYTES,
+            )?;
+            let admitted = crate::authority_selection::FreshSelection::admit_disk(
+                ValidatedConfig::try_from(saved)?, &handle.seal, &selector,
+            )?;
+            if storage_contract::canonical_json(&admitted)? != storage_contract::canonical_json(config)?
+                || admitted.fresh_bootstrap() != config.fresh_bootstrap()
+            {
+                return Err(rejected());
+            }
             let opened = OpenJournal::scan_initial_at(&handle.root, disk, config, MAX_BYTES)?;
             let rows = &opened.scan.records;
             if opened.scan.torn_tail || !(3..=4).contains(&rows.len()) {

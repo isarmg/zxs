@@ -43,3 +43,18 @@
   目录首节点初始化，不决定其他目录提交/软删语义。
 
 本地没有执行编译、测试、格式化或 CI 选择器；仅静态阅读和 diff 检查。
+
+## SYSTEM 丢失恢复：来源准入切片
+
+`admit_storage_recovery` 消费调用者明确提供的原 metadata 目录描述符，严格解码单一
+新格式 DISK selector/seal 和原 bootstrap 安装证明。它仅接受达到原 quorum、相同完整
+已发布前缀的来源，验证原三根与 writer 身份、每个实际 journal 收据与 publication seal、
+完整最新 State，以及原 bootstrap operation/principal 原文仍在。未列磁盘不会被探测。
+返回值保留原 writer 锁和 journal FD；其 evidence commitment 供控制层恢复 intent 绑定。
+此阶段不创建或选择新 SYSTEM，不修 journal，不补 SQLite，不给予普通写入权限。
+
+当前切片主动拒绝 pending、torn、分歧或未被 journal 包含的 publication barrier；不从
+更新时间推断哪份来源较新。恢复执行后继仍待接：原 recovery operation、控制 intent
+承诺、新 SYSTEM 实体必须进入原成员永久 publication，单一 selector 表达 Original /
+Recovery 载体后继，原 DISK/bootstrap 承诺不得重写。只读来源准入不是完整灾难恢复。
+新增 quorum 成功/原锁竞争及不足 quorum/torn 全树不变回归均尚未运行。

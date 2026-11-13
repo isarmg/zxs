@@ -17,6 +17,7 @@ use storage_contract::Generation;
 
 mod decision;
 mod pending;
+pub(in crate::engine) mod system_recovery;
 
 const ROOTS: &str = "fresh-directory-roots-v1.json";
 const COMPLETE: &str = "fresh-directory-bootstrap-complete-v1.json";
@@ -497,6 +498,16 @@ fn verify_roots(
     config: &ValidatedConfig, record: &RootRecord, selector_bytes: &[u8],
     resources: Option<&DiskResources>,
 ) -> Result<()> {
+    verify_scoped_roots(config, record, selector_bytes, resources, &config.disks.iter().collect::<Vec<_>>())
+}
+
+fn verify_scoped_roots(
+    config: &ValidatedConfig,
+    record: &RootRecord,
+    selector_bytes: &[u8],
+    resources: Option<&DiskResources>,
+    scope: &[&crate::DiskConfig],
+) -> Result<()> {
     if config.fresh_bootstrap() != Some(record.selection)
         || record.roots.len() != config.disks.len()
         || record.disk_writers.len() != config.disks.len()
@@ -506,6 +517,9 @@ fn verify_roots(
     for ((binding, writer), disk) in record.roots.iter().zip(&record.disk_writers)
         .zip(&config.disks)
     {
+        if !scope.iter().any(|selected| selected.disk_id == disk.disk_id) {
+            continue;
+        }
         if binding.registration.pool_id != config.pool_id
             || binding.registration.disk_id != disk.disk_id
             || binding.registration.slot_id != disk.slot_id

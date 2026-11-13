@@ -73,7 +73,7 @@ class TargetedSelection(unittest.TestCase):
     def test_cache_budget_fixture_routes_full_fault_module_without_production_scope_changes(self):
         fixture = 'test/engine/unit/engine/publication/cache_budget_tests.rs'
         plan = assert_path_group_extension(
-            self, self.policy, [fixture], ['publication-cache-budget'], [])
+            self, self.policy, [fixture], ['publication-cache-budget'], ['portable-path-consumers'])
         self.assertEqual(plan['python_tests'], [])
         self.assertEqual(len(plan['rust_targets']), 1)
         expected = {
@@ -407,7 +407,8 @@ class TargetedSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths,
             ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
              'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
-            ['directory-snapshot-initialization', 'container-manual-fresh-format'])
+            ['directory-snapshot-initialization', 'container-manual-fresh-format',
+             'directory-storage-bootstrap', 'storage-system-recovery-admission'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -457,14 +458,17 @@ class TargetedSelection(unittest.TestCase):
                 self.assertEqual(plan['python_tests'], [])
         for path in ['src/engine/src/journal.rs', 'src/engine/src/engine/provenance.rs']:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
                 required = ['held-directory-layout', 'version-publication-location']
                 if path == 'src/engine/src/journal.rs':
                     required.insert(0, 'backup-scoped-encoding-memo')
+                    plan = assert_path_group_extension(self, self.policy, [path], required, [
+                        'directory-storage-bootstrap', 'storage-system-recovery-admission',
+                    ])
                     self.assertEqual(len(plan['rust_targets']), 4)
                     self.assertEqual(plan['python_tests'], ['test_backup_encoding_memo_ci'])
                     self.assert_backup_memo_union_preserves_selections(plan)
                 else:
+                    plan = CI.select_plan(self.policy, [path])
                     self.assertEqual(len(plan['rust_targets']), 3)
                     self.assertEqual(plan['python_tests'], [])
                 self.assertEqual(plan['groups'], required)
@@ -751,7 +755,8 @@ class TargetedSelection(unittest.TestCase):
              '.github/workflows/ci.yml'],
             ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
              'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
-            ['directory-snapshot-initialization', 'container-manual-fresh-format'])
+            ['directory-snapshot-initialization', 'container-manual-fresh-format',
+             'directory-storage-bootstrap', 'storage-system-recovery-admission'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -3140,9 +3145,10 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
             path = 'src/engine/src/engine/disk_lifecycle/bootstrap/' + source
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path],
-                                            ['held-directory-layout'], [group] + (
+                                            ['held-directory-layout'], [group, 'container-manual-fresh-format'] + (
                                                 ['storage-setup-system-binding',
-                                                 'storage-system-product-consumers']
+                                                 'storage-system-product-consumers',
+                                                 'storage-system-recovery-admission']
                                                 if source == 'runtime.rs' else []))
 
 
@@ -3157,7 +3163,8 @@ class DirectoryBootstrapDecisionSelection(unittest.TestCase):
                 assert_path_group_extension(self, policy, [path],
                                             ['directory-storage-bootstrap'],
                                             ['storage-setup-system-binding',
-                                             'storage-system-product-consumers'])
+                                             'storage-system-product-consumers',
+                                             'storage-system-recovery-admission'])
 
 
 class StorageSystemProductSelection(unittest.TestCase):
@@ -3221,3 +3228,31 @@ class StorageSystemProductSelection(unittest.TestCase):
         ], [], ['storage-setup-system-binding'])
         plan = CI.select_plan(policy, ['test/server/unit/startup_admission_tests.rs'])
         self.assertEqual(plan['groups'], ['storage-system-product-consumers'])
+
+
+class StorageSystemRecoveryAdmissionSelection(unittest.TestCase):
+    def test_read_only_sources_keep_original_bootstrap_and_product_recovery_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'storage-system-recovery-admission'
+        source = 'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs'
+        fixture = 'test/engine/unit/system_recovery_admission_tests.rs'
+        assert_path_group_extension(self, policy, [source], [], [
+            group, 'directory-storage-bootstrap', 'storage-setup-system-binding',
+            'storage-system-product-consumers',
+        ])
+        assert_path_group_extension(self, policy, [fixture], [], [group])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'prefixes': ['engine::snapshot_initialization::bootstrap::system_recovery::tests::'],
+            'max_tests': 4, 'timeout_seconds': 900,
+        }])
+
+    def test_recovery_and_lifecycle_fixtures_keep_original_origin_selections(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/management_recovery_admission_tests.rs',
+        ], ['current-name-record-consumers'], ['storage-system-product-consumers'])
+        assert_path_group_extension(self, policy, [
+            'test/server/unit/service_lifecycle/management.rs',
+        ], None, ['storage-system-product-consumers'])

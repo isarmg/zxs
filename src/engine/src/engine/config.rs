@@ -536,7 +536,7 @@ pub(super) fn acquire_locks_selected(
     Ok(locks)
 }
 
-fn acquire_writer(f: &File) -> Result<()> {
+pub(in crate::engine) fn acquire_writer(f: &File) -> Result<()> {
     platform_io::fs_safety::linux::SingleLinkRequirement::check(f).map_err(|e| {
         let message = e.to_string();
         Error::from(e).context(storage_contract::ErrorCode::UnsafePath, message)

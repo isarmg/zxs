@@ -4033,6 +4033,22 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "storage-system-recovery-admission": {
+      "reason": "Read-only recovery source admission retains original metadata descriptors, writer locks, exact bootstrap and complete publication prefix. Missing seals, foreign roots, insufficient quorum and torn or stale prefixes refuse without mutation; this selection alone does not prove SYSTEM replacement or completed disaster recovery.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::snapshot_initialization::bootstrap::system_recovery::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -12259,6 +12275,68 @@
       "path": "src/engine/src/journal.rs",
       "groups": [
         "directory-storage-bootstrap"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "test/engine/unit/system_recovery_admission_tests.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "storage-system-recovery-admission"
       ]
     }
   ],

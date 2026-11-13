@@ -41,13 +41,31 @@ fn initial_result(record: &RootRecord) -> crate::Result<OperationResult> {
         commit_state: crate::CommitState::Published,
         protection_at_publish: crate::ProtectionAtPublish::NotApplicable,
         current_health: crate::CurrentHealth::Healthy,
-        request_digest: roots_commitment(record)?.to_string(),
+        request_digest: roots_commitment(record)?.hash().to_string(),
         sequence: 1,
         result: storage_contract::decode_strict(&record.bytes().map_err(failure)?)?,
     })
 }
 
 impl BootstrapDecision {
+    pub(super) fn require_initial_candidate(&self, candidate: &Candidate) -> crate::Result<()> {
+        if storage_contract::canonical_json(&self.candidate)?
+            != storage_contract::canonical_json(candidate)?
+        {
+            return Err(rejected());
+        }
+        Ok(())
+    }
+
+    pub(super) fn admit_source(bytes: &[u8]) -> crate::Result<(Self, RootRecord)> {
+        let proof: Self = storage_contract::decode_strict(bytes)?;
+        let record = storage_contract::decode_strict(
+            &storage_contract::canonical_json(&proof.publication.result.result)?,
+        )?;
+        let admitted = Self::decode(bytes, &record)?;
+        Ok((admitted, record))
+    }
+
     pub(super) fn verify_membership(&self, config: &crate::ValidatedConfig) -> crate::Result<()> {
         config.verify_candidate_membership(&self.candidate)
     }
@@ -89,7 +107,7 @@ impl BootstrapDecision {
             || self.candidate.directory_material().is_some()
             || !self.candidate.versions.is_empty()
             || self.publication.recovery.is_some()
-            || result.request_digest != roots_commitment(record)?.to_string()
+            || result.request_digest != roots_commitment(record)?.hash().to_string()
         {
             return Err(rejected());
         }
@@ -311,7 +329,7 @@ impl Engine {
             || candidate.generation().is_some()
             || candidate.directory_material().is_some()
             || !candidate.versions.is_empty()
-            || candidate.request_digest != roots_commitment(&record)?.to_string()
+            || candidate.request_digest != roots_commitment(&record)?.hash().to_string()
             || &expected != next
         {
             return Err(rejected());
@@ -345,7 +363,7 @@ pub(super) fn read_initial_state(
     if candidate.operation_id != record.operation || candidate.sequence != 1
         || candidate.previous_snapshot.is_some() || candidate.generation().is_some()
         || candidate.directory_material().is_some() || !candidate.versions.is_empty()
-        || candidate.request_digest != roots_commitment(record)?.to_string()
+        || candidate.request_digest != roots_commitment(record)?.hash().to_string()
     {
         return Err(rejected());
     }

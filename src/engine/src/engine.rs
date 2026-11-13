@@ -60,6 +60,7 @@ pub use disk_registry::{
 mod disk_lifecycle;
 pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
 pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
+pub use snapshot_initialization::bootstrap::system_recovery::StorageRecoveryAdmission;
 pub(crate) use disk_lifecycle::terminal::VerifiedTerminalStop;
 pub use disk_lifecycle::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
