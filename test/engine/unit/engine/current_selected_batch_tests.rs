@@ -302,6 +302,12 @@ fn assert_clean_graph(engine: &Engine, directory: &str, hidden: &[Entry]) {
 #[test]
 fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
     let mut fixture = Fixture::new();
+    let child = selected_branch(&fixture.engine, &fixture.repo, "dir/child");
+    let later_tree = fixture.engine.state.directory_trees[
+        &fixture.engine.state.directory_branches[&child].head_tree_id
+    ].clone();
+    assert!(later_tree.entries.contains(&fixture.later_child));
+    assert!(!later_tree.entries.contains(&fixture.original_child));
     fixture.exit_and_select(MembershipExitAction::Deregister);
     let state = fixture.engine.state();
     let current = fixture.engine.current_namespaces.as_ref().unwrap();
@@ -311,8 +317,8 @@ fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
         admitted.selected_tree_id(),
         state.directory_tree_selections[&fixture.repo.repository_id]
     );
-    // A source keeps the named HEAD for CAS even when its rows come from a
-    // different selected tree. The child below exercises that distinction.
+    // Checkout materializes the selected composition as the named HEAD.
+    // CAS must bind that head, not the retained unselected later snapshot.
     assert_eq!(
         admitted.branch().head_tree_id,
         state.directory_branches[&fixture.root].head_tree_id
@@ -336,12 +342,25 @@ fn disk_exit_selected_projection_batch_sources_reuse_only_the_current_input() {
     assert_eq!(sources.get(&fixture.root).unwrap().branch(), &expected);
     let child = selected_branch(&fixture.engine, &fixture.repo, "dir/child");
     let selected_child = sources.get(&child).unwrap();
-    assert_ne!(
+    assert_eq!(
         selected_child.selected_tree_id(),
-        state.directory_branches[&child].head_tree_id
+        state.directory_tree_selections[&selected_child.branch().directory_id]
     );
+    assert_eq!(selected_child.branch().head_tree_id,
+        state.directory_branches[&child].head_tree_id);
+    assert_ne!(selected_child.selected_tree_id(), later_tree.tree_id);
     assert!(selected_child.branch().entries.contains(&fixture.original_child));
     assert!(!selected_child.branch().entries.contains(&fixture.later_child));
+    assert_eq!(state.directory_trees[&later_tree.tree_id], later_tree);
+    let selected = selected_child.branch().clone();
+    drop(sources);
+    drop(fixture.engine);
+    let engine = Engine::open(&fixture.temp.path().join("system")).unwrap();
+    let mut sources = engine.current_namespaces.as_ref().unwrap().batch_sources(engine.state());
+    assert_eq!(sources.get(&child).unwrap().branch(), &selected);
+    assert_eq!(engine.state.directory_trees[&later_tree.tree_id], later_tree);
+    assert_eq!(body(&engine, &fixture.original_child), b"selected original body");
+    assert_eq!(body(&engine, &fixture.later_child), b"unselected later body");
 }
 
 #[test]
