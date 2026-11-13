@@ -36,19 +36,27 @@ impl Fixture {
             message: "name projection fixture".into(),
             request_digest: None,
         }).unwrap();
+        directory_fixture::checkpoint(&mut engine, &repository, "");
         let original_head = engine.state().branches[&repository.main_branch_id]
             .head_commit_id.clone();
-        let retained = engine.create_branch(
-            &original_head, &storage_contract::BranchName::parse("retained").unwrap(),
-            "admin", op(),
-        ).unwrap().branch_id;
         let entry = engine.namespace_tree(&repository.main_branch_id).unwrap()
             .get("before.txt").unwrap().clone();
+        // Disk roots expose independent file branches, not whole-history forks.
+        // Neither retained scope is selected by the current directory.
+        let retained = engine.create_file_branch(
+            &entry.file_id, &entry.version_id,
+            &storage_contract::BranchName::parse("retained").unwrap(), "admin", op(),
+        ).unwrap().branch_id.unwrap();
         let file_branch = engine.create_file_branch(
             &entry.file_id, &entry.version_id,
             &storage_contract::BranchName::parse("file retained").unwrap(), "admin", op(),
-        ).unwrap().result["branch_id"].as_str().unwrap().to_owned();
-        directory_fixture::checkpoint(&mut engine, &repository, "");
+        ).unwrap().branch_id.unwrap();
+        assert_ne!(retained, file_branch);
+        for branch in [&retained, &file_branch] {
+            assert_eq!(engine.state().branches[branch].file_id.as_deref(),
+                Some(entry.file_id.as_str()));
+            assert_ne!(engine.state().file_selections.get(&entry.file_id), Some(branch));
+        }
         let directory = engine.create_directory_branches(
             &repository.repository_id, None,
             &storage_contract::BranchName::parse("directory retained").unwrap(), "admin", op(),
