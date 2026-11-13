@@ -34,6 +34,12 @@ fn fixture() -> (State, State, String, OperationId) {
     (before, engine.state().clone(), repo.history_tree_id, operation)
 }
 
+fn candidate(before: &State) -> State {
+    let mut after = before.clone();
+    after.begin_tracking();
+    after
+}
+
 fn full_audit(state: &State, history: &str) -> json_codec::Map<String, Value> {
     path_audit::project(state, history).unwrap().into_iter()
         .map(|(id, carrier)| (id.to_string(), json_codec::to_value(carrier).unwrap())).collect()
@@ -62,7 +68,7 @@ fn published_rename_full_indexed_and_delta_keep_original_receipt() {
 fn principal_only_change_is_dirty_and_fails_closed() {
     let (_, before, history, operation) = fixture();
     let index = DerivedOwners::from_state(&before);
-    let mut after = before.clone();
+    let mut after = candidate(&before);
     after.operation_principals.insert(operation, "mallory".into());
     assert!(Writes::between(&before, &after).unwrap().rows[&Field::PathAudit]
         .contains(&operation.to_string()));
@@ -77,7 +83,7 @@ fn principal_only_change_is_dirty_and_fails_closed() {
 fn unrelated_sequence_preserves_audit_storage_without_full_rescan() {
     let (_, before, _, _) = fixture();
     let index = DerivedOwners::from_state(&before);
-    let mut after = before.clone();
+    let mut after = candidate(&before);
     after.sequence += 1;
     let writes = Writes::between(&before, &after).unwrap();
     assert!(writes.operations.is_empty());
@@ -90,19 +96,53 @@ fn unrelated_sequence_preserves_audit_storage_without_full_rescan() {
 }
 
 #[test]
-fn removed_carrier_clears_owners_and_emits_removal() {
+fn non_audit_replacement_removes_derived_row_with_exact_delta() {
     let (_, before, history, operation) = fixture();
     let index = DerivedOwners::from_state(&before);
-    let mut after = before.clone();
-    after.operations.remove_discard(&operation);
-    after.operation_principals.remove_discard(&operation);
+    let mut after = candidate(&before);
+    // Index-only fault fixture: this does not authorize rewriting a published
+    // receipt. Exercise a carrier Some -> None change using an exact keyed write.
+    let mut replacement = before.operations[&operation].clone();
+    replacement.kind = "projection.fixture.non-audit".into();
+    after.operations.insert(operation, replacement);
+    let writes = Writes::between(&before, &after).unwrap();
+    assert_eq!(writes.operations, BTreeSet::from([operation]));
+    assert_eq!(writes.rows[&Field::PathAudit], BTreeSet::from([operation.to_string()]));
     let delta = ProjectionDelta::between(&before, &after, &index).unwrap().unwrap();
     assert_eq!(delta.owners, DerivedOwners::from_state(&after));
     assert!(!delta.owners.path_audit_owners.contains_key(&operation));
-    assert_eq!(Field::PathAudit.value(&after, &operation.to_string()).unwrap(), None);
     assert_eq!(delta.histories[&history].maps[&Field::PathAudit][&operation.to_string()], None);
-    assert_eq!(delta.owners.rows(&history).unwrap().values(Field::PathAudit, &after).unwrap(),
-        full_audit(&after, &history));
+    let projected = delta.owners.rows(&history).unwrap()
+        .values(Field::PathAudit, &after).unwrap();
+    assert!(!projected.contains_key(&operation.to_string()));
+    assert_eq!(projected, full_audit(&after, &history));
+}
+
+#[test]
+fn foreign_receipt_removal_requires_full_rebuild_and_clears_audit_owners() {
+    let (_, before, history, operation) = fixture();
+    let index = DerivedOwners::from_state(&before);
+    let mut after = candidate(&before);
+    // Permanent operations have no tracked deletion API. This deliberate
+    // foreign mutable escape must lose exact lineage, not claim a delta.
+    after.operations.remove_discard(&operation);
+    after.operation_principals.remove_discard(&operation);
+    assert!(matches!(after.operations.changes_since(&before.operations), MapChanges::All));
+    assert!(matches!(
+        after.operation_principals.changes_since(&before.operation_principals),
+        MapChanges::All,
+    ));
+    assert!(Writes::between(&before, &after).is_none());
+    assert!(ProjectionDelta::between(&before, &after, &index).unwrap().is_none());
+    let mut transition = ProjectionTransition::new(&before, &after, Some(&index)).unwrap();
+    assert!(transition.take_history_edits().is_none());
+    let owners = transition.next().owners();
+    assert_eq!(owners, &DerivedOwners::from_state(&after));
+    assert!(!owners.path_audit_owners.contains_key(&operation));
+    assert_eq!(Field::PathAudit.value(&after, &operation.to_string()).unwrap(), None);
+    let projected = owners.rows(&history).unwrap().values(Field::PathAudit, &after).unwrap();
+    assert!(!projected.contains_key(&operation.to_string()));
+    assert_eq!(projected, full_audit(&after, &history));
 }
 
 #[test]
@@ -112,7 +152,7 @@ fn malformed_carrier_tracks_new_histories_and_repair_removes_unscoped_membership
     before.operations.get_mut(&operation).unwrap().result = json_codec::json!({});
     let index = DerivedOwners::from_state(&before);
     assert!(index.unscoped_path_audit.contains_key(&operation));
-    let mut after = before.clone();
+    let mut after = candidate(&before);
     let other = "history_ffffffffffffffffffffffffffffffff";
     let mut added = after.histories[&history].clone();
     added.history_tree_id = other.into();
@@ -121,14 +161,14 @@ fn malformed_carrier_tracks_new_histories_and_repair_removes_unscoped_membership
     assert_eq!(owners, DerivedOwners::from_state(&after));
     assert!(owners.rows(other).unwrap().values(Field::PathAudit, &after).is_err());
     assert!(ProjectionDelta::between(&before, &after, &index).is_err());
-    let mut removed = after.clone();
+    let mut removed = candidate(&after);
     removed.histories.remove(other);
     let removed_owners = DerivedOwners::transition(&after, &removed, &owners, None)
         .unwrap().unwrap();
     assert_eq!(removed_owners, DerivedOwners::from_state(&removed));
     assert!(removed_owners.rows(other).is_none());
     assert!(removed_owners.rows(&history).unwrap().values(Field::PathAudit, &removed).is_err());
-    let mut repaired = after.clone();
+    let mut repaired = candidate(&after);
     repaired.operations.insert(operation, valid.operations[&operation].clone());
     let delta = ProjectionDelta::between(&after, &repaired, &owners).unwrap().unwrap();
     assert_eq!(delta.owners, DerivedOwners::from_state(&repaired));
@@ -177,7 +217,7 @@ fn restore_carrier_indexes_imported_projection_without_reclassifying_source_as_n
     receipt.sequence += 1;
     receipt.history_tree_id = Some(target.into());
     receipt.result = json_codec::json!({"restored_path_audit": &sources});
-    let mut after = before.clone();
+    let mut after = candidate(&before);
     after.operations.insert(restore_id, receipt);
     after.operation_principals.insert(restore_id, "alice".into());
     let index = DerivedOwners::from_state(&before);
@@ -198,7 +238,7 @@ fn restore_carrier_indexes_imported_projection_without_reclassifying_source_as_n
 fn mutable_graph_owner_changes_do_not_retarget_immutable_audit_sources() {
     let (_, before, history, operation) = fixture();
     let index = DerivedOwners::from_state(&before);
-    let mut after = before.clone();
+    let mut after = candidate(&before);
     let fact = crate::persist::path_changes::read(&before.operations[&operation])
         .unwrap().remove(0);
     let other = "history_ffffffffffffffffffffffffffffffff";
