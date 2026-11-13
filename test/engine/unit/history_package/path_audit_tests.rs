@@ -79,6 +79,60 @@ fn restore_rejects_same_operation_id_with_different_native_proof_without_writes(
 }
 
 #[test]
+fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_without_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (first, first_repo, native) = source(&temporary.path().join("first"));
+    let first_package = temporary.path().join("first-package");
+    first.export_history_package(&first_repo.history_tree_id, &first_package).unwrap();
+
+    let mut second = initialize(&temporary.path().join("second"));
+    // Use a distinct repository name too: rejection must concern the retained
+    // source proof, not an incidental target repository-name collision.
+    let second_repo = second.create_repository(
+        &storage_contract::RepositoryName::parse("different audit source").unwrap(),
+        "P01", 3, "bob", OperationId::generate().unwrap(),
+    ).unwrap();
+    save(&mut second, &second_repo.main_branch_id, b"different source body");
+    let conflicting = second.file_namespace(
+        &second_repo.repository_id,
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "file.txt", Some("different.txt"),
+        ).unwrap(),
+        "bob", native.operation_id,
+    ).unwrap();
+    assert_eq!(conflicting.operation_id, native.operation_id);
+    assert_ne!(conflicting, native);
+    let second_package = temporary.path().join("second-package");
+    second.export_history_package(&second_repo.history_tree_id, &second_package).unwrap();
+
+    let root = temporary.path().join("target");
+    let mut target = initialize(&root);
+    let restored = target.restore_history_package(
+        &first_package, "P01", 3, "restore-manager", OperationId::generate().unwrap(),
+    ).unwrap();
+    let retained = audit::restored(&restored).unwrap();
+    assert_eq!(retained[&native.operation_id].operation, native);
+    assert_eq!(retained[&native.operation_id].principal.as_str(), "alice");
+    assert!(!target.state.operations.contains_key(&native.operation_id));
+    drop(target);
+    let mut target = Engine::open(&root.join("state")).unwrap();
+    assert!(!target.state.operations.contains_key(&native.operation_id));
+    assert_eq!(audit::restored(&target.state.operations[&restored.operation_id]).unwrap(), retained);
+    let state = canonical_json(target.state()).unwrap();
+    // Cover both packages, both source pools and every target file, including
+    // exact bytes, inode and mode; rejected restore must not stage anything.
+    let files = super::export_audit_guard::disk_image(temporary.path());
+    let operation = OperationId::generate().unwrap();
+    let error = target.restore_history_package(
+        &second_package, "P01", 3, "second-manager", operation,
+    ).unwrap_err();
+    assert!(matches!(error, Error::PathChange(crate::PathChangeError::Publication)));
+    assert!(!target.state.operations.contains_key(&operation));
+    assert_eq!(canonical_json(target.state()).unwrap(), state);
+    assert_eq!(super::export_audit_guard::disk_image(temporary.path()), files);
+}
+
+#[test]
 fn copied_restored_provenance_survives_cold_open_without_inventing_source_operations() {
     let temporary = tempfile::tempdir().unwrap();
     let (source, repo, native) = source(&temporary.path().join("source"));

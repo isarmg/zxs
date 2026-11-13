@@ -785,6 +785,10 @@ class TargetedSelection(unittest.TestCase):
                     'src/engine/src/state_projection/move_receipts.rs',
                     'test/engine/unit/state_projection/move_receipts_tests.rs',
                 ] else ['container-path-facts-engine']
+                if path == 'src/engine/src/state_projection/lifecycles.rs':
+                    added += ['history-path-audit-projection']
+                if path == 'src/engine/src/file_deletion/retained.rs':
+                    added += ['history-package-audit-guard', 'history-package-path-audit']
                 plan = assert_path_group_extension(
                     self, self.policy, [path], ['container-lifecycle-engine'], added,
                 )
@@ -817,6 +821,8 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-path-facts-http',
             'container-path-facts-schema', 'container-lifecycle-contract',
+            'history-package-audit-guard', 'history-package-path-audit',
+            'history-path-audit-projection',
         ])
         self.assertEqual(complete['groups'], [
             'ci-selection', 'container-lifecycle-engine',

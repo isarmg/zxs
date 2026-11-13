@@ -122,7 +122,7 @@ fn malformed_carrier_tracks_new_histories_and_repair_removes_unscoped_membership
     assert!(owners.rows(other).unwrap().values(Field::PathAudit, &after).is_err());
     assert!(ProjectionDelta::between(&before, &after, &index).is_err());
     let mut removed = after.clone();
-    removed.histories.remove_discard(other);
+    removed.histories.remove(other);
     let removed_owners = DerivedOwners::transition(&after, &removed, &owners, None)
         .unwrap().unwrap();
     assert_eq!(removed_owners, DerivedOwners::from_state(&removed));
