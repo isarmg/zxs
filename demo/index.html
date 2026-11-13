@@ -10,7 +10,7 @@
 #helper>.content{background:#f3f5f6;color:#20303e;padding:0}#helper>.content>.notice{display:none}.helper-surface{padding:32px 20px 64px;max-width:1040px;margin:auto}.helper-surface header{display:flex;gap:20px;align-items:center;justify-content:space-between;margin-bottom:24px}.helper-surface h1{font-size:28px;margin:2px 0}.helper-surface h2{font-size:19px;margin-bottom:12px}.eyebrow{font-size:12px;letter-spacing:.08em;color:#647383}.helper-card{background:white;border:1px solid #dce2e6;border-radius:12px;padding:22px;margin:20px 0}.helper-warning{background:#fff5e6;border:2px solid #e4c58e;border-radius:12px;padding:16px 20px}.helper-warning strong{color:#714b10}.helper-surface button{background:#285f73;border:1px solid #214f60;color:white;border-radius:8px;padding:10px 16px}.helper-surface label{font-weight:600;color:#20303e}.helper-surface input,.helper-surface textarea,.helper-surface select{border:2px solid #d1d8de;background:#fafbfc;border-radius:8px}.helper-surface pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7f9;padding:14px;border-radius:8px}.reference{font-size:11px;color:#65727d;margin:12px 0}.extension{border:1px dashed #b9aa77;padding:12px;margin:16px 0;background:#fffcf3}.extension>summary{cursor:pointer;font-weight:600}.zxs-surface{font:14.4px/1.5 ui-monospace,monospace;color:#1f1f1f;background:white}.zxs-shell{display:flex;align-items:center;flex-wrap:wrap;gap:18px;padding:10px 0 18px}.zxs-shell strong{font-size:22px}.zxs-shell nav{display:flex;gap:12px;flex-wrap:wrap}.zxs-surface button{border:0;border-radius:0;background:transparent;color:#444;font-weight:400;padding:6px 8px}.zxs-surface button:hover,.zxs-surface button.active{text-decoration:underline;text-underline-offset:.25em;background:transparent}.zxs-surface .primary{color:#444;background:transparent}.zxs-surface .feature,.zxs-surface .selected,.zxs-surface .node-card{border:0;border-radius:0;background:#f2f2f2;padding:18px}.zxs-surface input,.zxs-surface select,.zxs-surface textarea{border:0;border-radius:0;background:#f2f2f2;color:#1f1f1f}.zxs-surface .extension{background:#fffcf3;border:1px dashed #b9aa77}.data-table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}.data-table th,.data-table td{padding:9px 8px;border-bottom:1px solid #e3e3e3}.data-table th{font-weight:500;color:#5f5f5f}.zxs-surface .data-table{background:#f2f2f2}.app-crumb{padding:10px 0;font-size:12px;overflow-wrap:anywhere}.explorer-chrome{background:#f5f5f5;border-bottom:1px solid #ddd;padding:9px 12px}.explorer-tab{background:white;border-radius:8px 8px 0 0;padding:7px 14px;display:inline-block;min-width:160px}.explorer-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:7px 0}.explorer-bar button{background:transparent;border:0;padding:5px 8px}.explorer-address{background:white;border:1px solid #ddd;border-radius:4px;padding:6px 10px;flex:1;overflow-wrap:anywhere;font-size:12px}.explorer-body{display:grid;grid-template-columns:110px minmax(0,1fr)}.explorer-side{border-right:1px solid #eee;padding:10px 4px;background:#fafafa}.explorer-side button{display:block;width:100%;border:0;background:transparent;text-align:left;font-size:12px;padding:8px}.explorer-files{padding:6px 12px;min-width:0}.explorer-files .file-icon{color:#c89622;font-size:17px;margin-right:9px}.explorer-files td button{border:0;background:transparent;text-align:left;padding:4px}.explorer-files tr:has(button.primary){background:#e5f3ff}.explorer-files button.primary{color:#222}.explorer-files tr:hover{background:#f1f7fc}#smb>.content{padding:0}#smbControls{padding:0;margin:0;border:0}#smbView{padding:0}.explorer-actions{padding:12px}.explorer-status{font-size:11px;color:#666;padding:8px 12px;border-top:1px solid #eee}.physical-banner{background:#f5f5f5;border:1px solid #ddd;padding:8px;margin:8px 0}.physical-banner code{font-size:11px}@media(max-width:500px){.explorer-body{grid-template-columns:80px minmax(0,1fr)}.helper-surface{padding:20px 12px}.helper-surface h1{font-size:23px}.helper-card{padding:16px}}
 
 .helper-reference .card{background:#fff;border:1px solid #dce2e6;border-radius:12px;padding:22px;margin:20px 0}.helper-reference .warning{background:#fff5e6;border:2px solid #e4c58e;border-radius:12px;padding:16px 20px}.helper-reference .warning strong{color:#714b10}.helper-reference .warning p{margin:6px 0 0}.helper-reference .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:14px 0}.helper-reference .ack{display:flex;align-items:flex-start;gap:8px;font-weight:400;margin-top:20px}.helper-reference .ack input{width:auto;margin-top:6px}.helper-reference [hidden]{display:none!important}.helper-reference .secondary{background:white;color:#294b59}.helper-reference .muted,.helper-reference .pending{color:#65727d;font-size:14px}.helper-reference label{font-size:14px}.helper-reference .helper-surface{padding:0}
-</style></head><body>
+.admin-fields{display:grid;grid-template-columns:1fr;gap:10px}.admin-fields label{display:grid;grid-template-columns:1fr 2fr;gap:12px}.admin-output{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;background:#f2f2f2;padding:12px}</style></head><body>
 <header class="top"><div><div class="brand">ZXS <span>交互实验室</span></div><p>四个界面，一份状态。看清操作、可见文件与磁盘正文的关系。</p></div><div class="row"><button onclick="resetLayout()">复位布局</button><button onclick="App.exportState()">导出演示状态</button><button onclick="if(confirm('重置为示例数据？当前演示操作会清空。'))App.reset()">重置演示</button></div></header>
 <div class="overview" id="stats"></div><main class="workspace" id="workspace">
 <div class="column" id="leftColumn">
@@ -1218,7 +1218,7 @@ document.addEventListener('submit',event=>{
   event.preventDefault();helperSimulationAction(event.target.querySelector('button[type="submit"]'));
 });
 
-const ui = {helperStages:{}, notes:{}, filePreview:null, page:'文件', helperPlan:null, smbArea:'common'};
+const ui = {helperStages:{}, notes:{}, adminKind:'', adminResult:'', adminConfigs:[], filePreview:null, page:'文件', helperPlan:null, smbArea:'common'};
 function helperModelUI() {
   const card=(title,body)=>`<section class="helper-card"><h2>${title}</h2>${body}</section>`;
   const preview=()=>{const rows=JSON.parse(value('helperBatch'));if(!Array.isArray(rows)||!rows.length)throw Error('输入非空磁盘数组');
@@ -1261,16 +1261,45 @@ function referenceDetails() {
     fileGraph(f)+`<p class="reference">标题、属性、分支控件次序按 files/detail.rs 复刻。节点图使用独立演示图；操作时间线和工作稿扩展见下方。</p>`;
 }
 
+
+function adminReference() {
+  const page=ui.page;
+  const descriptions={
+    '仓库':'这里创建独立历史域及命名共享，不是初始化文件夹仓库。文件和目录的分支、节点、暂存与提交请在对应对象的「详情」管理。',
+    '备份与放置':'日常备份请使用文件或目录详情中的「逐级备份」与「自定义备份前缀」。以下是按路径匹配的高级规则，不会搬移旧版本；路径副本规则不回填历史。更换某盘的下一级备份盘是另一项操作，必须迁移所有数据；此表单不能替代迁移。',
+    '恢复与检查':'检查运行状态、查询原操作及已存在的计划。旧整树分支、手工合并连线、清理、拆分和历史保存创建表单已移除；它们不能代替当前文件及目录模型。查询到计划不代表它适用于当前存储，执行仍由核心准入。'};
+  const choices=page==='仓库'?['仓库']:page==='备份与放置'?['路径副本规则','主盘规则']:['检查 / 查询'];
+  const fields={
+    '仓库':[['name','名称'],['slot','主盘槽位'],['copies','份数（含主盘；1 份无冗余）']],
+    '路径副本规则':[['id','路径规则 ID'],['repository','仓库 ID'],['prefix','路径前缀'],['copies','份数（含主盘；1 份无冗余）'],['generation','预期代数（新建填 0）']],
+    '主盘规则':[['id','规则 ID'],['repository','仓库 ID'],['prefix','路径前缀'],['slot','主盘槽位'],['generation','预期代数（新建填 0）']],
+    '检查 / 查询':[['repository','仓库 ID'],['id','操作 / 计划 / 策略 / 拓扑 ID']]};
+  const kind=choices.includes(ui.adminKind)?ui.adminKind:null;
+  let body=`<h1>${esc(page)}</h1><p>${esc(descriptions[page])}</p>`+row(...choices.map(k=>button(k,()=>{ui.adminKind=k;ui.adminResult='';},kind===k?'active':'')));
+  if(kind){body+='<div class="admin-fields">'+fields[kind].map(([key,label])=>input('admin-'+key,label,key==='generation'?'0':key==='copies'?'1':'')).join('')+'</div>';
+    if(kind==='检查 / 查询')body+=row(...['仓库列表','磁盘','完整性检查','仓库详情','操作','计划','分支树','分支详情','文件历史','历史图','副本规则','主盘规则','拓扑'].map(q=>button(q,()=>{
+      const data=q==='磁盘'?Object.values(sim.disks):q==='仓库列表'?Object.values(sim.repos):q==='文件历史'?Object.values(sim.files).map(f=>({id:f.id,name:f.name,versions:f.versions})):q==='拓扑'?Object.values(sim.disks).map(d=>({id:d.id,sources:d.sources})):q==='操作'?sim.events:ui.adminConfigs;
+      ui.adminResult=JSON.stringify({simulation:true,query:q,selection:value('admin-id'),data},null,2);
+    })));
+    else body+=button('保存配置',()=>{
+      const values=Object.fromEntries(fields[kind].map(([key])=>[key,value('admin-'+key)]));
+      if(fields[kind].some(([key])=>key!=='prefix'&&!values[key]))throw Error('请填写表单必填值');
+      if('copies' in values&&(!/^\d+$/.test(values.copies)||+values.copies<1))throw Error('份数必须为正整数');
+      const config={simulation:true,kind,...values};ui.adminConfigs.push(config);ui.adminResult=JSON.stringify(config,null,2);
+    });
+  }
+  return body+`<pre class="admin-output">${esc(ui.adminResult)}</pre><p class="reference">表单标签、顺序和说明来自 admin/mod.rs / navigation.rs / messages.rs。保存只登记演示配置；不会伪装执行真实核心准入、规则发布或数据迁移。</p>`;
+}
+
 function zxsWeb() {
   const nav=['文件','详情','状态','历史记录','磁盘与接入','仓库','备份与放置','恢复与检查'];
   let body='';
   if(!sim.loggedIn)body=`<h2>登录</h2>${input('demoUser','用户名','admin')}${input('demoPassword','密码（演示，不要输入真实密码）')}<p>仅模拟会话，不发送凭据。</p>${button('登录',()=>{sim.loggedIn=true;})}`;
   else if(ui.page==='文件')body=webFileTable();
   else if(ui.page==='详情')body=referenceDetails();
-  else if(ui.page==='仓库'||ui.page==='恢复与检查')body='<p>目录快照、worktree 与管理员恢复的目标模型位于下方演示扩展；本页不冒充未核验的生产表单。</p>';
+  else if(['仓库','恢复与检查','备份与放置'].includes(ui.page))body=adminReference();
   else if(ui.page==='历史记录')body=sim.events.slice().reverse().map(e=>`<div class="event"><time>${e.at.slice(11,19)}</time><div>${esc(e.title)}<p class="small">${esc(e.detail)}</p></div></div>`).join('');
   else if(ui.page==='磁盘与接入')body=`<p>选择一个硬盘目录查看文件。</p><p class="reference">备份盘只在 Web 中只读浏览，不出现在 SMB 的磁盘列表。</p><table class="data-table"><tr><th>名称</th><th>层级</th><th>目录模式</th><th>观测状态</th><th>可用空间</th><th>操作</th></tr>${Object.values(sim.disks).map(d=>`<tr><td>${esc(d.name)}</td><td>${d.level}</td><td>${d.level===1?'读写':'只读'}</td><td>${d.online?'在线':'离线'}</td><td>${d.capacity} B</td><td>${d.level===1?button('打开',()=>{sim.currentDir=d.root;ui.page='文件';}):'只读副本见物理布局'}</td></tr>`).join('')}</table>`;
-  else if(ui.page==='备份与放置')body='<h2>备份与放置</h2><p>多级备份生产开发排最后。可操作的来源配置、全量迁移与故障状态机在辅助区“演示扩展”中；不模拟成已发布产品入口。</p>';
   else body=`<h2>状态</h2><p>浏览器模拟运行中</p><p>${Object.keys(sim.files).length} 个文件容器 · ${Object.keys(sim.worktrees).length} 个 worktree</p><p>真实磁盘健康、权限及 fsync 未检测。</p>`;
   return `<div class="zxs-surface"><header class="zxs-shell"><strong>zxs</strong><nav>${nav.map(n=>button(n,()=>{ui.page=n;},ui.page===n?'active':'')).join('')}</nav>${button('↻',()=>notify('已刷新当前演示状态'))}${button(sim.loggedIn?'退出':'登录',()=>{sim.loggedIn=!sim.loggedIn;})}</header>${body}<details class="extension"><summary>演示扩展 · 全部容器 / 目录操作</summary>${zxsExtensions()}</details><p class="reference">主线导航 / 色值 / 表格源自 src/web 与 src/interface；系统字体替代 ZxsUI，未做运行实例像素验收。</p></div>`;
 }
