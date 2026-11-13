@@ -85,7 +85,11 @@ fn context_path_is_frozen(previous: &State, context_key: &str) -> bool {
         })
 }
 
-fn verify_selections(previous: &State, next: &State) -> Result<()> {
+fn verify_selections(
+    previous: &State,
+    next: &State,
+    removals: &[(&crate::Branch, crate::business::namespace::current_removal::CurrentRemoval)],
+) -> Result<()> {
     // A selection can change without changing the Entry's content version.
     // Freeze its write target and path-local context as well as its body/HEAD.
     for key in changed_keys(&previous.file_selections, &next.file_selections) {
@@ -105,7 +109,9 @@ fn verify_selections(previous: &State, next: &State) -> Result<()> {
     for key in changed_keys(&previous.file_contexts, &next.file_contexts) {
         let before = previous.file_contexts.get(&key);
         let after = next.file_contexts.get(&key);
-        if before != after
+        let removed_mount = before.is_some() && after.is_none()
+            && removals.iter().any(|(_, proof)| proof.removes_context(&key));
+        if before != after && !removed_mount
             && (context_path_is_frozen(previous, &key)
                 || before.into_iter().chain(after).any(|context| {
                     [&previous.branches, &next.branches]
@@ -180,9 +186,47 @@ fn verify_notes(previous: &State, next: &State) -> Result<()> {
 }
 
 pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
+    verify_with_removal(previous, next, None, false)
+}
+
+pub(crate) fn verify_current(
+    previous: &State,
+    next: &State,
+    current: Option<&crate::engine::CurrentNamespaces>,
+) -> Result<()> {
+    verify_with_removal(previous, next, current, true)
+}
+
+fn verify_with_removal(
+    previous: &State,
+    next: &State,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    allow_current_removal: bool,
+) -> Result<()> {
     super::directory::verify_frozen(previous, next)?;
     if previous.file_deletions.is_empty() {
         return Ok(());
+    }
+    let mut removals = Vec::new();
+    if allow_current_removal {
+        for key in changed_keys(&previous.branches, &next.branches) {
+            if let (Some(before), Some(after)) = (
+                previous.branches.get(&key), next.branches.get(&key),
+            ) && before.file_id.is_none() && after.file_id.is_none()
+                && previous.commits.get(&before.head_commit_id).is_some_and(|source| {
+                    next.commits.get(&after.head_commit_id).is_some_and(|target| {
+                        frozen_entries(previous, &source.entries)
+                            != frozen_entries(previous, &target.entries)
+                    })
+                })
+                && let Some(proof) =
+                crate::business::namespace::current_removal::verified_removed_rows(
+                    previous, next, current, before, after,
+                )?
+            {
+                removals.push((before, proof));
+            }
+        }
     }
     // Tracking limits ordinary work to actual changed records. The complete
     // fallback is for decoded recovery data, never a cached trust shortcut.
@@ -206,7 +250,7 @@ pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
     direct!(file_metadata_nodes);
     direct!(file_branch_merges);
     verify_notes(previous, next)?;
-    verify_selections(previous, next)?;
+    verify_selections(previous, next, &removals)?;
     // Immutable content uses the persistent records collection rather than a map.
     let keys = match next.versions.changes_since(&previous.versions) {
         MapChanges::Keys(keys) => keys.iter().cloned().collect::<Vec<_>>(),
@@ -253,8 +297,14 @@ pub(crate) fn verify(previous: &State, next: &State) -> Result<()> {
                 })
                 .unwrap_or_default()
         };
-        if entries(previous, before) != entries(next, after) {
-            return Err(frozen());
+        let old_entries = entries(previous, before);
+        let new_entries = entries(next, after);
+        if old_entries != new_entries {
+            if !removals.iter().any(|(branch, _)| branch.branch_id == key) {
+                return Err(frozen());
+            }
+            // The proof compares the entire retained namespace, including every
+            // ancestor that stops appearing in frozen_entries after this removal.
         }
     }
     for key in changed_keys(&previous.directory_branches, &next.directory_branches) {

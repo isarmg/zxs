@@ -495,9 +495,10 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
         .unwrap()
         .clone();
     assert_eq!(source.pending_file_versions.len(), 2);
-    // Even identical bytes must materialize inherited first-write intent.
+    // Only a real content change materializes an inherited pending identity.
+    // An unchanged save retains its source until a later changed write.
     engine
-        .stage_bytes(&workspace.workspace_id, written.path(), b"original")
+        .stage_bytes(&workspace.workspace_id, written.path(), b"changed first write")
         .unwrap();
     engine
         .stage_bytes(&workspace.workspace_id, "New.txt", b"new")
@@ -530,6 +531,14 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
     let materialized = find_unordered(&commit.entries, written.path()).unwrap();
     assert_eq!(materialized.file_id, written.file_id);
     assert_ne!(materialized.version_id, written.version_id);
+    assert_eq!(
+        next.versions.get(&written.version_id),
+        engine.state().versions.get(&written.version_id)
+    );
+    assert_eq!(
+        next.versions.get(&retained.version_id),
+        engine.state().versions.get(&retained.version_id)
+    );
     assert_eq!(
         find_unordered(&commit.entries, retained.path())
             .unwrap()

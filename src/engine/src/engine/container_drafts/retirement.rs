@@ -76,7 +76,18 @@ impl Engine {
 
     fn retains_draft_workspace(&self, file: FileId, revision: &DraftRevision) -> bool {
         self.workspaces.values().any(|workspace| {
-            workspace.container_draft_commit.as_ref().is_some_and(|binding| {
+            // Successful abort persists terminal mirrors before updating this
+            // admitted map. Its retained binding is evidence, not a consumer;
+            // an outstanding preparation still keeps its original body pinned.
+            let may_consume = match workspace.state {
+                crate::WorkspaceState::Aborted => {
+                    self.workspace_has_preparation(&workspace.workspace_id)
+                }
+                crate::WorkspaceState::Open
+                | crate::WorkspaceState::Sealed
+                | crate::WorkspaceState::Committed => true,
+            };
+            may_consume && workspace.container_draft_commit.as_ref().is_some_and(|binding| {
                 binding.file == file && binding.revision.operation == revision.operation
             })
         })

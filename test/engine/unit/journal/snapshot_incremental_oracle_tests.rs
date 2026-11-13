@@ -191,7 +191,27 @@ fn populated_state() -> State {
     state.control_auth =
         Some(json_codec::json!({"\u{10000}": {"roles": ["读者"]}, "\u{e000}": true}));
     let encoded = json_codec::to_value(&state).unwrap();
-    assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 38);
+    // container_edits is a required, durable generation/selection map, not
+    // disposable body inventory. Every field must participate in byte reuse.
+    let mut tracked = REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS)
+        .copied().collect::<BTreeSet<_>>();
+    assert_eq!(tracked.len(), 39);
+    assert_eq!(tracked.len(), REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len());
+    let expected = tracked.iter().copied().chain([
+        "sequence", "business_generation", "topology_generation", "control_auth", "events",
+    ]).collect::<BTreeSet<_>>();
+    assert_eq!(
+        encoded.as_object().unwrap().keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        expected,
+        "the populated fixture and independent field oracle cover the complete State schema",
+    );
+    macro_rules! require_tracked_field {
+        ($field:ident) => {
+            assert!(tracked.remove(stringify!($field)), "duplicate or unclassified tracked field");
+        };
+    }
+    every_tracked_field!(require_tracked_field);
+    assert!(tracked.is_empty(), "field omitted from mutation oracle: {tracked:?}");
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }

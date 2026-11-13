@@ -1578,12 +1578,15 @@ impl crate::engine::PlanningContext<'_> {
                     written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
-                let deleted = namespace::apply_current_workspace_namespace(
+                let (deleted, current_removal) = namespace::apply_current_workspace_namespace(
                     state, &repo, &branch, &mut entries, current_entries,
                     &w.namespace_operations,
                 )?;
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
                 let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
+                if let Some(removal) = &current_removal {
+                    removal.preserve_file_state(engine.state, state);
+                }
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w, &entries)?; }
                 if entries.as_slice() == current_entries && deleted.is_empty() {

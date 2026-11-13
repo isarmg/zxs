@@ -574,7 +574,9 @@ impl<'a> PlanningContext<'a> {
             },
             &result,
         )? {
-            crate::file_deletion::freeze::verify(self.state, &next)?;
+            crate::file_deletion::freeze::verify_current(
+                self.state, &next, self.current_namespaces.map(AsRef::as_ref),
+            )?;
         }
         if kind != storage_contract::file_container_tags::KIND {
             crate::business::file_tags::preserve_existing(self.state, &next)?;

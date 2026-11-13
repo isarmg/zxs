@@ -47,8 +47,77 @@ fn usage(path: &Path, engine_store: bool) -> Usage {
     result
 }
 
+// A same-process Linux snapshot, not a filesystem-wide reclamation claim:
+// other processes and mappings without an open FD are outside this observation.
+// This fixture has no concurrent draft writers at these checkpoints.
+#[cfg(target_os = "linux")]
+fn unlinked_body_usage(store: &Path) -> Usage {
+    use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStrExt;
+
+    let store = fs::canonicalize(store).unwrap();
+    let mut identities = BTreeSet::new();
+    let mut result = Usage::default();
+    for descriptor in fs::read_dir("/proc/self/fd").unwrap() {
+        let descriptor = descriptor.unwrap().path();
+        let target = match fs::read_link(&descriptor) {
+            Ok(target) => target,
+            // An unrelated background FD can close during enumeration.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot inspect descriptor {descriptor:?}: {error}"),
+        };
+        let Some(original) = target.as_os_str().as_bytes().strip_suffix(b" (deleted)") else {
+            continue;
+        };
+        let original = Path::new(std::ffi::OsStr::from_bytes(original));
+        if !original.starts_with(&store)
+            || original.file_name() != Some(std::ffi::OsStr::new("body"))
+        {
+            continue;
+        }
+        // A matching draft FD must remain stable at this synchronous checkpoint;
+        // do not turn a failed measurement into an apparent zero allocation.
+        let metadata = fs::metadata(&descriptor).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.nlink(), 0);
+        if identities.insert((metadata.dev(), metadata.ino())) {
+            result.bodies += 1;
+            result.logical += metadata.len();
+            result.allocated += metadata.blocks() * 512;
+        }
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn record_body_usage(store: &Path, phase: &str, round: u8) -> (Usage, Usage) {
+    let named = usage(store, true);
+    let unlinked = unlinked_body_usage(store);
+    eprintln!("round={round} phase={phase} named={named:?} open-unlinked={unlinked:?}");
+    (named, unlinked)
+}
+
 #[test]
+#[cfg(target_os = "linux")]
 fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_close() {
+    // Calibrate the observer with a real deleted inode and cloned descriptors,
+    // outside the production store so no test-only evidence enters recovery.
+    let probe = tempfile::tempdir().unwrap();
+    let probe_body = probe.path().join("body");
+    fs::write(&probe_body, vec![1u8; 4096]).unwrap();
+    let reader = File::open(&probe_body).unwrap();
+    let cloned = reader.try_clone().unwrap();
+    let allocated = reader.metadata().unwrap().blocks() * 512;
+    fs::remove_file(&probe_body).unwrap();
+    let observed = unlinked_body_usage(probe.path());
+    assert_eq!(observed.bodies, 1, "cloned descriptors must count one inode");
+    assert_eq!(observed.logical, 4096);
+    assert_eq!(observed.allocated, allocated);
+    drop(reader);
+    assert_eq!(unlinked_body_usage(probe.path()).bodies, 1);
+    drop(cloned);
+    assert_eq!(unlinked_body_usage(probe.path()).bodies, 0);
+
     let (root, mut shared, backend, branch) = manual_fixture();
     // The generic tiny-file fixture reserves only 4 KiB per file/session.
     // This bounded acceptance uses 512 KiB bodies inside the unchanged
@@ -85,6 +154,7 @@ fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_
             let mut previous = vec![0; BODY_BYTES];
             file.read_exact_at(&mut previous, 0).unwrap();
             assert_eq!(previous, vec![index - 1; BODY_BYTES]);
+            record_body_usage(&store, "reopen", index);
         }
         let bytes = vec![index; BODY_BYTES];
         client.prepare_write(opened.handle, BODY_BYTES as u64, BODY_BYTES as u64).unwrap();
@@ -94,10 +164,12 @@ fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_
         assert_eq!(result["draft_persisted"], true);
         assert!(result.get("commit_id").is_none());
         operations.push(result["operation_id"].as_str().unwrap().to_owned());
+        record_body_usage(&store, "flush", index);
         client.close(opened.handle, false).unwrap();
         drop(file);
         drop(client);
-        let engine_usage = usage(&store, true);
+        let (engine_usage, unlinked) = record_body_usage(&store, "close", index);
+        assert_eq!(unlinked.bodies, 0, "closed readers still retain unlinked bodies");
         let spool_usage = usage(&shared.spool, false);
         eprintln!("round={index} engine={engine_usage:?} SMB-frozen={spool_usage:?}");
         if index == 1 {
@@ -123,7 +195,10 @@ fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_
     assert_eq!(engine.state().versions, before.0);
     assert_eq!(engine.state().commits, before.1);
     assert_eq!(engine.state().branches, before.2);
-    let engine_usage = usage(&store, true);
+    let (engine_usage, unlinked) = record_body_usage(&store, "cold-open", ROUNDS);
+    assert_eq!(unlinked.bodies, 0, "cold open retains unlinked draft bodies");
+    assert_eq!(unlinked.logical, 0);
+    assert_eq!(unlinked.allocated, 0);
     // No reader remains pinned. Check pathname retention and physical block
     // accounting separately; unlink alone cannot establish physical release.
     assert_eq!(engine_usage.bodies, 1,

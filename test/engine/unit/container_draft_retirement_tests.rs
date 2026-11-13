@@ -198,6 +198,9 @@ fn changed_superseded_body_is_preserved_without_reinterpreting_permanent_success
     let second = fixture.revision(2);
     let receipt = fixture.save(&second, 2).unwrap();
     drop(held);
+    // Explicit administrator tampering, not an ordinary immutable-body write.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(fixture.body(&first), fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(fixture.body(&first), b"corrupt retained body").unwrap();
     let before = fixture.engine.state().clone();
     assert!(fixture.save(&second, 2).is_err());
@@ -250,7 +253,22 @@ fn retained_explicit_commit_workspace_keeps_its_exact_draft_body_without_live_re
     assert_eq!(fs::read(fixture.body(&first)).unwrap(), vec![1; 64 * 1024]);
     read_current(&fixture.engine, fixture.file, 2);
     fixture.engine.abort_workspace(&prepared.workspace_id, fixture.principal.as_str()).unwrap();
+    let aborted = fixture.engine.workspace(&prepared.workspace_id).unwrap();
+    assert_eq!(aborted.state, crate::WorkspaceState::Aborted);
+    assert_eq!(aborted.container_draft_commit.as_ref().unwrap().revision, first);
+    assert!(!fixture.engine.workspace_has_preparation(&prepared.workspace_id));
+    assert!(fixture.engine.seal_workspace(
+        &prepared.workspace_id, fixture.principal.as_str(),
+    ).is_err());
     fixture.save(&second, 2).unwrap();
-    assert!(!fixture.body(&first).exists());
+    let retired = fixture.body(&first);
+    assert!(!retired.exists());
     read_current(&fixture.engine, fixture.file, 2);
+    drop(fixture.engine);
+    let engine = cold(fixture.root.path());
+    let retained = engine.workspace(&prepared.workspace_id).unwrap();
+    assert_eq!(retained.state, crate::WorkspaceState::Aborted);
+    assert_eq!(retained.container_draft_commit, aborted.container_draft_commit);
+    assert!(!retired.exists());
+    read_current(&engine, fixture.file, 2);
 }
