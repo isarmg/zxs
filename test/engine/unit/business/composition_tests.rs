@@ -161,7 +161,7 @@ fn selecting_old_directory_restores_membership_and_hierarchy_with_current_file_n
     let old = e.state().directory_git_repositories[&directory].branches[&draft]
         .head_tree_id
         .clone();
-    let frozen = e.state().directory_trees[&old].clone();
+    let frozen = e.state().directory_trees[old.as_ref().unwrap()].clone();
     e.file_namespace(
         &r.repository_id,
         NamespaceOperation::parse(
@@ -182,7 +182,7 @@ fn selecting_old_directory_restores_membership_and_hierarchy_with_current_file_n
     assert_eq!(current.file_id, original.file_id);
     assert_eq!(current.version_id, original.version_id);
     assert_eq!(body(&e, &current.version_id), b"old");
-    assert_eq!(e.state().directory_trees[&old], frozen);
+    assert_eq!(e.state().directory_trees[old.as_ref().unwrap()], frozen);
     assert!(frozen.entries.iter().any(|entry| entry.path() == "folder/old.txt"));
     assert!(!view.contains_key("folder/nested"));
     assert_eq!(
@@ -192,7 +192,7 @@ fn selecting_old_directory_restores_membership_and_hierarchy_with_current_file_n
     drop(e);
     let reopened = Engine::open(&temporary.path().join("system")).unwrap();
     assert_eq!(entries(&reopened, &r), view);
-    assert_eq!(reopened.state().directory_trees[&old], frozen);
+    assert_eq!(reopened.state().directory_trees[old.as_ref().unwrap()], frozen);
     assert_eq!(body(&reopened, &original.version_id), b"old");
 }
 #[test]
