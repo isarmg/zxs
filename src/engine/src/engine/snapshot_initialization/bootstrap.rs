@@ -279,7 +279,7 @@ impl AdmittedFreshRoot {
     }
 }
 fn verify_record(engine: &Engine, record: &RootRecord) -> Result<()> {
-    verify_roots(engine.config(), record)
+    verify_roots(&engine.config, record)
 }
 fn verify_roots(config: &ValidatedConfig, record: &RootRecord) -> Result<()> {
     if config.fresh_bootstrap() != Some(record.selection)
@@ -344,7 +344,7 @@ pub(crate) fn fresh_root(engine: &Engine, id: RootId) -> crate::Result<AdmittedF
         let selector = crate::authority_selection::FreshSelection::read(&system)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         selector.require_directory(&system)?;
-        selector.require_config(engine.config()).map_err(engine_error)?;
+        selector.require_config(&engine.config).map_err(engine_error)?;
         let bytes = system.read_bounded(&name(ROOTS)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
