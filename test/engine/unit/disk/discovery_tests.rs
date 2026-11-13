@@ -235,6 +235,25 @@ fn ordinary_unknown_and_rebound_roots_are_rejected_without_changes() {
 
 #[test]
 fn fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate() {
+    fn image(root: &Path) -> std::collections::BTreeMap<PathBuf, (u64, u32, Vec<u8>)> {
+        use std::os::unix::fs::MetadataExt;
+        fn visit(path: &Path, rows: &mut std::collections::BTreeMap<PathBuf,
+            (u64, u32, Vec<u8>)>)
+        {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_file() || metadata.is_dir());
+            let bytes = if metadata.is_file() { std::fs::read(path).unwrap() } else { Vec::new() };
+            rows.insert(path.to_path_buf(), (metadata.ino(), metadata.mode(), bytes));
+            if metadata.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    visit(&entry.unwrap().path(), rows);
+                }
+            }
+        }
+        let mut rows = std::collections::BTreeMap::new();
+        visit(root, &mut rows);
+        rows
+    }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("disk");
     let engine = Engine::initialize(
@@ -252,11 +271,15 @@ fn fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate() {
             blake3::hash(b"fresh reader boundary"),
         ),
     };
-    write_json(&seal_path, &seal, false).unwrap();
+    // Simulate external bytes at the reader boundary. The production immutable
+    // writer correctly refuses to replace the original seal with different bytes.
+    std::fs::write(&seal_path, crate::canonical_json(&seal).unwrap()).unwrap();
     let fresh_bytes = std::fs::read(&seal_path).unwrap();
     let marker = root.join("metadata/pool-membership/generation.json");
     std::fs::write(&marker, b"retained unpromoted bytes, not JSON").unwrap();
+    let before = image(temp.path());
     let error = recognize(&root).unwrap_err();
+    assert_eq!(image(temp.path()), before);
     assert_eq!(error.code(), ErrorCode::FormatUnsupported);
     assert!(matches!(error, Error::FreshBootstrap(source)
         if matches!(*source, crate::authority_selection::FreshBootstrapError::UnsupportedReader)));
@@ -266,9 +289,11 @@ fn fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate() {
 
     // Existing held-identity rejection still precedes unsupported-reader status.
     seal.inode ^= 1;
-    write_json(&seal_path, &seal, false).unwrap();
+    std::fs::write(&seal_path, crate::canonical_json(&seal).unwrap()).unwrap();
     let stale_bytes = std::fs::read(&seal_path).unwrap();
+    let before = image(temp.path());
     assert_eq!(recognize(&root).unwrap_err().code(), ErrorCode::DiskIdentityMismatch);
+    assert_eq!(image(temp.path()), before);
     assert_eq!(std::fs::read(&seal_path).unwrap(), stale_bytes);
     assert_eq!(std::fs::read(&config_path).unwrap(), original_config);
 }
