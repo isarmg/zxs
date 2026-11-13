@@ -211,14 +211,18 @@ fn membership_registry_current_rename_updates_the_exact_independent_file_context
             .file_context(&fixture.repo.repository_id, "dir/b")
             .is_none()
     );
+    // Current branch reads project the current leaf, while its immutable
+    // content commit still retains the original parent and historical spelling.
     assert_eq!(
-        fixture
-            .engine
-            .namespace_tree(&after.branch_id)
-            .unwrap()
-            .get("dir/b")
-            .map(|entry| &entry.version_id),
-        Some(&moved.version_id)
+        fixture.engine.namespace_tree(&after.branch_id).unwrap()
+            .get("dir/renamed").map(|entry| &entry.version_id),
+        Some(&moved.version_id),
+    );
+    assert!(fixture.engine.namespace_tree(&after.branch_id).unwrap().get("dir/b").is_none());
+    assert_eq!(
+        fixture.engine.namespace_tree_at(&after.branch_id, &before_branch.head_commit_id)
+            .unwrap().get("dir/b").map(|entry| &entry.version_id),
+        Some(&moved.version_id),
     );
     let workspace = fixture
         .engine
@@ -695,17 +699,37 @@ fn membership_registry_current_staged_rename_conflicts_with_a_changed_source() {
         "dir/b",
         Some("staged"),
     );
+    let staged = fixture.engine.workspace_recovery_hint(&workspace.workspace_id)
+        .unwrap().namespace_operations.clone();
+    assert_eq!(staged.len(), 1);
+    let original_name = crate::container_storage::current_container_name(
+        fixture.engine.state(), &fixture.retained.file_id,
+    ).unwrap();
+    assert_eq!(original_name.as_str(), "b");
     rename(&mut fixture, "dir/b", "other");
+    let changed_name = crate::container_storage::current_container_name(
+        fixture.engine.state(), &fixture.retained.file_id,
+    ).unwrap();
+    assert_eq!(changed_name.as_str(), "other");
+    assert_ne!(changed_name, original_name);
+    let commit = request(&workspace);
+    let operation = commit.operation_id;
     let before = canonical_json(fixture.engine.state()).unwrap();
     assert_eq!(
         fixture
             .engine
-            .commit_workspace(request(&workspace))
+            .commit_workspace(commit)
             .unwrap_err()
             .code(),
-        ErrorCode::NamespaceConflict
+        // Current-name baseline admission precedes namespace-operation conflict checks.
+        ErrorCode::WorkspaceChanged
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+    assert!(!fixture.engine.state().operations.contains_key(&operation));
+    assert_eq!(fixture.engine.workspace_recovery_hint(&workspace.workspace_id)
+        .unwrap().namespace_operations, staged);
+    assert!(fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
+        .get("staged").is_none());
     assert_eq!(current(&fixture, "other").file_id, fixture.retained.file_id);
 }
 

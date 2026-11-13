@@ -660,6 +660,12 @@ fn membership_registry_current_batch_inactive_and_historical_scopes_stay_fenced_
         .as_str()
         .unwrap()
         .to_owned();
+    let frozen_tree = fixture.engine.state.directory_trees[
+        &fixture.engine.state.directory_branches[&inactive].head_tree_id
+    ].clone();
+    assert!(frozen_tree.entries.iter().any(|entry| {
+        entry.path() == "dir/b" && entry.file_id == fixture.retained.file_id
+    }));
     let original = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Rename,
         items: vec![item(
@@ -672,6 +678,8 @@ fn membership_registry_current_batch_inactive_and_historical_scopes_stay_fenced_
     let operation = op();
     let receipt = apply(&mut fixture, &original, operation).unwrap();
     fixture.project(false);
+    assert_eq!(fixture.engine.state.directory_trees[&frozen_tree.tree_id], frozen_tree);
+    assert_eq!(current(&fixture, "dir/previous").file_id, fixture.retained.file_id);
     let rejected = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Rename,
         items: vec![item(
@@ -695,13 +703,17 @@ fn membership_registry_current_batch_inactive_and_historical_scopes_stay_fenced_
         .parent_tree_id
         .clone()
         .unwrap();
-    Arc::make_mut(&mut fixture.engine.state)
-        .directory_tree_selections
-        .insert(branch.directory_id, historical);
     let request = DirectoryNamespaceBatch {
         kind: DirectoryBatchKind::Delete,
-        items: vec![item(&fixture, &active, "dir/b", None)],
+        // The earlier inactive occurrence rename changed this container's name
+        // everywhere, without changing the active occurrence's identity.
+        items: vec![item(&fixture, &active, "dir/previous", None)],
     };
+    let mut changed = fixture.engine.state.as_ref().clone();
+    changed.directory_tree_selections.insert(branch.directory_id, historical);
+    // This intentionally inconsistent selection tests the scope fence, not a
+    // stale NameCache caused by bypassing the normal state-install boundary.
+    fixture.engine.named_namespaces.install_state(&mut fixture.engine.state, Arc::new(changed));
     let before = canonical_json(fixture.engine.state()).unwrap();
     assert_eq!(
         apply(&mut fixture, &request, op()).unwrap_err().code(),
@@ -719,7 +731,7 @@ fn membership_registry_current_batch_requires_the_exact_selected_occurrence_not_
         kind: DirectoryBatchKind::Rename,
         items: vec![item(&fixture, &scope, "dir/b", Some((&scope, "dir/new")))],
     };
-    let view = Arc::make_mut(fixture.engine.current_namespaces.as_mut().unwrap());
+    let mut view = fixture.engine.current_namespaces.as_ref().unwrap().as_ref().clone();
     let directories = Arc::make_mut(&mut view.directories);
     let projected = Arc::make_mut(directories.get_mut(&scope).unwrap());
     Arc::make_mut(&mut projected.entries)
@@ -727,6 +739,11 @@ fn membership_registry_current_batch_requires_the_exact_selected_occurrence_not_
         .find(|entry| entry.path() == "dir/b")
         .unwrap()
         .size += 1;
+    // Keep publication/name-cache binding coherent so the rejection proves
+    // exact selected occurrence admission, not an earlier stale-cache fence.
+    fixture.engine.named_namespaces.install_current(
+        &mut fixture.engine.current_namespaces, Some(Arc::new(view)),
+    );
     let before = canonical_json(fixture.engine.state()).unwrap();
     assert_eq!(
         apply(&mut fixture, &request, op()).unwrap_err().code(),
