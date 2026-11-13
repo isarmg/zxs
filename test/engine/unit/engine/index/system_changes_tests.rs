@@ -51,6 +51,14 @@ fn rename(engine: &mut Engine, repo: &Repository, source: &str, destination: &st
         )
         .unwrap();
 }
+fn path_facts(engine: &Engine) -> Vec<crate::engine::FilePathChange> {
+    let mut facts = Vec::new();
+    engine.visit_file_path_changes(
+        &crate::HistoryWindowCancellation::new(),
+        |fact| facts.push(fact),
+    ).unwrap();
+    facts
+}
 fn expected_operations(engine: &Engine) -> Vec<OperationResult> {
     let mut rows: Vec<_> = engine.state.operations.values().cloned().collect();
     rows.sort_by_key(|row| (row.sequence, row.operation_id));
@@ -103,27 +111,32 @@ fn real_publications_store_complete_global_receipts_and_exterior_path_rows_then_
     rename(&mut engine, &right, "other.txt", "renamed.txt");
     let expected = expected_operations(&engine);
     assert_eq!(operations(&engine, 1), expected);
-    let page = engine.system_file_path_nodes(None, 100).unwrap();
-    assert_eq!(page.records.len(), 2);
-    assert_eq!(page.records[0].previous_path, "a.txt");
-    assert_eq!(page.records[0].path, "b.txt");
-    assert_eq!(page.records[1].history_tree_id, right.history_tree_id);
+    let saved_paths = path_facts(&engine);
+    assert_eq!(saved_paths.len(), 2);
+    assert_eq!(saved_paths[0].before.path.as_str(), "a.txt");
+    assert_eq!(saved_paths[0].after.path.as_str(), "b.txt");
+    assert_eq!(saved_paths[1].history_tree_id.to_string(), right.history_tree_id);
+    assert!(engine.system_file_path_nodes(None, 100).unwrap().records.is_empty());
+    let operation = saved_paths[0].operation_id;
     let actual: String = platform_io::sqlite::block_on_sqlite_connection(async {
         let mut c =
             platform_io::sqlite::open_index_read_connection(&engine.root.join("index.sqlite"))
                 .await
                 .unwrap();
+        // New path facts live in their complete permanent receipt, not a
+        // second content/path-node row that would alter file ancestry.
         let value = sqlite_access::query_scalar(
-            "SELECT payload FROM system_changes WHERE kind=1 ORDER BY sequence_key,id LIMIT 1",
+            "SELECT payload FROM system_changes WHERE kind=0 AND id=?",
         )
+        .bind(operation.to_string())
         .fetch_one(&mut c)
         .await
         .unwrap();
         c.close().await.unwrap();
         value
     });
-    assert_eq!(actual.as_bytes(), encode(&page.records[0]).unwrap());
-    let saved_paths = page.records;
+    assert_eq!(actual.as_bytes(), encode(&engine.state.operations[&operation]).unwrap());
+    assert_eq!(engine.state.operations[&operation].result["path_changes"].as_array().unwrap().len(), 1);
     drop(engine);
     // The database is derived: deleting it must neither invent an empty pool
     // nor discard the publications used to reconstruct these complete rows.
@@ -131,7 +144,7 @@ fn real_publications_store_complete_global_receipts_and_exterior_path_rows_then_
     let engine = Engine::open(&temp.path().join("system")).unwrap();
     assert_eq!(operations(&engine, 2), expected);
     assert_eq!(
-        engine.system_file_path_nodes(None, 100).unwrap().records,
+        path_facts(&engine),
         saved_paths
     );
 }
@@ -272,6 +285,27 @@ fn retained_path_projection_is_not_filtered_by_current_placement() {
     let repo = repository(&mut engine, "paths");
     save(&mut engine, &repo, "before");
     rename(&mut engine, &repo, "before", "after");
+    let fact = path_facts(&engine).pop().unwrap();
+    assert!(engine.state.file_path_nodes.is_empty());
+    // This derived-index oracle deliberately supplies a retained path-row
+    // family. It does not admit it as a new-format FILE or business State.
+    let node = storage_contract::FilePathNode {
+        node_id: storage_contract::new_id("fnode").unwrap(),
+        history_tree_id: fact.history_tree_id.to_string(),
+        file_id: fact.file_id.to_string(),
+        version_id: fact.after_version_id.to_string(),
+        parent_node_ids: vec![fact.before_version_id.to_string()],
+        branch_id: fact.branch_id.to_string(),
+        path: fact.after.path.to_string(),
+        previous_path: fact.before.path.to_string(),
+        operation_id: fact.operation_id,
+        author: fact.author.to_string(),
+        sequence: fact.sequence.get(),
+        created_at: fact.occurred_at.unix_seconds(),
+    };
+    let base = Arc::clone(&engine.state);
+    Arc::make_mut(&mut engine.state).file_path_nodes.insert(node.node_id.clone(), node);
+    engine.update_index(&base);
     let rows = engine.system_file_path_nodes(None, 100).unwrap().records;
     // Isolated projection test, not admission of this synthetic business State.
     let base = Arc::clone(&engine.state);
