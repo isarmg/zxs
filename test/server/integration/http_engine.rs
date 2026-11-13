@@ -2909,10 +2909,20 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
             if metadata.creation_name != "lost.txt" {
                 continue;
             }
-            let path = fixture_payload(&directory, engine.state());
-            if path.exists() {
-                std::fs::remove_file(path).unwrap();
-            }
+            // Acceptance installed this new container, but the injected fault
+            // precedes publication and its canonical namespace projection.
+            assert_eq!(metadata.history_tree_id, repo.history_tree_id);
+            assert!(!engine.state().file_locations.contains_key(&metadata.file_id));
+            let path = disk
+                .root
+                .join("histories")
+                .join(&metadata.history_tree_id)
+                .join("file-containers")
+                .join(&metadata.file_id)
+                .join(&metadata.creation_name)
+                .join("versions")
+                .join(format!("{}-{}", metadata.storage_id, metadata.creation_name));
+            std::fs::remove_file(path).unwrap();
         }
     }
     std::fs::remove_file(lost.source_path).unwrap();

@@ -3645,7 +3645,8 @@
           ],
           "prefixes": [
             "http_container_drafts::tests::",
-            "smb_rpc::tests::manual_draft_tests::"
+            "smb_rpc::tests::manual_draft_tests::",
+            "backend_workspace::tests::"
           ],
           "exact": [
             "authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation"
@@ -10587,6 +10588,12 @@
         "portable-path-consumers",
         "container-tags-http",
         "note-target-consumers",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_workspace.rs",
+      "groups": [
         "container-manual-drafts-consumers"
       ]
     },

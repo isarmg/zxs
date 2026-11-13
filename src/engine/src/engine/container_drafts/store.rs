@@ -234,11 +234,13 @@ pub(crate) fn prepare(
     let _lock = platform_io::fs_safety::linux::AdvisoryLock::directory(&directory_handle)
         .map_err(|error| engine(error.into()))?;
     retained_budget(&root, &intent, bytes.len(), limits)?;
+    // Admit the typed file parent before probing the operation leaf.
+    // Missing ancestors are I/O failures, not evidence of an absent operation.
+    let parent = path.parent().ok_or(StoreError::Incomplete)?;
+    root.private_dir(parent).map_err(engine)?;
     if root.optional_metadata(&path).map_err(engine)?.is_some() {
         require_intent(&root, &path, &intent)?;
     } else {
-        let parent = path.parent().ok_or(StoreError::Incomplete)?;
-        root.private_dir(parent).map_err(engine)?;
         root.create_private_directory_synced(&path).map_err(engine)?;
         root.write_atomic(&path.join(layout::INTENT.as_path()), &bytes, false).map_err(engine)?;
     }

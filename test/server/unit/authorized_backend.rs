@@ -456,6 +456,7 @@ impl Backend for RecordingBackend {
             json!({"branch_id":command.branch_id,"source_commit_id":command.source_commit_id}),
         )?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: "created-workspace".into(),
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: command.branch_id,
@@ -489,6 +490,7 @@ impl Backend for RecordingBackend {
     ) -> Result<storage_contract::Workspace, ApiError> {
         self.record("workspace", Some(identity), json!({"workspace":workspace}))?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: workspace.into(),
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: "branch".into(),
@@ -895,6 +897,7 @@ impl Backend for RecordingBackend {
         )?;
         Ok(crate::DiskWriteSession {
             workspace: storage_contract::Workspace {
+                container_draft_commit: None,
                 workspace_id: "disk-workspace".into(),
                 purpose: storage_contract::WorkspacePurpose::Normal,
                 branch_id: "namespace-branch".into(),
@@ -1491,6 +1494,7 @@ impl Backend for RecordingBackend {
             json!({"workspace_id":command.workspace_id,"change":command.change}),
         )?;
         Ok(storage_contract::Workspace {
+            container_draft_commit: None,
             workspace_id: command.workspace_id,
             purpose: storage_contract::WorkspacePurpose::Normal,
             branch_id: "branch".into(),
@@ -3384,7 +3388,7 @@ fn container_edit_methods_preserve_identity_errors_and_revocation() {
     let revision = storage_contract::container_edit::DraftRevision {
         operation: storage_contract::OperationId::from_random([14; 16]),
         expected_generation: storage_contract::Generation::new(7),
-        principal: storage_contract::Principal::new(fixture.identity.principal.clone()).unwrap(),
+        principal: storage_contract::Principal::new(fixture.identity.principal.clone().into()).unwrap(),
         base: storage_contract::container_edit::DraftBase {
             entry: storage_contract::EntryId::from_random([15; 16]),
             repository: request.repository,

@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn workspace_wire_projection_preserves_current_fields_without_local_paths() {
     let workspace = storage_contract::Workspace {
+        container_draft_commit: None,
         workspace_id: "workspace".into(),
         purpose: WorkspacePurpose::Normal,
         branch_id: "branch".into(),
@@ -31,6 +32,8 @@ fn workspace_wire_projection_preserves_current_fields_without_local_paths() {
         state: WorkspaceState::Open,
     };
     let mut expected = json_codec::to_value(&workspace).unwrap();
+    // The sealed consumption is internal workspace state, not ordinary workspace info.
+    assert!(expected.as_object_mut().unwrap().remove("container_draft_commit").is_some());
     expected["files"]["entry"]
         .as_object_mut()
         .unwrap()

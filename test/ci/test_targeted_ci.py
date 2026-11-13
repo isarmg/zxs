@@ -2877,6 +2877,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             'src/server/src/file_manager.rs', 'src/server/src/http_container_drafts.rs',
             'src/server/src/lib.rs', 'src/server/src/transfer.rs',
             'test/server/unit/authorized_backend.rs', 'test/server/unit/http_container_drafts.rs',
+            'test/server/unit/backend_workspace.rs',
             'test/server/integration/http_engine.rs',
             'test/server/integration/http_engine/container_drafts.rs',
             'src/client/src/container_edit.rs', 'src/client/src/lib.rs',
@@ -2901,6 +2902,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
                          ('storage-server', 'lib', ['core']))
         self.assertEqual(native['prefixes'], [
             'http_container_drafts::tests::', 'smb_rpc::tests::manual_draft_tests::',
+            'backend_workspace::tests::',
         ])
         self.assertEqual(native['exact'], [
             'authorized_backend_tests::container_edit_methods_preserve_identity_errors_and_revocation',

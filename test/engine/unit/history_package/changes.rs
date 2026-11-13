@@ -18,7 +18,7 @@ macro_rules! projection_fields {
             history { histories, commits, versions, file_path_nodes, file_metadata_nodes, file_deletions, file_branch_merges, merge_links, history_boundaries, }
             repository { repositories, directory_branches, directory_git_repositories, placement_rules, protection_policies, }
             version { placements, content_states, file_node_parents, version_notes, }
-            typed_file { container_tags, }
+            typed_file { container_tags, container_edits, }
             file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
             directory { directory_tree_selections, directory_selection_generations, }
             special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
