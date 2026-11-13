@@ -630,6 +630,26 @@ fn missing_body_cannot_mask_corrupt_or_absent_checksum_proof() {
 
 #[test]
 fn fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection() {
+    fn image(root: &Path) -> std::collections::BTreeMap<PathBuf, (u64, u32, Vec<u8>)> {
+        use std::os::unix::fs::MetadataExt;
+        fn visit(
+            path: &Path,
+            rows: &mut std::collections::BTreeMap<PathBuf, (u64, u32, Vec<u8>)>,
+        ) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_file() || metadata.is_dir());
+            let bytes = if metadata.is_file() { fs::read(path).unwrap() } else { Vec::new() };
+            rows.insert(path.to_path_buf(), (metadata.ino(), metadata.mode(), bytes));
+            if metadata.is_dir() {
+                for entry in fs::read_dir(path).unwrap() {
+                    visit(&entry.unwrap().path(), rows);
+                }
+            }
+        }
+        let mut rows = std::collections::BTreeMap::new();
+        visit(root, &mut rows);
+        rows
+    }
     let f = fixture();
     let seal_path = f.source.join("disk.json");
     let config_path = f.source.join("metadata/pool-membership/config.json");
@@ -642,11 +662,14 @@ fn fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection() {
             blake3::hash(b"fresh foreign reader boundary"),
         ),
     };
-    write_json(&seal_path, &seal, false).unwrap();
+    // External malicious bytes bypass the immutable writer, which must reject replacement.
+    fs::write(&seal_path, canonical_json(&seal).unwrap()).unwrap();
     let fresh_bytes = fs::read(&seal_path).unwrap();
     let marker = f.source.join("metadata/pool-membership/generation.json");
     fs::write(&marker, b"retained generation evidence, not JSON").unwrap();
+    let before = image(f._temp.path());
     let error = inspect(&f.source).err().expect("fresh format is not a foreign legacy source");
+    assert_eq!(image(f._temp.path()), before);
     assert_eq!(error.code(), ErrorCode::FormatUnsupported);
     assert!(matches!(error, Error::FreshBootstrap(source)
         if matches!(*source, crate::authority_selection::FreshBootstrapError::UnsupportedReader)));
@@ -656,9 +679,12 @@ fn fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection() {
 
     // Preserve the source binding validation that precedes format dispatch.
     seal.binding_generation = 0;
-    write_json(&seal_path, &seal, false).unwrap();
+    // External malicious bytes bypass the immutable writer, which must reject replacement.
+    fs::write(&seal_path, canonical_json(&seal).unwrap()).unwrap();
     let invalid_bytes = fs::read(&seal_path).unwrap();
+    let before = image(f._temp.path());
     assert_eq!(inspect(&f.source).err().unwrap().code(), ErrorCode::HistoryPackageInvalid);
+    assert_eq!(image(f._temp.path()), before);
     assert_eq!(fs::read(&seal_path).unwrap(), invalid_bytes);
     assert_eq!(fs::read(&config_path).unwrap(), original_config);
 }

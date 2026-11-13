@@ -403,16 +403,19 @@ fn directory_snapshot_keeps_all_alias_paths_and_counts_logical_bytes_per_occurre
     let operation = OperationId::generate().unwrap();
     // Publish an admitted alias namespace through the real Engine transaction,
     // rather than feeding an arbitrary vector directly to the capture routine.
+    // Current occurrences share their FILE canonical leaf name, not their parent.
     fixture.engine.mutate("test.snapshot.aliases", "admin", operation,
         json_codec::json!({}), |_, state, _| {
             let previous = state.branches[&branch].head_commit_id.clone();
             let mut commit = state.commits[&previous].clone();
             let mut same = current.clone();
             same.entry_id = new_id("entry")?;
-            same.relocate(PortablePath::parse("SameBody").unwrap());
+            same.relocate(PortablePath::parse("SameBody/Source").unwrap());
+            crate::business::ensure_parents(&mut commit.entries, &same.path)?;
             let mut historical = old.clone();
             historical.entry_id = new_id("entry")?;
-            historical.relocate(PortablePath::parse("OldBody").unwrap());
+            historical.relocate(PortablePath::parse("OldBody/Source").unwrap());
+            crate::business::ensure_parents(&mut commit.entries, &historical.path)?;
             commit.entries.extend([same, historical]);
             crate::business::validate_entries(&mut commit.entries, 2048)?;
             commit.commit_id = new_id("commit")?;
@@ -428,15 +431,27 @@ fn directory_snapshot_keeps_all_alias_paths_and_counts_logical_bytes_per_occurre
     let plan = fixture.capture(None, DirectorySnapshotLimits::default()).unwrap();
     assert_eq!(fixture.engine.reads.lock().unwrap().counts().unwrap().len(), 2);
     let preview = fixture.engine.finish_directory_snapshot_preview(verify(plan)).unwrap();
-    assert_eq!(preview.entries.len(), 3);
+    assert_eq!(preview.entries.len(), 5);
     assert_eq!(preview.usage.unique_versions, 2);
     assert_eq!(preview.usage.logical_bytes, 3 + 7 + 7);
-    assert_eq!(preview.entries[0].path.as_str(), "OldBody");
-    assert_eq!(preview.entries[1].path.as_str(), "SameBody");
-    assert_eq!(preview.entries[2].path.as_str(), "Source");
-    assert_eq!(file(&preview.entries[0]).0, file(&preview.entries[1]).0);
-    assert_ne!(file(&preview.entries[0]).1, file(&preview.entries[1]).1);
-    assert_eq!(file(&preview.entries[1]).1, file(&preview.entries[2]).1);
+    let paths: Vec<_> = preview.entries.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, ["OldBody", "OldBody/Source", "SameBody", "SameBody/Source", "Source"]);
+    let files: Vec<_> = preview.entries.iter().filter(|entry| {
+        matches!(entry.content, DirectorySnapshotContent::File { .. })
+    }).collect();
+    assert_eq!(files.len(), 3);
+    assert_eq!(file(files[0]).0, file(files[1]).0);
+    assert_eq!(file(files[1]).0, file(files[2]).0);
+    assert_ne!(file(files[0]).1, file(files[1]).1);
+    assert_eq!(file(files[1]).1, file(files[2]).1);
+    assert_eq!(file(files[0]).2, 3);
+    assert_eq!(file(files[1]).2, 7);
+    assert_eq!(file(files[2]).2, 7);
+    fixture.no_leases();
+    let mut limits = DirectorySnapshotLimits::default();
+    limits.logical_bytes = 3 + 7 + 7 - 1;
+    assert!(matches!(fixture.capture(None, limits),
+        Err(DirectorySnapshotSourceError::Budget(DirectorySnapshotBudget::LogicalBytes))));
     fixture.no_leases();
 }
 
