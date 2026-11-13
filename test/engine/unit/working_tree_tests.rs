@@ -69,12 +69,18 @@ fn directory(root: &RootBinding, id: u8, parent: DirectoryId, name: &str) -> Dir
 fn commitment() -> MaterialCommitment {
     MaterialCommitment::from_digest(blake3::hash(b"admitted FILE material"))
 }
-fn add_container(catalog: &mut WorkingTreeCatalog, root_index: usize, replica_index: u8) -> FileId {
+fn add_container(
+    catalog: &mut WorkingTreeCatalog,
+    root_index: usize,
+    replica_index: u8,
+    owner_disk: DiskId,
+) -> FileId {
     let root = &catalog.roots[root_index];
     let file_id = FileId::from_random([9; 16]);
     let replica_id = ReplicaId::from_random([replica_index; 16]);
     catalog.containers.push(ContainerBinding {
         file_id,
+        owner_disk,
         replica_id,
         root_id: root.root_id,
         parent_directory_id: root.roots.common_data.directory_id,
@@ -213,9 +219,9 @@ fn working_tree_backup_keeps_every_source_identity_and_local_replica() {
     let terminal = root(3, vec![backup.registration.clone(), primary.registration.clone()]);
     let baseline = vec![primary, backup, terminal];
     let mut record = catalog(baseline.clone());
-    add_container(&mut record, 0, 1);
-    add_container(&mut record, 1, 2);
-    add_container(&mut record, 2, 3);
+    add_container(&mut record, 0, 1, DiskId::from_random([1; 16]));
+    add_container(&mut record, 1, 2, DiskId::from_random([1; 16]));
+    add_container(&mut record, 2, 3, DiskId::from_random([1; 16]));
     assert!(validate_catalog_structure(&record).is_ok());
     record.replicas[2].source_chain.remove(0);
     assert!(matches!(validate_catalog_structure(&record), Err(AdmissionError::Replica)));
@@ -232,8 +238,8 @@ fn working_tree_replicas_require_consistent_commitments_and_one_current_copy() {
     let primary = root(1, vec![]);
     let backup = root(2, vec![primary.registration.clone()]);
     let mut record = catalog(vec![primary, backup]);
-    add_container(&mut record, 0, 1);
-    add_container(&mut record, 1, 2);
+    add_container(&mut record, 0, 1, DiskId::from_random([1; 16]));
+    add_container(&mut record, 1, 2, DiskId::from_random([1; 16]));
     assert!(validate_catalog_structure(&record).is_ok());
     record.containers[1].file_authority = MaterialCommitment::from_digest(blake3::hash(b"other"));
     assert!(matches!(
@@ -245,6 +251,146 @@ fn working_tree_replicas_require_consistent_commitments_and_one_current_copy() {
     record.replicas[1].source_chain.clear();
     record.replicas[1].purpose = ReplicaPurpose::Current;
     assert!(matches!(validate_catalog_structure(&record), Err(AdmissionError::Replica)));
+}
+
+fn retain_container(record: &mut WorkingTreeCatalog, index: usize, root_index: usize) {
+    record.containers[index].parent_directory_id =
+        record.roots[root_index].roots.deleted_data.directory_id;
+    record.containers[index].lifecycle = BindingLifecycle::Retained { operation_id: operation() };
+    record.replicas[index].purpose = ReplicaPurpose::Retained;
+}
+
+#[test]
+fn working_tree_retained_original_and_independent_destination_keep_distinct_owners() {
+    let disk_a = DiskId::from_random([1; 16]);
+    let disk_b = DiskId::from_random([2; 16]);
+    let mut record = catalog(vec![root(1, vec![]), root(2, vec![])]);
+    let file_a = add_container(&mut record, 0, 1, disk_a);
+    add_container(&mut record, 1, 2, disk_b);
+    let file_b = FileId::from_random([10; 16]);
+    record.containers[1].file_id = file_b;
+    record.replicas[1].object = ReplicaObject::Container(file_b);
+    retain_container(&mut record, 0, 0);
+
+    // Deliberately equal names and opaque commitments do not create identity.
+    // This fixture is structural, not a proof that either FILE body was read.
+    assert_eq!(record.containers[0].name, record.containers[1].name);
+    assert_eq!(record.containers[0].file_authority, record.containers[1].file_authority);
+    let bytes = storage_contract::canonical_json(&record).unwrap();
+    let decoded = decode_catalog(&bytes).unwrap();
+    let view = validate_catalog_structure(&decoded).unwrap();
+    let source = view.container(record.containers[0].replica_id).unwrap();
+    let destination = view.container(record.containers[1].replica_id).unwrap();
+    assert_eq!((source.binding().file_id, source.binding().owner_disk), (file_a, disk_a));
+    assert_eq!(
+        (destination.binding().file_id, destination.binding().owner_disk),
+        (file_b, disk_b),
+    );
+    assert_eq!(source.role(), ContainerPlacementRole::Original);
+    assert_eq!(source.replica().purpose, ReplicaPurpose::Retained);
+    assert_eq!(source.binding().lifecycle, BindingLifecycle::Retained {
+        operation_id: operation(),
+    });
+    assert_eq!(destination.role(), ContainerPlacementRole::Original);
+    assert_eq!(destination.binding().lifecycle, BindingLifecycle::Current);
+    assert_eq!(storage_contract::canonical_json(&decoded).unwrap(), bytes);
+}
+
+#[test]
+fn working_tree_retained_backup_is_not_an_original_even_without_original_placement() {
+    let owner = DiskId::from_random([1; 16]);
+    let primary = root(1, vec![]);
+    let backup = root(2, vec![primary.registration.clone()]);
+    let mut record = catalog(vec![primary, backup]);
+    add_container(&mut record, 0, 1, owner);
+    add_container(&mut record, 1, 2, owner);
+    retain_container(&mut record, 0, 0);
+    retain_container(&mut record, 1, 1);
+    let view = validate_catalog_structure(&record).unwrap();
+    assert_eq!(
+        view.container(record.containers[0].replica_id).unwrap().role(),
+        ContainerPlacementRole::Original,
+    );
+    assert_eq!(
+        view.container(record.containers[1].replica_id).unwrap().role(),
+        ContainerPlacementRole::Backup,
+    );
+    let original = record.containers.remove(0);
+    record.replicas.remove(0);
+    let view = validate_catalog_structure(&record).unwrap();
+    assert!(view.container(original.replica_id).is_none());
+    let retained = view.container(record.containers[0].replica_id).unwrap();
+    assert_eq!(retained.role(), ContainerPlacementRole::Backup);
+    assert_eq!(retained.binding().owner_disk, owner);
+    assert_ne!(retained.replica().registration.disk_id, owner.to_string());
+    // Missing structural coverage is not a proven physical deletion, and a
+    // remaining backup cannot become original by claiming the local disk.
+    record.containers[0].owner_disk = DiskId::from_random([2; 16]);
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
+}
+
+#[test]
+fn working_tree_owner_claim_must_match_every_copy_and_original_registration() {
+    let owner = DiskId::from_random([1; 16]);
+    let primary = root(1, vec![]);
+    let backup = root(2, vec![primary.registration.clone()]);
+    let mut record = catalog(vec![primary, backup]);
+    add_container(&mut record, 0, 1, owner);
+    add_container(&mut record, 1, 2, owner);
+    record.containers[1].owner_disk = DiskId::from_random([2; 16]);
+    let rejected = record.clone();
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
+    assert_eq!(record, rejected);
+    record.containers[1].owner_disk = owner;
+    record.containers[0].owner_disk = DiskId::from_random([2; 16]);
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
+}
+
+#[test]
+fn working_tree_same_file_cannot_claim_two_retained_originals() {
+    let owner = DiskId::from_random([1; 16]);
+    let mut record = catalog(vec![root(1, vec![]), root(2, vec![])]);
+    add_container(&mut record, 0, 1, owner);
+    add_container(&mut record, 1, 2, owner);
+    retain_container(&mut record, 0, 0);
+    retain_container(&mut record, 1, 1);
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
+    record.containers[1].owner_disk = DiskId::from_random([2; 16]);
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
+}
+
+#[test]
+fn working_tree_owner_survives_slot_changes_but_not_disk_identity_substitution() {
+    let owner = DiskId::from_random([1; 16]);
+    let mut record = catalog(vec![root(1, vec![])]);
+    add_container(&mut record, 0, 1, owner);
+    record.roots[0].registration.slot_id = "D09".into();
+    record.roots[0].registration.binding_generation = 2;
+    record.replicas[0].registration = record.roots[0].registration.clone();
+    let view = validate_catalog_structure(&record).unwrap();
+    let placement = view.container(record.containers[0].replica_id).unwrap();
+    assert_eq!(placement.binding().owner_disk, owner);
+    record.roots[0].registration.disk_id = DiskId::from_random([2; 16]).to_string();
+    record.replicas[0].registration = record.roots[0].registration.clone();
+    assert!(matches!(
+        validate_catalog_structure(&record),
+        Err(AdmissionError::ContainerOwner),
+    ));
 }
 
 #[test]
@@ -361,7 +507,7 @@ fn structural_catalog_does_not_claim_current_registration_or_expected_file_cover
     let primary = root(1, vec![]);
     let current = authorities(std::slice::from_ref(&primary));
     let mut record = catalog(vec![primary.clone()]);
-    add_container(&mut record, 0, 1);
+    add_container(&mut record, 0, 1, DiskId::from_random([1; 16]));
     assert!(validate_catalog_structure(&record).is_ok());
     // Structural closure intentionally cannot detect omission of an entire FILE.
     // No complete expected FILE set or authenticated catalog is supplied here.

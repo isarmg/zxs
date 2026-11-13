@@ -89,6 +89,40 @@ fn working_tree_catalog_requires_every_table_and_format_even_when_empty() {
 }
 
 #[test]
+fn working_tree_container_owner_is_required_typed_and_preserved_in_candidate_bytes() {
+    use crate::working_tree::ContainerBinding;
+
+    // A fixed vector for the standalone candidate format, not a migration of
+    // production State or FILE bytes. No missing-owner compatibility is allowed.
+    let bytes = concat!(
+        r#"{"file_authority":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","#,
+        r#""file_id":"file_11111111111111111111111111111111","#,
+        r#""lifecycle":{"kind":"current"},"name":"report.txt","#,
+        r#""operation_id":"op_22222222222222222222222222222222","#,
+        r#""owner_disk":"disk_33333333333333333333333333333333","#,
+        r#""parent_directory_id":"directory_44444444444444444444444444444444","#,
+        r#""replica_id":"replica_55555555555555555555555555555555","#,
+        r#""root_id":"root_66666666666666666666666666666666"}"#,
+    );
+    let container = crate::decode_strict::<ContainerBinding>(bytes.as_bytes()).unwrap();
+    assert_eq!(
+        container.owner_disk.to_string(),
+        "disk_33333333333333333333333333333333",
+    );
+    assert_eq!(crate::canonical_json(&container).unwrap(), bytes.as_bytes());
+    let owner = r#""owner_disk":"disk_33333333333333333333333333333333","#;
+    for invalid in [
+        bytes.replace(owner, ""),
+        bytes.replace(owner, r#""owner_disk":null,"#),
+        bytes.replace(owner, r#""owner_disk":"D01","#),
+        bytes.replace(owner, r#""owner_disk":"file_33333333333333333333333333333333","#),
+        bytes.replace(owner, &format!("{owner}{owner}")),
+    ] {
+        assert!(crate::decode_strict::<ContainerBinding>(invalid.as_bytes()).is_err());
+    }
+}
+
+#[test]
 fn directory_target_is_relative_bounded_and_does_not_require_directory_identity() {
     let path = DirectoryRelativePath::parse("Projects/notes.txt").unwrap();
     assert_eq!(path.components()[0].as_str(), "Projects");

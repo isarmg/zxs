@@ -2,10 +2,11 @@
 use crate::DiskRegistrationIdentity;
 use crate::persist::layout;
 use crate::working_tree::records::{
-    BindingLifecycle, CurrentRootSelection, DirectoryBinding, DirectoryId,
+    BindingLifecycle, ContainerBinding, ContainerPlacementRole, CurrentRootSelection,
+    DirectoryBinding, DirectoryId,
     LocalEntityIdentity, ReplicaBinding, ReplicaId, ReplicaObject,
     ReplicaPurpose, RootBinding, RootId, SnapshotRepositoryLocation, StorageLayout,
-    StructurallyValidWorkingTreeCatalog, WorkingTreeCatalog,
+    StructuralContainerPlacement, StructurallyValidWorkingTreeCatalog, WorkingTreeCatalog,
 };
 use name_policy::LookupName;
 use platform_io::fs_safety::{EntryName, linux::FileIdentity};
@@ -52,6 +53,8 @@ pub(crate) enum AdmissionError {
     Replica,
     #[error("working-tree copies disagree about their recorded FILE commitment")]
     FileCommitment,
+    #[error("working-tree container owner disagrees with its copies or placement source")]
+    ContainerOwner,
     #[error("allocating a working-tree directory identity")]
     Allocate(#[source] storage_contract::Error),
     #[error("directory target generation no longer matches the admitted root")]
@@ -159,8 +162,9 @@ pub(crate) fn validate_catalog_structure(
     let replicas = ordered_index(&catalog.replicas, |row| row.replica_id)?;
     ordered_index(&catalog.containers, |row| row.replica_id)?;
     ordered_index(&catalog.snapshot_repositories, |row| row.replica_id)?;
-    let view = StructurallyValidWorkingTreeCatalog {
+    let mut view = StructurallyValidWorkingTreeCatalog {
         catalog, roots, directories, replicas,
+        containers: BTreeMap::new(),
     };
     let mut entities = BTreeSet::new();
     let mut directory_ids = BTreeSet::new();
@@ -188,7 +192,7 @@ pub(crate) fn validate_catalog_structure(
     let mut names = BTreeSet::new();
     admit_directories(&view, &mut entities, &mut names)?;
     admit_replicas(&view, &mut entities)?;
-    admit_objects(&view, &mut names)?;
+    view.containers = admit_objects(&view, &mut names)?;
     if storage_contract::canonical_json(catalog).map_err(AdmissionError::Encode)?.len()
         > MAX_CATALOG_BYTES
     {
@@ -396,7 +400,7 @@ fn admit_replicas(
 }
 
 fn object_replica<'a>(
-    view: &'a StructurallyValidWorkingTreeCatalog<'_>,
+    view: &StructurallyValidWorkingTreeCatalog<'a>,
     root: RootId,
     parent: DirectoryId,
     lifecycle: BindingLifecycle,
@@ -415,7 +419,7 @@ fn object_replica<'a>(
     if parent_state != lifecycle {
         return Err(AdmissionError::Lifecycle);
     }
-    let replica = view.replicas.get(&id).ok_or(AdmissionError::Replica)?;
+    let replica = view.replicas.get(&id).copied().ok_or(AdmissionError::Replica)?;
     if replica.root_id != root || replica.object != object {
         return Err(AdmissionError::Replica);
     }
@@ -429,13 +433,14 @@ fn object_replica<'a>(
     }
 }
 
-fn admit_objects(
-    view: &StructurallyValidWorkingTreeCatalog<'_>,
+fn admit_objects<'a>(
+    view: &StructurallyValidWorkingTreeCatalog<'a>,
     names: &mut Names,
-) -> Result<(), AdmissionError> {
+) -> Result<BTreeMap<ReplicaId, StructuralContainerPlacement<'a>>, AdmissionError> {
     let mut used_replicas = BTreeSet::new();
     let mut repositories = BTreeMap::new();
     let mut files = BTreeMap::new();
+    let mut containers = BTreeMap::new();
     for row in &view.catalog.containers {
         let replica = object_replica(
             view, row.root_id, row.parent_directory_id, row.lifecycle,
@@ -444,11 +449,20 @@ fn admit_objects(
         if replica.operation_id != row.operation_id || !used_replicas.insert(row.replica_id) {
             return Err(AdmissionError::Replica);
         }
-        if files.insert(row.file_id, row.file_authority)
-            .is_some_and(|previous| previous != row.file_authority)
-        {
-            return Err(AdmissionError::FileCommitment);
+        if let Some((owner, authority)) = files.insert(
+            row.file_id, (row.owner_disk, row.file_authority),
+        ) {
+            if owner != row.owner_disk {
+                return Err(AdmissionError::ContainerOwner);
+            }
+            if authority != row.file_authority {
+                return Err(AdmissionError::FileCommitment);
+            }
         }
+        let role = container_placement_role(row, replica)?;
+        containers.insert(row.replica_id, StructuralContainerPlacement {
+            binding: row, replica, role,
+        });
         insert_name(names, row.parent_directory_id, &row.name)?;
     }
     for row in &view.catalog.snapshot_repositories {
@@ -495,7 +509,23 @@ fn admit_objects(
     if used_replicas.len() != view.replicas.len() {
         return Err(AdmissionError::Replica);
     }
-    Ok(())
+    Ok(containers)
+}
+
+/// Compare the explicitly recorded owner with the structurally closed source
+/// chain. The chain checks that claim; it never supplies a missing owner.
+fn container_placement_role(
+    container: &ContainerBinding,
+    replica: &ReplicaBinding,
+) -> Result<ContainerPlacementRole, AdmissionError> {
+    let (source, role) = match replica.source_chain.last() {
+        Some(source) => (source, ContainerPlacementRole::Backup),
+        None => (&replica.registration, ContainerPlacementRole::Original),
+    };
+    if source.disk_id != container.owner_disk.to_string() {
+        return Err(AdmissionError::ContainerOwner);
+    }
+    Ok(role)
 }
 
 /// A retained repository's original host is provenance in the authenticated

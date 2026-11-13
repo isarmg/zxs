@@ -474,6 +474,7 @@ fn working_directory_recorded_container_cannot_be_traversed_as_an_ordinary_direc
     let replica_id = ReplicaId::from_random([11; 16]);
     fixture.catalog.containers.push(ContainerBinding {
         file_id,
+        owner_disk: fixture.disk.seal.disk_id.parse().unwrap(),
         replica_id,
         root_id: root.root_id,
         parent_directory_id: root.roots.common_data.directory_id,

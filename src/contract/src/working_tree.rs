@@ -3,7 +3,7 @@
 //! These records are a standalone prerequisite, not fields of current state.
 //! Persisting or activating them requires a separate authenticated format boundary;
 //! FILE metadata never receives these locations.
-use crate::{ContentHash, FileId, Generation, Id, OperationId};
+use crate::{ContentHash, DiskId, FileId, Generation, Id, OperationId};
 use data_serialization::{Deserialize, Deserializer, Serialize};
 use name_policy::LookupName;
 
@@ -160,6 +160,10 @@ impl MaterialCommitment {
 #[serialization(deny_unknown_fields)]
 pub struct ContainerBinding {
     pub file_id: FileId,
+    /// Stable logical owner, preserved by every placement and backup replica.
+    /// The deciding operation must supply it, never infer it from root_id,
+    /// the current version's location, a path or ReplicaPurpose::Retained.
+    pub owner_disk: DiskId,
     pub replica_id: ReplicaId,
     pub root_id: RootId,
     pub parent_directory_id: DirectoryId,

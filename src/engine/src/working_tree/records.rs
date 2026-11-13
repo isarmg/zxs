@@ -30,10 +30,45 @@ pub(crate) struct StructurallyValidWorkingTreeCatalog<'a> {
     roots: BTreeMap<RootId, &'a RootBinding>,
     directories: BTreeMap<DirectoryId, &'a DirectoryBinding>,
     replicas: BTreeMap<ReplicaId, &'a ReplicaBinding>,
+    containers: BTreeMap<ReplicaId, StructuralContainerPlacement<'a>>,
 }
 impl<'a> StructurallyValidWorkingTreeCatalog<'a> {
     pub(crate) fn catalog(&self) -> &'a WorkingTreeCatalog {
         self.catalog
+    }
+
+    /// A joined candidate row, not evidence of publication or original presence.
+    pub(crate) fn container(
+        &self,
+        replica: ReplicaId,
+    ) -> Option<&StructuralContainerPlacement<'a>> {
+        self.containers.get(&replica)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContainerPlacementRole {
+    Original,
+    Backup,
+}
+
+/// Structural agreement of the recorded owner and one physical placement.
+/// A retained original and a retained backup have the same lifecycle but retain
+/// different roles. Neither role authenticates the catalog or permits a write.
+pub(crate) struct StructuralContainerPlacement<'a> {
+    binding: &'a ContainerBinding,
+    replica: &'a ReplicaBinding,
+    role: ContainerPlacementRole,
+}
+impl StructuralContainerPlacement<'_> {
+    pub(crate) fn binding(&self) -> &ContainerBinding {
+        self.binding
+    }
+    pub(crate) fn replica(&self) -> &ReplicaBinding {
+        self.replica
+    }
+    pub(crate) fn role(&self) -> ContainerPlacementRole {
+        self.role
     }
 }
 
