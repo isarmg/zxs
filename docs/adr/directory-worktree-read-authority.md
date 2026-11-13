@@ -200,3 +200,21 @@ sequence；完整 node material 绑定原意图和同一个 candidate，在原 F
 已编写真实非空 FILE 来源、完整副本/原来源不变、冷开/精确重试、未知 `.zxs`
 全盘不变、正文/实体替换、离线拒绝与 ACCEPT/FINALIZE/Publication 故障恢复用例。
 未在本机运行。首节点执行与冷读尚无 GitHub 行为验证结果，不得作为 A 已完成交付。
+
+### 原始 bootstrap 完成证明到冷读消费者（后继未验证）
+
+RootRecord 与相同 Complete 字节新增必填 bootstrap 目录及 writer 实体；缺字段的旧
+WIP 材料严格拒绝且保留原字节，不迁移。首次实际 locator 初始化发生在该记录写入前，
+任一中断尚无 Complete 时仍不自动收养材料。
+
+冷开准入返回私有 CompletionProof，保存原 SYSTEM/locator/锁身份及完整记录承诺。
+实际 locator 相对已打开 SYSTEM FD 读取；再次打开的原目录、Complete commitment、
+Existing writer FD 与锁后路径都必须匹配原证明，不能由后来同名材料重新授权。
+新格式冷开保持这一个 locator 锁至恢复完成，不走重复加锁的旧 discovery 路径；没有
+此证明的旧通用管理入口拒绝新格式，不创建 missing sidecar。
+
+新增真实预准入后替目录、取得根证明后替锁、缺锁及旧记录拒绝回归，检查拒绝后全部
+bytes/inode/mode 不变。保留原初始化、快照、冷读测试；bootstrap 目标从原 8 项
+增加两个实际测试至 10 项，900 秒预算不变。未本机编译、测试、格式化或 selector。
+此处只闭合 locator 准入与持有锁链；SYSTEM SQLite/WAL 仍有独立路径责任，未声称
+完整 held initializer、所有恢复或产品 A 段完成。

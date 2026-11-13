@@ -311,3 +311,66 @@ fn missing_original_writer_is_not_recreated_by_cold_open() {
         assert!(!writer.exists());
     }
 }
+
+#[test]
+fn cold_bootstrap_preserves_original_root_and_writer_after_preflight() {
+    use crate::engine::disk_lifecycle::bootstrap::{runtime, store::BootstrapStore};
+    for replace_root in [true, false] {
+        let (temp, system, config) = fixture();
+        let engine = Engine::initialize_directory_storage(
+            &system, config, OperationId::generate().unwrap(),
+        ).unwrap();
+        let proof = require_complete(&system, &engine.config).unwrap();
+        let admitted = engine.config.clone().with_fresh_completion(proof);
+        drop(engine);
+        let path = system.join(runtime::DIRECTORY);
+        if replace_root {
+            fs::rename(&path, system.join("original-bootstrap-retained")).unwrap();
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            let before = image(temp.path());
+            assert!(runtime::open_store_for_config(&system, &admitted).is_err());
+            assert_eq!(image(temp.path()), before);
+        } else {
+            let held_system = PrivateDirectory::open_existing(&system).unwrap();
+            let held = OpenAt2Root::open(&path, MountPolicy::SameMount).unwrap();
+            let writer = admit_bootstrap_handle(&held_system, &admitted, held.identity()).unwrap();
+            let lock = path.join(layout::CONTROL_WRITER_LOCK.as_path());
+            fs::rename(&lock, path.join("original-writer-retained")).unwrap();
+            fs::write(&lock, b"").unwrap();
+            fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+            let before = image(temp.path());
+            assert!(BootstrapStore::hold_existing(held.into_directory(), path, writer).is_err());
+            assert_eq!(image(temp.path()), before);
+        }
+    }
+}
+
+#[test]
+fn cold_bootstrap_refuses_missing_writer_or_old_completion_without_repair() {
+    for missing_writer in [true, false] {
+        let (temp, system, config) = fixture();
+        let engine = Engine::initialize_directory_storage(
+            &system, config, OperationId::generate().unwrap(),
+        ).unwrap();
+        drop(engine);
+        if missing_writer {
+            fs::remove_file(system.join(
+                crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY,
+            ).join(layout::CONTROL_WRITER_LOCK.as_path())).unwrap();
+        } else {
+            let bytes = fs::read(system.join(ROOTS)).unwrap();
+            let mut old: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
+            let fields = old.as_object_mut().unwrap();
+            fields.remove("bootstrap_root");
+            fields.remove("bootstrap_writer");
+            let bytes = storage_contract::canonical_json(&old).unwrap();
+            // Both matching legacy records still lack mandatory original authority.
+            fs::write(system.join(ROOTS), &bytes).unwrap();
+            fs::write(system.join(COMPLETE), &bytes).unwrap();
+        }
+        let before = image(temp.path());
+        assert!(Engine::open(&system).is_err());
+        assert_eq!(image(temp.path()), before);
+    }
+}

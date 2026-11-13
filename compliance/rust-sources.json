@@ -79509,7 +79509,7 @@
     "Cargo.lock": "6614c732be4234259b355b2ae73950bdbb5667433c8196abc9fd3c88f041ab8b"
   },
   "manifests_sha256": {
-    "Cargo.toml": "ca1ffbb2fa59327067c99eefc52fc780340292a72686d1305d6291a4fcf82d08",
+    "Cargo.toml": "64edd59e133ee22b07d36a5ea4499453b7b343c59fb280f97ef59244bef269ae",
     "helper/Cargo.toml": "0071473a5f84c7a69d9c1cd6514124f7aeaf0eff192de976c1477592806d02a6",
     "src/auth/Cargo.toml": "30c13cd13b7760139354761dc800d6a939702af7e638e8139cb32e73a3378839",
     "src/client/Cargo.toml": "948ee09545561370e0041bcdda5ff3641b5239a6ceadbeb774ee061b7ccfc12b",

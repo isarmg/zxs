@@ -61,9 +61,71 @@ struct RootRecord {
     selection: MaterialCommitment,
     operation: OperationId,
     system_writer: LocalEntityIdentity,
+    bootstrap_root: LocalEntityIdentity,
+    bootstrap_writer: LocalEntityIdentity,
     disk_writers: Vec<LocalEntityIdentity>,
     roots: Vec<RootBinding>,
 }
+/// Original cold-admission evidence, never constructed from a later path lookup.
+#[derive(Clone, Debug)]
+pub(crate) struct CompletionProof {
+    commitment: MaterialCommitment,
+    system: LocalEntityIdentity,
+    bootstrap_root: LocalEntityIdentity,
+    bootstrap_writer: LocalEntityIdentity,
+}
+
+fn bootstrap_identity(system: &PrivateDirectory) -> Result<(LocalEntityIdentity, LocalEntityIdentity)> {
+    let root = opened(system.try_clone().map_err(FreshBootstrapError::Filesystem)?)?;
+    let child = root.open_directory(&name(
+        crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY,
+    )?.as_relative()).map_err(FreshBootstrapError::Filesystem)?;
+    let child = OpenAt2Root::from_directory(child, MountPolicy::SameMount)
+        .map_err(FreshBootstrapError::Filesystem)?;
+    let child_identity = entity(&child);
+    let directory = PrivateDirectory::from_directory(
+        child.into_directory(), system.path().join(
+            crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY,
+        ),
+    ).map_err(FreshBootstrapError::Filesystem)?;
+    let writer = directory.open_payload(
+        &layout::CONTROL_WRITER_LOCK, platform_io::fs_safety::PayloadOpenMode::Existing,
+    ).map_err(FreshBootstrapError::Filesystem)?;
+    let stat = platform_io::fs_safety::linux::FileIdentity::from_fd(&writer)
+        .map_err(|error| FreshBootstrapError::Filesystem(error.into()))?;
+    if writer.metadata().map_err(|error| FreshBootstrapError::Filesystem(error.into()))?.len() != 0 {
+        return Err(FreshBootstrapError::Changed);
+    }
+    Ok((child_identity, LocalEntityIdentity::new(stat.device, stat.inode)))
+}
+
+fn completion_commitment(bytes: &[u8]) -> MaterialCommitment {
+    let mut hash = blake3::Hasher::new_derive_key("zxs directory bootstrap completion v1");
+    hash.update(bytes);
+    MaterialCommitment::from_digest(hash.finalize())
+}
+
+pub(crate) fn admit_bootstrap_handle(
+    system: &PrivateDirectory, config: &ValidatedConfig,
+    bootstrap: platform_io::fs_safety::linux::FileIdentity,
+) -> crate::Result<LocalEntityIdentity> {
+    let inspect = || -> Result<LocalEntityIdentity> {
+        let proof = config.fresh_completion().ok_or(FreshBootstrapError::Incomplete)?;
+        let root = opened(system.try_clone().map_err(FreshBootstrapError::Filesystem)?)?;
+        let bytes = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
+            .map_err(FreshBootstrapError::Filesystem)?;
+        if entity(&root) != proof.system
+            || completion_commitment(&bytes) != proof.commitment
+            || LocalEntityIdentity::new(bootstrap.device, bootstrap.inode) != proof.bootstrap_root
+        {
+            return Err(FreshBootstrapError::Changed);
+        }
+        system.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
+        Ok(proof.bootstrap_writer)
+    };
+    inspect().map_err(failure)
+}
+
 impl RootRecord {
     fn bytes(&self) -> Result<Vec<u8>> {
         let bytes = storage_contract::canonical_json(self).map_err(FreshBootstrapError::Codec)?;
@@ -267,16 +329,18 @@ impl FreshBootstrap {
             ).map_err(engine_error)?;
             root.sync_dir(&disk.root).map_err(engine_error)?;
         }
+        crate::engine::disk_lifecycle::bootstrap::runtime::initialize(
+            &self.root, &self.config, &self.resources,
+        ).map_err(engine_error)?;
+        let (bootstrap_root, bootstrap_writer) = bootstrap_identity(&system)?;
         let record = RootRecord {
             layout: StorageLayout::UnifiedWorkingTreeV1, selection, operation,
-            system_writer, disk_writers, roots,
+            system_writer, bootstrap_root, bootstrap_writer, disk_writers, roots,
         };
         let bytes = record.bytes()?;
         AtomicFile::create(&system, &name(ROOTS)?, &bytes)
             .map_err(FreshBootstrapError::Filesystem)?;
-        crate::engine::disk_lifecycle::bootstrap::runtime::initialize(
-            &self.root, &self.config, &self.resources,
-        ).map_err(engine_error)?;
+
         let config = storage_contract::canonical_json(&self.config)
             .map_err(FreshBootstrapError::Codec)?;
         AtomicFile::create(&system, &name("config.json")?, &config)
@@ -290,7 +354,7 @@ impl FreshBootstrap {
             ).map_err(engine_error)?;
             journals.insert(disk.disk_id.clone(), journal);
         }
-        let engine = Engine::assemble_initialized(
+        let mut engine = Engine::assemble_initialized(
             self.root, self.config, self.resources, locks, journals,
         ).map_err(engine_error)?;
         // Completion is last. An index write interrupted before this record is
@@ -298,6 +362,9 @@ impl FreshBootstrap {
         AtomicFile::create(&system, &name(COMPLETE)?, &bytes)
             .map_err(FreshBootstrapError::Filesystem)?;
         verify_roots(&engine.config, &record, &selection_bytes, Some(&engine.disk_resources))?;
+        let proof = require_complete_resources(&system, &engine.config, Some(&engine.disk_resources))
+            .map_err(engine_error)?;
+        engine.config = engine.config.clone().with_fresh_completion(proof);
         Ok(engine)
     }
 }
@@ -401,7 +468,9 @@ fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
-        if bytes != complete {
+        if bytes != complete || engine.config.fresh_completion()
+            .is_none_or(|proof| proof.commitment != completion_commitment(&complete))
+        {
             return Err(FreshBootstrapError::Changed);
         }
         let record = RootRecord::decode(&bytes)?;
@@ -460,7 +529,9 @@ impl Engine {
 }
 
 /// Must run before writer-sidecar creation or writable index admission on cold open.
-pub(crate) fn require_complete(root: &Path, config: &ValidatedConfig) -> crate::Result<()> {
+pub(crate) fn require_complete(
+    root: &Path, config: &ValidatedConfig,
+) -> crate::Result<CompletionProof> {
     let system = PrivateDirectory::open_existing(root)
         .map_err(|error| failure(FreshBootstrapError::Filesystem(error)))?;
     require_complete_resources(&system, config, None)
@@ -469,13 +540,13 @@ pub(crate) fn require_complete(root: &Path, config: &ValidatedConfig) -> crate::
 fn require_complete_held(
     system: &PrivateDirectory, config: &ValidatedConfig, resources: &DiskResources,
 ) -> crate::Result<()> {
-    require_complete_resources(system, config, Some(resources))
+    require_complete_resources(system, config, Some(resources)).map(|_| ())
 }
 
 fn require_complete_resources(
     system: &PrivateDirectory, config: &ValidatedConfig, resources: Option<&DiskResources>,
-) -> crate::Result<()> {
-    let inspect = || -> Result<()> {
+) -> crate::Result<CompletionProof> {
+    let inspect = || -> Result<CompletionProof> {
         let bytes = system.read_bounded(&name(ROOTS)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
@@ -504,7 +575,15 @@ fn require_complete_resources(
         verify_roots(
             config, &record, &selector.canonical_bytes().map_err(engine_error)?, resources,
         )?;
-        system.verify_identity().map_err(FreshBootstrapError::Filesystem)
+        let (bootstrap_root, bootstrap_writer) = bootstrap_identity(system)?;
+        if bootstrap_root != record.bootstrap_root || bootstrap_writer != record.bootstrap_writer {
+            return Err(FreshBootstrapError::Changed);
+        }
+        system.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
+        Ok(CompletionProof {
+            commitment: completion_commitment(&complete), system: selector.system,
+            bootstrap_root, bootstrap_writer,
+        })
     };
     inspect().map_err(failure)
 }

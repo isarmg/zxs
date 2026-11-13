@@ -2917,3 +2917,25 @@ class CurrentNameFixtureSelection(unittest.TestCase):
                 for group in groups:
                     self.assertCountEqual(origin_selections(plan, group),
                                           policy['groups'][group]['rust_targets'])
+
+
+class DirectoryBootstrapColdProofSelection(unittest.TestCase):
+    def test_original_bootstrap_consumers_keep_complete_selection_and_budget(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'directory-storage-bootstrap'
+        target, = policy['groups'][group]['rust_targets']
+        self.assertEqual(target['prefixes'],
+                         ['engine::snapshot_initialization::bootstrap::tests::'])
+        self.assertEqual(target['max_tests'], 10)
+        self.assertEqual(target['timeout_seconds'], 900)
+        self.assertEqual(target['exact'], [
+            'disk::discovery::tests::'
+            'fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate',
+            'foreign_import::tests::'
+            'fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection',
+        ])
+        for source in ['runtime.rs', 'store.rs']:
+            path = 'src/engine/src/engine/disk_lifecycle/bootstrap/' + source
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path],
+                                            ['held-directory-layout'], [group])

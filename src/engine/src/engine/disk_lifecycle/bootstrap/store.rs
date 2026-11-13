@@ -31,7 +31,7 @@ const HEAD_FILE: &str = "head.json";
 pub(crate) struct BootstrapStore {
     directory: PrivateDirectory,
     reader: OpenAt2Root,
-    _lock: AdvisoryLock,
+    _lock: BootstrapWriter,
     #[cfg(test)]
     fault: Option<WriteFault>,
 }
@@ -53,9 +53,30 @@ pub(in crate::engine) fn inject_next(phase: WriteFault) {
     NEXT_WRITE_FAULT.with(|fault| fault.set(Some(phase)));
 }
 
+enum BootstrapWriter {
+    Create { _lock: AdvisoryLock },
+    Existing { _file: File },
+}
+
 impl BootstrapStore {
     /// Acquires/synchronizes only the control lock, never a configured root.
     pub(crate) fn hold(directory: File, path: PathBuf) -> Result<Self> {
+        Self::hold_with_existing(directory, path, None)
+    }
+
+    pub(crate) fn hold_existing(
+        directory: File,
+        path: PathBuf,
+        writer: storage_contract::working_tree::LocalEntityIdentity,
+    ) -> Result<Self> {
+        Self::hold_with_existing(directory, path, Some(writer))
+    }
+
+    fn hold_with_existing(
+        directory: File,
+        path: PathBuf,
+        existing: Option<storage_contract::working_tree::LocalEntityIdentity>,
+    ) -> Result<Self> {
         let reader = directory
             .try_clone()
             .map_err(|e| BootstrapError::io("control descriptor clone", e))?;
@@ -63,8 +84,34 @@ impl BootstrapStore {
             .map_err(|e| BootstrapError::fs("held control directory", e))?;
         let reader = OpenAt2Root::from_directory(reader, MountPolicy::SameMount)
             .map_err(|e| BootstrapError::fs("held control reader", e))?;
-        let lock = AdvisoryLock::acquire(&directory, &layout::CONTROL_WRITER_LOCK.as_relative())
-            .map_err(|e| BootstrapError::fs("control lock", e))?;
+        let lock = if let Some(expected) = existing {
+            let file = directory.open_payload(&layout::CONTROL_WRITER_LOCK,
+                platform_io::fs_safety::PayloadOpenMode::Existing)
+                .map_err(|error| BootstrapError::fs("existing control lock", error))?;
+            let observed = platform_io::fs_safety::linux::FileIdentity::from_fd(&file)
+                .map_err(|error| BootstrapError::io("existing control identity", error))?;
+            if storage_contract::working_tree::LocalEntityIdentity::new(
+                observed.device, observed.inode,
+            ) != expected || file.metadata()
+                .map_err(|error| BootstrapError::io("existing control metadata", error))?.len() != 0
+            {
+                return Err(BootstrapError::fs("existing control identity",
+                    platform_io::fs_safety::Error::IdentityChanged(directory.path().to_owned())));
+            }
+            file.try_lock().map_err(|error| match error {
+                std::fs::TryLockError::WouldBlock => BootstrapError::fs("existing control lock",
+                    platform_io::fs_safety::Error::AlreadyLocked(directory.path().to_owned())),
+                std::fs::TryLockError::Error(error) => BootstrapError::io("existing control lock", error),
+            })?;
+            directory.verify_payload(&layout::CONTROL_WRITER_LOCK, &file)
+                .map_err(|error| BootstrapError::fs("existing control identity", error))?;
+            BootstrapWriter::Existing { _file: file }
+        } else {
+            BootstrapWriter::Create {
+                _lock: AdvisoryLock::acquire(&directory, &layout::CONTROL_WRITER_LOCK.as_relative())
+                    .map_err(|error| BootstrapError::fs("control lock", error))?,
+            }
+        };
         Ok(Self {
             directory,
             reader,

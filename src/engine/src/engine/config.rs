@@ -1,6 +1,7 @@
 //! Disk topology, resource admission configuration and OS writer locks.
 use crate::{disk::*, *};
 use crate::persist::layout;
+use crate::engine::snapshot_initialization::bootstrap::CompletionProof;
 use data_serialization::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -33,6 +34,7 @@ pub struct ValidatedConfig {
 struct AdmittedConfig {
     config: Config,
     fresh_bootstrap: Option<storage_contract::working_tree::MaterialCommitment>,
+    fresh_completion: Option<Arc<CompletionProof>>,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
     genesis_io_authority: Arc<GenesisIoAuthority>,
@@ -59,6 +61,7 @@ impl TryFrom<Config> for ValidatedConfig {
             admitted: Arc::new(AdmittedConfig {
                 config,
                 fresh_bootstrap: None,
+                fresh_completion: None,
                 metadata_members,
                 membership,
                 genesis_io_authority,
@@ -94,8 +97,23 @@ impl ValidatedConfig {
         selection: &crate::authority_selection::FreshSelection,
     ) -> Result<Self> {
         selection.require_config(&self)?;
-        Arc::make_mut(&mut self.admitted).fresh_bootstrap = Some(selection.commitment()?);
+        let admitted = Arc::make_mut(&mut self.admitted);
+        admitted.fresh_bootstrap = Some(selection.commitment()?);
+        admitted.fresh_completion = None;
         Ok(self)
+    }
+
+    pub(crate) fn with_fresh_completion(
+        mut self, proof: CompletionProof,
+    ) -> Self {
+        Arc::make_mut(&mut self.admitted).fresh_completion = Some(Arc::new(proof));
+        self
+    }
+
+    pub(crate) fn fresh_completion(
+        &self,
+    ) -> Option<&CompletionProof> {
+        self.admitted.fresh_completion.as_deref()
     }
 
     pub(crate) fn fresh_bootstrap(

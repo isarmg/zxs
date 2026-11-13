@@ -21,16 +21,38 @@ pub(crate) fn management_error(error: BootstrapError) -> Error {
 /// Keep the ledger's exclusive lock until resource admission and the system
 /// writer lock have completed. A cooperating stop cannot race this snapshot.
 pub(crate) fn open_store(root: &Path) -> crate::Result<BootstrapStore> {
+    if crate::authority_selection::has_fresh_selector(root)? {
+        return Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::Changed,
+        )));
+    }
     let path = root.join(DIRECTORY);
     let reader = OpenAt2Root::open(&path, MountPolicy::SameMount)
         .map_err(|error| management_error(BootstrapError::fs("open system locator", error)))?;
     BootstrapStore::hold(reader.into_directory(), path).map_err(management_error)
 }
 
+pub(crate) fn open_store_for_config(
+    root: &Path, config: &ValidatedConfig,
+) -> crate::Result<BootstrapStore> {
+    if config.fresh_bootstrap().is_none() {
+        return open_store(root);
+    }
+    let system = existing_private_dir(root)?;
+    let anchor = OpenAt2Root::from_private_directory(system.try_clone()?, MountPolicy::SameMount)?;
+    let directory = anchor.open_directory(&EntryName::new(DIRECTORY)?.as_relative())?;
+    let writer = crate::engine::snapshot_initialization::bootstrap::admit_bootstrap_handle(
+        &system, config, platform_io::fs_safety::linux::FileIdentity::from_fd(&directory)?,
+    )?;
+    BootstrapStore::hold_existing(directory, root.join(DIRECTORY), writer).map_err(management_error)
+}
+
 fn create_store(root: &Path) -> crate::Result<BootstrapStore> {
     let system = existing_private_dir(root)?;
-    system.create_child(&EntryName::new(DIRECTORY)?)?;
-    open_store(root)
+    let child = system.create_child(&EntryName::new(DIRECTORY)?)?;
+    let path = child.path().to_path_buf();
+    let directory = OpenAt2Root::from_private_directory(child, MountPolicy::SameMount)?;
+    BootstrapStore::hold(directory.into_directory(), path).map_err(management_error)
 }
 
 pub(in crate::engine) fn observe<'a>(
