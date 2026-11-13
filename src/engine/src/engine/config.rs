@@ -450,18 +450,25 @@ pub(super) fn acquire_locks_selected(
     selection: crate::authority_selection::SelectionGuard,
 ) -> Result<WriterLocks> {
     selection.require_selected()?;
-    let system = File::from(
-        rustix::fs::open(
-            root.join(layout::CONTROL_WRITER_LOCK.as_path()),
-            rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::RDWR
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .map_err(std::io::Error::from)?,
-    );
+    // The selection owns the original SYSTEM descriptor. A path check before
+    // absolute CREATE would still permit a replacement directory to receive a
+    // sidecar, even if the later identity check rejected the operation.
+    let directory = selection.selected_directory()?;
+    if directory.path() != root {
+        return Err(Error::FreshBootstrap(Box::new(
+            crate::authority_selection::FreshBootstrapError::Changed,
+        )));
+    }
+    use platform_io::fs_safety::PayloadOpenMode;
+    let opened = directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::Existing);
+    let system = match opened {
+        Ok(file) => file,
+        Err(platform_io::fs_safety::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound => {
+                directory.open_payload(&layout::CONTROL_WRITER_LOCK, PayloadOpenMode::CreateNew)?
+            }
+        Err(error) => return Err(error.into()),
+    };
     acquire_writer(&system)?;
     selection.require_selected()?;
     let mut locks = WriterLocks::new(system, selection);

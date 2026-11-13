@@ -94,23 +94,51 @@ impl FreshBootstrap {
         Self::prepare_inner(root, config, operation).map_err(failure)
     }
     fn prepare_inner(root: &Path, config: ValidatedConfig, operation: OperationId) -> Result<Self> {
+        let system = PrivateDirectory::open_existing(root)
+            .map_err(FreshBootstrapError::Filesystem)?;
+        let directories = config.disks.iter().map(|disk| {
+            PrivateDirectory::open_existing(&disk.root).map_err(FreshBootstrapError::Filesystem)
+        }).collect::<Result<Vec<_>>>()?;
+        Self::prepare_held(system, config, operation, directories)
+    }
+
+    // This is held bootstrap admission, not a complete held Engine initializer.
+    // SYSTEM index/locator consumers still require a separate anchored-I/O change.
+    fn prepare_held(
+        system: PrivateDirectory, config: ValidatedConfig, operation: OperationId,
+        directories: Vec<PrivateDirectory>,
+    ) -> Result<Self> {
         if config.generation().is_some() || config.disks.len() > 256 {
             return Err(FreshBootstrapError::Changed);
         }
         crate::authority_selection::FreshSelection::require_primary(&config)?;
-        let selection = SelectionGuard::acquire(root).map_err(engine_error)?;
+        let root = system.path().to_owned();
+        let selection = SelectionGuard::acquire_held(system).map_err(engine_error)?;
         let mut directory_locks = Vec::new();
-        for disk in &config.disks {
-            let directory = opened(PrivateDirectory::open_existing(&disk.root)
-                .map_err(FreshBootstrapError::Filesystem)?)?;
-            directory_locks.push(AdvisoryLock::directory(directory.directory())
+        for directory in &directories {
+            let held = opened(directory.try_clone().map_err(FreshBootstrapError::Filesystem)?)?;
+            directory_locks.push(AdvisoryLock::directory(held.directory())
                 .map_err(FreshBootstrapError::Filesystem)?);
         }
-        let selection = selection.select_fresh(&config, operation)?;
+        let selection = selection.select_fresh_held(&config, operation, &directories)?;
         let config = config.with_fresh_bootstrap(
             selection.fresh_selection().ok_or(FreshBootstrapError::Changed)?,
         ).map_err(engine_error)?;
-        let resources = Arc::new(DiskResources::open(&config, false).map_err(engine_error)?);
+        let system = selection.selected_directory().map_err(engine_error)?;
+        let complete = match system.read_bounded(&name(COMPLETE)?, MAX_BYTES) {
+            Ok(_) => true,
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(FreshBootstrapError::Filesystem(error)),
+        };
+        let handles = directories.into_iter().map(|directory| {
+            Ok(opened(directory)?.into_directory())
+        }).collect::<Result<Vec<_>>>()?;
+        let resources = Arc::new(if complete {
+            DiskResources::recover_held(&config, handles)
+        } else {
+            DiskResources::initialize_held(&config, handles)
+        }.map_err(engine_error)?);
         let admitted = selection.fresh_selection().ok_or(FreshBootstrapError::Changed)?;
         for (expected, disk) in admitted.disks.iter().zip(&config.disks) {
             let handle = resources.get(disk).map_err(engine_error)?;
@@ -118,8 +146,11 @@ impl FreshBootstrap {
                 return Err(FreshBootstrapError::Changed);
             }
         }
+        if complete {
+            require_complete_held(&system, &config, &resources).map_err(engine_error)?;
+        }
         Ok(Self {
-            root: root.to_owned(), config, resources, selection,
+            root, config, resources, selection,
             _directory_locks: directory_locks,
         })
     }
@@ -430,9 +461,21 @@ impl Engine {
 
 /// Must run before writer-sidecar creation or writable index admission on cold open.
 pub(crate) fn require_complete(root: &Path, config: &ValidatedConfig) -> crate::Result<()> {
+    let system = PrivateDirectory::open_existing(root)
+        .map_err(|error| failure(FreshBootstrapError::Filesystem(error)))?;
+    require_complete_resources(&system, config, None)
+}
+
+fn require_complete_held(
+    system: &PrivateDirectory, config: &ValidatedConfig, resources: &DiskResources,
+) -> crate::Result<()> {
+    require_complete_resources(system, config, Some(resources))
+}
+
+fn require_complete_resources(
+    system: &PrivateDirectory, config: &ValidatedConfig, resources: Option<&DiskResources>,
+) -> crate::Result<()> {
     let inspect = || -> Result<()> {
-        let system = PrivateDirectory::open_existing(root)
-            .map_err(FreshBootstrapError::Filesystem)?;
         let bytes = system.read_bounded(&name(ROOTS)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;
         let complete = system.read_bounded(&name(COMPLETE)?, MAX_BYTES)
@@ -459,7 +502,7 @@ pub(crate) fn require_complete(root: &Path, config: &ValidatedConfig) -> crate::
             return Err(FreshBootstrapError::Changed);
         }
         verify_roots(
-            config, &record, &selector.canonical_bytes().map_err(engine_error)?, None,
+            config, &record, &selector.canonical_bytes().map_err(engine_error)?, resources,
         )?;
         system.verify_identity().map_err(FreshBootstrapError::Filesystem)
     };

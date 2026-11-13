@@ -90,16 +90,22 @@ impl FreshSelection {
         }
         Ok(())
     }
-    fn capture(guard: &SelectionGuard, config: &ValidatedConfig, operation: OperationId)
-        -> Result<Self>
-    {
+    fn capture(
+        guard: &SelectionGuard, config: &ValidatedConfig, operation: OperationId,
+        directories: &[PrivateDirectory],
+    ) -> Result<Self> {
         Self::require_primary(config)?;
         let system = entity(&held(&guard.directory)?);
         let mut disks = Vec::new();
-        for disk in &config.disks {
-            let directory = PrivateDirectory::open_existing(&disk.root)
-                .map_err(FreshBootstrapError::Filesystem)?;
-            let root = held(&directory)?;
+        if directories.len() != config.disks.len() {
+            return Err(FreshBootstrapError::Changed);
+        }
+        for (disk, directory) in config.disks.iter().zip(directories) {
+            if directory.path() != disk.root {
+                return Err(FreshBootstrapError::Changed);
+            }
+            directory.verify_identity().map_err(FreshBootstrapError::Filesystem)?;
+            let root = held(directory)?;
             let observed = entity(&root);
             if observed == system || disks.iter().any(|disk: &FreshDisk| disk.entity == observed) {
                 return Err(FreshBootstrapError::Changed);
@@ -144,9 +150,18 @@ impl FreshSelection {
 }
 impl SelectionGuard {
     pub(crate) fn select_fresh(
-        mut self, config: &ValidatedConfig, operation: OperationId,
+        self, config: &ValidatedConfig, operation: OperationId,
     ) -> Result<Self> {
-        let expected = FreshSelection::capture(&self, config, operation)?;
+        let directories = config.disks.iter().map(|disk| {
+            PrivateDirectory::open_existing(&disk.root).map_err(FreshBootstrapError::Filesystem)
+        }).collect::<Result<Vec<_>>>()?;
+        self.select_fresh_held(config, operation, &directories)
+    }
+    pub(crate) fn select_fresh_held(
+        mut self, config: &ValidatedConfig, operation: OperationId,
+        directories: &[PrivateDirectory],
+    ) -> Result<Self> {
+        let expected = FreshSelection::capture(&self, config, operation, directories)?;
         if let Some(original) = FreshSelection::read(&self.directory)? {
             if original != expected {
                 return Err(FreshBootstrapError::Changed);
@@ -158,10 +173,8 @@ impl SelectionGuard {
             {
                 return Err(FreshBootstrapError::Occupied);
             }
-            for disk in &expected.disks {
-                let directory = PrivateDirectory::open_existing(&disk.path)
-                    .map_err(FreshBootstrapError::Filesystem)?;
-                let root = held(&directory)?;
+            for (disk, directory) in expected.disks.iter().zip(directories) {
+                let root = held(directory)?;
                 if entity(&root) != disk.entity {
                     return Err(FreshBootstrapError::Changed);
                 }

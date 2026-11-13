@@ -20,10 +20,12 @@ pub(crate) struct SelectionGuard {
 }
 impl SelectionGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
-        let root = OpenAt2Root::from_private_directory(
-            PrivateDirectory::open_existing(path)?,
-            MountPolicy::SameMount,
-        )?;
+        Self::acquire_held(PrivateDirectory::open_existing(path)?)
+    }
+    pub(crate) fn acquire_held(directory: PrivateDirectory) -> Result<Self> {
+        directory.verify_identity()?;
+        let path = directory.path().to_owned();
+        let root = OpenAt2Root::from_private_directory(directory, MountPolicy::SameMount)?;
         let lock = AdvisoryLock::directory(root.directory()).map_err(|source| {
             Error::from(source).context(
                 ErrorCode::WriterAlreadyActive,

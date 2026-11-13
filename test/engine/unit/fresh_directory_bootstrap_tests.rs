@@ -67,6 +67,45 @@ fn selector_is_first_and_old_writer_refuses_without_sidecar_or_disk_writes() {
     ).unwrap();
     assert_eq!(image(temp.path()), before);
     drop(retry);
+
+    // A pre-admitted SYSTEM/DISK handle cannot silently select a replacement
+    // directory at the same name. Refusal must precede the first selector write.
+    for replace_system in [false, true] {
+        let (held_temp, held_system, held_config) = fixture();
+        let config = ValidatedConfig::try_from(held_config).unwrap();
+        let system_handle = PrivateDirectory::open_existing(&held_system).unwrap();
+        let directories = config.disks.iter().map(|disk| {
+            PrivateDirectory::open_existing(&disk.root).unwrap()
+        }).collect::<Vec<_>>();
+        let replaced = if replace_system { &held_system } else { &config.disks[0].root };
+        fs::rename(replaced, held_temp.path().join("original-root")).unwrap();
+        fs::create_dir(replaced).unwrap();
+        fs::set_permissions(replaced, fs::Permissions::from_mode(0o700)).unwrap();
+        let before = image(held_temp.path());
+        let admitted = SelectionGuard::acquire_held(system_handle);
+        if replace_system {
+            assert!(admitted.is_err());
+        } else {
+            assert!(admitted.unwrap().select_fresh_held(
+                &config, operation, &directories,
+            ).is_err());
+        }
+        assert!(!held_system.join("initialized.json").exists());
+        assert_eq!(image(held_temp.path()), before);
+    }
+
+    let (temp, system, config) = fixture();
+    let admitted = FreshBootstrap::prepare(
+        &system, ValidatedConfig::try_from(config).unwrap(), operation,
+    ).unwrap();
+    fs::rename(&system, temp.path().join("original-system")).unwrap();
+    fs::create_dir(&system).unwrap();
+    fs::set_permissions(&system, fs::Permissions::from_mode(0o700)).unwrap();
+    let before = image(temp.path());
+    assert!(crate::engine::config::acquire_locks_selected(
+        &system, &admitted.resources, admitted.selection,
+    ).is_err());
+    assert_eq!(image(temp.path()), before);
 }
 
 #[test]
@@ -155,6 +194,22 @@ fn complete_fresh_bootstrap_reopens_exact_roots_and_rejects_replaced_child() {
     let selector = fs::read(system.join("initialized.json")).unwrap();
     let roots = fs::read(system.join(ROOTS)).unwrap();
     drop(engine);
+    // A complete cold admission consumes the selected descriptors, validates
+    // original selector/operation plus every root and writer, and writes nothing.
+    let before_held = image(temp.path());
+    let selected_system = PrivateDirectory::open_existing(&system).unwrap();
+    let selected_disks = config.disks.iter().map(|disk| {
+        PrivateDirectory::open_existing(&disk.root).unwrap()
+    }).collect::<Vec<_>>();
+    let held = FreshBootstrap::prepare_held(
+        selected_system, ValidatedConfig::try_from(config.clone()).unwrap(), operation,
+        selected_disks,
+    ).unwrap();
+    require_complete_held(
+        &held.selection.selected_directory().unwrap(), &held.config, &held.resources,
+    ).unwrap();
+    assert_eq!(image(temp.path()), before_held);
+    drop(held);
     let reopened = Engine::initialize_directory_storage(
         &system, config.clone(), operation,
     ).unwrap();
