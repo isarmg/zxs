@@ -24,6 +24,7 @@ use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryManifest {
+    pub container_edits: BTreeMap<storage_contract::FileId, storage_contract::container_edit::ContainerEdit>,
     pub path_audit: BTreeMap<storage_contract::OperationId, super::path_audit::PathAuditCarrier>,
     pub container_tags: BTreeMap<
         storage_contract::FileId,
@@ -270,6 +271,10 @@ impl HistoryManifest {
                 .iter()
                 .filter(|(directory, _)| directory_ids.contains(directory.as_str()))
                 .map(|(directory, tree)| (directory.clone(), tree.clone()))
+                .collect(),
+            container_edits: state.container_edits.iter()
+                .filter(|(file, _)| file_ids.contains(file.to_string().as_str()))
+                .map(|(file, edit)| (*file, edit.clone()))
                 .collect(),
             container_tags: state.container_tags.iter()
                 .filter(|(file, _)| file_ids.contains(file.to_string().as_str()))
@@ -1303,6 +1308,20 @@ impl HistoryManifest {
             .collect::<std::result::Result<BTreeSet<_>, _>>()?;
         if files.iter().ne(self.container_tags.keys()) {
             return Err(invalid("container tags do not exactly cover retained files"));
+        }
+        for (file, edit) in &self.container_edits {
+            if !files.contains(file) {
+                return Err(invalid("container edit state escapes its retained file"));
+            }
+            if let Some(draft) = edit.draft() {
+                let version = self.versions.get(&draft.base.version.to_string())
+                    .ok_or_else(|| invalid("container draft base version is missing"))?;
+                if version.file_id != file.to_string()
+                    || draft.base.repository.to_string() != self.repository.repository_id
+                {
+                    return Err(invalid("container draft base belongs to another file"));
+                }
+            }
         }
         if self.file_notes.iter().any(|(file, note)| {
             storage_contract::validate_note(note).is_err() || !file_ids.contains(file.as_str())

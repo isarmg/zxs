@@ -564,6 +564,9 @@ impl Engine {
     ) -> Result<BackupPreparationStatus> {
         Self::require_actor(&request.principal)?;
         self.require_write()?;
+        for edit in self.state.container_edits.values() {
+            edit.require_clean().map_err(Error::ContainerEdit)?;
+        }
         self.require_unfenced_membership()?;
         self.check_backup_preparation_scope(&request)?;
         let system = DiskRoot::open(&self.root)?;

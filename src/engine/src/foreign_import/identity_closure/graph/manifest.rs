@@ -40,6 +40,7 @@ impl Remap<'_> {
             file_backup_policies,
             file_selection_generations,
             container_tags,
+            container_edits,
             file_notes,
             version_notes,
             file_names,
@@ -53,6 +54,12 @@ impl Remap<'_> {
         if !path_audit.is_empty() {
             return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
         }
+        for edit in container_edits.values() {
+            edit.require_clean().map_err(Error::ContainerEdit)?;
+        }
+        *container_edits = std::mem::take(container_edits).into_iter()
+            .map(|(file, edit)| Ok((self.id(Domain::File, &file.to_string())?.parse()?, edit)))
+            .collect::<Result<_>>()?;
         // The empty map is preserved verbatim, not cleared or remapped.
         self.repository(repository)?;
         self.history(history)?;

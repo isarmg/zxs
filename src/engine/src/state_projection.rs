@@ -14,6 +14,7 @@ pub(crate) use files::FileRows;
 // One schema drives State coverage, row lookup, membership, and graph field names.
 macro_rules! projection_maps {
     ($consumer:ident) => { $consumer! {
+        container_edits => ContainerEdits, file, "container_edits";
         container_tags => ContainerTags, file, "container_tags";
         branches => Branches, history, "branches";
         file_selections => FileSelections, selected_file, "file_selections";
@@ -204,6 +205,11 @@ macro_rules! owner_for {
     };
 }
 macro_rules! field_keys {
+    (container_edits, $state:ident, $visit:ident) => {
+        for key in $state.container_edits.keys() {
+            $visit(&key.to_string());
+        }
+    };
     (container_tags, $state:ident, $visit:ident) => {
         for key in $state.container_tags.keys() {
             $visit(&key.to_string());
@@ -222,6 +228,11 @@ macro_rules! field_keys {
     };
 }
 macro_rules! field_value {
+    (container_edits, $state:ident, $key:ident) => {
+        Ok($key.parse::<storage_contract::FileId>().ok()
+            .and_then(|key| $state.container_edits.get(&key))
+            .map(json_codec::to_value).transpose()?)
+    };
     (container_tags, $state:ident, $key:ident) => {
         Ok($key.parse::<storage_contract::FileId>().ok()
             .and_then(|key| $state.container_tags.get(&key))
@@ -256,6 +267,11 @@ macro_rules! field_value {
     };
 }
 macro_rules! field_equal {
+    (container_edits, $before:ident, $after:ident, $key:ident) => {
+        $key.parse::<storage_contract::FileId>().ok().is_some_and(|key| {
+            $before.container_edits.get(&key) == $after.container_edits.get(&key)
+        })
+    };
     (container_tags, $before:ident, $after:ident, $key:ident) => {
         $key.parse::<storage_contract::FileId>().ok().is_some_and(|key| {
             $before.container_tags.get(&key) == $after.container_tags.get(&key)
@@ -271,6 +287,10 @@ macro_rules! field_equal {
     };
 }
 macro_rules! field_present {
+    (container_edits, $state:ident, $key:ident) => {
+        $key.parse::<storage_contract::FileId>().ok()
+            .is_some_and(|key| $state.container_edits.contains_key(&key))
+    };
     (container_tags, $state:ident, $key:ident) => {
         $key.parse::<storage_contract::FileId>().ok()
             .is_some_and(|key| $state.container_tags.contains_key(&key))
@@ -454,6 +474,7 @@ impl Writes {
     fn file(&mut self, key: &str) {
         for field in [
             Field::ContainerTags,
+            Field::ContainerEdits,
             Field::FileWriteOrigins,
             Field::FileLocations,
             Field::FileBackupPaths,

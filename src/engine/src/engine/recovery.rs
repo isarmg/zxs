@@ -524,6 +524,8 @@ impl Engine {
                     Some(original),
                 )?;
             let next = original.state();
+            crate::engine::container_drafts::verify_transition(&self.state, next)?;
+            self.verify_draft_material(next)?;
             // Prove the authenticated transition before repairing any of this
             // candidate's replicas, payloads, names or publication receipts.
             // advance is pure: install the new view only after completion below.

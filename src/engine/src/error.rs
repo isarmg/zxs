@@ -10,6 +10,10 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    ContainerDrafts(crate::engine::container_drafts::DraftError),
+    #[error(transparent)]
+    ContainerEdit(storage_contract::container_edit::EditConflict),
+    #[error(transparent)]
     ContainerTags(ContainerTagsError),
     #[error(transparent)]
     PathChange(PathChangeError),
@@ -111,6 +115,8 @@ impl Error {
             },
             source @ (Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::ContainerEdit(_)
+            | Self::ContainerDrafts(_)
             | Self::PathChange(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
@@ -146,6 +152,8 @@ impl Error {
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::ContainerEdit(_)
+            | Self::ContainerDrafts(_)
             | Self::PathChange(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)
@@ -175,6 +183,8 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
+            Self::ContainerEdit(error) => error.code(),
+            Self::ContainerDrafts(error) => error.code(),
             Self::PathChange(error) => error.code(),
             Self::VersionNames(error) => error.code(),
             Self::ContainerName(error) => error.code(),
@@ -231,6 +241,8 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
+            Self::ContainerEdit(error) => error.to_string().into(),
+            Self::ContainerDrafts(error) => error.to_string().into(),
             Self::PathChange(error) => error.to_string().into(),
             Self::VersionNames(error) => error.to_string().into(),
             Self::ContainerName(error) => error.to_string().into(),
@@ -290,6 +302,8 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::ContainerEdit(_)
+            | Self::ContainerDrafts(_)
             | Self::PathChange(_)
             | Self::VersionNames(_)
             | Self::ContainerName(_)

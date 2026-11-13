@@ -1010,6 +1010,7 @@ pub struct ProtectionPolicy {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct State {
+    pub container_edits: crate::TrackedFiles<crate::container_edit::ContainerEdit>,
     pub container_tags: crate::TrackedFiles<crate::file_container_tags::ContainerTags>,
     #[serialization(with = "crate::u64_string")]
     pub sequence: u64,
@@ -1112,6 +1113,7 @@ impl State {
             };
         }
         track!(
+            container_edits,
             container_tags,
             events,
             repositories,

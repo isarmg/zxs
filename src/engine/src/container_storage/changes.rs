@@ -16,6 +16,17 @@ fn visit_changes<'a>(
 
 pub(super) fn changed_files(previous: &State, next: &State) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
+    let edit_keys = match next.container_edits.changes_since(&previous.container_edits) {
+        MapChanges::Keys(keys) => (*keys).clone(),
+        MapChanges::All => previous.container_edits.keys()
+            .chain(next.container_edits.keys()).copied().collect(),
+    };
+    for file in edit_keys {
+        if previous.container_edits.get(&file) != next.container_edits.get(&file) {
+            files.insert(file.to_string());
+        }
+    }
+
     // Keys are conservative writes, not semantic changes. Keep each projection's
     // original predicate; lost lineage still reads both authoritative maps.
     let tag_keys = match next.container_tags.changes_since(&previous.container_tags) {

@@ -460,6 +460,30 @@ impl<'a> PlanningContext<'a> {
         Ok(plan)
     }
 
+    pub(super) fn plan_container_edit_mutation<F>(
+        &self,
+        principal: &str,
+        operation: OperationId,
+        digest: String,
+        change: F,
+    ) -> Result<MutationPlan>
+    where
+        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+    {
+        if self.current_namespaces.is_none()
+            && self.config.generation().is_some_and(|generation| generation.registry().is_some())
+        {
+            return Err(crate::engine::disk_registry::current::pending_publication());
+        }
+        self.prepare_new_mutation(
+            crate::engine::container_drafts::EDIT_KIND,
+            principal,
+            operation,
+            digest,
+            change,
+        )
+    }
+
     /// Directory commits require a complete current-projection proof before
     /// publication. A kind allowlist cannot prove their nested reference graph.
     pub(super) fn plan_directory_commit_mutation<F>(
@@ -630,6 +654,7 @@ impl<'a> PlanningContext<'a> {
                 .unwrap_or_else(|| operation_id.to_string()),
         });
         crate::node_retirement_engine::verify(self.state, &next)?;
+        crate::engine::container_drafts::verify_transition(self.state, &next)?;
         crate::file_deletion::publication::verify(
             self.state,
             &next,

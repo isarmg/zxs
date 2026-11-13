@@ -350,6 +350,8 @@ impl Engine {
             .prepare_publication(next, prepared, result, maximum)
     }
     fn require_detached_publication(&self, detached: &DetachedPublication) -> Result<()> {
+        crate::engine::container_drafts::verify_transition(&self.state, &detached.next)?;
+        self.verify_draft_material(&detached.next)?;
         if self.blocked
             || self.move_is_retained()
             || !detached.prepared_epoch.matches(&self.metadata_integrity)

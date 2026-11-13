@@ -5,6 +5,7 @@ pub mod backup_transaction;
 pub mod client_protocol;
 mod content_hash;
 pub mod content_matches;
+pub mod container_edit;
 mod counter;
 pub mod directory_git;
 pub mod directory_history;

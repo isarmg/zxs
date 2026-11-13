@@ -7,7 +7,7 @@ use storage_contract::{MapChanges, SequenceChanges};
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
-            container_tags,repositories,histories,branches,commits,versions,placements,merge_links,
+            container_edits,container_tags,repositories,histories,branches,commits,versions,placements,merge_links,
             history_boundaries,content_states,operations,plans,placement_rules,
             protection_policies,operation_principals,file_selections,directory_branches,
             directory_git_repositories,
@@ -160,6 +160,26 @@ fn prepare_inner(
         }};
     }
     macro_rules! field {
+        (container_edits) => {{
+            let prior = previous.map(|(before, basis)| {
+                Ok::<_, Error>((
+                    state.container_edits.changes_since(&before.container_edits),
+                    basis.fields.get("container_edits").ok_or_else(|| {
+                        storage_contract::file_container_tags::TagsError::SnapshotKeyDomain
+                            .into_error()
+                    })?.files()?,
+                ))
+            }).transpose()?;
+            let root = builder.map(
+                "container_edits",
+                state.container_edits.iter(),
+                prior,
+                |key| state.container_edits.get(key),
+                |value| encode_value("container_edits", value),
+                &|key: &storage_contract::FileId| Cow::Owned(key.to_string()),
+            )?;
+            builder.fields.insert("container_edits".into(), FieldRoot::Files(root));
+        }};
         (container_tags) => {{
             let prior = previous.map(|(before, basis)| {
                 Ok::<_, Error>((

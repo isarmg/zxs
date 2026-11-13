@@ -29,6 +29,7 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) -> Result<()> {
         directory_selection_generations,
         file_selection_generations,
         container_tags,
+        container_edits,
         file_notes,
         version_notes,
         file_names,
@@ -47,6 +48,7 @@ pub(super) fn include(next: &mut State, mapped: HistoryManifest) -> Result<()> {
         return Err(Error::PathChange(crate::PathChangeError::ForeignSource));
     }
     next.container_tags.extend(container_tags);
+    next.container_edits.extend(container_edits);
     next.repositories
         .insert(repository.repository_id.clone(), repository);
     next.histories

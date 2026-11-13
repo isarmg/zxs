@@ -24,6 +24,10 @@ struct RecordRef<'a> {
 /// durable discriminator and typed result. No field-name reflection or JSON
 /// filtering determines scope.
 macro_rules! catalog_get {
+    ($state:ident, container_edits, $id:ident) => {
+        $id.parse::<storage_contract::FileId>().ok()
+            .and_then(|key| $state.container_edits.get(&key))
+    };
     ($state:ident, container_tags, $id:ident) => {
         $id.parse::<storage_contract::FileId>().ok()
             .and_then(|key| $state.container_tags.get(&key))
@@ -153,6 +157,7 @@ catalog_families! {
     Plan => (33, plans, Plan),
     PlacementRule => (34, placement_rules, PlacementRule),
     ProtectionPolicy => (35, protection_policies, ProtectionPolicy),
+    ContainerEdits => (40, container_edits, storage_contract::container_edit::ContainerEdit),
     ContainerTags => (39, container_tags, storage_contract::file_container_tags::ContainerTags),
 }
 

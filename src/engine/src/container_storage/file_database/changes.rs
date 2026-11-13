@@ -7,6 +7,17 @@ use storage_contract::MapChanges;
 
 pub(crate) fn affected(previous: &State, next: &State) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
+    let edit_keys = match next.container_edits.changes_since(&previous.container_edits) {
+        MapChanges::Keys(keys) => (*keys).clone(),
+        MapChanges::All => previous.container_edits.keys()
+            .chain(next.container_edits.keys()).copied().collect(),
+    };
+    for file in edit_keys {
+        if previous.container_edits.get(&file) != next.container_edits.get(&file) {
+            files.insert(file.to_string());
+        }
+    }
+
     macro_rules! inspect {
         ($field:ident, |$id:ident| $body:block) => {
             let mut inspect = |$id: &String| $body;

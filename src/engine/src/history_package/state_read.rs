@@ -86,6 +86,7 @@ macro_rules! history_coverage {
         struct HistoryCoverage {
             repositories: BTreeSet<String>,
             container_tags: BTreeSet<storage_contract::FileId>,
+            container_edits: BTreeSet<storage_contract::FileId>,
             $($field: BTreeSet<String>,)*
         }
 
@@ -97,6 +98,11 @@ macro_rules! history_coverage {
                 for key in manifest.container_tags.keys() {
                     if !self.container_tags.insert(*key) {
                         return Err(invalid("container tags have multiple history owners"));
+                    }
+                }
+                for key in manifest.container_edits.keys() {
+                    if !self.container_edits.insert(*key) {
+                        return Err(invalid("container edits have multiple history owners"));
                     }
                 }
                 $(for key in manifest.$projected.keys() {
@@ -112,10 +118,13 @@ macro_rules! history_coverage {
                     sequence: _, business_generation: _, topology_generation: _,
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
                     content_states: _,
-                    histories: _, container_tags, repositories, $($field,)*
+                    histories: _, container_tags, container_edits, repositories, $($field,)*
                 } = state;
                 if self.container_tags.iter().ne(container_tags.keys()) {
                     return Err(invalid("container tags contain unowned records"));
+                }
+                if self.container_edits.iter().ne(container_edits.keys()) {
+                    return Err(invalid("container edits contain unowned records"));
                 }
                 if self.repositories.iter().ne(repositories.keys()) {
                     return Err(invalid("snapshot contains an unowned repository"));

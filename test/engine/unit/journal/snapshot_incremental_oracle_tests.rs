@@ -5,6 +5,7 @@
 use super::*;
 
 const REQUIRED_FIELDS: &[&str] = &[
+    "container_edits",
     "container_tags",
     "repositories",
     "histories",
@@ -49,6 +50,7 @@ const OPTIONAL_FIELDS: &[&str] = &[
 
 macro_rules! every_tracked_field {
     ($apply:ident) => {
+        $apply!(container_edits);
         $apply!(container_tags);
         $apply!(repositories);
         $apply!(histories);
@@ -113,6 +115,9 @@ fn populated_state() -> State {
     ] {
         value[field] = json_codec::json!({"文件/\u{10000}": "值/\u{e000}\n\"\\"});
     }
+    value["container_edits"] = json_codec::json!({
+        "file_00000000000000000000000000000001": {"state": "manual_clean", "generation": "7"}
+    });
     value["file_node_parents"] = json_codec::json!({"node": ["parent-一", "parent-二"]});
     value["file_backup_paths"] = json_codec::json!({"file": {"B01": "目录/备份"}});
     value["directory_selection_generations"] =
@@ -405,6 +410,9 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
     let basis = baseline(&before, &config.disks);
     let descriptor = prepare_snapshot(&before, MAX_METADATA).unwrap().descriptor;
     macro_rules! new_key {
+        (container_edits) => {
+            "file_ffffffffffffffffffffffffffffffff".parse().unwrap()
+        };
         (container_tags) => {
             "file_ffffffffffffffffffffffffffffffff".parse().unwrap()
         };

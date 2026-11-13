@@ -583,6 +583,7 @@ fn path_fact_golden() -> Vec<u8> {
     let mut logical: Value = json_codec::from_str(bundle["logical"].as_str().unwrap()).unwrap();
     assert_eq!(logical["branches"], json!({}));
     assert!(logical.as_object_mut().unwrap().insert("path_audit".into(), json!({})).is_none());
+    assert!(logical.as_object_mut().unwrap().insert("container_edits".into(), json!({})).is_none());
     bundle["logical"] = json!(String::from_utf8(canonical_json(&logical).unwrap()).unwrap());
     let original_root = bundle["root"].clone();
     let mut replacement = None;
@@ -596,7 +597,8 @@ fn path_fact_golden() -> Vec<u8> {
         root["format"] = json!("container-current-name-radix-map-roots");
         let empty = root["maps"]["branches"].clone();
         assert_eq!(empty, json!({"kind":"state-page", "hash":hash("state-page", b"{}")}));
-        assert!(root["maps"].as_object_mut().unwrap().insert("path_audit".into(), empty).is_none());
+        assert!(root["maps"].as_object_mut().unwrap().insert("path_audit".into(), empty.clone()).is_none());
+        assert!(root["maps"].as_object_mut().unwrap().insert("container_edits".into(), empty).is_none());
         let current = canonical_json(&root).unwrap();
         let digest = hash("history-manifest", &current);
         assert!(replacement.replace(digest.clone()).is_none());

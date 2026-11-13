@@ -1,5 +1,6 @@
 //! Stable entry names shared by runtime publication and recovery.
 pub(crate) mod worktree;
+pub(crate) mod container_drafts;
 use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
 

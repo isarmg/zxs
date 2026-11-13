@@ -1576,6 +1576,9 @@ fn prepare_names_inner(
             };
             let mut descriptor_value = json!({
                 "cache_only": true,
+                "container_edit": next.container_edits
+                    .get(&file.parse::<storage_contract::FileId>()?)
+                    .cloned().unwrap_or_else(storage_contract::container_edit::ContainerEdit::initial),
                 "file_id": file,
                 "history_tree_id": history_id,
                 "name": name,

@@ -79,6 +79,10 @@ fn with_events(
         "file",
         file,
         &FileRow {
+            container_edit: state.container_edits
+                .get(&file.parse::<storage_contract::FileId>()?)
+                .cloned()
+                .unwrap_or_else(storage_contract::container_edit::ContainerEdit::initial),
             file_id: file.to_owned(),
             container_tags: state.container_tags
                 .get(&file.parse::<storage_contract::FileId>()?)

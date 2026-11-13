@@ -433,6 +433,9 @@ fn sources_for(
     {
         return Err(unsupported());
     }
+    if let Some(edit) = previous.container_edits.get(&entry.file_id.parse::<storage_contract::FileId>()?) {
+        edit.require_clean().map_err(Error::ContainerEdit)?;
+    }
     Ok(CopySources {
         file: entry.file_id.clone(),
         versions,

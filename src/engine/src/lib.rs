@@ -21,6 +21,9 @@ pub use business::{
     FileHistoryMoveRequest, FileHistoryMoveSourceDigest,
 };
 mod container_storage;
+pub mod container_drafts {
+    pub use crate::engine::container_drafts::{ContainerDraftRead, DraftError};
+}
 mod database_install;
 mod sqlite_connection;
 mod sqlite_integrity;

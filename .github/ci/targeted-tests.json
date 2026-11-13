@@ -3631,6 +3631,32 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "container-manual-drafts": {
+      "reason": "Shared per-container edit authority and immutable draft bodies: exact generation, permanent publication, cold reads without history nodes, bounded original-intent storage, and clean-mode refusal. SMB routing and explicit draft commit are separate pending consumers.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::container_drafts::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "container_edit::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 300
+        }
+      ]
     }
   },
   "rules": [
@@ -3819,7 +3845,8 @@
     {
       "path": "src/contract/src/model.rs",
       "groups": [
-        "container-tags-contract"
+        "container-tags-contract",
+        "container-manual-drafts"
       ]
     },
     {
@@ -3885,13 +3912,15 @@
     {
       "path": "src/engine/src/container_storage.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
       "path": "src/engine/src/container_storage/changes.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
@@ -3903,13 +3932,15 @@
     {
       "path": "src/engine/src/container_storage/file_database/projection.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
       "path": "src/engine/src/container_storage/file_database/rows.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
@@ -4031,7 +4062,8 @@
       "path": "src/engine/src/engine/recovery.rs",
       "groups": [
         "container-tags-engine",
-        "held-directory-layout"
+        "held-directory-layout",
+        "container-manual-drafts"
       ]
     },
     {
@@ -4093,7 +4125,8 @@
     {
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
@@ -4105,7 +4138,8 @@
     {
       "path": "src/engine/src/journal/snapshot.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
@@ -4135,7 +4169,8 @@
     {
       "path": "src/engine/src/state_projection.rs",
       "groups": [
-        "container-tags-storage"
+        "container-tags-storage",
+        "container-manual-drafts"
       ]
     },
     {
@@ -5242,7 +5277,8 @@
     {
       "path": "src/engine/src/engine.rs",
       "groups": [
-        "held-directory-layout"
+        "held-directory-layout",
+        "container-manual-drafts"
       ]
     },
     {
@@ -6552,7 +6588,8 @@
     {
       "path": "src/engine/src/engine.rs",
       "groups": [
-        "historical-directory-runtime"
+        "historical-directory-runtime",
+        "container-manual-drafts"
       ]
     },
     {
@@ -7018,13 +7055,13 @@
       ]
     },
     {
-      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
+      "path": "禁止防御性编程.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "\u5de5\u7a0b\u89c4\u8303.md",
+      "path": "工程规范.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -7501,7 +7538,8 @@
     {
       "path": "src/engine/src/container_storage.rs",
       "groups": [
-        "engine-date-errors"
+        "engine-date-errors",
+        "container-manual-drafts"
       ]
     },
     {
@@ -7513,7 +7551,8 @@
     {
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
-        "engine-date-errors"
+        "engine-date-errors",
+        "container-manual-drafts"
       ]
     },
     {
@@ -7549,7 +7588,8 @@
     {
       "path": "src/engine/src/container_storage.rs",
       "groups": [
-        "engine-integer-errors"
+        "engine-integer-errors",
+        "container-manual-drafts"
       ]
     },
     {
@@ -7573,7 +7613,8 @@
     {
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
-        "engine-integer-errors"
+        "engine-integer-errors",
+        "container-manual-drafts"
       ]
     },
     {
@@ -8827,7 +8868,8 @@
       "path": "src/engine/src/container_storage/file_database/changes.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -8841,14 +8883,16 @@
       "path": "src/engine/src/container_storage/file_database/projection.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
       "path": "src/engine/src/container_storage/file_database/rows.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -8904,7 +8948,8 @@
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -8946,7 +8991,8 @@
       "path": "src/engine/src/state_projection.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "container-manual-drafts"
       ]
     },
     {
@@ -9724,7 +9770,8 @@
       "path": "src/engine/src/engine/publication.rs",
       "groups": [
         "current-name-layout-consumers",
-        "container-current-name"
+        "container-current-name",
+        "container-manual-drafts"
       ]
     },
     {
@@ -9999,7 +10046,8 @@
       "path": "src/engine/src/history_package/manifest.rs",
       "groups": [
         "history-package-path-audit",
-        "history-package-audit-guard"
+        "history-package-audit-guard",
+        "container-manual-drafts"
       ]
     },
     {
@@ -10054,7 +10102,8 @@
     {
       "path": "src/engine/src/state_projection.rs",
       "groups": [
-        "history-path-audit-projection"
+        "history-path-audit-projection",
+        "container-manual-drafts"
       ]
     },
     {
@@ -10088,6 +10137,54 @@
       "groups": [
         "history-package-path-audit",
         "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/contract/src/container_edit.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/container_drafts/store.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/container_edits.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/container_drafts.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "test/contract/unit/container_edit.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_drafts_tests.rs",
+      "groups": [
+        "container-manual-drafts"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_draft_store_tests.rs",
+      "groups": [
+        "container-manual-drafts"
       ]
     }
   ],

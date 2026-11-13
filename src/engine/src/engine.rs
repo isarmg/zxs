@@ -44,6 +44,7 @@ pub use membership_transition::{
     BackupRegistryDecisionHash,
 };
 mod config;
+pub(crate) mod container_drafts;
 pub use config::ValidatedConfig;
 mod disk_registry;
 pub(crate) use disk_registry::current::{
@@ -1635,6 +1636,14 @@ impl Engine {
         }
         if kind == storage_contract::file_container_tags::KIND {
             return context.plan_file_tags_mutation(
+                principal,
+                operation_id,
+                digest,
+                |_, next, prepared| change(self, next, prepared),
+            );
+        }
+        if kind == container_drafts::EDIT_KIND {
+            return context.plan_container_edit_mutation(
                 principal,
                 operation_id,
                 digest,
