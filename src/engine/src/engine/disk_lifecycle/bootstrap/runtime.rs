@@ -107,6 +107,23 @@ pub(crate) fn initialize(
     store.sync_current(&locator).map_err(management_error)
 }
 
+/// Install only the new SYSTEM carrier locator through its original descriptor.
+/// Its roots were admitted independently; this creates no DISK registration.
+pub(in crate::engine) fn initialize_recovery_carrier(
+    system: &platform_io::fs_safety::PrivateDirectory,
+    config: &ValidatedConfig,
+    resources: &DiskResources,
+) -> crate::Result<()> {
+    let observations = observe(config, resources.handles())?;
+    let child = system.create_child(&EntryName::new(DIRECTORY)?)?;
+    let path = child.path().to_owned();
+    let directory = OpenAt2Root::from_private_directory(child, MountPolicy::SameMount)?;
+    let mut store = BootstrapStore::hold(directory.into_directory(), path)
+        .map_err(management_error)?;
+    let locator = store.initialize(&config.pool_id, observations).map_err(management_error)?;
+    store.sync_current(&locator).map_err(management_error)
+}
+
 /// A held restriction for inspecting the original activation directories. It
 /// does not authenticate storage authority or permit ordinary pool admission.
 /// Keep it alive until all unregistered probe handles have been dropped, or

@@ -85,7 +85,7 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
-    #[serialization(rename = "unified-storage-managed-directory-v1")]
+    #[serialization(rename = "unified-storage-managed-directory-v2")]
     UnifiedStorage { bootstrap: storage_contract::working_tree::MaterialCommitment },
     #[serialization(rename = "container-current-name-managed-directory")]
     ManagedDirectory,

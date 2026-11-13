@@ -1629,7 +1629,7 @@ impl Backend for ManagementBackend {
                     EngineBackend::new(engine).replicate_auth(snapshot)
                 };
                 if let Some(identity) = &identity {
-                    setup.restore_authenticated(identity, request, restore)
+                    setup.restore_authenticated(identity, request, revalidate, restore)
                 } else {
                     setup.restore_system(
                         permit.as_ref().ok_or_else(ApiError::unauthorized)?,

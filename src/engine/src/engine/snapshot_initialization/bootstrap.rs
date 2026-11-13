@@ -443,7 +443,7 @@ impl FreshBootstrap {
                 false,
             ).map_err(engine_error)?;
             root.write_json(
-                &disk.root.join("metadata/pool-membership/config.json"), &self.config, false,
+                &disk.root.join(crate::persist::layout::GENESIS_CONFIG.as_path()), &self.config, false,
             ).map_err(engine_error)?;
             root.sync_dir(&disk.root).map_err(engine_error)?;
         }
@@ -587,6 +587,18 @@ fn verify_scoped_roots(
     Ok(())
 }
 fn read_verified_roots(engine: &Engine) -> crate::Result<RootRecord> {
+    let system = engine._locks.selected_directory()?;
+    if crate::authority_selection::carrier::RecoverySelection::read(&system)
+        .map_err(failure)?.is_some()
+    {
+        let (proof, record) = system_recovery::completed_carrier(
+            &system, &engine.config, &engine.disk_resources,
+        )?;
+        if engine.config.fresh_completion().is_none_or(|original| original.commitment != proof.commitment) {
+            return Err(failure(FreshBootstrapError::Changed));
+        }
+        return Ok(record);
+    }
     let inspect = || -> Result<RootRecord> {
         let system = PrivateDirectory::open_existing(&engine.root)
             .map_err(FreshBootstrapError::Filesystem)?;
@@ -705,6 +717,23 @@ fn require_complete_held(
 pub(in crate::engine) fn require_complete_resources(
     system: &PrivateDirectory, config: &ValidatedConfig, resources: Option<&DiskResources>,
 ) -> crate::Result<CompletionProof> {
+    if crate::authority_selection::carrier::RecoverySelection::read(system)
+        .map_err(failure)?.is_some()
+    {
+        let opened;
+        let resources = match resources {
+            Some(held) => held,
+            None => {
+                opened = DiskResources::open(config, true)?;
+                &opened
+            }
+        };
+        let (proof, _) = system_recovery::completed_carrier(system, config, resources)?;
+        if config.fresh_completion().is_some_and(|original| original.commitment != proof.commitment) {
+            return Err(failure(FreshBootstrapError::Changed));
+        }
+        return Ok(proof);
+    }
     let inspect = || -> Result<CompletionProof> {
         let bytes = system.read_bounded(&name(ROOTS)?, MAX_BYTES)
             .map_err(FreshBootstrapError::Filesystem)?;

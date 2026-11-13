@@ -450,7 +450,7 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
         result.unwrap_err().code,
         storage_contract::ErrorCode::AuthRecoveryRequired
     );
-    assert!(restored.join("config.json").exists());
+    assert!(recovery.storage_system().unwrap().path().join("config.json").exists());
     assert!(!f.service.disks["three"].exists());
 }
 
@@ -997,14 +997,14 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
                 error.code,
                 storage_contract::ErrorCode::AuthRecoveryRequired
             );
-            assert!(restored.join("config.json").exists());
+            assert!(recovery.storage_system().unwrap().path().join("config.json").exists());
         } else {
             assert_ne!(
                 error.code,
                 storage_contract::ErrorCode::AuthRecoveryRequired,
                 "one surviving member must not shrink a three-member quorum"
             );
-            assert!(!restored.join("config.json").exists());
+            assert!(!restored.join("storage-system/config.json").exists());
         }
     }
 }
@@ -1100,7 +1100,7 @@ fn bootstrap_restore_rechecks_authorization_after_disk_recovery() {
         );
         assert!(result.is_err(), "{change}");
         assert!(
-            recovery.data_root.join("config.json").exists(),
+            recovery.storage_system().unwrap().path().join("config.json").exists(),
             "disk recovery completed: {change}"
         );
         assert!(
@@ -1159,6 +1159,7 @@ fn authenticated_restore_does_not_require_bootstrap_authorization() {
                 disk_ids: vec!["one".into()],
                 accept_stale_credentials: false,
             },
+            |_| Ok(()),
             |engine| {
                 assert!(engine.auth_state().is_some());
                 published = true;
@@ -1353,7 +1354,7 @@ fn initialization_and_bound_completion_keep_runtime_workspace_limits_out_of_conf
         })
         .unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
-    let persisted = fs::read(f.service.data_root.join("config.json")).unwrap();
+    let persisted = fs::read(f.service.storage_system().unwrap().path().join("config.json")).unwrap();
     f.service
         .complete_initialization(
             &permit(&f.service),
@@ -1368,7 +1369,7 @@ fn initialization_and_bound_completion_keep_runtime_workspace_limits_out_of_conf
         )
         .unwrap();
     assert_eq!(
-        fs::read(f.service.data_root.join("config.json")).unwrap(),
+        fs::read(f.service.storage_system().unwrap().path().join("config.json")).unwrap(),
         persisted
     );
 }
@@ -1398,7 +1399,7 @@ fn system_restore_passes_runtime_workspace_limits_without_rewriting_baseline() {
         )
         .unwrap();
     let restored: Config =
-        storage_engine::decode_strict(&fs::read(f.service.data_root.join("config.json")).unwrap())
+        storage_engine::decode_strict(&fs::read(f.service.storage_system().unwrap().path().join("config.json")).unwrap())
             .unwrap();
     assert_eq!(
         json_codec::to_value(restored).unwrap(),
@@ -1488,8 +1489,11 @@ fn control_record_publication_failure_preserves_evidence_and_storage_error_sourc
 
 
 #[test]
-fn unbound_disaster_recovery_preserves_source_and_target_without_publishing_credentials() {
+fn unclaimed_system_child_recovery_preserves_source_and_target_without_publishing_credentials() {
     let f = recoverable_fixture();
+    fs::create_dir(f.service.data_root.join("storage-system")).unwrap();
+    fs::set_permissions(f.service.data_root.join("storage-system"),
+        fs::Permissions::from_mode(0o700)).unwrap();
     // The setup lock is a control artifact, not a storage SYSTEM or recovery proof.
     drop(f.service.lock().unwrap());
     let control_before = tree_digest(&f.service.data_root).unwrap();
@@ -1497,10 +1501,66 @@ fn unbound_disaster_recovery_preserves_source_and_target_without_publishing_cred
     let error = f.service.restore_authenticated(
         &admin(),
         RestoreRequest { disk_ids: vec!["one".into()], accept_stale_credentials: false },
-        |_| panic!("unbound recovery must not publish credentials"),
+        |_| Ok(()),
+        |_| panic!("unclaimed recovery must not publish credentials"),
     ).unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::SetupProofInvalid);
     assert_eq!(tree_digest(&f.service.data_root).unwrap(), control_before);
     assert_eq!(tree_digest(&f.service.disks["one"]).unwrap(), source_before);
-    assert!(f.service.storage_system_if_bound().unwrap().is_none());
+    assert!(f.service.storage_system_if_bound().is_err());
+}
+
+#[test]
+fn authenticated_recovery_rechecks_authority_before_creating_system() {
+    let f = recoverable_fixture();
+    drop(f.service.lock().unwrap());
+    let control = tree_digest(&f.service.data_root).unwrap();
+    let source = tree_digest(&f.service.disks["one"]).unwrap();
+    let checks = std::cell::Cell::new(0);
+    let result = f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| {
+        checks.set(checks.get() + 1);
+        if checks.get() == 2 { Err(ApiError::unauthorized()) } else { Ok(()) }
+    }, |_| panic!("revoked recovery cannot install credentials"));
+    assert!(result.is_err());
+    assert_eq!(checks.get(), 2, "source admission must reach the publication fence");
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), control);
+    assert_eq!(tree_digest(&f.service.disks["one"]).unwrap(), source);
+}
+
+#[test]
+fn completed_system_recovery_reuses_original_intent_after_cold_reopen() {
+    let f = recoverable_fixture();
+    let restore = || f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |engine| {
+        assert!(engine.auth_state().is_some());
+        Ok(())
+    });
+    restore().unwrap();
+    let intent_path = f.service.data_root.join(recovery::RECOVERY_INTENT);
+    let original = fs::read(&intent_path).unwrap();
+    let original_identity = directory_identity(f.service.storage_system().unwrap().path()).unwrap();
+    restore().unwrap();
+    assert_eq!(fs::read(intent_path).unwrap(), original);
+    assert_eq!(directory_identity(f.service.storage_system().unwrap().path()).unwrap(), original_identity);
+}
+
+#[test]
+fn completed_system_recovery_rejects_a_different_principal_without_writes() {
+    let f = recoverable_fixture();
+    f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |_| Ok(())).unwrap();
+    let control = tree_digest(&f.service.data_root).unwrap();
+    let source = tree_digest(&f.service.disks["one"]).unwrap();
+    let mut other = admin();
+    other.principal = "other-admin".into();
+    let error = f.service.restore_authenticated(&other, RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |_| panic!("another principal cannot reuse the original intent")).unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::SetupProofInvalid);
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), control);
+    assert_eq!(tree_digest(&f.service.disks["one"]).unwrap(), source);
 }

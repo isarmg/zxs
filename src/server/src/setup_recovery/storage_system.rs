@@ -104,6 +104,16 @@ impl crate::setup_recovery::SetupRecovery {
         }};
         let activation = present(&self.data_root.join(ACTIVATION_INTENT))?;
         let setup = present(&self.data_root.join("setup-intent.json"))?;
+        let recovery = present(&self.data_root.join(super::recovery::RECOVERY_INTENT))?;
+        if recovery {
+            if activation || setup || present(&self.data_root.join("config.json"))? {
+                return Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
+                    "recovery cannot replace an existing initialization owner"));
+            }
+            let intent: super::recovery::StorageRecoveryIntent =
+                self.read_durable_control(super::recovery::RECOVERY_INTENT)?;
+            return intent.storage_system.open(&self.data_root).map(Some);
+        }
         let binding = match (activation, setup) {
             (true, false) => {
                 let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;

@@ -460,8 +460,10 @@ impl Session {
                     .map(|target| (self.branch.as_str(), target.key())),
             ),
         )?;
+        let mut ordinary_directory = None;
         if let storage_contract::NamespaceOperation::Delete { path } = &change {
             if soft_delete_directory {
+                ordinary_directory = self.find(path)?;
                 match self.soft_delete_rmdir(path, operation_id, record) {
                     Ok(None) => {}
                     result => {
@@ -556,7 +558,33 @@ impl Session {
                         "rmdir requires a directory",
                     ));
                 }
-                if nonempty(entry) {
+                let ordinary_removal = if let Some(original) = &ordinary_directory {
+                    if entry.entry_id != original.entry_id {
+                        return Err(ApiError::conflict(
+                            storage_contract::ErrorCode::WorkspaceChanged,
+                            "directory identity changed before structural removal",
+                        ));
+                    }
+                    // Recheck exact identity and initialized-owner admission.
+                    // None does not prove emptiness: the core must prove every
+                    // removed child invisible and check subtree CAS at publish.
+                    let initialized = self.shared.backend.prepare_current_directory_deletion(
+                        &self.identity,
+                        crate::PrepareCurrentDirectoryDeletion {
+                            branch_id: self.branch.clone(),
+                            path: name_policy::LookupPath::parse(change.path())
+                                .map_err(ApiError::invalid_source)?,
+                            expected_entry_id: original.entry_id.clone(),
+                        },
+                    )?;
+                    if initialized.is_some() {
+                        return Err(ApiError::unsupported());
+                    }
+                    true
+                } else {
+                    false
+                };
+                if nonempty(entry) && !ordinary_removal {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::DirectoryNotEmpty,

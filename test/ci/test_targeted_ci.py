@@ -100,7 +100,12 @@ class TargetedSelection(unittest.TestCase):
         production = assert_path_group_extension(
             self, self.policy, ['src/engine/src/engine/publication.rs'],
             ['container-current-name', 'current-name-layout-consumers',
-             'directory-snapshot-initialization'], [])
+             'directory-snapshot-initialization'], [
+                'container-manual-drafts', 'directory-storage-bootstrap',
+                'container-manual-fresh-format', 'storage-setup-system-binding',
+                'storage-system-product-consumers', 'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ])
         self.assertNotIn('publication-cache-budget', production['groups'])
         self.assertEqual(
             [rule for rule in self.policy['rules']
@@ -408,7 +413,9 @@ class TargetedSelection(unittest.TestCase):
             ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
              'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
             ['directory-snapshot-initialization', 'container-manual-fresh-format',
-             'directory-storage-bootstrap', 'storage-system-recovery-admission'])
+             'directory-storage-bootstrap', 'storage-system-recovery-admission',
+             'storage-system-recovery-execution', 'storage-setup-system-binding',
+             'storage-system-product-consumers'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -463,6 +470,7 @@ class TargetedSelection(unittest.TestCase):
                     required.insert(0, 'backup-scoped-encoding-memo')
                     plan = assert_path_group_extension(self, self.policy, [path], required, [
                         'directory-storage-bootstrap', 'storage-system-recovery-admission',
+                        'storage-system-recovery-execution',
                     ])
                     self.assertEqual(len(plan['rust_targets']), 4)
                     self.assertEqual(plan['python_tests'], ['test_backup_encoding_memo_ci'])
@@ -599,6 +607,8 @@ class TargetedSelection(unittest.TestCase):
             'container-lifecycle-web', 'container-path-facts-schema',
             'container-manual-drafts', 'container-manual-fresh-format',
             'directory-snapshot-initialization', 'directory-storage-bootstrap',
+            'storage-system-recovery-admission', 'storage-system-recovery-execution',
+            'storage-setup-system-binding', 'storage-system-product-consumers',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -756,7 +766,9 @@ class TargetedSelection(unittest.TestCase):
             ['backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
              'held-directory-layout', 'projection-cache-layout', 'version-publication-location'],
             ['directory-snapshot-initialization', 'container-manual-fresh-format',
-             'directory-storage-bootstrap', 'storage-system-recovery-admission'])
+             'directory-storage-bootstrap', 'storage-system-recovery-admission',
+             'storage-system-recovery-execution', 'storage-setup-system-binding',
+             'storage-system-product-consumers'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -1268,7 +1280,7 @@ class TargetedSelection(unittest.TestCase):
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'container-manual-drafts'])
+            'container-manual-drafts', 'container-manual-recovery'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -3046,7 +3058,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
                 'container-tags-engine', 'container-unchanged-save',
                 'portable-path-consumers', 'container-path-facts-engine',
                 'container-lifecycle-engine',
-            ], ['container-manual-drafts']),
+            ], ['container-manual-drafts', 'container-manual-recovery']),
             ('src/engine/src/wire.rs', ['portable-path-consumers'], ['container-manual-drafts']),
             ('src/server/src/lib.rs', ['directory-rename-http-retirement', 'paged-deletion-review'],
              ['container-manual-drafts-consumers']),
@@ -3062,6 +3074,13 @@ class FrozenManualRecoverySelection(unittest.TestCase):
         policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
         group = 'container-manual-recovery'
         paths = [
+            'src/server/Cargo.toml',
+            'src/server/src/smb_rpc/budget.rs',
+            'src/server/src/smb_rpc/budget/retention.rs',
+            'src/server/src/smb_rpc/manual_retention.rs',
+            'src/server/src/smb_rpc/working_recovery.rs',
+            'test/server/unit/smb_rpc/manual_recovery_safety.rs',
+            'test/server/unit/smb_rpc/manual_retention_tests.rs',
             'helper/src/main.rs',
             'helper/src/smb_manual_recovery.rs',
             'helper/Cargo.toml',
@@ -3088,7 +3107,7 @@ class FrozenManualRecoverySelection(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path], None, [group])
-        server, helper, protocol = policy['groups'][group]['rust_targets']
+        server, helper, protocol, interruptions = policy['groups'][group]['rust_targets']
         self.assertEqual(server['features'], ['core'])
         self.assertEqual(server['prefixes'], [
             'smb_rpc::tests::manual_recovery_tests::',
@@ -3109,6 +3128,16 @@ class FrozenManualRecoverySelection(unittest.TestCase):
                          ('smb-protocol', 'src/smb/Cargo.toml', 'lib'))
         self.assertTrue(protocol['whole'])
         self.assertEqual((protocol['max_tests'], protocol['timeout_seconds']), (192, 900))
+
+        self.assertEqual(interruptions, {
+            'package': 'storage-server', 'manifest': 'src/server/Cargo.toml',
+            'kind': 'lib', 'features': ['core', 'fault-injection'],
+            'exact': [
+                'smb_rpc::tests::manual_recovery_tests::retention::'
+                'every_retirement_interruption_preserves_evidence_until_retry_and_cold_recovery',
+            ],
+            'max_tests': 1, 'timeout_seconds': 900,
+        })
 
 
 class CurrentBackupPublicationAttackSelection(unittest.TestCase):
@@ -3148,7 +3177,8 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
                                             ['held-directory-layout'], [group, 'container-manual-fresh-format'] + (
                                                 ['storage-setup-system-binding',
                                                  'storage-system-product-consumers',
-                                                 'storage-system-recovery-admission']
+                                                 'storage-system-recovery-admission',
+                                                 'storage-system-recovery-execution']
                                                 if source == 'runtime.rs' else []))
 
 
@@ -3164,7 +3194,9 @@ class DirectoryBootstrapDecisionSelection(unittest.TestCase):
                                             ['directory-storage-bootstrap'],
                                             ['storage-setup-system-binding',
                                              'storage-system-product-consumers',
-                                             'storage-system-recovery-admission'])
+                                             'storage-system-recovery-admission',
+                                             'storage-system-recovery-execution',
+                                             'container-manual-fresh-format'])
 
 
 class StorageSystemProductSelection(unittest.TestCase):
@@ -3238,7 +3270,8 @@ class StorageSystemRecoveryAdmissionSelection(unittest.TestCase):
         fixture = 'test/engine/unit/system_recovery_admission_tests.rs'
         assert_path_group_extension(self, policy, [source], [], [
             group, 'directory-storage-bootstrap', 'storage-setup-system-binding',
-            'storage-system-product-consumers',
+            'storage-system-product-consumers', 'container-manual-fresh-format',
+            'storage-system-recovery-execution',
         ])
         assert_path_group_extension(self, policy, [fixture], [], [group])
         self.assertEqual(policy['groups'][group]['rust_targets'], [{
@@ -3256,3 +3289,82 @@ class StorageSystemRecoveryAdmissionSelection(unittest.TestCase):
         assert_path_group_extension(self, policy, [
             'test/server/unit/service_lifecycle/management.rs',
         ], None, ['storage-system-product-consumers'])
+
+
+class StorageSystemRecoveryExecutionSelection(unittest.TestCase):
+    def test_new_carrier_paths_keep_full_initializer_manual_and_product_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        closed = [
+            'directory-storage-bootstrap', 'container-manual-fresh-format',
+            'storage-setup-system-binding', 'storage-system-product-consumers',
+            'storage-system-recovery-admission', 'storage-system-recovery-execution',
+        ]
+        for path in [
+            'src/engine/src/authority_selection/carrier.rs',
+            'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs',
+            'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/execute.rs',
+            'src/server/src/setup_recovery/recovery.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], [], closed)
+        group = 'storage-system-recovery-execution'
+        assert_path_group_extension(self, policy, [
+            'test/engine/unit/system_recovery_execution_tests.rs',
+        ], [], [group])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml', 'kind': 'lib',
+            'prefixes': [
+                'engine::snapshot_initialization::bootstrap::system_recovery::execute::tests::',
+            ],
+            'max_tests': 4, 'timeout_seconds': 900,
+        }])
+
+
+
+class MembershipInitializerDirectoryLockSelection(unittest.TestCase):
+    def test_reservation_source_and_fixture_execute_complete_lock_module(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'membership-initializer-directory-locks'
+        for path, retained in [
+            ('src/engine/src/engine/membership_transition/pending/reservation.rs',
+             ['held-directory-layout']),
+            ('test/engine/unit/engine/membership_reservation_tests.rs', []),
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], retained, [group])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-engine',
+            'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'prefixes': ['engine::membership_transition::pending::reservation::tests::'],
+            'max_tests': 8,
+            'timeout_seconds': 900,
+        }])
+
+
+class OrdinaryCurrentRemovalSelection(unittest.TestCase):
+    def test_current_removal_preserves_workspace_namespace_and_real_smb_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'container-manual-recovery'
+        for path in [
+            'src/engine/src/business/namespace/current_removal.rs',
+            'src/engine/src/business/namespace.rs',
+            'src/engine/src/business/workspace.rs',
+            'src/server/src/smb_rpc/namespace.rs',
+            'test/server/unit/smb_rpc/default_share_tests.rs',
+            'test/server/unit/smb_rpc/ordinary_rmdir_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], None, [group])
+        assert_path_group_extension(self, policy, [
+            'src/engine/src/business/namespace/current_removal.rs',
+        ], [
+            'current-name-namespace-consumers', 'container-current-name',
+            'container-tags-engine', 'container-manual-drafts',
+            'container-unchanged-save', 'portable-path-consumers',
+            'container-path-facts-engine', 'container-lifecycle-engine',
+        ], [group])
+        target = policy['groups'][group]['rust_targets'][0]
+        self.assertIn('smb_rpc::tests::default_share_tests::', target['prefixes'])
+        self.assertEqual((target['max_tests'], target['timeout_seconds']), (96, 900))
+        self.assertEqual(target['features'], ['core'])

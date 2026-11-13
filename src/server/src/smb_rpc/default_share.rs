@@ -223,10 +223,22 @@ impl DefaultShare {
             .map_err(|error| failure(ApiError::invalid_source(error), None))?;
         let operation = match &request {
             Request::Namespace { operation_id, .. }
-            | Request::RecoverManualDraft { operation_id, .. } => Some(operation_id.to_string()),
+            | Request::RecoverManualDraft { operation_id, .. }
+            | Request::RecoverManualWorking { operation_id, .. } => Some(operation_id.to_string()),
             _ => None,
         };
         let result = match request {
+            Request::RecoverManualWorking { operation_id, record, resume } => {
+                let result = (|| {
+                    let account = self.shared.account.read()?;
+                    account.require_generation(self.account_generation)?;
+                    working_recovery::recover(
+                        &self.shared, &self.identity, operation_id, &record,
+                        self.max_file_bytes, resume,
+                    )
+                })();
+                result.map(Reply::Json).map_err(|error| failure(error, operation))
+            }
             Request::RecoverManualDraft { operation_id, resume } => {
                 let result = (|| {
                     let account = self.shared.account.read()?;

@@ -6,7 +6,7 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-fn fixture() -> (tempfile::TempDir, PathBuf, Config) {
+pub(super) fn fixture() -> (tempfile::TempDir, PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let system = temp.path().join("system");
@@ -26,7 +26,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Config) {
     (temp, system, config)
 }
 
-fn image(root: &Path) -> BTreeMap<PathBuf, (u64, u64, u32, Vec<u8>)> {
+pub(super) fn image(root: &Path) -> BTreeMap<PathBuf, (u64, u64, u32, Vec<u8>)> {
     fn visit(root: &Path, path: &Path, rows: &mut BTreeMap<PathBuf, (u64, u64, u32, Vec<u8>)>) {
         let metadata = fs::symlink_metadata(path).unwrap();
         let bytes = if metadata.is_dir() { Vec::new() } else { fs::read(path).unwrap() };
@@ -151,4 +151,30 @@ fn missing_barrier_foreign_root_and_older_prefix_cannot_authorize_recovery() {
         assert_eq!(image(temp.path()), before);
         assert_eq!(image(foreign.0.path()), foreign_before);
     }
+}
+
+#[test]
+fn prior_unified_reader_format_is_rejected_without_migration() {
+    let (temp, system, config) = fixture();
+    drop(Engine::initialize_storage(
+        &system, config.clone(), OperationId::generate().unwrap(),
+    ).unwrap());
+    let marker = system.join("initialized.json");
+    let bytes = fs::read_to_string(&marker).unwrap();
+    assert!(bytes.contains("unified-storage-system-v2"));
+    fs::write(&marker, bytes.replace("unified-storage-system-v2", "unified-storage-system-v1"))
+        .unwrap();
+    let seal = config.disks[0].root.join(crate::persist::layout::DISK_IDENTITY.as_path());
+    let bytes = fs::read_to_string(&seal).unwrap();
+    assert!(bytes.contains("unified-storage-managed-directory-v2"));
+    fs::set_permissions(&seal, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&seal, bytes.replace(
+        "unified-storage-managed-directory-v2", "unified-storage-managed-directory-v1",
+    )).unwrap();
+    let before = image(temp.path());
+    assert!(Engine::open(&system).is_err());
+    let handles = config.disks.iter().take(2)
+        .map(|disk| PrivateDirectory::open_existing(&disk.root).unwrap()).collect();
+    assert!(Engine::admit_storage_recovery(handles).is_err());
+    assert_eq!(image(temp.path()), before);
 }

@@ -1,6 +1,7 @@
 //! One held SYSTEM directory lock serializes every authority-format selection.
 //! It is retained with writer ownership, never reconstructed from a cache.
 pub(crate) mod manual;
+pub(crate) mod carrier;
 mod fresh;
 pub use fresh::FreshBootstrapError;
 pub(crate) use fresh::{FreshSelection, has_fresh_selector};
@@ -19,6 +20,7 @@ pub(crate) struct SelectionGuard {
     _lock: AdvisoryLock,
     fresh: Option<FreshSelection>,
     first_write: bool,
+    recovery: Option<carrier::RecoverySelection>,
 }
 impl SelectionGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
@@ -41,6 +43,7 @@ impl SelectionGuard {
             _lock: lock,
             fresh: None,
             first_write: false,
+            recovery: None,
         })
     }
     pub(crate) fn allows_writer_creation(&self) -> bool {

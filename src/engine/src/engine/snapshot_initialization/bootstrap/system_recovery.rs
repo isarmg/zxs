@@ -4,7 +4,7 @@
 use crate::authority_selection::{FreshBootstrapError, FreshSelection};
 use crate::disk::{DiskResources, DiskRoot, DiskWriter, FenceOwner};
 use crate::engine::snapshot_initialization::bootstrap::{
-    MAX_BYTES, RootRecord, decision, failure, verify_scoped_roots,
+    MAX_BYTES, RootRecord, decision as bootstrap_decision, failure, verify_scoped_roots,
 };
 use crate::journal::{Candidate, OpenJournal, Publication, PublicationSeal, Receipt, RecordType};
 use crate::persist::layout;
@@ -13,6 +13,8 @@ use platform_io::fs_safety::PrivateDirectory;
 use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+mod decision;
+mod execute;
 use storage_contract::working_tree::{LocalEntityIdentity, MaterialCommitment};
 
 /// An opaque live source proof, not a deserializable recovery permission.
@@ -23,6 +25,7 @@ pub struct StorageRecoveryAdmission {
     writers: BTreeMap<String, DiskWriter>,
     journals: BTreeMap<String, OpenJournal>,
     original: RootRecord,
+    origin: FreshSelection,
     source: Candidate,
     state: State,
     evidence: MaterialCommitment,
@@ -37,6 +40,52 @@ impl StorageRecoveryAdmission {
     pub fn evidence_commitment(&self) -> MaterialCommitment {
         self.evidence
     }
+
+    pub fn origin_operation(&self) -> crate::OperationId {
+        self.original.operation
+    }
+
+    /// Compare a retained control initialization intent with the unchanged
+    /// original storage authority, without admitting a new configuration.
+    pub fn require_initialization_origin(
+        &self, operation: crate::OperationId, config: &Config,
+    ) -> crate::Result<()> {
+        if operation != self.original.operation
+            || storage_contract::canonical_json(config)?
+                != storage_contract::canonical_json(&self.config)?
+        {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
+    /// A completed retry keeps the original source evidence from its permanent
+    /// recovery receipt. It must not compare that evidence with the later tip.
+    pub fn require_recovery_intent_source(
+        &self,
+        operation: crate::OperationId,
+        principal: &storage_contract::Principal,
+        source_evidence: MaterialCommitment,
+        control_intent: MaterialCommitment,
+    ) -> crate::Result<()> {
+        let Some(result) = self.state.operations.get(&operation) else {
+            return if source_evidence == self.evidence { Ok(()) } else { Err(refused()) };
+        };
+        if result.kind != decision::KIND {
+            return Err(refused());
+        }
+        let binding: decision::RecoveryBinding = storage_contract::decode_strict(
+            &storage_contract::canonical_json(&result.result)?,
+        )?;
+        if binding.request.operation != operation || &binding.request.principal != principal
+            || binding.request.source_evidence != source_evidence
+            || binding.request.control_intent != control_intent
+            || result != &binding.result(result.sequence)?
+        {
+            return Err(refused());
+        }
+        Ok(())
+    }
 }
 
 impl Engine {
@@ -47,7 +96,7 @@ impl Engine {
         metadata_directories: Vec<PrivateDirectory>,
     ) -> crate::Result<StorageRecoveryAdmission> {
         let mut originals = BTreeMap::new();
-        let mut agreed: Option<(ValidatedConfig, Vec<u8>)> = None;
+        let mut agreed: Option<(ValidatedConfig, Vec<u8>, FreshSelection)> = None;
         let mut identities = BTreeSet::new();
         for directory in metadata_directories {
             directory.verify_identity()?;
@@ -65,7 +114,7 @@ impl Engine {
                 return Err(refused());
             }
             let saved: Config = root.read_json_observed(
-                &path.join("metadata/pool-membership/config.json"), &mut |_| Ok(()),
+                &path.join(crate::persist::layout::GENESIS_CONFIG.as_path()), &mut |_| Ok(()),
             )?;
             let selector = root.read_bytes(
                 &path.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_BYTES,
@@ -79,18 +128,19 @@ impl Engine {
                 return Err(refused());
             }
             let bytes = storage_contract::canonical_json(&config)?;
-            if let Some((_, first)) = &agreed {
-                if first != &bytes {
+            if let Some((_, first, original)) = &agreed {
+                if first != &bytes || original.canonical_bytes()? != selector {
                     return Err(refused());
                 }
             } else {
-                agreed = Some((config, bytes));
+                let original = storage_contract::decode_strict(&selector)?;
+                agreed = Some((config, bytes, original));
             }
             if originals.insert(seal.disk_id, root).is_some() {
                 return Err(refused());
             }
         }
-        let (config, configuration) = agreed.ok_or_else(refused)?;
+        let (config, configuration, origin) = agreed.ok_or_else(refused)?;
         if originals.len() < config.metadata_quorum() {
             return Err(failure(FreshBootstrapError::Incomplete));
         }
@@ -117,7 +167,7 @@ impl Engine {
         for disk in config.io_disks() {
             let root = &resources.get(disk)?.root;
             let anchor: Config = root.read_json_observed(
-                &disk.root.join("metadata/pool-membership/config.json"), &mut |_| Ok(()),
+                &disk.root.join(crate::persist::layout::GENESIS_CONFIG.as_path()), &mut |_| Ok(()),
             )?;
             if storage_contract::canonical_json(&anchor)? != configuration {
                 return Err(refused());
@@ -125,7 +175,7 @@ impl Engine {
             let bytes = root.read_bytes(
                 &disk.root.join(layout::STORAGE_INITIALIZATION_PROOF.as_path()), MAX_BYTES,
             )?;
-            let (bootstrap, record) = decision::BootstrapDecision::admit_source(&bytes)?;
+            let (bootstrap, record) = bootstrap_decision::BootstrapDecision::admit_source(&bytes)?;
             bootstrap.verify_membership(&config)?;
             if Some(record.selection) != config.fresh_bootstrap() {
                 return Err(refused());
@@ -166,7 +216,7 @@ impl Engine {
                 }
                 if hashes.is_empty() {
                     bootstrap.require_initial_candidate(&candidate)?;
-                    decision::read_initial_state(root, disk, &candidate, &record)?;
+                    bootstrap_decision::read_initial_state(root, disk, &candidate, &record)?;
                 }
                 let publication: Publication = crate::journal::load_object_at(
                     root, disk, "publication", &rows[3].0.object_hash,
@@ -227,7 +277,7 @@ impl Engine {
             let state = crate::publication_evidence::verified_snapshot_observed_at(
                 &resources, std::slice::from_ref(disk), &candidate.snapshot_hash, &mut |_| {},
             )?.into_state();
-            let first = decision::initial_state(&record)?;
+            let first = bootstrap_decision::initial_state(&record)?;
             if state.operations.get(&record.operation) != first.operations.get(&record.operation)
                 || state.operation_principals.get(&record.operation)
                     != first.operation_principals.get(&record.operation)
@@ -253,7 +303,7 @@ impl Engine {
         let mut digest = blake3::Hasher::new_derive_key("zxs SYSTEM recovery source admission v1");
         digest.update(&evidence_bytes);
         Ok(StorageRecoveryAdmission {
-            config, resources, writers, journals, original, source, state,
+            config, resources, writers, journals, original, origin, source, state,
             evidence: MaterialCommitment::from_digest(digest.finalize()),
         })
     }
@@ -262,3 +312,37 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../../../test/engine/unit/system_recovery_admission_tests.rs"]
 mod tests;
+
+pub(in crate::engine) fn completed_carrier(
+    system: &PrivateDirectory,
+    config: &ValidatedConfig,
+    resources: &DiskResources,
+) -> crate::Result<(crate::engine::snapshot_initialization::bootstrap::CompletionProof, RootRecord)> {
+    decision::require_complete(system, config, resources)
+}
+
+pub(in crate::engine) fn verify_original_publication(
+    system: &PrivateDirectory,
+    candidate: &Candidate,
+    next: &State,
+    publication: &Publication,
+) -> crate::Result<()> {
+    let complete = decision::RecoveryCompletion::decode(&system.read_bounded(
+        &crate::engine::snapshot_initialization::bootstrap::name(
+            crate::engine::snapshot_initialization::bootstrap::COMPLETE,
+        ).map_err(failure)?, MAX_BYTES,
+    )?)?;
+    let original = &complete.binding.origin;
+    original.require_initial_candidate(candidate)?;
+    let bytes = storage_contract::canonical_json(original)?;
+    let (_, record) = bootstrap_decision::BootstrapDecision::admit_source(&bytes)?;
+    let rebuilt = bootstrap_decision::BootstrapDecision::from_decided(
+        candidate.clone(), publication.clone(), &record,
+    )?;
+    if storage_contract::canonical_json(&rebuilt)? != bytes
+        || next != &bootstrap_decision::initial_state(&record)?
+    {
+        return Err(refused());
+    }
+    Ok(())
+}

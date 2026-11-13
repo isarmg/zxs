@@ -755,9 +755,11 @@ fn connect(shared: Arc<Shared>) -> (Client, JoinHandle<()>) {
         .unwrap()[0]
         .repository_id
         .clone();
-    let socket = shared
-        .spool
-        .join(format!("{}.sock", new_id("rpc").unwrap()));
+    // Socket names have a kernel byte limit independent of the CI checkout
+    // length. Keep a real private listener, not a mocked Client transport.
+    let socket_root = tempfile::Builder::new().prefix("zxs-rpc-")
+        .tempdir_in("/tmp").unwrap();
+    let socket = socket_root.path().join("rpc.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let worker = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();

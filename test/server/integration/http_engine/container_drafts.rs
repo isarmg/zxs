@@ -148,6 +148,13 @@ async fn cold_current_http_reads_shared_draft_without_changing_historical_bytes_
             "expected_generation":edit["generation"],"draft_operation":draft.operation,
             "operation_id":operation}))).await;
     assert_eq!(prepared["operation_id"], operation);
+    let retried_preparation = success(
+        &app, &token, "POST", &format!("{route}/prepare-draft-commit"),
+        Some(json!({"repository":repository,"path":"file.txt",
+            "expected_generation":edit["generation"],"draft_operation":draft.operation,
+            "operation_id":operation})),
+    ).await;
+    assert_eq!(retried_preparation, prepared);
     assert_eq!(success(&app, &token, "GET", &format!("{route}/edit-mode{query}"), None).await,
         edit, "preparation is not a historical publication");
     let workspace = prepared["workspace_id"].as_str().unwrap().to_owned();

@@ -84,7 +84,7 @@
       ]
     },
     "container-manual-recovery": {
-      "reason": "Frozen original manual-save query/resume across daemon restart and real RPC, bounded helper online CLI, and the complete SMB protocol library. Preserve default-share, close, namespace, admission, binding and captured snapshot consumers; this excludes the later Working/partial-freeze design.",
+      "reason": "Frozen and Working manual-save recovery, permanent-receipt retirement and interruption recovery across real RPC/cold reopen. Preserve every original SMB consumer, helper and complete protocol target.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -124,6 +124,20 @@
           "kind": "lib",
           "whole": true,
           "max_tests": 192,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core",
+            "fault-injection"
+          ],
+          "exact": [
+            "smb_rpc::tests::manual_recovery_tests::retention::every_retirement_interruption_preserves_evidence_until_retry_and_cold_recovery"
+          ],
+          "max_tests": 1,
           "timeout_seconds": 900
         }
       ]
@@ -4046,6 +4060,38 @@
             "engine::snapshot_initialization::bootstrap::system_recovery::tests::"
           ],
           "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "storage-system-recovery-execution": {
+      "reason": "Execute explicit all-root SYSTEM replacement through the same fresh-only format, permanent recovery publication, retained origin proof and full cold runtime replay. Preserve original initializer and product recovery consumers; partial-decided and unavailable-member recovery remain separate unfinished cases.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::snapshot_initialization::bootstrap::system_recovery::execute::tests::"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "membership-initializer-directory-locks": {
+      "reason": "Execute all membership reservation regressions, including initializer-versus-membership directory lock exclusion, original held roots, cancellation barriers and preserved conflict bytes.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::membership_transition::pending::reservation::tests::"
+          ],
+          "max_tests": 8,
           "timeout_seconds": 900
         }
       ]
@@ -12337,6 +12383,295 @@
       "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
       "groups": [
         "storage-system-recovery-admission"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/fresh.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/authority_selection/carrier.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/fencing.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_lifecycle/bootstrap/runtime.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/execute.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/recovery.rs",
+      "groups": [
+        "directory-storage-bootstrap",
+        "container-manual-fresh-format",
+        "storage-setup-system-binding",
+        "storage-system-product-consumers",
+        "storage-system-recovery-admission",
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal.rs",
+      "groups": [
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "test/engine/unit/system_recovery_execution_tests.rs",
+      "groups": [
+        "storage-system-recovery-execution"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation.rs",
+      "groups": [
+        "membership-initializer-directory-locks"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_reservation_tests.rs",
+      "groups": [
+        "membership-initializer-directory-locks"
+      ]
+    },
+    {
+      "path": "src/server/Cargo.toml",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/budget.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/budget/retention.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/manual_retention.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/working_recovery.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_recovery_safety.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/manual_retention_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/current_removal.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name",
+        "container-tags-engine",
+        "container-manual-drafts",
+        "container-unchanged-save",
+        "portable-path-consumers",
+        "container-path-facts-engine",
+        "container-lifecycle-engine",
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/server/src/smb_rpc/namespace.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers",
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/default_share_tests.rs",
+      "groups": [
+        "container-manual-recovery"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/ordinary_rmdir_tests.rs",
+      "groups": [
+        "container-manual-recovery"
       ]
     }
   ],

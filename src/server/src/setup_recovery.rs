@@ -16,6 +16,7 @@ use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedCon
 
 mod activation;
 mod storage_system;
+mod recovery;
 mod discovery;
 pub use activation::{
     StorageActivationRequest, StorageActivationState, StorageActivationStatus,
@@ -954,7 +955,9 @@ impl SetupRecovery {
                 "acknowledge that restored administrator credentials may be stale; restored sessions are always revoked",
             ));
         }
-        self.restore_locked(request, |engine| {
+        self.restore_locked(request,
+            "system_recovery".parse().expect("invariant: fixed recovery principal"),
+            || self.verify_permit(permit), |engine| {
             // Recovery can outlive local authorization. Recheck at the authority
             // publication boundary, not just before slow disk recovery begins.
             self.verify_permit(permit)?;
@@ -962,58 +965,24 @@ impl SetupRecovery {
         })
     }
 
-    /// Normal restore uses a freshly authenticated system administrator.
-    pub(crate) fn restore_authenticated<F>(
+    /// Normal restore revalidates the same administrator before and after publication.
+    pub(crate) fn restore_authenticated<F, V>(
         &self,
-        _identity: &Identity,
+        identity: &Identity,
         request: RestoreRequest,
+        revalidate: V,
         restore: F,
     ) -> Result<(), ApiError>
     where
         F: FnOnce(Engine) -> Result<(), ApiError>,
+        V: Fn(&Identity) -> Result<(), ApiError>,
     {
+        revalidate(identity)?;
         let _lock = self.lock()?;
-        self.restore_locked(request, restore)
+        let principal = identity.principal.parse().map_err(ApiError::invalid_authenticated_principal)?;
+        self.restore_locked(request, principal, || revalidate(identity), restore)
     }
 
-    fn restore_locked<F>(&self, request: RestoreRequest, restore: F) -> Result<(), ApiError>
-    where
-        F: FnOnce(Engine) -> Result<(), ApiError>,
-    {
-        if request.disk_ids.is_empty() || request.disk_ids.len() > 32 {
-            return Err(ApiError::invalid(
-                "restore requires authorized metadata members; the original configuration determines quorum",
-            ));
-        }
-        let system = self.storage_system()?;
-        if system.path()
-            .join("config.json")
-            .symlink_metadata()
-            .is_ok()
-        {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::AlreadyInitialized,
-                "configuration exists; use diagnostic recovery",
-            ));
-        }
-        let disks = self.selected(&request.disk_ids)?;
-        let mut engine = Engine::restore_from_disks_with_workspace_limits(
-            system.path(),
-            &disks,
-            self.retained_workspace_limits,
-        )
-        .map_err(engine_error)?;
-        crate::engine_backend::report_recovery_warnings(&mut engine);
-        if engine.auth_state().is_none() {
-            return Err(ApiError::conflict(
-                storage_contract::ErrorCode::AuthRecoveryRequired,
-                "storage configuration was restored but authoritative credentials are absent; initialization remains blocked and explicit local recovery is required",
-            ));
-        }
-        #[cfg(test)]
-        tests::after_restore();
-        restore(engine)
-    }
 }
 
 fn control_publication_error(source: platform_io::fs_safety::Error) -> ApiError {

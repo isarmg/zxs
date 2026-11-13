@@ -456,7 +456,7 @@ impl ValidatedConfig {
 /// configured majority and later checks every input seal against that winner.
 pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<ValidatedConfig> {
     let original = ValidatedConfig::try_from(read_json::<Config>(
-        &path.join("metadata/pool-membership/config.json"),
+        &path.join(crate::persist::layout::GENESIS_CONFIG.as_path()),
     )?)?;
     let config =
         super::membership_transition::pending::activation::restore_anchor(path, seal, original)?;

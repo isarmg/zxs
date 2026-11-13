@@ -14,6 +14,7 @@ use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory, RelativePath};
 
 mod persistence;
+pub(super) mod retention;
 #[cfg(not(test))]
 use persistence as persist;
 #[cfg(test)]
@@ -160,7 +161,7 @@ fn invalid(message: &str) -> ApiError {
         message,
     )
 }
-fn record_path(source: &Path) -> PathBuf {
+pub(super) fn record_path(source: &Path) -> PathBuf {
     source.with_extension("budget.json")
 }
 /// Extent admitted ahead of a growing write: a quarter of its end, between

@@ -159,6 +159,10 @@ impl WriterLocks {
         self.disks.len() + 1
     }
 
+    pub(crate) fn selected_directory(&self) -> Result<platform_io::fs_safety::PrivateDirectory> {
+        self.selection.selected_directory()
+    }
+
     pub(crate) fn require_selected(&self) -> Result<()> {
         self.selection.require_selected()
     }

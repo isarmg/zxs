@@ -48,7 +48,7 @@ type Result<T> = std::result::Result<T, FreshBootstrapError>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "unified-storage-system-v1")]
+    #[serialization(rename = "unified-storage-system-v2")]
     UnifiedStorage,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -249,11 +249,31 @@ impl SelectionGuard {
     pub(crate) fn recover_fresh(
         self, config: &ValidatedConfig,
     ) -> Result<Self> {
+        if let Some(recovered) = crate::authority_selection::carrier::RecoverySelection
+            ::read(&self.directory)?
+        {
+            recovered.origin.require_config(config)
+                .map_err(|error| FreshBootstrapError::Engine(Box::new(error)))?;
+            return self.admit_recovery(recovered)
+                .map_err(|error| FreshBootstrapError::Engine(Box::new(error)));
+        }
         let original = FreshSelection::read(&self.directory)?
             .ok_or(FreshBootstrapError::Incomplete)?;
         self.select_fresh(config, original.operation)
     }
     pub(crate) fn require_selected(&self) -> crate::Result<()> {
+        if let Some(expected) = &self.recovery {
+            let verify = || -> Result<()> {
+                expected.require_directory(&self.directory)?;
+                if crate::authority_selection::carrier::RecoverySelection::read(&self.directory)?
+                    .as_ref() != Some(expected)
+                {
+                    return Err(FreshBootstrapError::Changed);
+                }
+                Ok(())
+            };
+            return verify().map_err(|error| crate::Error::FreshBootstrap(Box::new(error)));
+        }
         if let Some(expected) = &self.fresh {
             let verify = || -> Result<()> {
                 self.directory.verify_identity().map_err(FreshBootstrapError::Filesystem)?;

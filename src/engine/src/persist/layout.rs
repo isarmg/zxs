@@ -68,6 +68,12 @@ pub(crate) static JOURNAL: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("journal.bin").expect("invariant: journal uses one canonical entry")
 });
 
+/// Immutable original pool membership/configuration anchor below a held DISK.
+pub(crate) static GENESIS_CONFIG: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("metadata/pool-membership/config.json")
+        .expect("invariant: Genesis configuration has a canonical disk-relative address")
+});
+
 /// Address below a held disk root, shared by publication, loading and coverage exclusion.
 pub(crate) static REPLAY_CHECKPOINT: LazyLock<RelativePath> = LazyLock::new(|| {
     RelativePath::new("metadata/replay-checkpoint.json")

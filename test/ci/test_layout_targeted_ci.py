@@ -127,7 +127,12 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
                                            ['src/engine/src/persist/layout.rs'],
                                            ['checkpoint-layout', 'held-directory-layout',
                                             'projection-cache-layout'],
-                                           ['directory-snapshot-initialization', 'container-manual-fresh-format'])
+                                           ['directory-snapshot-initialization', 'container-manual-fresh-format',
+                                            'directory-storage-bootstrap',
+                                            'storage-system-recovery-admission',
+                                            'storage-system-recovery-execution',
+                                            'storage-setup-system-binding',
+                                            'storage-system-product-consumers'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'held-directory-layout', 'projection-cache-layout'])
         engine = next(target for target in plan['rust_targets']
@@ -206,7 +211,12 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
                                             'held-directory-layout',
                                             'ordinary-conversion-name-budget',
                                             'projection-cache-layout'],
-                                           ['directory-snapshot-initialization', 'container-manual-fresh-format'])
+                                           ['directory-snapshot-initialization', 'container-manual-fresh-format',
+                                            'directory-storage-bootstrap',
+                                            'storage-system-recovery-admission',
+                                            'storage-system-recovery-execution',
+                                            'storage-setup-system-binding',
+                                            'storage-system-product-consumers'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])

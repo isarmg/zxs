@@ -81,7 +81,8 @@ impl Session {
         };
         let mut operation_id = match &request {
             Request::Namespace { operation_id, .. }
-            | Request::RecoverManualDraft { operation_id, .. } => Some(operation_id.to_string()),
+            | Request::RecoverManualDraft { operation_id, .. }
+            | Request::RecoverManualWorking { operation_id, .. } => Some(operation_id.to_string()),
             Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
                 match self.handles.get(handle) {
                     Some(Handle::Write(writer, _)) => Some(writer.operation_id.to_string()),
@@ -120,6 +121,11 @@ impl Session {
         let value = match request {
             Request::Hello { .. } | Request::HelloDefault { .. } => {
                 return Err(ApiError::invalid("hello is allowed only once"));
+            }
+            Request::RecoverManualWorking { operation_id, record, resume } => {
+                return working_recovery::recover(
+                    &self.shared, &self.identity, operation_id, &record, self.max_file_bytes, resume,
+                ).map(Reply::Json);
             }
             Request::RecoverManualDraft { operation_id, resume } => {
                 return manual_recovery::recover(

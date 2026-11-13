@@ -13,6 +13,7 @@ required-features = ["core"]
 [features]
 default = ["core"]
 core = ["dep:storage-engine"]
+fault-injection = []
 
 [dependencies]
 sha2 = { version = "0.11.0", path = "../foundation/cryptography/sha2" }

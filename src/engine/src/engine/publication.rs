@@ -882,6 +882,7 @@ impl Engine {
             }
         }
         self.complete_storage_bootstrap(c, next, &publication)?;
+        self.complete_system_recovery(c, next, &publication)?;
         self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }
@@ -1132,6 +1133,7 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_local_publications")?;
         self.complete_storage_bootstrap(c, next, &publication)?;
+        self.complete_system_recovery(c, next, &publication)?;
         self.admit_directory_snapshot_publication(c, next, &publication)?;
         Ok(())
     }

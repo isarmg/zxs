@@ -4,8 +4,8 @@
 
 ## 已落盘的整合边界
 
-统一 SYSTEM selector 使用 `unified-storage-system-v1`，DISK seal 使用
-`unified-storage-managed-directory-v1`。两个此前独立候选的 selector 和 seal 均不作为
+统一 SYSTEM selector 使用 `unified-storage-system-v2`，DISK seal 使用
+`unified-storage-managed-directory-v2`。两个此前独立候选的 selector 和 seal 均不作为
 兼容输入；不在已有根写入或补齐新字段。手动稿和目录初始化共享同一运行时准入与完成证明。
 显式 `initialize_storage` 是唯一初始化实现；旧 `initialize` / `initialize_validated` /
 `initialize_held` 暂以具名错误写前拒绝，不能继续生成旧可写格式。
@@ -58,3 +58,30 @@
 承诺、新 SYSTEM 实体必须进入原成员永久 publication，单一 selector 表达 Original /
 Recovery 载体后继，原 DISK/bootstrap 承诺不得重写。只读来源准入不是完整灾难恢复。
 新增 quorum 成功/原锁竞争及不足 quorum/torn 全树不变回归均尚未运行。
+
+## SYSTEM 丢失恢复：显式载体后继（已写，未验证）
+
+第二片使用同一个 `initialized.json` 槽：Original 保留原 selector 形状；Recovery
+显式保留原 origin 并绑定新 SYSTEM 实体、恢复 operation/Principal、源 candidate/snapshot
+与控制 intent 承诺。DISK selector/seal 与原 bootstrap 决定不重封、不改写。恢复请求进入
+`storage.recover-system` 永久 publication，State 只可增加这一项 operation/principal，
+不能借恢复修改旧文件、分支 HEAD、历史节点、手动稿或账号状态。
+
+新 SYSTEM 的 writer 与 bootstrap locator 由原目录描述符创建；其实体进入恢复结果。
+全部 publication seal 完成后，Complete 才保存该恢复决定和原 bootstrap 证明。冷开需
+重验新载体身份、原盘证明、完整源/恢复快照精确差量和原 publication；重放原 bootstrap
+只验证不在新 inode 上重建旧身份。原操作完成后的显式重试按永久结果中原来源承诺核对，
+允许当前 source tip 已含恢复或账号后继，不重新发布第二个恢复结果。
+
+这个执行切片仍有明确限制：仅完全已发布来源，且所有原配置磁盘在线才能执行普通
+all-member publication；只读准入仍接受原 metadata quorum，但少成员执行所需受权恢复
+publication、非投票 data 根显式输入、恢复自身 ACCEPT/FINALIZE 中断续作尚未完成。
+新根首写后未知 partial 继续保留并拒绝，不声称自动恢复。现有 SYSTEM-loss 成功和撤权
+测试不得改成期望早拒绝来替代上述缺口。新增真实 FILE/cold/exact retry/主体冲突/复制到
+新 inode 拒绝及未知目标保留回归均未经运行。SQLite/WAL 全 held 仍不是本片承诺。
+
+
+恢复载体协议采用统一 v2 discriminator（SYSTEM 与 DISK 同时升级）。原因不是新增一种
+兼容读取模式：旧 v1 writer 可能忽略未知恢复 operation，在原 SYSTEM 再次出现后继续写。
+v2 seal/selector 使这种 writer 在准入阶段拒绝。所有 v1 WIP 材料仅保留原字节并拒绝，
+不得原地补 marker、换 seal 或重写其 bootstrap。上述恢复逻辑只适用于显式新建的 v2 根。

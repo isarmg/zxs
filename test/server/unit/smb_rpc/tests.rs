@@ -71,6 +71,8 @@ pub(super) struct LostCommitReply {
     repository_authorizations: Mutex<Vec<String>>,
     fail: AtomicBool,
     reconciliation_failure: AtomicUsize,
+    recovery_outcome_state: Mutex<Option<storage_contract::CommitState>>,
+    recovery_outcome_error: AtomicBool,
     uploads: AtomicUsize,
     revoked: AtomicBool,
     change_before_workspace: AtomicBool,
@@ -100,7 +102,17 @@ impl Backend for LostCommitReply {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
-        self.inner.operation_outcome(identity, operation_id)
+        if self.recovery_outcome_error.load(Ordering::SeqCst) {
+            return Err(ApiError::io(io::Error::new(
+                io::ErrorKind::ConnectionReset, "injected original outcome lookup failure",
+            )));
+        }
+        self.inner.operation_outcome(identity, operation_id).map(|mut outcome| {
+            if let Some(state) = *self.recovery_outcome_state.lock().unwrap() {
+                outcome.commit_state = state;
+            }
+            outcome
+        })
     }
     fn move_current_object(
         &self,
@@ -1043,6 +1055,8 @@ fn fixture_backend(
         repository_authorizations: Mutex::new(Vec::new()),
         fail: AtomicBool::new(false),
         reconciliation_failure: AtomicUsize::new(0),
+        recovery_outcome_state: Mutex::new(None),
+        recovery_outcome_error: AtomicBool::new(false),
         uploads: AtomicUsize::new(0),
         revoked: AtomicBool::new(false),
         change_before_workspace: AtomicBool::new(false),

@@ -210,7 +210,13 @@ impl Engine {
         let Some(proof) = self.storage_bootstrap_decision(candidate, next, publication)? else {
             return Ok(());
         };
-        let system = platform_io::fs_safety::PrivateDirectory::open_existing(&self.root)?;
+        let system = self._locks.selected_directory()?;
+        if crate::authority_selection::carrier::RecoverySelection::read(&system)
+            .map_err(failure)?.is_some()
+        {
+            return crate::engine::snapshot_initialization::bootstrap::system_recovery
+                ::verify_original_publication(&system, candidate, next, publication);
+        }
         let roots = system.read_bounded(&super::name(super::ROOTS).map_err(failure)?, MAX_BYTES)?;
         let record = RootRecord::decode(&roots).map_err(failure)?;
         proof.verify(&record)?;
@@ -307,6 +313,9 @@ impl Engine {
         next: &State,
     ) -> crate::Result<()> {
         let result = next.operations.get(&candidate.operation_id).ok_or_else(rejected)?;
+        if result.kind == "storage.recover-system" {
+            return self.require_system_recovery_transition(candidate, next);
+        }
         if result.kind != KIND {
             return crate::engine::container_drafts::format::require_manual_storage(&self.config);
         }

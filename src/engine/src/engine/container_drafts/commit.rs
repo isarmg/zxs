@@ -147,8 +147,14 @@ impl Engine {
         }
         // Reopen the selected, hash-verified body before authorizing consumption.
         let _body = self.open_container_draft(file)?.ok_or_else(invalid)?;
+        let current_entries = self.namespace_snapshot(&workspace.branch_id)?;
         validate_workspace(
-            &self.state, self.admitted_current_namespaces()?, &workspace, request, &binding,
+            &self.state,
+            self.admitted_current_namespaces()?,
+            current_entries.entries(),
+            &workspace,
+            request,
+            &binding,
         )?;
         workspace.container_draft_commit = Some(binding);
         self.persist_workspace(&workspace)?;
@@ -160,6 +166,7 @@ impl Engine {
 pub(crate) fn validate_workspace(
     state: &State,
     view: Option<&crate::engine::CurrentNamespaces>,
+    current_entries: &[crate::Entry],
     workspace: &Workspace,
     request: &CommitRequest,
     binding: &DraftConsumption,
@@ -185,11 +192,13 @@ pub(crate) fn validate_workspace(
         return Err(Error::ContainerEdit(EditConflict::SourceChanged));
     }
     let staged = workspace.files.values().next().ok_or_else(invalid)?;
-    let branch = state.branches.get(&workspace.branch_id).ok_or_else(invalid)?;
-    let current = view.ok_or_else(invalid)?;
-    current.require_branch_write(state, &workspace.branch_id)?;
-    let entries = current.branch_entries(&workspace.branch_id, &branch.head_commit_id)?;
-    let entry = entries.iter().find(|entry| {
+    if let Some(current) = view {
+        current.require_branch_write(state, &workspace.branch_id)?;
+    }
+    // Callers supply the same admitted, current-name projection used by ordinary
+    // namespace reads. Initial admission has no registry yet; Pending is rejected
+    // by that boundary rather than treated as an empty or historical fallback.
+    let entry = current_entries.iter().find(|entry| {
         entry.entry_id == binding.revision.base.entry.to_string()
             && entry.file_id == binding.file.to_string()
     }).ok_or_else(invalid)?;

@@ -40,7 +40,7 @@ impl PendingBootstrapAdmission {
             // restore. Admit the fixed Genesis anchor from the original seal
             // and selector, not from a fabricated completed SYSTEM capability.
             let saved: crate::Config = handle.root.read_json_observed(
-                &disk.root.join("metadata/pool-membership/config.json"), &mut |_| Ok(()),
+                &disk.root.join(crate::persist::layout::GENESIS_CONFIG.as_path()), &mut |_| Ok(()),
             )?;
             let selector = handle.root.read_bytes(
                 &disk.root.join(crate::authority_selection::FRESH_DISK_SELECTOR), MAX_BYTES,

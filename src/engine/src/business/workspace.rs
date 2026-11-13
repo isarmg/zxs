@@ -1359,8 +1359,12 @@ impl crate::engine::PlanningContext<'_> {
         let w = workspace;
         if let Some(binding) = &w.container_draft_commit {
             crate::engine::container_drafts::commit::validate_workspace(
-                self.state, self.current_namespaces.map(std::sync::Arc::as_ref),
-                &w, &request, binding,
+                self.state,
+                self.current_namespaces.map(std::sync::Arc::as_ref),
+                self.current_branch_entries(&w.branch_id)?,
+                &w,
+                &request,
+                binding,
             )?;
         }
         if w.purpose == WorkspacePurpose::HistoricalBranch {
@@ -1574,7 +1578,10 @@ impl crate::engine::PlanningContext<'_> {
                     written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
-                let deleted = apply_workspace_namespace(&mut entries, current_entries, &w.namespace_operations)?;
+                let deleted = namespace::apply_current_workspace_namespace(
+                    state, &repo, &branch, &mut entries, current_entries,
+                    &w.namespace_operations,
+                )?;
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
                 let path_changes = super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;

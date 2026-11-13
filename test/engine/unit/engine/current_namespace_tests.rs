@@ -773,6 +773,26 @@ fn membership_registry_current_shared_version_survives_without_granting_removed_
             .code(),
         ErrorCode::BranchNotActive
     );
+    // A retained readable version is not a current write grant. Explicit draft
+    // preparation must reject the removed owner before allocating a workspace,
+    // even when the caller supplies a valid file identity and current path.
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    let workspace_count = fixture.engine.workspaces.len();
+    let error = fixture.engine.prepare_shared_container_draft_commit(
+        shared.file_id.parse().unwrap(),
+        &storage_contract::file_container_tags::Context {
+            repository_id: owned.repository_id.parse().unwrap(),
+            path: shared.location().clone(),
+        },
+        storage_contract::Generation::new(0),
+        op(),
+        &storage_contract::Principal::new("admin".into()).unwrap(),
+        op(),
+    ).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::BranchNotActive);
+    assert_eq!(fixture.engine.workspaces.len(), workspace_count);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+
 }
 
 #[test]

@@ -15,6 +15,9 @@ pub(crate) struct Options {
     /// The original operation from the retained manual save, never a new ID.
     #[arg(long)]
     operation: OperationId,
+    /// Exact retained working-record basename, for work not yet fully frozen.
+    #[arg(long)]
+    working_record: Option<String>,
     #[command(subcommand)]
     action: Option<Action>,
 }
@@ -38,7 +41,12 @@ pub(crate) fn run(options: Options) -> Result<()> {
     // this command. Peer/account admission and original-result ownership stay
     // in the normal server protocol and Backend boundaries.
     let client = smb_protocol::client::Client::connect_default(&options.socket, &options.username)?;
-    print(client.recover_manual_draft(options.operation, options.resumes())?)
+    let resume = options.resumes();
+    let response = match options.working_record {
+        Some(record) => client.recover_manual_working(options.operation, record, resume)?,
+        None => client.recover_manual_draft(options.operation, resume)?,
+    };
+    print(response)
 }
 
 #[cfg(test)]

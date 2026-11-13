@@ -3,7 +3,7 @@ use super::*;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{AtomicFile, EntryName, PayloadOpenMode, PrivateDirectory};
 use storage_contract::container_edit::DraftRevision;
-use storage_contract::{ContentHash, Principal};
+use storage_contract::ContentHash;
 
 const RECORD_LIMIT: usize = 16 * 1024;
 
@@ -13,13 +13,17 @@ pub enum RecoveryError {
     Codec(#[source] json_codec::Error),
     #[error("manual SMB recovery record does not bind its original request")]
     Binding,
+    #[error("the original operation exists but its complete frozen evidence is missing")]
+    OriginalEvidenceMissing,
+    #[error("partial manual freeze evidence is retained and cannot be adopted as a fresh request")]
+    PartialFreeze,
     #[error("manual SMB recovery body differs from its frozen request")]
     Body,
     #[error("manual SMB recovery exceeds its record or body budget")]
     Budget,
 }
 impl RecoveryError {
-    fn api(self) -> ApiError {
+    pub(super) fn api(self) -> ApiError {
         ApiError::conflict(storage_contract::ErrorCode::RecoveryRequired, &self.to_string())
             .with_source(crate::http_boundary::ApiErrorSource::ManualDraftRecovery(self))
     }
@@ -41,13 +45,13 @@ struct Record {
     live_name: PathBuf,
 }
 
-fn body_name(operation: OperationId) -> Result<EntryName, ApiError> {
+pub(super) fn body_name(operation: OperationId) -> Result<EntryName, ApiError> {
     EntryName::new(format!("manual-{operation}")).map_err(crate::upload_fs_error)
 }
 fn record_name(operation: OperationId) -> Result<EntryName, ApiError> {
     EntryName::new(format!("manual-{operation}.work.json")).map_err(crate::upload_fs_error)
 }
-fn fingerprint(file: &File, limit: u64) -> Result<(ContentHash, u64), ApiError> {
+pub(super) fn fingerprint(file: &File, limit: u64) -> Result<(ContentHash, u64), ApiError> {
     let mut hash = blake3::Hasher::new();
     let mut offset = 0u64;
     let mut buffer = [0u8; 65_536];
@@ -83,6 +87,46 @@ fn read_record(
     decode(&bytes, operation, principal)
 }
 
+pub(super) fn retirement_request(
+    directory: &PrivateDirectory,
+    operation: OperationId,
+    principal: &str,
+) -> Result<crate::PersistContainerDraft, ApiError> {
+    Ok(read_record(directory, operation, principal)?.request)
+}
+
+pub(super) fn require_no_partial(
+    directory: &PrivateDirectory,
+    operation: OperationId,
+) -> Result<(), ApiError> {
+    let body = body_name(operation)?;
+    let budget = EntryName::new(budget::record_path(body.as_path()))
+        .map_err(crate::upload_fs_error)?;
+    for name in [&body, &budget] {
+        match directory.open_payload(name, PayloadOpenMode::Existing) {
+            Ok(_) => return Err(RecoveryError::PartialFreeze.api()),
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(crate::upload_fs_error(error)),
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn require_unrecorded(
+    shared: &Shared,
+    identity: &Identity,
+    operation: OperationId,
+) -> Result<(), ApiError> {
+    match shared.backend.operation_outcome(identity, operation) {
+        Ok(_) => Err(RecoveryError::OriginalEvidenceMissing.api()),
+        Err(error) if matches!(error.code,
+            storage_contract::ErrorCode::OperationNotFound | storage_contract::ErrorCode::NotFound
+        ) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Freeze once, before save publication. The private body is never lent to a
 /// peer. A partial/occupied destination is retained and rejected, not replaced.
 pub(super) fn freeze(
@@ -91,39 +135,58 @@ pub(super) fn freeze(
     writer: &Writer,
     limit: u64,
 ) -> Result<DraftRevision, ApiError> {
-    let container = writer.container.as_ref()
-        .expect("invariant: only admitted manual writers freeze manual requests");
-    let original = writer.directory.read_bounded(&record_name(writer.operation_id)?, RECORD_LIMIT);
-    match original {
+    let origin = working_recovery::origin(writer, &identity.principal)?;
+    if retained_revision(&writer.directory, &origin)?.is_none() {
+        require_unrecorded(shared, identity, origin.operation)?;
+        require_no_partial(&writer.directory, origin.operation)?;
+    }
+    freeze_source(shared, &writer.directory, &writer.file, &origin, limit)
+}
+
+pub(super) fn retained_revision(
+    directory: &PrivateDirectory,
+    origin: &working_recovery::Origin,
+) -> Result<Option<DraftRevision>, ApiError> {
+    match directory.read_bounded(&record_name(origin.operation)?, RECORD_LIMIT) {
         Ok(bytes) => {
-            let record = decode(&bytes, writer.operation_id, &identity.principal)?;
+            let record = decode(&bytes, origin.operation, origin.principal.as_str())?;
             let revision = &record.request.revision;
-            if record.request.context != container.context
-                || record.request.entry.to_string() != writer.item_id
-                || revision.base != container.base
-                || revision.expected_generation != container.edit.generation()
-                || record.live_name.as_os_str() != writer.source.file_name()
-                    .ok_or_else(|| RecoveryError::Binding.api())?
+            if record.request.context != origin.context || record.request.entry != origin.entry
+                || revision.base != origin.base
+                || revision.expected_generation != origin.expected_generation
+                || record.live_name != origin.live_name
             {
                 return Err(RecoveryError::Binding.api());
             }
-            return Ok(record.request.revision);
+            Ok(Some(record.request.revision))
         }
         Err(platform_io::fs_safety::Error::Io(error))
-            if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(crate::upload_fs_error(error)),
+            if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::upload_fs_error(error)),
     }
-    let name = body_name(writer.operation_id)?;
-    let destination = writer.directory.path().join(name.as_path());
-    let size = writer.file.metadata().map_err(ApiError::io)?.len();
-    let _reservation = shared.budget.reserve(&identity.principal, &destination, size, limit)?;
-    let mut frozen = writer.directory.open_payload(&name, PayloadOpenMode::CreateNew)
+}
+
+pub(super) fn freeze_source(
+    shared: &Shared,
+    directory: &PrivateDirectory,
+    live: &File,
+    origin: &working_recovery::Origin,
+    limit: u64,
+) -> Result<DraftRevision, ApiError> {
+    if let Some(revision) = retained_revision(directory, origin)? {
+        return Ok(revision);
+    }
+    let name = body_name(origin.operation)?;
+    let destination = directory.path().join(name.as_path());
+    let size = live.metadata().map_err(ApiError::io)?.len();
+    let _reservation = shared.budget.reserve(origin.principal.as_str(), &destination, size, limit)?;
+    let mut frozen = directory.open_payload(&name, PayloadOpenMode::CreateNew)
         .map_err(crate::upload_fs_error)?;
     let mut hash = blake3::Hasher::new();
     let mut offset = 0u64;
     let mut buffer = [0u8; 65_536];
     loop {
-        let count = writer.file.read_at(&mut buffer, offset).map_err(ApiError::io)?;
+        let count = live.read_at(&mut buffer, offset).map_err(ApiError::io)?;
         if count == 0 {
             break;
         }
@@ -133,37 +196,35 @@ pub(super) fn freeze(
         hash.update(&buffer[..count]);
     }
     let content_hash = ContentHash::from_digest(hash.finalize());
-    if offset != size || fingerprint(&writer.file, limit)? != (content_hash, size) {
+    if offset != size || fingerprint(live, limit)? != (content_hash, size) {
         return Err(RecoveryError::Body.api());
     }
     frozen.sync_all().map_err(ApiError::io)?;
-    writer.directory.verify_payload(&name, &frozen).map_err(crate::upload_fs_error)?;
-    writer.directory.sync().map_err(crate::upload_fs_error)?;
+    directory.verify_payload(&name, &frozen).map_err(crate::upload_fs_error)?;
+    directory.sync().map_err(crate::upload_fs_error)?;
     let revision = DraftRevision {
-        operation: writer.operation_id,
-        expected_generation: container.edit.generation(),
-        principal: identity.principal.parse::<Principal>()
-            .map_err(ApiError::invalid_authenticated_principal)?,
-        base: container.base.clone(),
+        operation: origin.operation,
+        expected_generation: origin.expected_generation,
+        principal: origin.principal.clone(),
+        base: origin.base.clone(),
         content_hash,
         size,
     };
     let record = Record {
         format: Format::ManualDraftFrozenV1,
         request: crate::PersistContainerDraft {
-            entry: writer.item_id.parse().map_err(ApiError::contract_input)?,
-            context: container.context.clone(),
+            entry: origin.entry,
+            context: origin.context.clone(),
             revision: revision.clone(),
         },
-        live_name: writer.source.file_name()
-            .ok_or_else(|| RecoveryError::Binding.api())?.into(),
+        live_name: origin.live_name.clone(),
     };
     let bytes = json_codec::to_vec(&record)
         .map_err(|error| RecoveryError::Codec(error).api())?;
     if bytes.len() > RECORD_LIMIT {
         return Err(RecoveryError::Budget.api());
     }
-    AtomicFile::create(&writer.directory, &record_name(writer.operation_id)?, &bytes)
+    AtomicFile::create(directory, &record_name(origin.operation)?, &bytes)
         .map_err(crate::upload_fs_error)?;
     Ok(revision)
 }
@@ -183,6 +244,9 @@ pub(super) fn save_frozen(
         Some(receipt) => RecordOutcome::Saved(receipt),
         None if !resume => RecordOutcome::Unresolved,
         None => {
+            working_recovery::require_frozen_reference(
+                &directory, &record.live_name, &record.request,
+            )?;
             let name = body_name(operation)?;
             let body = directory.open_payload(&name, PayloadOpenMode::Existing)
                 .map_err(crate::upload_fs_error)?;
@@ -208,6 +272,11 @@ pub(super) fn save_frozen(
             if error.kind() == io::ErrorKind::NotFound => true,
         Err(error) => return Err(crate::upload_fs_error(error)),
     };
+    // Query remains read-only even for a known result. Only an explicit
+    // resume or normal flush settles redundant private-body retention.
+    if resume && matches!(&result, RecordOutcome::Saved(_)) {
+        manual_retention::retire(shared, identity, &record.request, limit)?;
+    }
     Ok((result, changed))
 }
 

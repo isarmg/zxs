@@ -724,6 +724,7 @@ impl Engine {
                     break;
                 }
                 self.complete_storage_bootstrap(&candidate, next, &p)?;
+                self.complete_system_recovery(&candidate, next, &p)?;
                 self.admit_directory_snapshot_publication(&candidate, next, &p)?;
                 let recovered_result = p.recovery.as_ref().map(|_| p.result.clone());
                 self.install_recovered_namespace_state(
