@@ -1,5 +1,6 @@
 //! Allocation-free encoded-length counting and pre-decode event count fences.
 use super::*;
+use crate::ErrorCode;
 
 #[test]
 fn retained_history_copy_budget_counts_exact_encoded_bytes_without_a_value_copy() {
