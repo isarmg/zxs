@@ -139,6 +139,25 @@ pub(crate) fn renamed_path(
     Ok(None)
 }
 
+/// A same-parent file rename changes the shared leaf, not its physical owner.
+/// A lookup spelling may be NFD; it is never a new portable display location.
+pub(crate) fn renamed_file_location(
+    current: &PortablePath,
+    source: &name_policy::LookupPath,
+    destination: &PortablePath,
+) -> crate::Result<PortablePath> {
+    let source_parent = source.key().rsplit_once('/').map(|(parent, _)| parent);
+    let destination_parent = destination.key().rsplit_once('/').map(|(parent, _)| parent);
+    if source_parent != destination_parent {
+        return Ok(destination.clone());
+    }
+    let name = Name::parse(destination.file_name())?;
+    Ok(match current.parent() {
+        Some(parent) => parent.join_name(&name)?,
+        None => PortablePath::from_name(&name)?,
+    })
+}
+
 /// Recover each rename's exact source identity through chained operations.
 /// Directory creation cannot change any existing file identity.
 pub(crate) fn operation_files(
