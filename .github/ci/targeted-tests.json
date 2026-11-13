@@ -3260,6 +3260,227 @@
           "default_features": false
         }
       ]
+    },
+    "current-name-namespace-consumers": {
+      "reason": "Validate the changed current-name namespace consumers and cache installation boundaries, including frozen branch queries, status, current workspaces, recovered state and exact physical occurrence projections.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "business::directory_git::status::tests::",
+            "business::namespace::tests::",
+            "business::namespace::query::tests::",
+            "engine::named_namespaces::tests::",
+            "tests::state_read_tests::",
+            "state_projection::container_membership_tests::"
+          ],
+          "max_tests": 192
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "engine::disk_registry::current::tests::"
+          ],
+          "max_tests": 192
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "engine::disk_registry::current::batch::tests::",
+            "engine::disk_registry::published::occurrence::tests::",
+            "engine::disk_registry::tests::"
+          ],
+          "max_tests": 96
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "engine::index::tests::",
+            "engine::observations::tests::"
+          ],
+          "max_tests": 96
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "directory_git_index",
+          "max_tests": 24,
+          "prefixes": [
+            "file_separation::"
+          ]
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "current-name-layout-consumers": {
+      "reason": "Check installed version identity and current-name layout consumers at copy, recovery, cache and held-inode boundaries; execute affected layout and retained-history integrations without claiming full workspace coverage.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "directory_layout::tests::",
+            "engine::publication::io_tail_tests::",
+            "engine::publication::verified_payloads::tests::",
+            "engine::detached_history::tests::",
+            "tests::version_identity_tests::"
+          ],
+          "max_tests": 160
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "directory_layout_execution",
+          "max_tests": 96,
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "directory_layout_recovery_boundaries",
+          "max_tests": 64,
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "file_history_copy",
+          "max_tests": 128,
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "content_matches",
+          "max_tests": 96,
+          "whole": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "current-name-backup-consumers": {
+      "reason": "Preserve compilation of backup name-format consumers and test the changed namespace-cache installation primitive. Multilevel backup runtime and performance acceptance remain deferred; existing independently selected backup regressions keep their original limits.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "prefixes": [
+            "engine::named_namespaces::tests::"
+          ],
+          "max_tests": 16
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "timeout_seconds": 900,
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
+    "current-name-record-consumers": {
+      "reason": "Current-name format consumers preserve required VersionStorageId disk/wire bytes and shared-record roundtrips; server version encoding and recovery admission operate on the actual installed body name, retaining authentication, revocation and no-publication failures. Core behaviour and core-free server compilation are distinct checks.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-contract",
+          "manifest": "src/contract/Cargo.toml",
+          "kind": "lib",
+          "exact": [
+            "content_hash::tests::file_version_disk_record_parses_content_hash_without_changing_canonical_bytes",
+            "shared_records::tests::file_version_records_preserve_map_bytes_hashes_and_state_roundtrip"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "backend_read::tests::",
+            "management::recovery_admission_tests::"
+          ],
+          "max_tests": 5,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "current-name-recursive-http-consumers": {
+      "reason": "Execute only the two existing HTTP regressions whose installed-body assertions changed from stored names to storage_id-current_name: ordinary recursive tier read/cold retry and mixed file/empty-directory publication/cold retry. This is name-format consumer coverage, not all recursive-backup tests or a performance acceptance; retain the existing 900-second per-case ceiling.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_http",
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "recursive_http_writes_each_tier_reads_its_tree_and_retries_after_cold_open",
+            "empty_directories::mixed::mixed_http_publishes_files_and_empty_directories_together_and_cold_retries"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -9118,6 +9339,398 @@
       "groups": [
         "directory-history-worktree",
         "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_git/ownership.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_git/status.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/directory_preview.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/query.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/degraded_recovery.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/admission.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/batch.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/workspace.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/namespace_snapshot.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/named_namespaces.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/workspace_commit.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_git_index/file_separation.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/directory_git_status_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_workspace_names_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_deregistration_plan_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_occurrence_mask_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/index/tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/named_namespaces_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/observations/tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/state_projection/container_membership_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/state_read_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/install.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_layout.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/detached_history.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/ordinary/copy.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/move_execution.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/content_matches/permanent_removal_cleanup.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_layout_execution.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_layout_recovery_boundaries.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/move_journal.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/move_ordinary.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/move_target.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/file_history_copy/retained_lifecycle.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_layout/planner_tests.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/detached_history_tests.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/io_tail_tests.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/verified_payloads/tests.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/version_identity_tests.rs",
+      "groups": [
+        "current-name-layout-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/registration/serving_activation.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/recursive_follow/request.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_paths.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_recursive_backup_tests.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_recursive_route_tests.rs",
+      "groups": [
+        "current-name-backup-consumers",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_read.rs",
+      "groups": [
+        "current-name-record-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_read.rs",
+      "groups": [
+        "current-name-record-consumers"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_recovery_admission_tests.rs",
+      "groups": [
+        "current-name-record-consumers"
+      ]
+    },
+    {
+      "path": "test/contract/unit/content_hash.rs",
+      "groups": [
+        "current-name-record-consumers"
+      ]
+    },
+    {
+      "path": "test/contract/unit/shared_records.rs",
+      "groups": [
+        "current-name-record-consumers"
+      ]
+    },
+    {
+      "path": "src/web/src/files/history.rs",
+      "groups": [
+        "container-current-name",
+        "container-history-dag-admission"
+      ]
+    },
+    {
+      "path": "test/server/integration/recursive_backup_http.rs",
+      "groups": [
+        "current-name-recursive-http-consumers"
+      ]
+    },
+    {
+      "path": "test/server/integration/recursive_mixed_backup_http.rs",
+      "groups": [
+        "current-name-recursive-http-consumers"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/fixtures/history-window/versions.json",
+      "groups": [
+        "container-tags-contract",
+        "container-current-name"
+      ]
+    },
+    {
+      "path": "test/tools/contract-check/unit/history_window_tests.rs",
+      "groups": [
+        "container-tags-contract",
+        "container-current-name"
       ]
     }
   ],
