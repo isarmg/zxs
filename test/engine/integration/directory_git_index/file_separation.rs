@@ -80,6 +80,21 @@ fn apply(
     (request, operation, result)
 }
 
+// Ordinary child snapshots must match the parent's exact occurrences, not a
+// stale pre-Move or pre-Separate tree. This is independent of Current admission.
+fn assert_child_snapshot(engine: &Engine, owner: &str, path: &str) {
+    let parent = &engine.state().directory_branches[owner];
+    let mount = parent.entries.iter().find(|entry| entry.path() == path).unwrap();
+    let reference = &parent.directory_refs[&mount.entry_id];
+    let child = &engine.state().directory_trees[&reference.tree_id];
+    assert_eq!(child.path, path);
+    let prefix = format!("{path}/");
+    let expected = parent.entries.iter()
+        .filter(|entry| entry.path().starts_with(&prefix)).cloned().collect::<Vec<_>>();
+    assert_eq!(child.entries, expected);
+    assert!(child.entries.iter().any(|entry| entry.path() == "b/report.txt"));
+}
+
 // Produce real same-name aliases through Move, without injecting State or
 // picking an original by sort order. A retained branch uses a different parent,
 // not a different leaf: all occurrences of one FileId share its current name.
@@ -114,6 +129,7 @@ fn aliases(engine: &mut Engine, repo: &Repository) -> (String, String) {
         "b/report.txt",
     )];
     apply(engine, repo, DirectoryBatchKind::Move, items);
+    assert_child_snapshot(engine, &main, "b");
     assert_eq!(
         entry(engine, &main, "a/report.txt").file_id,
         entry(engine, &main, "b/report.txt").file_id
@@ -512,8 +528,13 @@ fn current_registry_separation_admits_exact_replacement_and_cold_idempotent_retr
     )];
     let (request, operation, receipt) =
         apply(&mut engine, &repo, DirectoryBatchKind::Separate, items);
+    assert_child_snapshot(&engine, &main, "b");
+    let selected_b = entry(&engine, &main, "b/report.txt");
+    assert_ne!(selected_b.file_id, secondary.file_id);
     drop(engine);
     let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+    assert_child_snapshot(&engine, &main, "b");
+    assert_eq!(entry(&engine, &main, "b/report.txt"), selected_b);
     assert_fresh(
         &engine,
         &secondary,
