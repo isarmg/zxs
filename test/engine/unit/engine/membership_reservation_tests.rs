@@ -1,6 +1,29 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 
+// Membership reservation tests exercise independent primary roots, not backup
+// topology. Every initializer below uses the public, format-selected producer.
+fn primary_config(roots: impl IntoIterator<Item = PathBuf>) -> Result<Config> {
+    let mut config = Config::development(roots)?;
+    for disk in &mut config.disks {
+        disk.level = 1;
+        disk.upstream_slot_id = None;
+    }
+    Ok(config)
+}
+
+fn initialize_fresh(system: &Path, config: Config) -> Result<Engine> {
+    // Provision only absent test directories. Never chmod or repair an existing
+    // root: contention/foreign-material assertions must observe its real state.
+    for root in std::iter::once(system).chain(config.disks.iter().map(|disk| disk.root.as_path())) {
+        if !root.try_exists()? {
+            fs::create_dir(root)?;
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Engine::initialize_storage(system, config, OperationId::generate()?)
+}
+
 struct Fixture {
     temp: tempfile::TempDir,
     engine: Engine,
@@ -12,10 +35,10 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
-        let engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
+            primary_config((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+        let engine = initialize_fresh(&temp.path().join("system"), original.clone()).unwrap();
         let mut target = original.clone();
-        for disk in Config::development((0..4).map(|n| temp.path().join(format!("new-{n}"))))
+        for disk in primary_config((0..4).map(|n| temp.path().join(format!("new-{n}"))))
             .unwrap()
             .disks
             .into_iter()
@@ -37,9 +60,9 @@ impl Fixture {
             .begin_membership_handoff(self.target.clone(), "admin", self.operation)
     }
     fn reopen(&mut self) {
-        let placeholder = Engine::initialize(
+        let placeholder = initialize_fresh(
             &self.temp.path().join("placeholder-system"),
-            Config::development([self.temp.path().join("placeholder")]).unwrap(),
+            primary_config([self.temp.path().join("placeholder")]).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(&mut self.engine, placeholder));
@@ -248,8 +271,8 @@ fn membership_preparation_reserved_root_is_not_available_to_initialization_or_an
     assert!(f.begin().is_err());
     let disk = &f.target.disks[2];
     let before = files(&disk.root);
-    let other = Config::development([disk.root.clone()]).unwrap();
-    assert!(Engine::initialize(&f.temp.path().join("other-system"), other).is_err());
+    let other = primary_config([disk.root.clone()]).unwrap();
+    assert!(initialize_fresh(&f.temp.path().join("other-system"), other).is_err());
     assert_eq!(files(&disk.root), before);
     let lockfile = File::open(disk.root.join(".writer.lock")).unwrap();
     lock(&lockfile).unwrap();
@@ -298,8 +321,8 @@ fn membership_preparation_directory_lock_excludes_initializer_before_writer_crea
         let begin = scope.spawn(|| f.begin());
         barrier.wait();
         let before = files(&new_root);
-        let other = Config::development([new_root.clone()]).unwrap();
-        let error = Engine::initialize(&other_system, other).err().unwrap();
+        let other = primary_config([new_root.clone()]).unwrap();
+        let error = initialize_fresh(&other_system, other).err().unwrap();
         assert_eq!(error.code(), ErrorCode::WriterAlreadyActive);
         assert_eq!(files(&new_root), before);
         assert!(!new_root.join("disk.json").exists());
@@ -341,10 +364,10 @@ fn membership_preparation_cannot_mutate_roots_or_source_while_initializer_holds_
     let mut f = Fixture::new();
     let new_root = f.target.disks[2].root.clone();
     let config =
-        ValidatedConfig::try_from(Config::development([new_root.clone()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(primary_config([new_root.clone()]).unwrap()).unwrap();
     let resources = DiskResources::open(&config, false).unwrap();
-    // This is the exact lock set acquired at initialize_resources entry and
-    // retained by that function until all initialization writes finish.
+    // Membership and fresh initialization both retain directory AdvisoryLocks
+    // before creating writer sidecars; this independently holds that same lock.
     let directory_locks = lock_initialization_directories(&resources).unwrap();
     let source_before = f.old_files();
     let target_before = files(&new_root);
@@ -358,7 +381,7 @@ fn membership_preparation_cannot_mutate_roots_or_source_while_initializer_holds_
     assert!(f.engine.membership_fence_status().is_none());
     drop(directory_locks);
     drop(resources);
-    let other = Engine::initialize(
+    let other = initialize_fresh(
         &f.temp.path().join("winning-initializer"),
         (*config).clone(),
     )
