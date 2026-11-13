@@ -566,7 +566,8 @@ fn every_decided_boundary_recovers_the_same_receipt_and_keeps_old_source_until_a
             target,
         } = fixture;
         drop(engine);
-        let mut engine = Engine::open(&temp.path().join("system")).unwrap();
+        let mut engine = Engine::open(&temp.path().join("system"))
+            .unwrap_or_else(|error| panic!("reopen after {fault}: {error:?}"));
         assert_visible(&engine, &source, &target, &old, operation);
         let receipt = engine
             .move_current_file(&request, "admin", operation)
