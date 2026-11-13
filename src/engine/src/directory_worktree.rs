@@ -5,3 +5,4 @@
 //! pending publication with its permanent operation receipt before exposing SMB.
 pub(crate) mod lifecycle;
 pub(crate) mod names;
+pub(crate) mod store;

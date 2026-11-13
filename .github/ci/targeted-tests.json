@@ -3079,9 +3079,10 @@
           "prefixes": [
             "directory_worktree::lifecycle::tests::",
             "directory_worktree::names::tests::",
-            "disk::owned::worktree_io::tests::"
+            "disk::owned::worktree_io::tests::",
+            "directory_worktree::store::tests::"
           ],
-          "max_tests": 32,
+          "max_tests": 48,
           "timeout_seconds": 900
         }
       ]
@@ -8862,6 +8863,12 @@
       "path": "test/engine/unit/working_tree/snapshot/*.rs",
       "groups": [
         "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/worktree.rs",
+      "groups": [
+        "directory-history-worktree"
       ]
     }
   ],

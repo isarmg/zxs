@@ -31,7 +31,8 @@ pub(crate) struct Revision {
     pub(crate) manifest: MaterialCommitment,
 }
 
-/// Both variants require every file, including unchanged files, to be snapshotted.
+/// Directory commits MOVE modified files and COPY unchanged original files.
+/// Deletion retains the sparse view and only publishes actual file modifications.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PublicationMode {
     DirectoryCommit { destination: DirectoryDestination },
@@ -134,8 +135,8 @@ pub(crate) enum LifecycleError {
 }
 
 impl Worktree {
-    /// The owner must allocate an unused ID and install a full independent copy
-    /// from source before publishing this record. No retained instance is input.
+    /// The owner allocates an unused ID and installs an empty sparse directory.
+    /// Initial reads map the original source; no retained instance is input.
     pub(crate) fn fresh(id: WorktreeId, source: SnapshotSource, mount: Mount) -> Self {
         Self {
             id,

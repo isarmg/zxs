@@ -66,7 +66,7 @@ fn fresh_same_node_never_contains_edits_from_retained_instance() {
 }
 
 #[test]
-fn delete_even_unchanged_unsubmitted_worktree_requires_all_file_publication() {
+fn unchanged_delete_keeps_original_mapping_and_forbids_directory_history() {
     let mut worktree = fresh(1);
     let publication = deletion(&mut worktree, operation(7));
     assert_eq!(publication.intent.mode, PublicationMode::FilesBeforeDelete);
