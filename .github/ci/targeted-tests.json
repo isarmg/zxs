@@ -4243,7 +4243,8 @@
       "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
       "groups": [
         "container-tags-engine",
-        "held-directory-layout"
+        "held-directory-layout",
+        "directory-snapshot-initialization"
       ]
     },
     {

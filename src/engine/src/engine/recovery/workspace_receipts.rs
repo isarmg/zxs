@@ -289,6 +289,24 @@ impl Engine {
                     }
                     generation.verify_activation_candidate(&candidate)?;
                 }
+                if candidate.directory_material().is_some() {
+                    self.preflight_directory_snapshot_material(&candidate, original.state())?;
+                }
+                Some(admitted.into_shared())
+            } else if candidate.directory_material().is_some() {
+                let admitted = verified_recovery_snapshot_at(
+                    &self.disk_resources,
+                    online,
+                    &candidate.snapshot_hash,
+                )?;
+                let original = admitted.for_candidate(&candidate)?;
+                crate::history_package::bound_history_objects_at(
+                    &self.disk_resources,
+                    online,
+                    &candidate,
+                    Some(original),
+                )?;
+                self.preflight_directory_snapshot_material(&candidate, original.state())?;
                 Some(admitted.into_shared())
             } else {
                 None

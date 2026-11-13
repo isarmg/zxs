@@ -19,10 +19,11 @@ class OfflineTargetedCi(unittest.TestCase):
         plan = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
         self.assertEqual(plan['groups'], ['container-lifecycle-engine',
                                          'container-path-facts-engine',
+                                         'directory-snapshot-initialization',
                                          'held-directory-layout',
                                          'ordinary-conversion-name-budget',
                                          'typed-name-consumers'])
-        self.assertEqual(len(plan['rust_targets']), 13)
+        self.assertEqual(len(plan['rust_targets']), 14)
         for group in plan['groups']:
             selections = []
             for target in plan['rust_targets']:
