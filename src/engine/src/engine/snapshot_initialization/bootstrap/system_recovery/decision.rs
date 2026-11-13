@@ -284,3 +284,61 @@ impl Engine {
         Ok(())
     }
 }
+
+impl Engine {
+    /// Historical recovery decisions remain valid history, but never select the
+    /// current SYSTEM by themselves. Verify them before any replay can write.
+    pub(in crate::engine) fn verify_published_system_recovery_prefix(
+        &self,
+        candidate: &Candidate,
+        publication: &Publication,
+    ) -> crate::Result<Option<OperationResult>> {
+        if publication.result.kind != KIND {
+            return Ok(None);
+        }
+        let binding: RecoveryBinding = storage_contract::decode_strict(
+            &storage_contract::canonical_json(&publication.result.result)?,
+        )?;
+        let complete = RecoveryCompletion::decode(&storage_contract::canonical_json(
+            &RecoveryCompletion {
+                binding,
+                candidate: candidate.clone(),
+                publication: publication.clone(),
+            },
+        )?)?;
+        let members = self.members();
+        let source: Candidate = crate::publication_evidence::verified_object_at(
+            &self.disk_resources, &members, "candidate",
+            &complete.binding.request.source_candidate.to_string(),
+        )?;
+        self.config.verify_candidate_membership(&source)?;
+        if source.snapshot_hash != complete.binding.request.source_snapshot.to_string()
+            || source.sequence.checked_add(1) != Some(candidate.sequence)
+        {
+            return Err(refused());
+        }
+        let previous = crate::publication_evidence::verified_snapshot_at(
+            &self.disk_resources,
+            &members,
+            &complete.binding.request.source_snapshot.to_string(),
+        )?;
+        let next = crate::publication_evidence::verified_snapshot_at(
+            &self.disk_resources, &members, &candidate.snapshot_hash,
+        )?;
+        complete.require_transition(previous.state(), next.state())?;
+        let origin_bytes = storage_contract::canonical_json(&complete.binding.origin)?;
+        let (_, record) = BootstrapDecision::admit_source(&origin_bytes)?;
+        // This origin is embedded in the already authenticated publication.
+        // Historical disks may have been explicitly removed by a later
+        // membership decision; they are not today's I/O authority.
+        complete.binding.origin.verify_membership(
+            &self.config.original_storage_configuration()?,
+        )?;
+        if self.config.fresh_bootstrap() != Some(record.selection) {
+            return Err(refused());
+        }
+        complete.binding.origin.require_retained_operation(previous.state())?;
+        complete.binding.origin.require_retained_operation(next.state())?;
+        Ok(Some(publication.result.clone()))
+    }
+}

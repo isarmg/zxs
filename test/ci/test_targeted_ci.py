@@ -14,6 +14,18 @@ CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
 
 
+CENTRAL_CARRIER_PRODUCERS = (
+    'src/engine/src/engine/recovery.rs',
+    'src/engine/src/engine/recovery/workspace_receipts.rs',
+    'src/engine/src/engine/snapshot_initialization/bootstrap.rs',
+    'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs',
+    'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs',
+    'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/admission.rs',
+)
+CENTRAL_CARRIER_EXTRA_CONSUMERS = [
+    "container-tags-engine", "historical-directory-runtime",
+]
+
 def origin_selections(plan, group):
     return [
         selection
@@ -3215,7 +3227,9 @@ class DirectoryBootstrapDecisionSelection(unittest.TestCase):
                                              'storage-system-product-consumers',
                                              'storage-system-recovery-admission',
                                              'storage-system-recovery-execution',
-                                             'container-manual-fresh-format'] + V3_ORIGIN_EXTENSIONS)
+                                             'container-manual-fresh-format'] + V3_ORIGIN_EXTENSIONS + (
+                                                 CENTRAL_CARRIER_EXTRA_CONSUMERS
+                                                 if path in CENTRAL_CARRIER_PRODUCERS else []))
 
 
 class StorageSystemProductSelection(unittest.TestCase):
@@ -3291,7 +3305,7 @@ class StorageSystemRecoveryAdmissionSelection(unittest.TestCase):
             group, 'directory-storage-bootstrap', 'storage-setup-system-binding',
             'storage-system-product-consumers', 'container-manual-fresh-format',
             'storage-system-recovery-execution',
-        ] + V3_ORIGIN_EXTENSIONS)
+        ] + V3_ORIGIN_EXTENSIONS + CENTRAL_CARRIER_EXTRA_CONSUMERS)
         assert_path_group_extension(self, policy, [fixture], [], [group])
         self.assertEqual(policy['groups'][group]['rust_targets'], [{
             'package': 'storage-engine', 'manifest': 'src/engine/Cargo.toml',
@@ -3327,7 +3341,9 @@ class StorageSystemRecoveryExecutionSelection(unittest.TestCase):
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path], [], closed + (
                     ['storage-restore-authorization-faults']
-                    if path.startswith('src/server/') else []))
+                    if path.startswith('src/server/') else []) + (
+                        CENTRAL_CARRIER_EXTRA_CONSUMERS
+                        if path in CENTRAL_CARRIER_PRODUCERS else []))
         group = 'storage-system-recovery-execution'
         assert_path_group_extension(self, policy, [
             'test/engine/unit/system_recovery_execution_tests.rs',
@@ -3700,7 +3716,9 @@ class UnifiedV3OriginSelection(unittest.TestCase):
                 assert_path_group_extension(self, policy, [path], retained,
                                             V3_ORIGIN_EXTENSIONS + (
                                                 ['storage-restore-authorization-faults']
-                                                if path.startswith('src/server/') else []))
+                                                if path.startswith('src/server/') else []) + (
+                                                CENTRAL_CARRIER_EXTRA_CONSUMERS
+                                                if path in CENTRAL_CARRIER_PRODUCERS else []))
         successor, = policy['groups']['unified-membership-successor']['rust_targets']
         self.assertEqual(successor['prefixes'],
                          ['engine::snapshot_initialization::bootstrap::successor::tests::'])
@@ -3759,3 +3777,126 @@ class UnifiedV3OriginSelection(unittest.TestCase):
         domain = policy['groups'][group]['rust_targets'][1]
         self.assertIn('management::storage_readmission::', domain['prefixes'])
         self.assertEqual((domain['max_tests'], domain['timeout_seconds']), (192, 900))
+
+
+class CentralCarrierAdmissionSelection(unittest.TestCase):
+    def test_every_carrier_gate_producer_keeps_all_recovery_entry_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        complete = [
+            'container-manual-drafts',
+            'container-manual-drafts-consumers',
+            'container-manual-fresh-format',
+            'container-manual-recovery',
+            'container-tags-engine',
+            'container-tags-format',
+            'directory-snapshot-initialization',
+            'directory-storage-bootstrap',
+            'held-directory-layout',
+            'historical-directory-runtime',
+            'membership-initializer-directory-locks',
+            'storage-setup-system-binding',
+            'storage-system-product-consumers',
+            'storage-system-recovery-admission',
+            'storage-system-recovery-execution',
+            'unified-membership-origin-consumers',
+            'unified-membership-successor',
+        ]
+        retained = {
+            'src/engine/src/engine/recovery.rs': [
+                'container-manual-drafts',
+                'container-manual-fresh-format',
+                'container-tags-engine',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+            ],
+            'src/engine/src/engine/recovery/workspace_receipts.rs': [
+                'container-lifecycle-engine',
+                'container-path-facts-engine',
+                'container-tags-engine',
+                'directory-snapshot-initialization',
+                'held-directory-layout',
+            ],
+            'src/engine/src/engine/snapshot_initialization/bootstrap.rs': [
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-fresh-format',
+                'container-manual-recovery',
+                'container-tags-format',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'membership-initializer-directory-locks',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'unified-membership-origin-consumers',
+                'unified-membership-successor',
+            ],
+            'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs': [
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-fresh-format',
+                'container-manual-recovery',
+                'container-tags-format',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'membership-initializer-directory-locks',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'unified-membership-origin-consumers',
+                'unified-membership-successor',
+            ],
+            'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs': [
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-fresh-format',
+                'container-manual-recovery',
+                'container-tags-format',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'membership-initializer-directory-locks',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'unified-membership-origin-consumers',
+                'unified-membership-successor',
+            ],
+            'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/admission.rs': [
+            ],
+        }
+        self.assertEqual(set(retained), set(CENTRAL_CARRIER_PRODUCERS))
+        for path, previous in retained.items():
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], previous, complete)
+        # Gate insertion does not reclassify fixture-only selection or grow budgets.
+        assert_path_group_extension(self, policy, [
+            'test/engine/unit/system_recovery_execution_tests.rs',
+        ], [], ['storage-system-recovery-execution'])
+        origin = policy['groups']['unified-membership-origin-consumers']['rust_targets']
+        self.assertEqual([target['max_tests'] for target in origin], [75, 123])
+        self.assertTrue(all(target['timeout_seconds'] == 900 for target in origin))
+        self.assertEqual(origin[1]['prefixes'], ['engine::membership_transition::pending::activation::'])
+        reservation, = policy['groups']['membership-initializer-directory-locks']['rust_targets']
+        self.assertEqual(reservation['prefixes'], [
+            'engine::membership_transition::pending::reservation::tests::',
+        ])
+        self.assertEqual((reservation['max_tests'], reservation['timeout_seconds']), (8, 900))
+        manual = policy['groups']['container-manual-recovery']['rust_targets']
+        self.assertEqual((manual[0]['max_tests'], manual[0]['timeout_seconds']), (96, 900))
+        self.assertEqual(manual[-1]['features'], ['core', 'fault-injection'])
+        self.assertEqual((manual[-1]['max_tests'], manual[-1]['timeout_seconds']), (1, 900))
+        product = policy['groups']['storage-system-product-consumers']['rust_targets']
+        self.assertEqual([target['max_tests'] for target in product[:3]], [128, 192, 64])
+        self.assertEqual(product[-1]['mode'], 'check')
+        self.assertFalse(product[-1]['default_features'])

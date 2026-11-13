@@ -20,15 +20,33 @@ pub(super) struct ReceiptPrefix<'a> {
     pub namespaces: Option<&'a CurrentNamespaces>,
 }
 
+/// Only this module can bind a State to the completed read-only receipt scan.
+pub(in crate::engine) struct PublishedCarrierPrefix<'a> {
+    state: &'a State,
+    recovery: Option<&'a OperationResult>,
+}
+
+impl PublishedCarrierPrefix<'_> {
+    pub(in crate::engine) fn state(&self) -> &State {
+        self.state
+    }
+
+    pub(in crate::engine) fn recovery(&self) -> Option<&OperationResult> {
+        self.recovery
+    }
+}
+
 impl Engine {
     pub(in crate::engine) fn preflight_workspace_receipts(
         &mut self,
         prepared: &mut PreparedRecovery,
     ) -> Result<()> {
+        prepared.carrier = None;
         let mut previous = self.snapshot.clone();
         let mut previous_state = Arc::clone(&self.state);
         let mut namespaces = self.current_namespaces.as_deref().cloned();
         let mut published = None;
+        let mut latest_recovery = self.recovery_prefix_seed();
         for (sequence, candidates) in &prepared.records {
             let mut active = candidates.iter().filter(|(hash, receipts)| {
                 self.move_completion.as_ref().is_some_and(|selected| {
@@ -91,6 +109,13 @@ impl Engine {
                     break;
                 }
             };
+            if let Some(publication) = &candidate.publication
+                && let Some(result) = self.verify_published_system_recovery_prefix(
+                    &candidate.candidate, publication,
+                )?
+            {
+                latest_recovery = Some(result);
+            }
             if candidate.publication.as_ref().is_some_and(|publication| {
                 publication.result.kind == storage_contract::file_relocation::OBJECT_MOVE_KIND
             }) {
@@ -163,6 +188,26 @@ impl Engine {
             prepared.candidates.clear();
             prepared.candidates.insert(*sequence, candidate);
         }
+        // A repairable short prefix cannot select the current carrier while
+        // later accepted decisions remain unread. In particular, do not repair
+        // old FILE projections before discovering a later SYSTEM recovery.
+        let inspected = prepared.candidates.keys().next_back().copied();
+        if prepared.records.iter().any(|(sequence, candidates)| {
+            inspected.is_none_or(|last| *sequence > last)
+                && candidates.values().flatten().any(|receipt| {
+                    matches!(receipt.record.record_type,
+                        RecordType::Accept | RecordType::Publication)
+                })
+        }) {
+            return Err(Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Incomplete,
+            )));
+        }
+        for (sequence, pending) in &prepared.candidates {
+            if Some(*sequence) != published {
+                self.require_no_pending_carrier_replay(&pending.candidate)?;
+            }
+        }
         // End the cursor's snapshot loan before reclaiming the latest cached
         // admitted State below (SharedAdmittedState requires unique ownership).
         drop(previous_state);
@@ -213,12 +258,18 @@ impl Engine {
         } else {
             Arc::clone(&self.state)
         };
+        let carrier = self.admit_recovery_carrier_prefix(PublishedCarrierPrefix {
+            state: &state,
+            recovery: latest_recovery.as_ref(),
+        })?;
         // The seed is read-only and borrows this verified publication view only
         // for admission. Replay must still start from its original prefix.
         let original = self.named_namespaces.install_state(&mut self.state, state);
         let admission = self.seed_workspace_recovery();
         self.named_namespaces.install_state(&mut self.state, original);
-        admission
+        admission?;
+        prepared.carrier = Some(carrier);
+        Ok(())
     }
 
     pub(super) fn read_workspace_receipt_candidate(

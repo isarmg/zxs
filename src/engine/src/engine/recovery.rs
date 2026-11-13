@@ -9,7 +9,7 @@ use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod payload_admission;
-mod workspace_receipts;
+pub(in crate::engine) mod workspace_receipts;
 
 /// Read-only journal admission, retained with its held descriptors until apply.
 pub(super) struct PreparedRecovery {
@@ -20,6 +20,8 @@ pub(super) struct PreparedRecovery {
     records: super::recovery_checkpoint::Records,
     torn_tail: bool,
     candidates: BTreeMap<u64, workspace_receipts::PreparedCandidate>,
+    carrier: Option<super::snapshot_initialization::bootstrap::system_recovery
+        ::admission::CarrierAdmission>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,6 +288,7 @@ impl Engine {
             records,
             torn_tail,
             candidates: BTreeMap::new(),
+            carrier: None,
         })
     }
 
@@ -299,8 +302,14 @@ impl Engine {
     pub(super) fn recover_prepared(
         &mut self,
         mode: RecoveryMode,
-        prepared: PreparedRecovery,
+        mut prepared: PreparedRecovery,
     ) -> Result<()> {
+        let carrier = prepared.carrier.take().ok_or_else(|| {
+            Error::FreshBootstrap(Box::new(
+                crate::authority_selection::FreshBootstrapError::Incomplete,
+            ))
+        })?;
+        carrier.require_current(self)?;
         let move_retained = self.move_is_retained();
         if let Some(selected) = &self.move_completion
             && prepared
@@ -334,6 +343,7 @@ impl Engine {
             records,
             torn_tail,
             mut candidates,
+            carrier: _,
         } = prepared;
         let fenced = self.membership_fence.is_some();
         let members_ready = online.len() == members.len() && !fenced;

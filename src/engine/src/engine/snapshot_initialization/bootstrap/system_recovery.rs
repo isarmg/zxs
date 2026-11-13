@@ -14,6 +14,7 @@ use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 mod decision;
+pub(in crate::engine) mod admission;
 pub mod control;
 mod execute;
 use storage_contract::working_tree::{LocalEntityIdentity, MaterialCommitment};

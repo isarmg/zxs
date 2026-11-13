@@ -72,7 +72,7 @@ pub(in crate::engine) struct RootRecord {
     roots: Vec<RootBinding>,
 }
 /// Original cold-admission evidence, never constructed from a later path lookup.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CompletionProof {
     commitment: MaterialCommitment,
     system: LocalEntityIdentity,

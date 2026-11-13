@@ -45,6 +45,17 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         request_digest: None,
     }).unwrap();
     let original = engine.state().clone();
+    let original_seal = fs::read_dir(config.disks[0].root.join("metadata/publication-seals"))
+        .unwrap().map(|entry| entry.unwrap().path()).find(|path| {
+            let seal: crate::journal::PublicationSeal = crate::decode_strict(
+                &fs::read(path).unwrap(),
+            ).unwrap();
+            let publication: crate::journal::Publication = crate::journal::load_object_at(
+                &engine.disk_resources.get(&config.disks[0]).unwrap().root,
+                &config.disks[0], "publication", &seal.publication_hash,
+            ).unwrap();
+            publication.result.sequence == original.sequence
+        }).unwrap();
     let descriptions = engine.directory_storage_roots().unwrap();
     let file = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
         .find(|entry| entry.path() == "original.txt").unwrap();
@@ -113,8 +124,34 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     fs::rename(&system, &recovered_carrier).unwrap();
     fs::rename(&lost, &system).unwrap();
     let before_old_carrier = image(temp.path());
-    assert!(Engine::open(&system).is_err());
-    assert_eq!(image(temp.path()), before_old_carrier);
+    for _ in 0..2 {
+        assert!(Engine::open(&system).is_err());
+        assert_eq!(image(temp.path()), before_old_carrier);
+        assert!(Engine::open_storage_held(
+            platform_io::fs_safety::PrivateDirectory::open_existing(&system).unwrap(),
+            None,
+        ).is_err());
+        assert_eq!(image(temp.path()), before_old_carrier);
+        assert!(Engine::open_storage_for_recovery_held(
+            platform_io::fs_safety::PrivateDirectory::open_existing(&system).unwrap(),
+            None,
+        ).is_err());
+        assert_eq!(image(temp.path()), before_old_carrier);
+    }
+    // Missing one old seal still leaves the complete journal barrier as an
+    // independent tip proof. It must not authorize repair on the old carrier.
+    let retained_seal = original_seal.with_extension("retained");
+    fs::rename(&original_seal, &retained_seal).unwrap();
+    let before_missing_seal = image(temp.path());
+    for _ in 0..2 {
+        assert!(Engine::open(&system).is_err());
+        assert_eq!(image(temp.path()), before_missing_seal);
+        assert!(Engine::open_storage_for_recovery_held(
+            PrivateDirectory::open_existing(&system).unwrap(), None,
+        ).is_err());
+        assert_eq!(image(temp.path()), before_missing_seal);
+    }
+    fs::rename(&retained_seal, &original_seal).unwrap();
     fs::rename(&system, &lost).unwrap();
     fs::rename(&recovered_carrier, &system).unwrap();
     let cold = Engine::open(&system).unwrap();
@@ -252,4 +289,147 @@ fn recovery_inventory_labels_require_the_local_selection_contract() {
         assert!(storage_contract::decode_strict::<crate::RecoveryDiskSelection>(&bytes).is_err());
     }
     assert!(crate::RecoveryDiskSelection::parse("local-disk_1").is_ok());
+}
+
+#[test]
+fn obsolete_carrier_cannot_repair_a_short_barrier_prefix_before_later_recovery() {
+    use crate::journal::{JournalFrameReader, RecordType};
+
+    fn assert_short_prefix_refused(result: crate::Result<Engine>) {
+        match result {
+            Err(crate::Error::FreshBootstrap(source)) => assert!(matches!(
+                source.as_ref(), crate::authority_selection::FreshBootstrapError::Incomplete
+            ), "expected the incomplete published-prefix guard, got {source:?}"),
+            Err(error) => panic!("expected the published-prefix guard, got {error:?}"),
+            Ok(_) => panic!("obsolete carrier admitted a short published prefix"),
+        }
+    }
+
+    let (temp, system, config) = fixture();
+    let mut engine = Engine::initialize_storage(
+        &system, config.clone(), OperationId::generate().unwrap(),
+    ).unwrap();
+    let repository = engine.create_repository(
+        &storage_contract::RepositoryName::parse("short barrier source").unwrap(),
+        "P01", 1, "admin", OperationId::generate().unwrap(),
+    ).unwrap();
+    let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "original.txt", b"before recovery").unwrap();
+    let saved = engine.commit_workspace(crate::CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate().unwrap(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "ordinary FILE before recovery".into(),
+        request_digest: None,
+    }).unwrap();
+    let mut seals = Vec::new();
+    for disk in &config.disks {
+        let seal = fs::read_dir(disk.root.join("metadata/publication-seals"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                let seal: crate::journal::PublicationSeal = crate::decode_strict(
+                    &fs::read(path).unwrap(),
+                ).unwrap();
+                let publication: crate::journal::Publication = crate::journal::load_object_at(
+                    &engine.disk_resources.get(disk).unwrap().root,
+                    disk, "publication", &seal.publication_hash,
+                ).unwrap();
+                publication.result.sequence == saved.sequence
+            })
+            .expect("each member retains the pre-recovery FILE publication seal");
+        seals.push(seal);
+    }
+    drop(engine);
+    let original_system = temp.path().join("preserved-original-system");
+    fs::rename(&system, &original_system).unwrap();
+    fs::create_dir(&system).unwrap();
+    fs::set_permissions(&system, fs::Permissions::from_mode(0o700)).unwrap();
+    let handles = config.disks.iter()
+        .map(|disk| PrivateDirectory::open_existing(&disk.root).unwrap()).collect();
+    let admitted = Engine::admit_storage_recovery(handles).unwrap();
+    let operation = OperationId::generate().unwrap();
+    let control = control(&system, operation, admitted.evidence_commitment());
+    let recovered = Engine::restore_storage_held(
+        PrivateDirectory::open_existing(&system).unwrap(), operation,
+        "recovery-owner".parse().unwrap(), admitted,
+        control.commitment().unwrap(), control, None,
+    ).unwrap();
+    let recovery_sequence = recovered.state().operations.get(&operation).unwrap().sequence;
+    assert!(recovery_sequence > saved.sequence);
+    drop(recovered);
+
+    // Retain the exact complete journal bytes outside the managed metadata.
+    // Only member zero loses a suffix, at a real authenticated frame boundary.
+    let retained = temp.path().join("retained-test-damage");
+    fs::create_dir(&retained).unwrap();
+    let journal = crate::journal::log_path(&config.disks[0]);
+    let original_bytes = fs::read(&journal).unwrap();
+    fs::write(retained.join("complete-member-zero-journal"), &original_bytes).unwrap();
+    let mut reader = JournalFrameReader::new(original_bytes.as_slice());
+    let boundary = loop {
+        let (record, _) = reader.next_record().unwrap().expect("FILE Finalize exists");
+        if record.sequence == saved.sequence && record.record_type == RecordType::Finalize {
+            break reader.valid_bytes;
+        }
+    };
+    assert!(boundary < original_bytes.len() as u64);
+    let file = fs::OpenOptions::new().write(true).open(&journal).unwrap();
+    file.set_len(boundary).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    for (index, seal) in seals.iter().enumerate() {
+        fs::rename(seal, retained.join(format!("member-{index}-FILE-publication-seal"))).unwrap();
+    }
+
+    // All streams remain valid, untorn journals. The union still contains the
+    // later recovery, but slot S cannot assemble all three Publication receipts
+    // and has no remaining seal fallback. This exercises the actual early break,
+    // rather than relying on missing seals with a complete journal barrier.
+    for (index, disk) in config.disks.iter().enumerate() {
+        let bytes = fs::read(crate::journal::log_path(disk)).unwrap();
+        let mut reader = JournalFrameReader::new(bytes.as_slice());
+        let mut last = None;
+        let mut recovery_publication = false;
+        let mut saved_publication = false;
+        while let Some((record, _)) = reader.next_record().unwrap() {
+            recovery_publication |= record.sequence == recovery_sequence
+                && record.record_type == RecordType::Publication;
+            saved_publication |= record.sequence == saved.sequence
+                && record.record_type == RecordType::Publication;
+            last = Some(record);
+        }
+        assert!(!reader.torn_tail);
+        assert_eq!(reader.valid_bytes, bytes.len() as u64);
+        if index == 0 {
+            let last = last.unwrap();
+            assert_eq!(last.sequence, saved.sequence);
+            assert_eq!(last.record_type, RecordType::Finalize);
+            assert!(!saved_publication);
+            assert!(!recovery_publication);
+        } else {
+            assert!(saved_publication);
+            assert!(recovery_publication);
+        }
+        assert!(!seals[index].exists());
+    }
+    fs::rename(&system, temp.path().join("preserved-recovery-system")).unwrap();
+    fs::rename(&original_system, &system).unwrap();
+    let before = image(temp.path());
+    for _ in 0..2 {
+        assert_short_prefix_refused(Engine::open(&system));
+        assert_eq!(image(temp.path()), before);
+        assert_short_prefix_refused(Engine::open_storage_held(
+            PrivateDirectory::open_existing(&system).unwrap(), None,
+        ));
+        assert_eq!(image(temp.path()), before);
+        assert_short_prefix_refused(Engine::open_storage_for_recovery_held(
+            PrivateDirectory::open_existing(&system).unwrap(), None,
+        ));
+        assert_eq!(image(temp.path()), before);
+    }
+    // This deliberately damaged fixture ends at refusal. It does not claim
+    // that a short prefix is sufficient authority to repair the current carrier.
 }
