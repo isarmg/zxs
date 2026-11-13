@@ -159,17 +159,20 @@ impl NamedNamespaces {
                 )?,
             )))
             .collect::<Result<_>>()?;
-        let changes = crate::business::namespace::container_name::plan_file_names(raw, &names)
+        let mut paths = crate::business::namespace::container_name::plan_file_names(raw, &names)
             .map_err(Error::ContainerName)?;
-        let paths: BTreeMap<_, _> = changes.into_iter()
-            .map(|change| (change.before, change.after)).collect();
+        // Exact admitted spellings identify the immutable rows being projected.
+        // PortablePath deliberately has no implicit order or string conversion.
+        paths.sort_by(|left, right| left.before.as_str().cmp(right.before.as_str()));
         let entries = match retained {
             Some(retained) if paths.is_empty() => retained,
             Some(_) | None => {
                 let mut entries = raw.to_vec();
                 for entry in &mut entries {
-                    if let Some(path) = paths.get(entry.location()) {
-                        entry.relocate(path.clone());
+                    if let Ok(index) = paths.binary_search_by(|change| {
+                        change.before.as_str().cmp(entry.location().as_str())
+                    }) {
+                        entry.relocate(paths[index].after.clone());
                     }
                 }
                 crate::business::sorted(&mut entries);

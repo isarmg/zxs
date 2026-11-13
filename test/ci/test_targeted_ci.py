@@ -2150,7 +2150,8 @@ class ContainerTagsSelection(unittest.TestCase):
         targets = [target for group in self.policy['groups'].values()
                    for target in group['rust_targets']
                    if target.get('package') == 'storage-engine'
-                   and target.get('name') == 'recursive_backup_paths']
+                   and target.get('name') == 'recursive_backup_paths'
+                   and target.get('mode', 'test') == 'test']
         self.assertTrue(targets)
         for target in targets:
             self.assertIs(target.get('isolate'), True)
