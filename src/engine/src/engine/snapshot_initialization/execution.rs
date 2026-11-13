@@ -416,6 +416,19 @@ impl Engine {
             return Err(rejected());
         }
         self.require_snapshot_source_inventory(&retained)?;
+        self.preflight_directory_snapshot_material(candidate, next)
+    }
+
+    /// A deny-only read of the original intent and bound physical material.
+    /// Recovery calls this before replaying earlier candidates, whose disposable
+    /// caches may otherwise be rewritten before an unknown target is rejected.
+    /// The transition and final installation still revalidate under writer locks.
+    pub(in crate::engine) fn preflight_directory_snapshot_material(
+        &self,
+        candidate: &Candidate,
+        next: &State,
+    ) -> crate::Result<()> {
+        let retained = record(candidate, next)?;
         let original = store::read(&self.snapshot_intent_system().map_err(failure)?)
             .map_err(|error| failure(Failure::Store(error)))?.ok_or_else(rejected)?;
         if original.record() != &retained.intent {

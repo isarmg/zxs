@@ -26,7 +26,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     engine
         .stage_bytes(&workspace.workspace_id, "file.txt", b"bytes")
         .unwrap();
-    engine
+    let saved = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
             operation_id: storage_contract::OperationId::generate().unwrap(),
@@ -46,7 +46,8 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     let note = "n".repeat(storage_contract::MAX_NOTE_BYTES);
     storage_contract::validate_note(&note).unwrap();
     next.file_notes.insert(file, note);
-    let mut result = next.operations.values().next().unwrap().clone();
+    let mut result = saved.clone();
+    // Use this save, not the ID-ordered map (which also contains repository.create).
     // This synthetic budget slot is not allowed to re-identify a path receipt.
     assert!(crate::persist::path_changes::read(&result).unwrap().is_empty());
     let original_operation = result.operation_id;
@@ -133,7 +134,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     engine
         .stage_bytes(&workspace.workspace_id, "file.txt", b"published bytes")
         .unwrap();
-    engine
+    let saved = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
             operation_id: storage_contract::OperationId::generate().unwrap(),
@@ -215,8 +216,9 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
     next.file_locations
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
-    let mut result = next.operations.values().next().unwrap().clone();
-    // Preserve the real receipt's actor without reusing any path-fact identity.
+    let mut result = saved.clone();
+    // Select the actual content save rather than a random operation-ID ordering.
+    // Preserve its actor without reusing any path-fact identity.
     assert!(crate::persist::path_changes::read(&result).unwrap().is_empty());
     let original_operation = result.operation_id;
     let principal = next.operation_principals[&original_operation].clone();

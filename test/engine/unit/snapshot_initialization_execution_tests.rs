@@ -379,6 +379,13 @@ fn decided_initialization_cold_recovery_keeps_original_operation_and_material() 
     fs::rename(&repository, &retained).unwrap();
     PrivateDirectory::create(&repository).unwrap();
     let before = image(fixture.temp.path());
-    assert!(Engine::open(&system).is_err());
+    let error = Engine::open(&system).err().unwrap();
+    assert!(matches!(
+        error,
+        crate::Error::SnapshotInitialization(source)
+            if matches!(*source, super::SnapshotInitializationError::Material(_))
+    ));
+    // Reject before historical replay may even replace a byte-identical FILE
+    // cache. The complete image includes every inode, not only the unknown target.
     assert_eq!(image(fixture.temp.path()), before);
 }
