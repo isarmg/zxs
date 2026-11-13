@@ -43,13 +43,19 @@ fn source_path(disk: &DiskConfig, operation: OperationId) -> PathBuf {
 /// journal/index creation, rather than releasing them after the first scan.
 pub(in crate::engine) fn lock_initialization_directories(
     disks: &DiskResources,
-) -> Result<Vec<File>> {
+) -> Result<Vec<platform_io::fs_safety::linux::AdvisoryLock>> {
     let mut locks = Vec::new();
     for disk in disks.handles() {
         let directory = disk.root.directory(disk.root.path())?;
-        lock(&directory)?;
+        let held = platform_io::fs_safety::linux::AdvisoryLock::directory(&directory)
+            .map_err(|error| {
+                Error::Filesystem(error).context(
+                    ErrorCode::WriterAlreadyActive,
+                    "another initializer or membership preparation owns this directory",
+                )
+            })?;
         admission::verify_named_root(&disk.root)?;
-        locks.push(directory);
+        locks.push(held);
     }
     Ok(locks)
 }

@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from test_targeted_ci import assert_path_group_extension
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -122,7 +123,8 @@ class ProjectionCacheTargetedCi(unittest.TestCase):
                 self.assertEqual(selected, sorted(self.runnable))
 
     def test_shared_layout_keeps_both_independent_budgets_and_their_full_union(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs'])
+        plan = assert_path_group_extension(self, self.policy,
+            ['src/engine/src/persist/layout.rs'], None, ['container-manual-fresh-format'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'held-directory-layout', 'projection-cache-layout'])
         engine = next(target for target in plan['rust_targets']
@@ -192,7 +194,8 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
             'test/ci/test_layout_targeted_ci.py',
             'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        plan = assert_path_group_extension(self, self.policy, paths, None,
+                                           ['container-manual-fresh-format'])
         self.assertEqual(plan['groups'],
                          ['checkpoint-layout', 'ci-selection', 'held-directory-layout',
                           'ordinary-conversion-name-budget', 'projection-cache-layout'])

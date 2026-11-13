@@ -54,6 +54,9 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
     # This projection is only an additional regression oracle. It is never
     # executed instead of the complete production plan checked above.
+    if not retained:
+        # The complete new-only plan was checked above; no old policy exists.
+        return {**complete, "groups": [], "rust_targets": [], "python_tests": []}
     previous = copy.deepcopy(policy)
     previous['groups'] = {name: previous['groups'][name] for name in retained}
     for rule in previous['rules']:
@@ -251,7 +254,8 @@ class TargetedSelection(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             CI.select_plan(self.policy, paths)
-        plan = CI.select_plan(self.policy, paths, shardable=True)
+        plan = assert_path_group_extension(self, self.policy, paths, None,
+                                           ['container-manual-drafts-consumers'])
         self.assertEqual(plan['groups'], [
             'ci-selection', 'container-tags-browser', 'container-tags-web',
             'directory-rename-recovery', 'historical-directory-web',
@@ -362,7 +366,8 @@ class TargetedSelection(unittest.TestCase):
             'test/engine/unit/engine/provenance_publication_tests.rs',
             CI.PLAN_PATH, 'test/ci/test_targeted_ci.py',
         ]
-        plan = CI.select_plan(self.policy, paths)
+        plan = assert_path_group_extension(self, self.policy, paths, None,
+                                           ['container-manual-fresh-format'])
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
             'held-directory-layout',
@@ -548,7 +553,7 @@ class TargetedSelection(unittest.TestCase):
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
             'container-lifecycle-web', 'container-path-facts-schema',
-            'container-manual-drafts',
+            'container-manual-drafts', 'container-manual-fresh-format',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -667,8 +672,10 @@ class TargetedSelection(unittest.TestCase):
                                     for target in plan['rust_targets']))
 
     def test_layout_and_ci_changes_union_groups_once(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/persist/layout.rs',
-                            'src/engine/src/journal.rs', '.github/workflows/ci.yml'])
+        plan = assert_path_group_extension(self, self.policy, [
+            'src/engine/src/persist/layout.rs', 'src/engine/src/journal.rs',
+            '.github/workflows/ci.yml',
+        ], None, ['container-manual-fresh-format'])
         self.assertEqual(len(plan['rust_targets']), 5)
         self.assertEqual(plan['groups'], [
             'backup-scoped-encoding-memo', 'checkpoint-layout', 'ci-selection',
@@ -1909,6 +1916,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-path-facts-http', 'container-lifecycle-http',
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema', 'container-manual-drafts-consumers',
+            'container-manual-recovery',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -2958,7 +2966,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
             ('src/server/src/lib.rs', ['directory-rename-http-retirement', 'paged-deletion-review'],
              ['container-manual-drafts-consumers']),
             ('src/server/src/backend_methods.rs', ['container-tags-http', 'paged-deletion-review'],
-             ['container-manual-drafts-consumers']),
+             ['container-manual-drafts-consumers', 'container-manual-recovery']),
         ]:
             with self.subTest(path=path):
                 assert_path_group_extension(self, self.policy, [path], retained, added)
@@ -3031,5 +3039,26 @@ class CurrentBackupPublicationAttackSelection(unittest.TestCase):
             'kind': 'lib',
             'prefixes': ['engine::disk_registry::current::backup_configuration::tests::'],
             'max_tests': 16,
+            'timeout_seconds': 900,
+        }])
+
+
+class MembershipInitializerDirectoryLockSelection(unittest.TestCase):
+    def test_reservation_source_and_fixture_execute_complete_lock_module(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'membership-initializer-directory-locks'
+        for path, retained in [
+            ('src/engine/src/engine/membership_transition/pending/reservation.rs',
+             ['held-directory-layout']),
+            ('test/engine/unit/engine/membership_reservation_tests.rs', []),
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], retained, [group])
+        self.assertEqual(policy['groups'][group]['rust_targets'], [{
+            'package': 'storage-engine',
+            'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'prefixes': ['engine::membership_transition::pending::reservation::tests::'],
+            'max_tests': 8,
             'timeout_seconds': 900,
         }])

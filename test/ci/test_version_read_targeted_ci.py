@@ -29,7 +29,7 @@ class VersionReadSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, PATHS, [
             'ci-selection', 'container-tags-http', 'note-http-boundary',
             'paged-deletion-review', 'version-metadata-read',
-        ], ['container-manual-drafts-consumers'])
+        ], ['container-manual-drafts-consumers', 'container-manual-recovery'])
         self.assertEqual(plan['groups'], [
             'ci-selection', 'container-tags-http', 'note-http-boundary', 'paged-deletion-review',
             'version-metadata-read'])

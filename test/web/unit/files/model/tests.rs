@@ -104,6 +104,10 @@ fn navigation_resets_only_location_owned_state() {
             placement: None,
             tag_edit: None,
             container_tags: crate::files::tags::tests::read_model(),
+            container_draft_commit: None,
+            container_draft_recovery_error: Some(
+                crate::files::container_edit::CommitPreparationError::RecoveryBinding.into(),
+            ),
             node_retirement: Default::default(),
             tag_submission: None,
             publications: [(
@@ -162,6 +166,8 @@ fn navigation_resets_only_location_owned_state() {
         assert!(model.disks_loaded && model.loading_disks);
         assert_eq!(model.disks_generation, 5);
         assert_eq!(model.operations, operations);
+        assert!(model.container_draft_commit.is_none());
+        assert!(model.container_draft_recovery_error.is_some());
         assert_eq!(model.operations[1].status(), SaveStatus::Degraded);
         assert_eq!(model.polling_operations, ["original".to_owned()]);
         assert!(model.mutation_pending);

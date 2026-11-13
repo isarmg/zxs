@@ -155,7 +155,7 @@ class HistoricalDirectoryTargetedCi(unittest.TestCase):
             assert_path_group_extension(self, self.policy, authorization, [
                 'portable-path-consumers', 'server-authorization',
                 'shared-history-http-boundary',
-            ], ['container-manual-drafts-consumers']),
+            ], ['container-manual-drafts-consumers', 'container-manual-recovery']),
             assert_path_group_extension(self, self.policy, notes, [
                 'container-tags-http', 'directory-rename-http-retirement',
                 'note-http-boundary', 'note-target-consumers', 'paged-deletion-review',

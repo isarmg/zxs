@@ -617,19 +617,20 @@ impl Client {
         })
     }
 
-    /// Fill a host-owned read buffer using bounded verified replies. A short
-    /// positive reply can be a checksum-chunk boundary; only zero denotes EOF.
-    /// Revocation, unavailable bytes, transport and malformed replies fail the
-    /// read. On failure the buffer can contain a verified prefix, which callers
-    /// must not report as a successful complete read.
+    /// Query or explicitly resume the original frozen manual-save operation.
     pub fn recover_manual_draft(
         &self,
         operation: storage_contract::OperationId,
         resume: bool,
     ) -> io::Result<Value> {
-        self.call(Request::RecoverManualDraft { operation_id: operation.to_string(), resume })
+        self.call(Request::RecoverManualDraft { operation_id: operation, resume })
     }
 
+    /// Fill a host-owned read buffer using bounded verified replies. A short
+    /// positive reply can be a checksum-chunk boundary; only zero denotes EOF.
+    /// Revocation, unavailable bytes, transport and malformed replies fail the
+    /// read. On failure the buffer can contain a verified prefix, which callers
+    /// must not report as a successful complete read.
     pub fn read(&self, handle: u64, mut offset: u64, output: &mut [u8]) -> io::Result<usize> {
         let mut copied = 0;
         loop {

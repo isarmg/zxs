@@ -1,5 +1,21 @@
 {
   "groups": {
+    "membership-initializer-directory-locks": {
+      "reason": "Execute all membership reservation regressions, including initializer-versus-membership directory lock exclusion, original held roots, cancellation barriers and preserved conflict bytes.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "engine::membership_transition::pending::reservation::tests::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "current-backup-publication-attacks": {
       "reason": "Execute the complete live and cold Current backup publication attack module, including exhaustive per-State-field mutation refusal for container edits. Compilation alone is not attack execution evidence.",
       "python_tests": [],
@@ -3874,6 +3890,18 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/reservation.rs",
+      "groups": [
+        "membership-initializer-directory-locks"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_reservation_tests.rs",
+      "groups": [
+        "membership-initializer-directory-locks"
+      ]
+    },
     {
       "path": "test/engine/unit/engine/current_backup_configuration_tests.rs",
       "groups": [
