@@ -162,7 +162,7 @@ fn decimal_map_stream_preserves_writer_failures_and_partial_bytes() {
 fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes() {
     for purpose in ["normal", "historical_branch"] {
         let bytes = format!(
-            r#"{{"base_head":"commit_fixture","branch_id":"br_fixture","created_at":"1","fencing_token":"1","files":{{}},"namespace_operations":[],"principal":"admin","purpose":"{purpose}","state":"open","workspace_id":"ws_fixture"}}"#
+            r#"{{"base_head":"commit_fixture","branch_id":"br_fixture","container_draft_commit":null,"created_at":"1","fencing_token":"1","files":{{}},"namespace_operations":[],"principal":"admin","purpose":"{purpose}","state":"open","workspace_id":"ws_fixture"}}"#
         );
         let workspace: Workspace = decode_strict(bytes.as_bytes()).unwrap();
         assert_eq!(workspace.purpose.as_str(), purpose);
@@ -186,7 +186,8 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         let bytes = format!(
             concat!(
                 r#"{{"branches":{{}},"business_generation":"{}","commits":{{}},"#,
-                r#""container_tags":{{}},"content_states":{{}},"control_auth":null,"#,
+                r#""container_edits":{{}},"container_tags":{{}},"#,
+                r#""content_states":{{}},"control_auth":null,"#,
                 r#""directory_git_repositories":{{}},"events":[],"file_deletions":{{}},"#,
                 r#""histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"#,
                 r#""operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"#,
@@ -203,6 +204,7 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
         assert_eq!(decode_strict::<State>(bytes.as_bytes()).unwrap(), state);
         for field in [
             "business_generation",
+            "container_edits",
             "container_tags",
             "directory_git_repositories",
             "file_deletions",

@@ -786,7 +786,10 @@ pub(crate) fn review_history_merge(state: RwSignal<State>, instance: u64) {
 fn inventory(state: &State, kind: review::Kind) -> Option<ReviewInventory> {
     match kind {
         review::Kind::Merge => Some(state.files.merge.as_ref()?.review_inventory()),
-        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
+        review::Kind::Tags
+        | review::Kind::Backup
+        | review::Kind::Placement
+        | review::Kind::ContainerMode => {
             unreachable!("invariant: configuration drafts have no history selection review")
         }
     }
@@ -795,7 +798,10 @@ fn inventory(state: &State, kind: review::Kind) -> Option<ReviewInventory> {
 fn review_current(state: &State, target: &Target, generation: u64, owner: ReviewOwner) -> bool {
     let instance = match owner.kind {
         review::Kind::Merge => state.files.merge.as_ref().map(|draft| draft.instance()),
-        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => None,
+        review::Kind::Tags
+        | review::Kind::Backup
+        | review::Kind::Placement
+        | review::Kind::ContainerMode => None,
     };
     target.current(state)
         && state.files.file_history.ready()
@@ -819,7 +825,10 @@ fn begin_review(state: RwSignal<State>, owner: ReviewOwner) {
             let generation = s.files.history_aux.begin_review(owner);
             match kind {
                 review::Kind::Merge => s.files.merge.as_mut()?.discard_review(),
-                review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
+                review::Kind::Tags
+                | review::Kind::Backup
+                | review::Kind::Placement
+                | review::Kind::ContainerMode => {
                     unreachable!("invariant: only merge owns a history selection review")
                 }
             }
@@ -937,7 +946,10 @@ async fn collect_review(
 ) -> Result<Option<ReviewFacts>, api::Error> {
     let nodes = match owner.kind {
         review::Kind::Merge => ReviewNodes::Merge(Vec::with_capacity(requested.node_ids.len())),
-        review::Kind::Tags | review::Kind::Backup | review::Kind::Placement => {
+        review::Kind::Tags
+        | review::Kind::Backup
+        | review::Kind::Placement
+        | review::Kind::ContainerMode => {
             unreachable!("invariant: configuration selection is not a history review")
         }
     };
