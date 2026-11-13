@@ -215,20 +215,34 @@ impl<'a> HeldReadView<'a> {
                 return Err(ViewError::Cursor);
             }
         }
-        let manifest = match &self.backing {
-            Backing::Sparse { source, .. } => source.manifest(),
-            Backing::Published { node } => node.manifest(),
-        };
+        match &self.backing {
+            Backing::Sparse { projection, .. } => {
+                self.page(parent, cursor, limit, projection.paths())
+            }
+            Backing::Published { node } => {
+                let paths = node.manifest().entries().iter().map(|entry| &entry.path);
+                self.page(parent, cursor, limit, paths)
+            }
+        }
+    }
+
+    fn page<'p>(
+        &self,
+        parent: Option<&LookupPath>,
+        cursor: Option<&Cursor>,
+        limit: NonZeroU16,
+        paths: impl Iterator<Item = &'p PortablePath>,
+    ) -> Result<Page, ViewError> {
         let mut selected = Vec::new();
         let mut bytes = 2usize;
-        for entry in manifest.entries() {
-            if entry.path.parent().as_ref().map(|path| path.key()) != parent.map(|path| path.key())
-                || cursor.is_some_and(|cursor| entry.path.key() <= cursor.after.key())
+        for path in paths {
+            if path.parent().as_ref().map(|path| path.key()) != parent.map(|path| path.key())
+                || cursor.is_some_and(|cursor| path.key() <= cursor.after.key())
             {
                 continue;
             }
             let item = Entry {
-                path: entry.path.clone(), content: self.admitted_content(&LookupPath::from(&entry.path))?,
+                path: path.clone(), content: self.admitted_content(&LookupPath::from(path))?,
             };
             let encoded = storage_contract::canonical_json(&item).map_err(ViewError::Encoding)?;
             let next_bytes = bytes.checked_add(encoded.len()).and_then(|total| total.checked_add(1))

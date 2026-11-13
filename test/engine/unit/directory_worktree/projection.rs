@@ -1,4 +1,5 @@
 use super::*;
+use crate::working_tree::snapshot::SnapshotEntry;
 use storage_contract::{ContentHash, OperationId};
 use storage_contract::working_tree::{SnapshotNodeId, SnapshotRepositoryId};
 

@@ -237,8 +237,25 @@ impl AdmittedSnapshotManifest {
             }
             *material = *replacement;
         }
-        let files = admit_entries(&record.entries)?;
-        record.payloads = default_payloads(&record.entries);
+        self.validate_material_entries(record.entries)
+    }
+
+    /// Admit a complete logical worktree view using the snapshot's structural
+    /// limits. FILE source nodes can still describe the pre-edit baseline, so
+    /// this does not admit publication provenance, disk ownership or body I/O.
+    pub(crate) fn validate_material_entries(
+        &self,
+        entries: Vec<SnapshotEntry>,
+    ) -> Result<(), SnapshotManifestError> {
+        let files = admit_entries(&entries)?;
+        let record = ManifestRecord {
+            format: self.record.format,
+            repository_id: self.record.repository_id,
+            node_id: self.record.node_id,
+            operation_id: self.record.operation_id,
+            payloads: default_payloads(&entries),
+            entries,
+        };
         admit_payloads(&record, &files)?;
         if storage_contract::canonical_json(&record).map_err(SnapshotManifestError::Encode)?.len()
             > MAX_MANIFEST_BYTES
