@@ -1,4 +1,5 @@
 //! Public production Engine regression. No fault-injection features are required.
+use std::os::unix::fs::DirBuilderExt;
 use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
 use storage_engine::{
     BranchName, CommitRequest, Config, DeleteFileRequest, Engine, ErrorCode, FileDeletionTarget,
@@ -27,9 +28,14 @@ fn request(workspace: Workspace) -> CommitRequest {
 fn deletion_joins_frontier_preserves_bytes_freezes_only_its_file_and_undo_survives_restart() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let mut engine = Engine::initialize(
+    let disk = temp.path().join("disk");
+    for path in [&root, &disk] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let mut engine = Engine::initialize_storage(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development([disk]).unwrap(),
+        OperationId::generate().unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -386,9 +392,14 @@ fn deletion_joins_frontier_preserves_bytes_freezes_only_its_file_and_undo_surviv
 fn deleted_same_body_branches_cannot_change_selection_or_default_but_other_files_can() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let mut engine = Engine::initialize(
+    let disk = temp.path().join("disk");
+    for path in [&root, &disk] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let mut engine = Engine::initialize_storage(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development([disk]).unwrap(),
+        OperationId::generate().unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -587,9 +598,14 @@ fn named_initialized_file_deletion_and_undo_survive_restart() {
     for directory in ["", "nested"] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let mut engine = Engine::initialize(
+        let disk = temp.path().join("disk");
+        for path in [&root, &disk] {
+            std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+        }
+        let mut engine = Engine::initialize_storage(
             &root,
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development([disk]).unwrap(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
         let repository = engine

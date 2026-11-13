@@ -1,10 +1,20 @@
 use super::*;
 use storage_contract::{CommitRequest, Entry, ErrorCode, OperationId, RepositoryName};
+use std::os::unix::fs::DirBuilderExt;
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, Identity) {
     let root = crate::tests::private_tempdir();
-    let config = storage_engine::Config::development([root.path().join("disk")]).unwrap();
-    let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+    let system = root.path().join("system");
+    let disk = root.path().join("disk");
+    // These are exclusively new fixture roots. Existing or nonempty paths must
+    // fail creation rather than being repaired or adopted by test setup.
+    for path in [&system, &disk] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let config = storage_engine::Config::development([disk]).unwrap();
+    let mut engine = Engine::initialize_storage(
+        &system, config, OperationId::generate().unwrap(),
+    ).unwrap();
     let repo = engine
         .create_repository(
             &RepositoryName::parse("Version reads").unwrap(),

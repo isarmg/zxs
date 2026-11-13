@@ -115,6 +115,10 @@ impl Engine {
             admission.state,
             admission.source.snapshot_hash.clone(),
         )?;
+        // This recovered State is fully admitted, but the new SYSTEM has no
+        // history projection yet. Establish it before the first publication
+        // invokes update_index; the later finish_open rebuild is too late.
+        engine.rebuild_index()?;
         engine.next_slot = engine.state.sequence.checked_add(1).ok_or_else(refused)?;
         let mut next = (*engine.state).clone();
         next.sequence = engine.next_slot;

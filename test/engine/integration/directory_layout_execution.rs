@@ -76,7 +76,11 @@ impl Fixture {
         let config = Config::development([temporary.path().join("primary")]).unwrap();
         let primary = config.disks[0].root.clone();
         assert_eq!(config.disks[0].slot_id, "P01");
-        let mut engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
+        let system = temporary.path().join("system");
+        for path in [&system, &primary] {
+            fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+        }
+        let mut engine = Engine::initialize_storage(&system, config, op()).unwrap();
         let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
         assert_eq!(repository.target_copies, 1);
         Self {

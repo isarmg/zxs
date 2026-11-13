@@ -3939,8 +3939,23 @@ fn detached_public_wire_commit_keeps_exact_digest_and_retry_binding() {
 
 #[test]
 fn detached_preparation_fences_physical_namespace_writes_but_not_reads() {
-    let fixture = Fixture::new();
-    let mut engine = fixture.initialize();
+    use std::os::unix::fs::DirBuilderExt;
+    let mut fixture = Fixture::new();
+    // This test requests one content copy and tests only a detached writer
+    // fence. Keep all three metadata voters, but explicitly provision primary
+    // roots rather than making its shared backup-chain initializer compatible.
+    for disk in &mut fixture.config.disks {
+        disk.level = 1;
+        disk.upstream_slot_id = None;
+    }
+    for path in std::iter::once(&fixture.root)
+        .chain(fixture.config.disks.iter().map(|disk| &disk.root))
+    {
+        fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let mut engine = Engine::initialize_storage(
+        &fixture.root, fixture.config.clone(), storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
     let repo = repository(&mut engine, 1);
     save(
         &mut engine,

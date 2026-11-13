@@ -1,6 +1,6 @@
 //! Real production Engine calls on disposable tmpfs roots; no save implementation
 //! or phase-two model is substituted. HTTP/Samba are covered by other owners.
-use std::{collections::BTreeSet, io::Read};
+use std::{collections::BTreeSet, io::Read, os::unix::fs::DirBuilderExt};
 use storage_engine::*;
 use storage_engine as engine_api;
 use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
@@ -78,9 +78,15 @@ fn selected_tree(e: &Engine, repo: &str) -> String {
 #[test]
 fn container_replacement_keeps_content_graph_and_replays_exact_cas() {
     let temp = tempfile::tempdir().unwrap();
-    let mut e = Engine::initialize(
-        &temp.path().join("system"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+    let system = temp.path().join("system");
+    let primary = temp.path().join("primary");
+    for path in [&system, &primary] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let mut e = Engine::initialize_storage(
+        &system,
+        Config::development([primary]).unwrap(),
+        op(),
     )
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
@@ -120,9 +126,15 @@ fn container_replacement_keeps_content_graph_and_replays_exact_cas() {
 #[test]
 fn reused_old_path_does_not_retarget_container_tags_or_break_exact_replay() {
     let temp = tempfile::tempdir().unwrap();
-    let mut e = Engine::initialize(
-        &temp.path().join("system"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+    let system = temp.path().join("system");
+    let primary = temp.path().join("primary");
+    for path in [&system, &primary] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    let mut e = Engine::initialize_storage(
+        &system,
+        Config::development([primary]).unwrap(),
+        op(),
     )
     .unwrap();
     let repo = e.create_disk_root("P01", "admin", op()).unwrap();
