@@ -147,6 +147,12 @@ fn unknown_noncanonical_and_missing_required_field_are_preserved_not_adopted() {
     missing.as_object_mut().unwrap().remove("metadata_members");
     let mut missing_path = value.clone();
     missing_path["target"].as_object_mut().unwrap().remove("path");
+    let mut old_format = value.clone();
+    old_format["format"] = json_codec::json!("directory-snapshot-initialization-intent-v1");
+    old_format.as_object_mut().unwrap().remove("host_directory_id");
+    old_format.as_object_mut().unwrap().remove("directories");
+    let mut missing_chain = value.clone();
+    missing_chain.as_object_mut().unwrap().remove("directories");
     let mut noncanonical = original.bytes().to_vec();
     noncanonical.push(b'\n');
     for bytes in [
@@ -154,6 +160,8 @@ fn unknown_noncanonical_and_missing_required_field_are_preserved_not_adopted() {
         storage_contract::canonical_json(&unknown).unwrap(),
         storage_contract::canonical_json(&missing).unwrap(),
         storage_contract::canonical_json(&missing_path).unwrap(),
+        storage_contract::canonical_json(&old_format).unwrap(),
+        storage_contract::canonical_json(&missing_chain).unwrap(),
         noncanonical,
     ] {
         let (_temp, disk) = root();

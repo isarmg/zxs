@@ -1,7 +1,7 @@
 {
   "groups": {
     "storage-format-binary-fence": {
-      "reason": "Explicit GitHub-only two real revision binaries, v2/v3 writer refusal and no-write byte/identity evidence. Heavy builds run only when one of the three acceptance files changes.",
+      "reason": "Explicit GitHub-only two real revision binaries, v2/v3 writer refusal and no-write byte/identity evidence. Selected by acceptance assets and the explicit-host admission producer; this does not prove old-reader rejection of host intent v2.",
       "python_tests": [
         "test_storage_format_binary_fence"
       ],
@@ -111,13 +111,13 @@
             "disk::discovery::tests::fresh_snapshot_seal_is_not_a_legacy_role_or_generation_recovery_candidate",
             "foreign_import::tests::fresh_snapshot_seal_cannot_authorize_foreign_legacy_inspection"
           ],
-          "max_tests": 15,
+          "max_tests": 16,
           "timeout_seconds": 900
         }
       ]
     },
     "directory-snapshot-initialization": {
-      "reason": "Fresh-only original intent and deny fence; explicit FILE-source snapshot candidate/material binding, cold publication/reads and exact recovery. Does not cover existing-host catalog registration or SMB activation.",
+      "reason": "Exact original intent and held explicit-host chain; immutable FILE-source snapshot candidate/material binding, nonempty host preservation, cold publication/reads and decided recovery. Trusted local API only; no HTTP/SMB activation or predecision recovery claim.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -133,13 +133,23 @@
           "package": "storage-engine",
           "manifest": "src/engine/Cargo.toml",
           "kind": "lib",
+          "prefixes": [
+            "engine::snapshot_initialization::execution_tests::"
+          ],
+          "max_tests": 11,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
           "features": [
             "fault-injection"
           ],
           "prefixes": [
             "engine::snapshot_initialization::execution_tests::"
           ],
-          "max_tests": 7,
+          "max_tests": 13,
           "timeout_seconds": 900
         }
       ]
@@ -4172,6 +4182,13 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "standalone-demo": {
+      "reason": "Exercise standalone browser simulation state transitions without building or importing ZXS product code.",
+      "python_tests": [
+        "test_zxs_demo"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -13558,6 +13575,34 @@
       "path": "test/ci/fixtures/storage-format-fence/recover.rs",
       "groups": [
         "storage-format-binary-fence"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/snapshot_initialization/target.rs",
+      "groups": [
+        "directory-snapshot-initialization",
+        "directory-storage-bootstrap",
+        "working-directory-prerequisite",
+        "directory-snapshot-source-preview",
+        "storage-format-binary-fence"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/working_directory.rs",
+      "groups": [
+        "directory-snapshot-initialization"
+      ]
+    },
+    {
+      "path": "demo/*",
+      "groups": [
+        "standalone-demo"
+      ]
+    },
+    {
+      "path": "test/ci/test_zxs_demo.py",
+      "groups": [
+        "standalone-demo"
       ]
     }
   ],

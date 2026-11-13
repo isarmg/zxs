@@ -19,6 +19,11 @@ fn control(system: &std::path::Path, operation: OperationId, source: MaterialCom
         crate::StorageRecoveryPredecessor::NewControl)
 }
 
+fn assert_history_index_tracks_admitted_state(engine: &Engine) {
+    assert!(matches!(engine.index_health(), crate::IndexHealth::Ready { sequence }
+        if sequence == engine.state().sequence));
+}
+
 #[test]
 fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt() {
     let (temp, system, config) = fixture();
@@ -61,6 +66,7 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         admitted, intent, control.clone(), None,
     ).unwrap();
     engine.require_recovery_control(Some(&control)).unwrap();
+    assert_history_index_tracks_admitted_state(&engine);
     let mut changed_control = control.clone();
     changed_control.disk_ids.push(crate::RecoveryDiskSelection::parse("changed-selection").unwrap());
     let control_before = image(temp.path());
@@ -112,6 +118,7 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     fs::rename(&system, &lost).unwrap();
     fs::rename(&recovered_carrier, &system).unwrap();
     let cold = Engine::open(&system).unwrap();
+    assert_history_index_tracks_admitted_state(&cold);
     assert_eq!(cold.state(), &published);
     assert_eq!(fs::read(cold.valid_replica(&successor.version_id).unwrap().0.path()).unwrap(),
         b"ordinary successor after recovery");
@@ -141,6 +148,7 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         admitted, intent, control.clone(), None,
     ).unwrap();
     assert_eq!(repeated.state(), &published);
+    assert_history_index_tracks_admitted_state(&repeated);
     assert_eq!(repeated.state().operations.get(&operation), Some(&recovery_receipt));
     assert_eq!(fs::read(repeated.valid_replica(&successor.version_id).unwrap().0.path()).unwrap(),
         b"ordinary successor after recovery");
@@ -175,8 +183,10 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     assert_eq!(third.state().operations.len(), published.operations.len() + 1);
     assert_eq!(third.directory_storage_roots().unwrap(), descriptions);
     let third_state = third.state().clone();
+    assert_history_index_tracks_admitted_state(&third);
     drop(third);
     let third_cold = Engine::open(&system).unwrap();
+    assert_history_index_tracks_admitted_state(&third_cold);
     assert_eq!(third_cold.state(), &third_state);
     assert_eq!(fs::read(third_cold.valid_replica(&successor.version_id).unwrap().0.path()).unwrap(),
         b"ordinary successor after recovery");

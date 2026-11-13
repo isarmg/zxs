@@ -9,6 +9,7 @@ mod permanent_retirement;
 mod rename;
 #[path = "content_matches/shared_history.rs"]
 mod shared_history;
+use std::os::unix::fs::DirBuilderExt;
 use storage_contract::content_matches::{ContentMatchPage, ContentMatchRequest};
 use storage_contract::history_window::HistoryWindowCancellation;
 use storage_engine::{
@@ -81,9 +82,14 @@ impl Pool {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let mut engine = Engine::initialize(
+        let disk = temp.path().join("disk");
+        for path in [&root, &disk] {
+            std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+        }
+        let mut engine = Engine::initialize_storage(
             &root,
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development([disk]).unwrap(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
         let repo = engine

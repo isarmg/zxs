@@ -672,3 +672,42 @@ fn decided_nested_host_recovers_original_chain_without_rewriting_live_contents()
         assert_eq!(image(&host), before);
     }
 }
+
+#[test]
+fn cold_nested_host_does_not_adopt_replaced_ancestor_or_repair_original_material() {
+    let mut fixture = Fixture::new();
+    create_explicit_host(&fixture);
+    let host = explicit_host(&fixture);
+    let ancestor = host.parent().unwrap().to_owned();
+    let operation = OperationId::generate().unwrap();
+    let target = fixture.engine.prepare_directory_snapshot_target(
+        target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+    ).unwrap();
+    publish_explicit_host(&mut fixture, target).unwrap();
+    let expected = fixture.engine.state().clone();
+    let original = image(&ancestor);
+    let system = fixture.temp.path().join("system");
+    let retained = fixture.temp.path().join("original host chain");
+    drop(fixture.engine);
+    fs::rename(&ancestor, &retained).unwrap();
+    PrivateDirectory::create(&ancestor).unwrap();
+    PrivateDirectory::create(&host).unwrap();
+    let before = image(fixture.temp.path());
+    assert!(Engine::open(&system).is_err());
+    assert_eq!(image(fixture.temp.path()), before);
+    assert_eq!(image(&retained), original);
+
+    // Put back precisely the retained ancestor inode, not reconstructed data.
+    fs::remove_dir(&host).unwrap();
+    fs::remove_dir(&ancestor).unwrap();
+    fs::rename(&retained, &ancestor).unwrap();
+    let engine = Engine::open(&system).unwrap();
+    assert_eq!(engine.state(), &expected);
+    let mut read = engine.open_initialized_directory_file(
+        operation, &PortablePath::parse("original.txt").unwrap(),
+    ).unwrap();
+    let mut bytes = Vec::new();
+    read.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, BODY);
+    assert_eq!(image(&ancestor), original);
+}

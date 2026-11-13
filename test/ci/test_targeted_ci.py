@@ -580,7 +580,10 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path in paths:
             with self.subTest(path=path):
-                plan = CI.select_plan(self.policy, [path])
+                added = (['directory-snapshot-initialization']
+                         if path == 'src/engine/src/disk/working_directory.rs' else [])
+                plan = assert_path_group_extension(
+                    self, self.policy, [path], ['working-directory-prerequisite'], added)
                 self.assertEqual(plan['groups'], ['working-directory-prerequisite'])
                 self.assertEqual(plan['python_tests'], [])
                 self.assertEqual(len(plan['rust_targets']), 3)
@@ -715,9 +718,17 @@ class TargetedSelection(unittest.TestCase):
                         'package': 'storage-engine',
                         'manifest': 'src/engine/Cargo.toml',
                         'kind': 'lib',
+                        'prefixes': ['engine::snapshot_initialization::execution_tests::'],
+                        'max_tests': 11,
+                        'timeout_seconds': 900,
+                    },
+                    {
+                        'package': 'storage-engine',
+                        'manifest': 'src/engine/Cargo.toml',
+                        'kind': 'lib',
                         'features': ['fault-injection'],
                         'prefixes': ['engine::snapshot_initialization::execution_tests::'],
-                        'max_tests': 7,
+                        'max_tests': 13,
                         'timeout_seconds': 900,
                     },
                 ])
@@ -3181,7 +3192,7 @@ class DirectoryBootstrapColdProofSelection(unittest.TestCase):
         target, = policy['groups'][group]['rust_targets']
         self.assertEqual(target['prefixes'],
                          ['engine::snapshot_initialization::bootstrap::tests::'])
-        self.assertEqual(target['max_tests'], 15)
+        self.assertEqual(target['max_tests'], 16)
         self.assertEqual(target['timeout_seconds'], 900)
         self.assertEqual(target['exact'], [
             'disk::discovery::tests::'
@@ -3732,7 +3743,7 @@ class UnifiedV3OriginSelection(unittest.TestCase):
             'management::authority_tests::authenticated_restore_rechecks_revocation_before_authority_publication',
         ])
 
-    def test_binary_fence_is_only_explicit_three_path_github_acceptance(self):
+    def test_binary_fence_assets_and_explicit_host_select_complete_acceptance(self):
         policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
         group = 'storage-format-binary-fence'
         paths = [
@@ -3740,8 +3751,15 @@ class UnifiedV3OriginSelection(unittest.TestCase):
             'test/ci/fixtures/storage-format-fence/reader.rs',
             'test/ci/fixtures/storage-format-fence/recover.rs',
         ]
+        host = 'src/engine/src/engine/snapshot_initialization/target.rs'
+        host_groups = [
+            'directory-snapshot-initialization', 'directory-storage-bootstrap',
+            'working-directory-prerequisite', 'directory-snapshot-source-preview', group,
+        ]
         self.assertEqual([rule for rule in policy['rules'] if group in rule['groups']],
-                         [{'path': path, 'groups': [group]} for path in paths])
+                         [{'path': path, 'groups': [group]} for path in paths]
+                         + [{'path': host, 'groups': host_groups}])
+        assert_path_group_extension(self, policy, [host], host_groups, [])
         for path in paths:
             plan = CI.select_plan(policy, [path])
             self.assertEqual(plan['groups'], [group])

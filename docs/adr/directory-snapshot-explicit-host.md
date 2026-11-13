@@ -25,3 +25,28 @@
 旧 reader 审阅须覆盖启动登记重放、pending intent 恢复与普通发布验证。严格 intent／登记解码是拒绝边界，但尚未执行全部旧 reader 无写验证。本片不扩展全池第 4 版格式。
 
 当前仍保留 A 原型的单永久 intent 槽和同 Root 仅一个登记限制，不能宣称同盘多个目录的完整初始化产品。未决定的原 intent 目前保全并封锁写入，完整原操作续作尚待实现；已决定恢复用例不覆盖该缺口。后继须复用原永久决定，闭合逐操作证据、单活跃事务与冷恢复，不能通过覆盖旧 intent 或另建一套 ledger 绕过。
+
+## 后继静态复核与定向范围
+
+普通冷启动 `open_mode_held` 先取得既有目录锁和完成记录证明，再以 Existing
+取得 writer；`recovery_resources_with_locks` 在进入 journal 恢复前调用
+`discover_snapshot_initialization`。SYSTEM 和可访问 metadata 成员上的原 intent
+均经严格解码，未知格式不会被当成缺失，也没有写回或升级。缺盘仍不是不存在。
+恢复的 `preflight_workspace_receipts` 对已决定目录操作调用
+`preflight_directory_snapshot_material`，在回放更早操作的缓存写入前核对原
+intent、登记、祖先与物料。普通发布的 `require_directory_snapshot_transition`
+和实际 list/open 的 `read_registered_snapshot` 仍经原登记完整闭包；并非只看
+外层 operation.result 就开放目录。
+
+这只是对上述实际调用链的静态证据，不能代替全部旧二进制无写拒绝验证。
+现有双 binary 验收只测试全池 v2/v3，不测试“中间 v3、host intent v1”程序对
+新 host intent v2 材料的拒绝。后续须固定该旧 revision 的真实 binary，并用
+当前 binary 产生嵌套 host 决定；分别验证旧程序 open/普通写/恢复均拒绝且全树
+字节、inode、权限不变，新程序则能原 operation 冷开和重试。不改永久旧材料，
+不将 pool 矩阵的结果冒充这项证据。
+
+本片补全现有单元测试中的旧 v1 intent/缺链材料落盘拒绝及原字节、inode、mode
+保留；另加真实已发布嵌套目录祖先换实体后冷启动拒绝、恢复原 inode 后成功读取。
+语法模块 8 项；完整 execution 模块产品配置 11 项、fault-injection 配置 13 项。
+保持原 source、working-directory、bootstrap 消费者与 pool binary 验收，全部
+等待 GitHub 执行；本机没有运行测试、编译或选择器。

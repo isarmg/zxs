@@ -323,13 +323,15 @@ impl Inner {
         intent: &mut StoredReadmission,
         directory: &PrivateDirectory,
     ) -> Result<ResumeOwner, ApiError> {
+        // Keep the admitted SYSTEM owner across proof lookup and authorized reopen.
+        let system = self.storage_system()?;
         let proof = TerminalManagement::metadata_resume_recovery(
-            self.storage_system()?.path(),
+            system.path(),
         )
             .map_err(crate::engine_backend::error)?;
         let Some(proof) = proof else {
             let terminal =
-                TerminalManagement::open(self.storage_system()?.path())
+                TerminalManagement::open(system.path())
                     .map_err(crate::engine_backend::error)?;
             return self
                 .prepare_terminal_readmission(identity, intent, terminal, directory)
@@ -341,7 +343,7 @@ impl Inner {
         self.current_management_identity(identity)?;
         let management = self.with_terminal_authorization(identity, || {
             TerminalManagement::open_metadata_resume_checked(
-                        self.storage_system()?.path(), &proof,
+                        system.path(), &proof,
                     )
         })?;
         match proof.phase {

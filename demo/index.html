@@ -1,0 +1,671 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZXS · 文件流转实验室</title><style>
+:root{--bg:#f0f3f3;--ink:#1b3137;--muted:#667c81;--line:#dce5e5;--green:#167c67;--mint:#e2f4eb;--orange:#a45f1a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer;border:1px solid var(--line);border-radius:7px;padding:8px 12px;color:var(--ink);background:white}button:hover{border-color:var(--green);background:#f0faf6}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #75bbad;outline-offset:2px}button:disabled{opacity:.4;cursor:not-allowed}.primary{background:var(--green);color:white;border-color:var(--green)}.primary:hover{background:#116552;color:white}.danger{color:#a54332}.top{background:#102e35;color:#fff;padding:25px 30px;display:flex;justify-content:space-between;align-items:center;gap:20px}.brand{font-size:26px;letter-spacing:-1px;font-weight:700}.brand span{font-size:12px;background:#28505a;border:1px solid #52717a;padding:4px 8px;border-radius:5px;vertical-align:middle;margin-left:12px;letter-spacing:1px}.top p{color:#aec8ce;margin:5px 0 0}.top button{background:transparent;color:#e9f3f4;border-color:#49646b}.overview{display:flex;gap:25px;padding:16px 30px;border-bottom:1px solid var(--line);background:#fff;align-items:center;flex-wrap:wrap}.stat strong{font-size:22px;margin-right:7px}.stat{color:var(--muted)}.legend{margin-left:auto;font-size:12px;display:flex;gap:16px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#239879}.dot.map{background:#688dbb}.dot.del{background:#b98554}.layout{display:grid;grid-template-columns:minmax(280px,.9fr) minmax(320px,1.1fr) minmax(350px,1.2fr);gap:16px;padding:20px 24px;align-items:start}.panel{background:white;border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 3px 10px #1d394206}.panel-head{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}.number{background:var(--mint);border-radius:6px;padding:3px 7px;font-size:11px;font-weight:700;color:var(--green)}h2{font-size:16px;margin:0}h3{font-size:12px;letter-spacing:1px;color:var(--muted);margin:20px 0 9px}.content{padding:16px 18px}.small{font-size:12px;color:var(--muted)}.notice{background:#eef5f7;color:#41636d;padding:11px 13px;border-radius:7px;font-size:12px}.badge{font-size:11px;border-radius:4px;padding:2px 6px;background:#eef2f3;color:#577077;white-space:nowrap}.badge.green{background:var(--mint);color:var(--green)}.badge.orange{background:#fbefdf;color:var(--orange)}.row{display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap}.row>*{min-width:0}input,select,textarea{border:1px solid #cbd9db;border-radius:6px;padding:8px;width:100%;color:var(--ink);background:#fcfefe}label{display:block;color:var(--muted);font-size:12px;margin-top:10px}textarea{min-height:105px;resize:vertical;font-family:ui-monospace,monospace;font-size:13px}.grow{flex:1}.selected{background:#f0f9f5;border:1px solid #badccc;padding:12px;border-radius:8px;margin-bottom:12px}.selected strong{display:block;overflow-wrap:anywhere}.hint{font-size:11px;color:var(--muted);margin:5px 0 0}.section{padding:12px 0;border-bottom:1px solid #edf1f1}.section:last-child{border-bottom:0}.section-title{font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}.file{display:flex;width:100%;text-align:left;align-items:center;gap:9px;padding:10px;border:0;border-radius:6px;background:transparent}.file:hover{background:#eef6f2}.file.active{background:#e3f3eb;color:#125e4e}.file .filename{flex:1;overflow-wrap:anywhere}.file .sub{font-size:11px;color:var(--muted);display:block}.folder{padding:6px 9px;color:#4b717a;font-weight:600}.tree{font:12px/1.7 ui-monospace,monospace;overflow:auto;max-height:650px;padding-bottom:12px}.tree details{margin-left:14px;border-left:1px solid #dce6e6;padding-left:10px}.tree>details{margin-left:0;border:0}.tree summary{cursor:pointer;list-style:none;font-weight:600;white-space:nowrap;padding:2px 0}.tree summary:before{content:'▾ ';color:#6d9790}.tree details:not([open])>summary:before{content:'▸ '}.leaf{padding:3px 0 3px 12px;white-space:nowrap;font-weight:400}.leaf.map{color:#6187aa}.leaf.meta{color:#8c9294}.leaf.new{color:#158069}.path{font:11px/1.7 ui-monospace,monospace;overflow-wrap:anywhere;padding:8px;background:#f3f7f7;border-radius:5px;margin-top:8px}.timeline{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.timeline button{font-size:11px;padding:4px 7px}.timeline .current{background:var(--green);color:white}.footer{margin:0 24px 24px}.log{max-height:150px;overflow:auto}.event{padding:9px 0;border-bottom:1px solid #eef1f1;display:flex;gap:12px}.event time{font:11px monospace;color:#8ba1a5;min-width:55px}.event b{font-weight:500}.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);padding:12px 18px;background:#173b43;color:white;border-radius:8px;box-shadow:0 5px 25px #0002;max-width:90%;z-index:5}.empty{padding:20px 10px;text-align:center;color:#83979b;font-size:12px}.tabs{display:none}.explain{background:#fbf6e9;padding:11px 14px;border-radius:8px;color:#816637;font-size:12px;margin-top:14px}details.help summary{cursor:pointer;color:var(--green)}details.help ul{padding-left:18px;font-size:12px;color:var(--muted)}@media(max-width:1100px){.layout{grid-template-columns:300px 1fr}.disk-panel{grid-column:1/-1}.tree{max-height:500px}.legend{margin-left:0}}@media(max-width:700px){.top{padding:20px;display:block}.top .row{margin-top:15px}.brand{font-size:23px}.overview{padding:12px 20px;gap:15px}.layout{display:block;padding:12px}.panel{margin-bottom:12px}.footer{margin:0 12px 20px}.tabs{display:flex;position:sticky;top:0;background:var(--bg);padding:8px 12px;gap:6px;z-index:2}.tabs button{flex:1;font-size:12px}.top p{font-size:12px}}
+
+.top{padding:16px 24px}.overview{padding:10px 24px}.workspace{--split:46;--leftH:33;--rightH:55;display:grid;grid-template-columns:minmax(320px,calc(var(--split)*1%)) 10px minmax(340px,1fr);height:calc(100dvh - 185px);min-height:650px;margin:14px 20px 10px}.column{display:flex;flex-direction:column;min-width:0;min-height:0}.column>.panel{margin:0;min-height:0;display:flex;flex-direction:column}.column>.panel .content{overflow:auto;min-height:0}.column>.panel:last-child{flex:1}.helper-panel{flex:0 0 calc(var(--leftH)*1%)}#smb{flex:0 0 calc(var(--rightH)*1%)}.panel-head{padding:11px 14px;flex-shrink:0;flex-wrap:wrap}.content{padding:13px 15px}.separator{position:relative;touch-action:none;user-select:none;outline-offset:-1px}.separator:before{content:'';position:absolute;background:#bacfce;border-radius:5px;transition:background .15s}.separator:hover:before,.separator:focus:before{background:#167c67}.separator.vertical{cursor:col-resize}.separator.vertical:before{width:4px;height:40px;top:45%;left:3px}.separator.horizontal{cursor:row-resize;flex:0 0 10px}.separator.horizontal:before{height:4px;width:40px;top:3px;left:45%}.tree{max-height:none;overflow:visible}.footer{margin:0 20px 16px}.log{max-height:85px;padding-top:4px;padding-bottom:4px}.event{padding:4px 0}.notice{font-size:11px}.helper-panel h3{margin-top:12px}#smbControls{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:10px}#smbControls textarea{min-height:65px}.stats-note{font-size:11px;color:var(--muted)}
+@media(max-width:800px){.workspace{display:block;height:auto;min-height:0;margin:12px}.column{display:contents}.column>.panel{height:auto;max-height:none;margin-bottom:12px}.column>.panel .content{max-height:600px}.separator{display:none}.helper-panel,#smb{flex:auto}.panel-head h2{font-size:15px}.legend{display:none}.top{padding:16px}.overview{padding:10px 16px}.footer{margin:0 12px 16px}}
+.feature{margin:12px 0;border:1px solid #dce5e5;border-radius:7px;padding:9px}.feature>summary{cursor:pointer;font-weight:600;color:#266858}.feature button{font-size:12px}.history-graph{border-left:2px solid #bad0cc;margin:10px 0;padding-left:10px}.event-line{border-top:1px dashed #8da5a9;margin:12px 0;padding-top:3px}.event-line small{display:block;color:#89999c;font-size:10px}.event-line button{padding:0 4px;border:0}.node-line{border-left:2px solid #8fbaad;padding:10px 8px}.node-line small{font:10px monospace;color:#7f969a;margin-left:8px}.graph-title{font-size:11px;color:#607d83}.workspace{min-height:720px}.helper-panel{flex-basis:calc(var(--leftH)*1%)}
+.graph-row{display:grid;gap:8px;min-height:55px}.graph-cell{border-left:1px dotted #8ba9a2;padding:6px;min-width:0}.node-card{background:#f2f8f5;border:1px solid #bbd6cd;border-radius:5px;padding:5px;overflow-wrap:anywhere}.node-card small{display:block;font:10px monospace}.history-graph{overflow-x:auto}.graph-title{position:sticky;top:0;background:white;padding:6px}.feature .row{margin-top:10px}
+</style></head><body>
+<header class="top"><div><div class="brand">ZXS <span>交互实验室</span></div><p>四个界面，一份状态。看清操作、可见文件与磁盘正文的关系。</p></div><div class="row"><button onclick="resetLayout()">复位布局</button><button onclick="App.exportState()">导出演示状态</button><button onclick="if(confirm('重置为示例数据？当前演示操作会清空。'))App.reset()">重置演示</button></div></header>
+<div class="overview" id="stats"></div><main class="workspace" id="workspace">
+<div class="column" id="leftColumn">
+<section class="panel helper-panel" id="helper"><div class="panel-head"><span class="number">01</span><h2>辅助工具 Web</h2><span class="badge">本地管理 · 模拟入口</span></div><div class="content"><div class="notice">完全独立的前端模拟，不连接 ZXS、不读写真实磁盘。辅助工具和 Web 的产品入口尚未全部定型，下列交互展示目标逻辑。</div><div id="helperControls"></div></div></section>
+<div class="separator horizontal" tabindex="0" role="separator" aria-label="调整左侧上下区域高度" aria-orientation="horizontal" data-split="left"></div>
+<section class="panel" id="operations"><div class="panel-head"><span class="number">02</span><h2>ZXS Web</h2><span class="badge">版本与容器管理</span></div><div class="content" id="controls"></div></section>
+</div>
+<div class="separator vertical" tabindex="0" role="separator" aria-label="调整左右两列宽度" aria-orientation="vertical" data-split="columns"></div>
+<div class="column" id="rightColumn">
+<section class="panel" id="smb"><div class="panel-head"><span class="number">03</span><h2>SMB</h2><span class="badge green">文件操作 · 用户可见视图</span></div><div class="content"><div id="smbControls"></div><div id="smbView"></div></div></section>
+<div class="separator horizontal" tabindex="0" role="separator" aria-label="调整右侧上下区域高度" aria-orientation="horizontal" data-split="right"></div>
+<section class="panel" id="disk"><div class="panel-head"><span class="number">04</span><h2>物理磁盘布局</h2><span class="badge">只读 · 模拟实际位置</span></div><div class="content"><div class="small">黑色为保存的正文，蓝色是映射说明，不是另一份正文。展开目录查看。</div><div class="tree" id="diskView"></div><details class="help"><summary>模拟范围与尚未确定的边界</summary><ul><li>只处理明确按钮操作，不按内容、哈希或同名推断来源。不是 ZXS 已实现功能的验收页面。</li><li>目录、数据库、身份均为浏览器内模拟；右侧展示逻辑物理位置，不是访问真实磁盘。</li><li>多磁盘、多目录仓库、文本正文；分阶段迁移、故障、权限与冷开是状态机模拟，不运行真实 OS/SMB/持久化协议。</li><li>初建 worktree 只有映射，修改项才落盘；提交修改项移动，未修改项复制。目录快照与文件容器版本是各自保留的内容。</li><li>手动模式与目录提交/软删的交界仍待产品确认。本演示采用显式目录提交保存相关编辑；工作树软删依已有要求先保存文件节点。</li><li>未知文件来源新建独立容器；已存在容器的明确移动保留身份。管理员物理删除只作用于演示对象；真实数据不会被访问。</li><li>软删采用已约定 16 字节 UTC 前缀；演示随机段使用独立递增编号，不宣称密码学随机源。</li></ul></details></div></section>
+</div></main>
+<section class="panel footer"><details open><summary class="panel-head"><span class="number">↳</span><h2>操作时间线</h2><span class="small">文件操作不等于历史内容节点</span></summary><div class="content log" id="events" aria-live="polite"></div></details></section><div id="toast" role="status"></div>
+<script>
+'use strict';
+const clone = value => JSON.parse(JSON.stringify(value));
+const bytes = value => new TextEncoder().encode(value).length;
+class Simulation {
+  constructor() { this.reset(); }
+  id() { return (++this.sequence).toString(36).padStart(15, '0'); }
+  key(value) { return value.normalize('NFC').toLocaleLowerCase(); }
+  name(value, limit = 239) {
+    if (!value || value !== value.trim() || /[\\/\x00-\x1f<>:"|?*]/.test(value)
+        || /[. ]$/.test(value) || ['.', '..', '.zxs'].includes(value)
+        || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(value)
+        || bytes(value) > limit) throw Error('名称不符合白名单或 UTF-8 字节预算；不会截断名称。');
+    return value;
+  }
+  reset() {
+    this.format = 'zxs-demo-2026-11'; this.sequence = 0; this.clock = 0;
+    this.disks = {}; this.dirs = {}; this.files = {}; this.repos = {};
+    this.nodes = {}; this.worktrees = {}; this.events = []; this.jobs = {};
+    this.receipts = {}; this.loggedIn = true; this.selected = null;
+    const a = this.registerDisk('磁盘 A', 1), b = this.registerDisk('备份 B', 2);
+    this.registerDisk('备份 C', 3); b.sources = [a.id];
+    const project = this.mkdir(a.root, '项目'), docs = this.mkdir(a.root, '资料');
+    const f = this.add(project.id, '报告.txt', '实验记录：第一版。');
+    this.add(project.id, '计划.md', '准备文件容器与目录快照。');
+    const repo = this.initRepo(project.id); this.snapshot(repo.id);
+    this.selected = {kind:'file', id:f.id}; this.currentDir = project.id;
+    this.disk = a.id; this.repo = repo.id; this.backupSource = a.id;
+    this.log('载入示例', '四区共享模拟状态。备份与硬件协议仅为可操作目标模型。');
+  }
+  log(title, detail = '', fileId = null) {
+    const e = {id:this.id(), order:++this.clock, title, detail, fileId,
+      at:new Date().toISOString()}; this.events.push(e); return e;
+  }
+  diskForDir(id) { return this.disks[this.dirs[id].disk]; }
+  online(id) {
+    const d = this.disks[id];
+    if (!d || !d.registered || !d.online) throw Error('磁盘离线或未登记，不等于容器不存在。');
+    if (d.corrupt) throw Error('模拟损坏：拒绝读取，保留材料；请明确执行校验恢复。');
+    return d;
+  }
+  registerDisk(name, level = 1, limit = 255, capacity = 1000000) {
+    this.name(name, Math.min(221, limit - 34));
+    if (Object.values(this.disks).some(d => d.registered && this.key(d.name) === this.key(name)))
+      throw Error('已登记磁盘名称不可重复，离线盘也占用名称。');
+    if (!Number.isInteger(level) || level < 1 || level > 32 || limit < 64 || capacity < 1)
+      throw Error('磁盘层级、组件上限或容量无效。');
+    const id = this.id(), root = this.id();
+    const d = {id, root, name, level, limit, capacity, online:true, registered:true,
+      uuid:id.padStart(32, '0'), serial:Object.keys(this.disks).length,
+      sources:[], replicas:{}, generation:0, corrupt:false};
+    if (d.serial > 1295) throw Error('磁盘序号空间耗尽。');
+    this.disks[id] = d; this.dirs[root] = {id:root, name:'', parent:null, disk:id};
+    this.log('登记并初始化磁盘', name + '：common-data / deleted-data / zxs-data');
+    return d;
+  }
+  renameDisk(id, name) {
+    const d = this.online(id); this.name(name, Math.min(221,d.limit-34));
+    if (Object.values(this.disks).some(x => x.id!==id && x.registered && this.key(x.name)===this.key(name)))
+      throw Error('磁盘名冲突。');
+    d.name=name; d.generation++; this.log('磁盘改名', 'UUID 不变，所有下级来源链显示名同步。');
+  }
+  toggleDisk(id) { this.disks[id].online=!this.disks[id].online; this.log('连接状态变化',this.disks[id].name); }
+  deregister(id) {
+    const d=this.online(id);
+    if(Object.values(this.files).some(f=>f.disk===id) || Object.values(this.disks).some(x=>x.sources.includes(id)))
+      throw Error('磁盘有容器或仍被备份来源引用，先迁移或解除引用；不自动清理。');
+    d.registered=false; this.log('注销磁盘','保留磁盘材料和稳定身份。');
+  }
+  path(id) {
+    const d=this.dirs[id]; return d.parent ? this.path(d.parent)+'/'+d.name : 'common-data';
+  }
+  descendants(id) {
+    return [id,...Object.values(this.dirs).filter(d=>d.parent===id).flatMap(d=>this.descendants(d.id))];
+  }
+  assertFree(dir, name, except=null) {
+    this.name(name,this.diskForDir(dir).limit-16);
+    const k=this.key(name);
+    if(Object.values(this.files).some(f=>f.id!==except && !f.deleted && f.dir===dir && this.key(f.name)===k)
+      || Object.values(this.dirs).some(d=>d.id!==except && d.parent===dir && this.key(d.name)===k)
+      || Object.values(this.worktrees).some(w=>!w.deleted && w.parent===dir && this.key(w.name)===k))
+      throw Error('目标名称冲突，拒绝覆盖。');
+    if(bytes(this.path(dir)+'/'+name)>4000) throw Error('完整逻辑路径超出演示预算。');
+  }
+  mkdir(parent,name) {
+    const disk=this.diskForDir(parent); this.online(disk.id); this.assertFree(parent,name);
+    const id=this.id(),d={id,name,parent,disk:disk.id};this.dirs[id]=d;
+    this.log('创建目录',this.path(id)); return d;
+  }
+  renameDir(id,name) {
+    const d=this.dirs[id]; if(!d.parent)throw Error('根目录不能改名。');
+    this.online(d.disk);this.assertFree(d.parent,name,id);d.name=name;this.log('目录改名',this.path(id));
+  }
+  moveDir(id,target) {
+    const d=this.dirs[id];if(!d.parent||this.descendants(id).includes(target))throw Error('不能移动根或制造目录环。');
+    if(d.disk!==this.dirs[target].disk)throw Error('跨盘整目录请使用完整单位迁移，不拆散仓库。');
+    this.assertFree(target,d.name,id);d.parent=target;this.log('移动目录',this.path(id));
+  }
+  copyDir(id,target) {
+    const source=this.dirs[id];
+    if(this.descendants(id).includes(target))throw Error('不能复制目录到自身后代。');
+    const copy=(from,parent)=>{
+      const next=this.mkdir(parent,this.dirs[from].name);
+      Object.values(this.files).filter(f=>!f.deleted&&f.dir===from).forEach(f=>this.copy(f.id,next.id));
+      Object.values(this.dirs).filter(d=>d.parent===from).forEach(d=>copy(d.id,next.id));
+      return next;
+    };
+    const result=copy(id,target);this.log('SMB 复制目录','复制当前暴露正文，新建独立容器；不复制隐藏仓库数据库。');return result;
+  }
+  removeDir(id) {
+    if(!this.dirs[id].parent)throw Error('不能删除磁盘根。');
+    if(Object.values(this.repos).some(r=>r.active&&this.descendants(id).includes(r.dir)))
+      throw Error('目录含已初始化仓库，请先明确撤销；不隐式撤销子仓库。');
+    const ids=this.descendants(id), files=Object.values(this.files).filter(f=>!f.deleted&&ids.includes(f.dir));
+    files.forEach(f=>this.remove(f.id));ids.reverse().forEach(i=>{if(this.dirs[i].parent)delete this.dirs[i]});
+    this.log('删除目录','文件容器平铺进入 deleted-data；空目录移除。');
+  }
+  prefix(disk,type='1') {
+    const d=this.disks[disk],t=new Date();
+    const stamp=String(t.getUTCFullYear()%100).padStart(2,'0')+(t.getUTCMonth()+1).toString(16)
+      +t.getUTCDate().toString(36)+t.getUTCHours().toString(36)+String(t.getUTCMinutes()).padStart(2,'0');
+    return d.serial.toString(36).padStart(2,'0')+type+stamp+this.id().slice(-5)+'-';
+  }
+  add(dir,name,body,deleted=false) {
+    const disk=this.diskForDir(dir);this.online(disk.id);
+    if(!deleted)this.assertFree(dir,name);else this.name(name,disk.limit-16);
+    const id=this.id(), v=this.id();
+    const f={id,name,dir,disk:disk.id,deleted,trash:deleted?this.prefix(disk.id):null,
+      auto:true,draft:null,tags:[],selected:v,branch:'main',heads:{main:v},
+      versions:[{id:v,body,branch:'main',parent:null,order:++this.clock}],marks:{}};
+    this.files[id]=f; this.log('文件进入 ZXS','立即建立新容器；完成本次写入后发布初始节点。',id);return f;
+  }
+  current(f) {return f.draft!==null?f.draft:f.versions.find(v=>v.id===f.selected).body;}
+  version(f,body,base=f.selected,branch=f.branch) {
+    const prior=f.versions.find(v=>v.id===base);
+    if(prior.body===body){f.draft=null;return prior;}
+    if(f.heads[branch]!==base){let n=1;while(f.heads['分支'+n])n++;branch='分支'+n;}
+    const v={id:this.id(),body,branch,parent:base,order:++this.clock};
+    f.versions.push(v);f.selected=v.id;f.branch=branch;f.heads[branch]=v.id;f.draft=null;return v;
+  }
+  saveFile(id,body) {
+    const f=this.files[id];this.online(f.disk);if(f.deleted)throw Error('删除区正文只读，移回 common-data 后再写。');
+    if(body===this.current(f))return;
+    if(f.auto)this.version(f,body);else f.draft=body;
+    this.log(f.auto?'保存并提交正文':'保存共享工作稿',f.auto?'真实内容变化才创建节点。':'flush/close 不推进 HEAD。',id);
+  }
+  commitFile(id) {
+    const f=this.files[id];this.online(f.disk);if(f.draft===null)throw Error('没有工作稿。');
+    this.version(f,f.draft);this.log('手动提交文件','消费工作稿，按准确来源 HEAD 续接或分叉。',id);
+  }
+  clean(f) {if(f.draft!==null)throw Error('存在未提交工作稿，先明确提交或丢弃。');}
+  mode(id) {const f=this.files[id];this.clean(f);f.auto=!f.auto;this.log('切换提交模式',f.auto?'自动':'手动',id);}
+  discard(id) {this.files[id].draft=null;this.log('丢弃工作稿','历史正文保持。',id);}
+  selectVersion(id,v,branch=null) {
+    const f=this.files[id];this.online(f.disk);this.clean(f);
+    const n=f.versions.find(x=>x.id===v);if(!n)throw Error('节点不属于容器。');
+    f.selected=v;f.branch=branch||n.branch;this.log('选择历史节点','名称、标签不回退。',id);
+  }
+  createBranch(id,name) {
+    const f=this.files[id];this.clean(f);this.name(name,31);
+    if(f.heads[name])throw Error('分支已存在。');f.heads[name]=f.selected;f.branch=name;
+    this.log('创建文件分支',name,id);
+  }
+  renameBranch(id,name) {
+    const f=this.files[id];this.name(name,31);if(f.heads[name])throw Error('分支名已存在。');
+    const old=f.branch;f.heads[name]=f.heads[old];delete f.heads[old];
+    f.versions.forEach(v=>{if(v.branch===old)v.branch=name});f.branch=name;
+    this.log('分支改名',old+' → '+name,id);
+  }
+  merge(id,other) {
+    const f=this.files[id];this.clean(f);if(other===f.branch)throw Error('请选择其他分支。');
+    const incoming=f.versions.find(v=>v.id===f.heads[other]);if(!incoming)throw Error('分支不存在。');
+    const old=f.selected,v=this.version(f,incoming.body);if(v.id!==old)v.mergeParent=incoming.id;
+    this.log('明确采用另一分支正文','输入 '+other+'；相同正文不造节点。',id);
+  }
+  rename(id,name) {
+    const f=this.files[id];this.online(f.disk);this.name(name,this.disks[f.disk].limit-16);
+    if(!f.deleted)this.assertFree(f.dir,name,id);f.name=name;this.log('文件改名','容器和所有版本后缀保持最新名称。',id);
+  }
+  move(id,dir) {
+    const f=this.files[id];this.online(f.disk);const target=this.diskForDir(dir);this.online(target.id);
+    this.assertFree(dir,f.name,id);f.dir=dir;f.disk=target.id;f.deleted=false;f.trash=null;
+    this.log('移动 / 恢复','明确移动保留容器身份与工作稿；位置 '+this.path(dir),id);
+  }
+  remove(id) {
+    const f=this.files[id];this.online(f.disk);if(f.deleted)return;
+    f.deleted=true;f.trash=this.prefix(f.disk);this.log('软删除','整个容器移动；没有删除内容节点。',id);
+  }
+  copy(id,dir) {
+    const f=this.files[id];this.online(f.disk);const n=this.add(dir,f.name,this.current(f));
+    this.log('SMB 复制','新容器仅含复制正文，不继承原历史/标签。',n.id);return n;
+  }
+  purge(id) {
+    const f=this.files[id];this.online(f.disk);if(!f.deleted)throw Error('先软删除，再管理员物理删除。');
+    delete this.files[id];this.log('模拟管理员物理删除','仅移除模拟实体，历史快照仍保留。',id);
+  }
+  initRepo(dir) {
+    this.online(this.dirs[dir].disk);
+    if(Object.values(this.repos).some(r=>r.active&&r.dir===dir))throw Error('该目录已初始化。');
+    const r={id:this.id(),dir,active:true,heads:{main:null},branch:'main',trash:null};
+    this.repos[r.id]=r;this.log('初始化目录仓库','只增加 .zxs；无自动首提交，子仓独立。');return r;
+  }
+  capture(r) {
+    const ids=this.descendants(r.dir),root=this.path(r.dir),files={},dirs=[];
+    ids.filter(id=>id!==r.dir).forEach(id=>dirs.push(this.path(id).slice(root.length+1)));
+    for(const f of Object.values(this.files).filter(f=>!f.deleted&&ids.includes(f.dir))) {
+      this.online(f.disk);this.clean(f);
+      const path=(this.path(f.dir).slice(root.length+1)+'/'+f.name).replace(/^\//,'');
+      files[path]={fileId:f.id,version:f.selected,branch:f.branch,body:this.current(f),storage:this.id()};
+    }
+    return {files,dirs};
+  }
+  snapshot(id) {
+    const r=this.repos[id];if(!r.active)throw Error('仓库已撤销。');const data=this.capture(r);
+    const n={id:this.id(),repo:id,branch:r.branch,parent:r.heads[r.branch],...data};
+    this.nodes[n.id]=n;r.heads[r.branch]=n.id;this.log('目录完整快照','包含子目录/子仓 SMB 正文与空目录，不含容器标签数据库。');return n;
+  }
+  revokeRepo(id) {
+    const r=this.repos[id];if(Object.values(this.worktrees).some(w=>w.repo===id&&!w.deleted))throw Error('先软删除活跃 worktree。');
+    r.active=false;r.trash=this.prefix(this.dirs[r.dir].disk,'0')+this.dirs[r.dir].name;
+    this.log('撤销目录仓库','.zxs 移入 deleted-data；原文件及子仓不受影响。');
+  }
+  restoreRepo(id,dir) {
+    const r=this.repos[id];if(Object.values(this.repos).some(x=>x.active&&x.dir===dir))throw Error('目标已有仓库，请更名或选其他路径。');
+    r.dir=dir;r.active=true;r.trash=null;this.log('管理员恢复仓库','保留原身份；不与同路径后来新仓库合并。');
+  }
+  allocateWT(w,preferred=null) {
+    const branch=this.name(w.birthBranch,31);
+    const occupied=name=>Object.values(this.worktrees).some(x=>x.id!==w.id&&!x.deleted&&x.parent===w.parent&&this.key(x.name)===this.key(name))
+      ||Object.values(this.dirs).some(x=>x.parent===w.parent&&this.key(x.name)===this.key(name))
+      ||Object.values(this.files).some(x=>!x.deleted&&x.dir===w.parent&&this.key(x.name)===this.key(name));
+    if(preferred&&!occupied(preferred))return preferred;
+    for(let n=1;n<=999;n++){const name='worktree-'+branch+'-'+String(n).padStart(3,'0');if(!occupied(name))return name;}
+    throw Error('worktree 001–999 全部占用，拒绝覆盖。');
+  }
+  createWT(node) {
+    const n=this.nodes[node],r=this.repos[n.repo];if(!r.active)throw Error('仓库已撤销。');
+    this.online(this.dirs[r.dir].disk);
+    const w={id:this.id(),repo:r.id,source:node,branch:n.branch,birthBranch:n.branch,
+      parent:this.dirs[r.dir].parent||r.dir,edits:{},imports:{},removed:[],dirs:clone(n.dirs),
+      deleted:false,generation:0,ledger:{}};
+    w.name=this.allocateWT(w);this.worktrees[w.id]=w;
+    this.log('创建空稀疏 worktree',w.name+'：只映射原节点，实例不共享修改。');return w;
+  }
+  view(w) {
+    const out=clone(this.nodes[w.source].files);w.removed.forEach(p=>delete out[p]);
+    Object.assign(out,clone(w.imports),clone(w.edits));return out;
+  }
+  wtReady(w) {if(w.deleted)throw Error('先由管理员恢复实例。');this.online(this.dirs[this.repos[w.repo].dir].disk);}
+  wtPath(w,path) {
+    const parts=path.split('/');parts.forEach(p=>this.name(p));
+    if(parts.length>1&&!w.dirs.includes(parts.slice(0,-1).join('/')))throw Error('父目录不存在，请先在 worktree 创建。');
+    return path;
+  }
+  editWT(id,path,body) {
+    const w=this.worktrees[id];this.wtReady(w);const source=this.view(w)[path];
+    if(!source)throw Error('文件不存在。');if(body===source.body)return;
+    w.edits[path]={...source,body,saved:false};w.generation++;
+    this.log('worktree 写入','仅修改正文落入稀疏层；原快照不变。',source.fileId);
+  }
+  importWT(id,fileId,move=false,name='新文件.txt',body='外部新文件') {
+    const w=this.worktrees[id];this.wtReady(w);let f=fileId?this.files[fileId]:null;
+    if(f){this.online(f.disk);if(move)this.clean(f);name=f.name;}
+    this.wtPath(w,name);if(this.view(w)[name]||w.dirs.includes(name))throw Error('worktree 名称冲突。');
+    if(move)this.remove(f.id);else f=this.add(this.repos[w.repo].dir,name.split('/').pop(),f?this.current(f):body,true);
+    w.imports[name]={fileId:f.id,version:f.selected,branch:f.branch,body:this.current(f),storage:this.id()};
+    w.generation++;this.log(move?'移动容器进入 worktree':'复制 / 新文件进入 worktree','立即关联 deleted-data 容器；不猜测未知来源。',f.id);
+  }
+  renameWT(id,path,newPath) {
+    const w=this.worktrees[id];this.wtReady(w);this.wtPath(w,newPath);
+    if(this.view(w)[newPath]||w.dirs.includes(newPath))throw Error('名称冲突。');
+    const entry=this.view(w)[path];if(!entry)throw Error('文件不存在。');
+    if(w.edits[path]){w.edits[newPath]=w.edits[path];delete w.edits[path];}
+    else w.imports[newPath]=entry;
+    delete w.imports[path];w.removed.push(path);w.generation++;this.log('worktree 改名 / 移动',path+' → '+newPath);
+  }
+  removeWTFile(id,path) {
+    const w=this.worktrees[id];this.wtReady(w);delete w.edits[path];delete w.imports[path];
+    w.removed.push(path);w.generation++;this.log('worktree 删除文件','仅改变该实例最终清单，原快照和其他实例不动。');
+  }
+  mkdirWT(id,path) {
+    const w=this.worktrees[id];this.wtReady(w);this.wtPath(w,path);
+    if(w.dirs.includes(path)||this.view(w)[path])throw Error('名称冲突。');w.dirs.push(path);w.generation++;
+  }
+  changeWTDir(id,path,target=null) {
+    const w=this.worktrees[id];this.wtReady(w);
+    if(!w.dirs.includes(path))throw Error('目录不存在。');
+    if(target && (target===path || target.startsWith(path+'/')))throw Error('不能移入自身。');
+    if(target){this.wtPath(w,target);if(w.dirs.includes(target)||this.view(w)[target])throw Error('名称冲突。');}
+    const paths=Object.keys(this.view(w)).filter(p=>p.startsWith(path+'/'));
+    if(target){
+      const mapped=w.dirs.map(p=>p===path||p.startsWith(path+'/')?target+p.slice(path.length):p);
+      w.dirs=mapped;
+      paths.forEach(p=>this.renameWT(id,p,target+p.slice(path.length)));
+    }else{
+      paths.forEach(p=>this.removeWTFile(id,p));
+      w.dirs=w.dirs.filter(p=>p!==path&&!p.startsWith(path+'/'));
+    }
+    w.generation++;this.log(target?'worktree 目录移动':'worktree 目录删除','只改变本实例清单。');
+  }
+  exportWT(id,path,dir,move=false) {
+    const w=this.worktrees[id],entry=this.view(w)[path];this.wtReady(w);
+    const f=this.add(dir,path.split('/').pop(),entry.body);
+    if(move)this.removeWTFile(id,path);this.log('worktree 文件导出','目标即时独立容器，来源快照身份不被冒用。',f.id);return f;
+  }
+  preflightWT(w) {
+    for(const e of Object.values(w.edits)){const f=this.files[e.fileId];if(f){this.online(f.disk);this.clean(f);}}
+  }
+  publishEdits(w) {
+    this.preflightWT(w);
+    for(const [p,e] of Object.entries(w.edits)) {
+      if(e.saved)continue;const f=this.files[e.fileId];
+      if(f){const v=this.version(f,e.body,e.version,e.branch);e.version=v.id;e.branch=v.branch;}
+      e.saved=true;w.ledger[p]={version:e.version,generation:w.generation};
+    }
+  }
+  commitWT(id) {
+    const w=this.worktrees[id];this.wtReady(w);this.publishEdits(w);
+    const r=this.repos[w.repo];let branch=w.branch;
+    if(r.heads[branch]!==w.source){let n=1;while(r.heads['目录分支'+n])n++;branch='目录分支'+n;}
+    const files=this.view(w),counts={move:Object.keys(w.edits).length,copy:0};
+    for(const [p,e] of Object.entries(files)){e.storage=this.id();if(!w.edits[p])counts.copy++;}
+    const node={id:this.id(),repo:r.id,branch,parent:w.source,files,dirs:clone(w.dirs)};
+    this.nodes[node.id]=node;r.heads[branch]=node.id;w.source=node.id;w.branch=branch;
+    w.edits={};w.imports={};w.removed=[];w.generation++;
+    this.log('worktree 提交','MOVE '+counts.move+' / COPY '+counts.copy+'；SMB 结构不变，'+branch);return node;
+  }
+  deleteWT(id) {
+    const w=this.worktrees[id];this.wtReady(w);this.publishEdits(w);w.deleted=true;
+    this.log('软删除 worktree','只发布文件修改，未创建目录节点；保留代数收据防重复。');
+  }
+  restoreWT(id) {
+    const w=this.worktrees[id];if(!this.repos[w.repo].active)throw Error('先恢复仓库。');
+    w.name=this.allocateWT(w,w.name);w.deleted=false;this.log('恢复 worktree','原实例及编辑保留；原名冲突则重新分配。');
+  }
+  configureBackup(target,sources) {
+    const d=this.online(target);
+    if(d.level===1||!sources.length||sources.some(id=>!this.disks[id]||this.disks[id].level!==d.level-1))
+      throw Error('备份来源必须是紧邻上一级已登记盘，不能跳级或成环。');
+    d.sources=[...new Set(sources)];d.generation++;this.log('备份候选关系配置','配置不等于已复制；实际完整单位通过迁移计划选择。');
+  }
+  units(source) {
+    const repositories=Object.values(this.repos).filter(r=>r.active&&this.dirs[r.dir].disk===source);
+    const outer=repositories.filter(r=>!repositories.some(p=>p.id!==r.id&&this.descendants(p.dir).includes(r.dir)));
+    const covered=new Set(outer.flatMap(r=>this.descendants(r.dir)));
+    const units=outer.map(r=>({id:r.id,kind:'repository',dirs:this.descendants(r.dir),name:this.dirs[r.dir].name}));
+    Object.values(this.files).filter(f=>f.disk===source&&!covered.has(f.dir)).forEach(f=>units.push({id:f.id,kind:'container',dirs:[],name:f.name}));
+    return units;
+  }
+  captureDisk(source) {
+    const ids=Object.values(this.files).filter(f=>f.disk===source).map(f=>f.id);
+    const files=Object.fromEntries(ids.map(id=>[id,clone(this.files[id])]));
+    const repos=Object.values(this.repos).filter(r=>this.dirs[r.dir].disk===source);
+    return {files,dirs:Object.values(this.dirs).filter(d=>d.disk===source),repos:clone(repos),
+      nodes:Object.values(this.nodes).filter(n=>repos.some(r=>r.id===n.repo)),
+      worktrees:Object.values(this.worktrees).filter(w=>repos.some(r=>r.id===w.repo)),units:this.units(source)};
+  }
+  planBackup(source,target) {
+    this.online(source);const dest=this.online(target);
+    if(!dest.sources.includes(source))throw Error('先配置明确的相邻来源关系。');
+    const own=clone(this.captureDisk(source)),inherited=clone(this.disks[source].replicas);
+    const payload={own,inherited},size=bytes(JSON.stringify(payload));
+    if(size>dest.capacity)throw Error('目标容量不足，不能拆分完整容器/仓库或缩减历史。');
+    const j={id:this.id(),source,target,payload,size,phase:'planned',error:null,sourceGeneration:this.clock};
+    this.jobs[j.id]=j;this.log('全量迁移预览','完整单位 '+own.units.length+'；旧副本仍服务，目标所需 '+size+' 字节。');return j;
+  }
+  stepJob(id,fail=false) {
+    const j=this.jobs[id];this.online(j.target);this.online(j.source);
+    if(fail){j.error='模拟 I/O 中断，原副本保留';this.log('迁移中断',j.error);return;}
+    j.error=null;const phases=['planned','copied','verified','decided','installed'];
+    if(j.phase==='installed'||j.phase==='cancelled')return;
+    if(j.phase==='verified' && JSON.stringify(this.captureDisk(j.source))!==JSON.stringify(j.payload.own))
+      throw Error('来源在准备后变化，旧计划不能决定；取消并重新预览。');
+    j.phase=phases[phases.indexOf(j.phase)+1];
+    if(j.phase==='installed')this.disks[j.target].replicas[j.source]=clone(j.payload);
+    this.log('迁移阶段 '+j.phase,j.phase==='installed'?'新副本已切换；源盘与其他目标保留。':'原副本保持可用，不把准备当完成。');
+  }
+  cancelJob(id) {
+    const j=this.jobs[id];if(['decided','installed'].includes(j.phase))throw Error('决定之后不能取消，只能恢复完成。');
+    j.phase='cancelled';this.log('取消未决定迁移','保留源盘与原副本。');
+  }
+}
+const esc = value => String(value).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let sim = new Simulation();
+let actions = [];
+const $ = id => document.getElementById(id);
+const value = id => $(id).value;
+function button(label, fn, kind='') {
+  const id=actions.push(fn)-1;
+  return `<button class="${kind}" data-action="${id}">${esc(label)}</button>`;
+}
+function input(id,label,initial='') {
+  return `<label for="${id}">${esc(label)}</label><input id="${id}" value="${esc(initial)}">`;
+}
+function select(id,label,options,selected='') {
+  return `<label for="${id}">${esc(label)}</label><select id="${id}">${options.map(([key,text])=>
+    `<option value="${esc(key)}" ${key===selected?'selected':''}>${esc(text)}</option>`).join('')}</select>`;
+}
+function row(...items) { return '<div class="row">'+items.join('')+'</div>'; }
+function box(title,content,open=false) {
+  return `<details ${open?'open':''} class="feature"><summary>${esc(title)}</summary>${content}</details>`;
+}
+function notify(message) {
+  $('toast').className='toast';$('toast').textContent=message;
+  clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>{$('toast').className='';$('toast').textContent=''},5000);
+}
+function act(fn) {
+  const before=clone(sim);
+  try {fn();render();} catch(error) {
+    sim=Object.assign(Object.create(Simulation.prototype),before);render();notify(error.message);
+  }
+}
+function choose(kind,id,path) {sim.selected={kind,id,path};render();}
+function fileOptions() {return Object.values(sim.files).map(f=>[f.id,f.name+' · '+f.id.slice(-4)+(f.deleted?' [删除区]':'')]);}
+function dirOptions() {return Object.values(sim.dirs).filter(d=>sim.disks[d.disk].registered)
+  .map(d=>[d.id,sim.disks[d.disk].name+'/'+sim.path(d.id)]);}
+function diskOptions() {return Object.values(sim.disks).filter(d=>d.registered).map(d=>[d.id,d.name+' · L'+d.level]);}
+function download(name,text) {
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+  a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+const App={
+  reset(){sim=new Simulation();render();},
+  exportState(){download('zxs-demo-state.json',JSON.stringify(sim,null,2));},
+  save(){localStorage.setItem('zxs-demo-state',JSON.stringify(sim));notify('模拟状态已保存到本浏览器。');},
+  load(){act(()=>{const state=JSON.parse(localStorage.getItem('zxs-demo-state')||'null');
+    if(!state||state.format!=='zxs-demo-2026-11')throw Error('没有同格式保存状态；不自动迁移。');
+    sim=Object.assign(Object.create(Simulation.prototype),state);sim.log('模拟冷重开','恢复状态与工作稿；不代表真实持久化协议。');});}
+};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b)act(actions[Number(b.dataset.action)]);});
+function helper() {
+  const disks=diskOptions(),d=sim.disks[sim.disk];
+  let html=box('磁盘登记与初始化',input('diskName','新磁盘名称','数据盘 D')+
+    input('diskLevel','层级：1 为主盘，2–32 为备份盘','1')+
+    input('diskLimit','目标单组件上限（模拟探测值，字节）','255')+
+    input('diskCapacity','模拟可用容量（字节）','1000000')+
+    button('登记并创建三根',()=>{const x=sim.registerDisk(value('diskName'),+value('diskLevel'),+value('diskLimit'),+value('diskCapacity'));sim.disk=x.id;},'primary'));
+  html+=select('manageDisk','管理磁盘',disks,sim.disk)+button('选择磁盘',()=>{sim.disk=value('manageDisk');});
+  html+=`<div class="path">${esc(d.name)} · UUID ${d.uuid}<br>L${d.level} · ${d.online?'在线':'离线'} · ${d.capacity} 字节</div>`;
+  html+=box('改名、连接、校验与注销',input('diskRename','磁盘新名称',d.name)+row(
+    button('改名并更新下级组合目录',()=>sim.renameDisk(d.id,value('diskRename'))),
+    button(d.online?'模拟断开':'模拟重连',()=>sim.toggleDisk(d.id)),
+    button(d.corrupt?'校验恢复模拟材料':'注入磁盘损坏',()=>{d.corrupt=!d.corrupt;sim.log('模拟校验',d.corrupt?'损坏保留拒绝':'人工确认副本正确后恢复');}),
+    button('注销空盘',()=>sim.deregister(d.id),'danger')));
+  const targets=disks.filter(([id])=>sim.disks[id].level>1);
+  html+=box('多级备份 · 目标规则模拟',select('backupTarget','目标盘',targets)+
+    select('backupSource','直接来源盘',disks,sim.backupSource)+row(
+      button('加入明确来源',()=>{const t=value('backupTarget');sim.configureBackup(t,[...sim.disks[t].sources,value('backupSource')]);}),
+      button('创建全量迁移计划',()=>sim.planBackup(value('backupSource'),value('backupTarget'))))+
+    '<p class="hint">允许扇出；点击一次计划明确选择一个完整目标，不从候选数推断份数。目录仓库及子仓同层同盘，完整历史/工作稿保留。生产多级备份仍排最后。</p>'+
+    Object.values(sim.disks).filter(x=>x.sources.length).map(x=>`<div class="path">${esc(x.name)} ← ${x.sources.map(id=>esc(sim.disks[id].name)).join('、')}</div>`).join('')+
+    Object.values(sim.jobs).map(j=>`<div class="selected">${esc(sim.disks[j.source].name)} → ${esc(sim.disks[j.target].name)} · ${j.phase} · ${j.size} bytes ${esc(j.error||'')}${row(
+      button('下一阶段 / 恢复',()=>sim.stepJob(j.id)),button('注入 I/O 中断',()=>sim.stepJob(j.id,true)),button('取消决定前计划',()=>sim.cancelJob(j.id)))}</div>`).join(''));
+  html+=box('普通盘转换预览（不恢复非容器产品功能）',input('convertName','源盘待转换名称','过长名称.txt')+
+    button('检查并转换为容器',()=>{sim.name(value('convertName'),d.limit-16);sim.add(d.root,value('convertName'),'模拟源文件');
+      sim.log('显式转换','超限拒绝，要求用户改名后重新操作；不截断。');}));
+  html+=box('示例控制与已定边界',row(button('保存模拟状态',()=>App.save()),button('模拟重启恢复',()=>App.load()))+
+    '<p class="hint">默认仅内存；保存后可刷新并恢复。只接受当前演示格式，不做兼容。此处所有永久删除、root、磁盘操作都只影响模拟状态。认证、OS 锁、SMB 协议、哈希和 fsync 不是浏览器真实实现。</p>');
+  return html;
+}
+function fileGraph(f) {
+  const branches=Object.keys(f.heads);
+  const operations=sim.events.filter(e=>e.fileId===f.id &&
+    !['保存并提交正文','手动提交文件','worktree 写入'].includes(e.title));
+  const boundaries=[{id:'origin',order:0,title:'初始基线',detail:''},...operations];
+  boundaries.push({id:'now',order:Infinity,title:'当前',detail:''});
+  const sections=[];
+  for(let i=0;i<boundaries.length-1;i++) {
+    const lower=boundaries[i],upper=boundaries[i+1];
+    const nodes=f.versions.filter(v=>v.order>lower.order&&v.order<=upper.order);
+    const members=new Map(nodes.map(v=>[v.id,v])),rank=new Map();
+    const getRank=v=>{
+      if(rank.has(v.id))return rank.get(v.id);
+      const parents=[v.parent,v.mergeParent].filter(id=>members.has(id));
+      const r=1+Math.max(0,...parents.map(id=>getRank(members.get(id))));rank.set(v.id,r);return r;
+    };
+    nodes.forEach(getRank);
+    const rows=[];
+    for(let r=Math.max(0,...rank.values());r>=1;r--) {
+      rows.push('<div class="graph-row" style="grid-template-columns:repeat('+branches.length+',minmax(90px,1fr))">'+
+        branches.map(branch=>'<div class="graph-cell">'+nodes.filter(v=>v.branch===branch&&rank.get(v.id)===r).map(v=>
+          '<div class="node-card">'+button(f.marks[v.id]||v.id.slice(-4),()=>sim.selectVersion(f.id,v.id),f.selected===v.id?'primary':'')+
+          '<small>父 '+esc(v.parent?.slice(-4)||'根')+(v.mergeParent?' / '+v.mergeParent.slice(-4):'')+'</small></div>').join('')+'</div>').join('')+'</div>');
+    }
+    sections.push('<section id="event-'+upper.id+'"><div class="event-line">'+
+      button('● '+upper.title,()=>{document.getElementById('event-'+upper.id)?.scrollIntoView({block:'nearest'});notify(upper.detail||upper.title);})+
+      '<small>'+esc(upper.detail)+'</small></div>'+rows.join('')+'</section>');
+  }
+  return '<div class="history-graph"><div class="graph-title">'+branches.map(esc).join(' │ ')+
+    '</div>'+sections.reverse().join('')+'<p class="hint">虚线为操作事件，不是内容父边。各段按最长内容因果路径分行；空分支导线延伸，短分支节点不拔高。</p></div>';
+}
+function zxsWeb() {
+  let html=row(button(sim.loggedIn?'模拟注销管理员':'模拟管理员登录',()=>{sim.loggedIn=!sim.loggedIn;}));
+  if(!sim.loggedIn)return html+'<div class="notice">演示会话已注销。管理操作隐藏，SMB 会话独立。</div>';
+  const s=sim.selected;
+  if(s?.kind==='file'&&sim.files[s.id]) {
+    const f=sim.files[s.id];html+=`<div class="selected"><strong>${esc(f.name)}</strong><div class="small">稳定容器 ${f.id} · ${f.versions.length} 节点 · 当前 ${esc(f.branch)}</div></div>`;
+    html+=row(button(f.auto?'自动提交：开启':'自动提交：关闭',()=>sim.mode(f.id)),
+      button('显式提交工作稿',()=>sim.commitFile(f.id),'primary'),
+      button('丢弃工作稿',()=>{if(confirm('丢弃本演示工作稿？'))sim.discard(f.id);}));
+    html+=box('分支、节点标记与标签',select('fileBranch','分支',Object.entries(f.heads).map(([b])=>[b,b]),f.branch)+
+      row(button('选择分支 HEAD',()=>sim.selectVersion(f.id,f.heads[value('fileBranch')],value('fileBranch'))),
+        button('采用该分支正文合并',()=>sim.merge(f.id,value('fileBranch'))))+
+      input('branchName','分支显示名（演示上限 31 字节）','topic')+row(
+        button('从当前节点建分支',()=>sim.createBranch(f.id,value('branchName'))),
+        button('当前分支改名',()=>sim.renameBranch(f.id,value('branchName'))))+
+      input('nodeMark','当前节点显示名（最多 31 字节）',f.marks[f.selected]||'')+
+      button('标记节点',()=>{f.marks[f.selected]=sim.name(value('nodeMark'),31);sim.log('标记节点','仅显示名，不创建内容节点。',f.id);})+
+      input('tags','容器标签，以逗号分隔',f.tags.join(','))+button('保存容器标签',()=>{f.tags=value('tags').split(',').map(x=>x.trim()).filter(Boolean);sim.log('修改标签','所有分支/节点共用当前容器标签。',f.id);})+
+      (f.deleted?button('模拟物理删除',()=>{if(confirm('仅在演示中永久移除此容器？快照仍保留。'))sim.purge(f.id);},'danger'):''));
+    html+=box('内容树 + 操作时间线（点击可选节点/查看事件）',fileGraph(f),true);
+  }
+  const repos=Object.values(sim.repos);
+  html+=box('目录仓库管理',select('repository','仓库',repos.map(r=>[r.id,sim.path(r.dir)+(r.active?'':' [已撤销]')]),sim.repo)+
+    input('repoBranch','目录分支名称','topic')+row(button('选择仓库',()=>{sim.repo=value('repository');}),button('提交当前 SMB 完整快照',()=>sim.snapshot(value('repository')),'primary'),
+      button('撤销目录仓库',()=>sim.revokeRepo(value('repository')),'danger'),
+      button('从当前 HEAD 建命名分支',()=>{const r=sim.repos[value('repository')],name=sim.name(value('repoBranch'),31);if(name in r.heads)throw Error('分支已存在');r.heads[name]=r.heads[r.branch];r.branch=name;sim.log('目录命名分支',name);}))+
+    select('restoreRepositoryDir','恢复到目录',dirOptions(),sim.currentDir)+button('管理员恢复仓库',()=>sim.restoreRepo(value('repository'),value('restoreRepositoryDir'))));
+  const repo=sim.repos[sim.repo];
+  if(repo){const nodes=Object.values(sim.nodes).filter(n=>n.repo===repo.id);
+    html+=select('sourceNode','准确历史目录节点',nodes.map(n=>[n.id,n.branch+' / '+n.id.slice(-4)]))+
+      button('创建独立 worktree',()=>{const w=sim.createWT(value('sourceNode'));sim.selected={kind:'wt',id:w.id};},'primary');}
+  if(s?.kind==='wt'&&sim.worktrees[s.id]){const w=sim.worktrees[s.id];html+=`<div class="selected">${esc(w.name)} · 代数 ${w.generation} · ${w.deleted?'已软删除':'活动'}</div>`+
+    row(w.deleted?button('管理员恢复实例',()=>sim.restoreWT(w.id)):button('提交 worktree',()=>sim.commitWT(w.id),'primary'))+
+    '<p class="hint">真实容器物理不存在才跳过同步；离线/损坏阻断。手动文件模式与目录提交边界按仓库未决说明保留，演示采用明确目录提交保存修改。</p>';}
+  html+=box('管理员恢复软删除实例',Object.values(sim.worktrees).filter(w=>w.deleted).map(w=>row(
+    button(w.name+' · '+w.id.slice(-4),()=>choose('wt',w.id)),button('恢复',()=>sim.restoreWT(w.id)))).join('')||'无软删除实例');
+  return html;
+}
+function smbControls() {
+  let html=select('smbDir','当前 SMB 普通目录',dirOptions(),sim.currentDir)+button('打开目录',()=>{sim.currentDir=value('smbDir');sim.selected={kind:'dir',id:sim.currentDir};});
+  html+=box('新建 / 初始化 / 目录操作',input('newName','文件或目录名称','新文件.txt')+row(
+    button('创建文件容器',()=>{const f=sim.add(sim.currentDir,value('newName'),'');choose('file',f.id);},'primary'),
+    button('创建普通目录',()=>sim.mkdir(sim.currentDir,value('newName'))),
+    button('初始化当前目录仓库',()=>{sim.repo=sim.initRepo(sim.currentDir).id;}))+
+    input('renameDir','当前目录新名称','项目改名')+select('moveDirTarget','目录移动目的父目录',dirOptions())+
+    row(button('目录改名',()=>sim.renameDir(sim.currentDir,value('renameDir'))),
+      button('移动目录',()=>sim.moveDir(sim.currentDir,value('moveDirTarget'))),
+      button('复制目录',()=>sim.copyDir(sim.currentDir,value('moveDirTarget'))),
+      button('删除普通目录',()=>{const parent=sim.dirs[sim.currentDir].parent;sim.removeDir(sim.currentDir);sim.currentDir=parent;},'danger')));
+  const s=sim.selected;
+  if(s?.kind==='file'&&sim.files[s.id]) {
+    const f=sim.files[s.id];html+=`<label>编辑 ${esc(f.name)} ${f.deleted?'（删除区只读）':''}</label><textarea id="fileBody" ${f.deleted?'readonly':''}>${esc(sim.current(f))}</textarea>`;
+    if(!f.deleted)html+=button(f.auto?'保存文件（自动提交）':'保存共享工作稿',()=>sim.saveFile(f.id,value('fileBody')),'primary');
+    html+=input('fileRename','文件最新名称',f.name)+(!f.deleted?button('改名',()=>sim.rename(f.id,value('fileRename'))):'')+
+      select('fileDest','目标普通目录',dirOptions(),sim.currentDir)+row(
+        button(f.deleted?'恢复到目标':'明确移动',()=>sim.move(f.id,value('fileDest'))),
+        button('SMB 复制为新容器',()=>sim.copy(f.id,value('fileDest'))),
+        !f.deleted?button('软删除',()=>sim.remove(f.id),'danger'):'');
+  }
+  if(s?.kind==='wt'&&sim.worktrees[s.id]) {
+    const w=sim.worktrees[s.id],files=sim.view(w),path=files[s.path]?s.path:Object.keys(files)[0];
+    html+=`<div class="selected">${esc(w.name)} · ${w.deleted?'软删除':'稀疏工作区'}</div>`;
+    if(path)html+=`<label>${esc(path)}</label><textarea id="wtBody" ${w.deleted?'readonly':''}>${esc(files[path].body)}</textarea>`;
+    if(!w.deleted) {
+      if(path)html+=row(button('保存修改',()=>sim.editWT(w.id,path,value('wtBody')),'primary'),button('删除此文件',()=>sim.removeWTFile(w.id,path),'danger'))+
+        input('wtRename','工作区新相对路径',path)+button('改名 / 内部移动',()=>{sim.renameWT(w.id,path,value('wtRename'));sim.selected.path=value('wtRename');});
+      html+=box('worktree 导入、目录与导出',select('wtSource','明确来源容器（或外部新文件）',[['','外部来源不明'],...fileOptions()])+
+        input('wtName','外部新文件相对路径 / 新建子目录名','导入.txt')+
+        row(button('复制 / 新文件进入',()=>sim.importWT(w.id,value('wtSource')||null,false,value('wtName'))),
+          button('明确移动已有容器进入',()=>{if(!value('wtSource'))throw Error('请选择明确来源');sim.importWT(w.id,value('wtSource'),true);}),
+          button('创建空子目录',()=>sim.mkdirWT(w.id,value('wtName'))))+
+        select('wtDirectory','工作区子目录',w.dirs.map(p=>[p,p]))+
+        row(button('重命名/移动子目录',()=>sim.changeWTDir(w.id,value('wtDirectory'),value('wtName'))),
+          button('删除子目录',()=>sim.changeWTDir(w.id,value('wtDirectory'))))+
+        (path?select('wtDest','导出目标目录',dirOptions())+row(
+          button('复制出去',()=>sim.exportWT(w.id,path,value('wtDest'))),
+          button('移动出去',()=>sim.exportWT(w.id,path,value('wtDest'),true))):''));
+      html+=button('软删除 worktree',()=>sim.deleteWT(w.id),'danger');
+    }
+  }
+  return html;
+}
+function fileRow(f) {
+  return button((f.deleted?f.trash:'')+f.name+' · '+f.id.slice(-4)+(f.draft!==null?' [工作稿]':''),()=>choose('file',f.id),sim.selected?.id===f.id?'primary':'');
+}
+function smb() {
+  let html='<h3>'+esc(sim.path(sim.currentDir))+'</h3>';
+  html+=Object.values(sim.dirs).filter(d=>d.parent===sim.currentDir).map(d=>row(button('▸ '+d.name,()=>{sim.currentDir=d.id;choose('dir',d.id);}))).join('');
+  html+=Object.values(sim.files).filter(f=>!f.deleted&&f.dir===sim.currentDir).map(f=>row(fileRow(f))).join('');
+  html+=box('当前父目录可见 worktree',Object.values(sim.worktrees).filter(w=>!w.deleted&&w.parent===sim.currentDir).map(w=>
+    box(w.name,button('管理此 worktree',()=>choose('wt',w.id))+w.dirs.map(esc).join(' / ')+
+      Object.entries(sim.view(w)).map(([path])=>row(button('↪ '+path+(w.edits[path]?' [修改正文]':' [映射]'),()=>choose('wt',w.id,path)))).join(''),true)).join('')||
+      '<p class="hint">worktree 显示在原目录的父目录。可在左侧管理区选择实例，或打开对应父目录。</p>',true);
+  html+=box('deleted-data（所有盘） · 正文只读',Object.values(sim.files).filter(f=>f.deleted).map(f=>row(fileRow(f))).join('')||'空',true);
+  html+=box('全部 worktree 快捷导航',Object.values(sim.worktrees).map(w=>row(button(w.name+(w.deleted?' [已软删]':''),()=>choose('wt',w.id)))).join(''));
+  return html;
+}
+function tree(name,content,open=false) {return `<details ${open?'open':''}><summary>${esc(name)}</summary>${content}</details>`;}
+function leaf(name,kind='') {return `<div class="leaf ${kind}">${esc(name)}</div>`;}
+function physicalFile(f) {
+  return tree((f.deleted?f.trash:'')+f.name+'/',leaf('FILE 数据库：'+f.id+' / 标签 '+f.tags.join(','),'meta')+
+    f.versions.map(v=>leaf(v.id+'-'+f.name+(v.id===f.selected?' ← SMB':''))).join('')+
+    (f.draft!==null?leaf('working-draft / '+bytes(f.draft)+' bytes','new'):''),true);
+}
+function physicalRepo(r) {
+  return tree(r.active?'.zxs/':r.trash+'/',leaf('仓库数据库 / manifest / 分支 HEAD','meta')+
+    Object.values(sim.nodes).filter(n=>n.repo===r.id).map(n=>tree(n.id+'-'+sim.dirs[r.dir].name+'/',
+      tree('files/',Object.entries(n.files).map(([p,e])=>leaf(e.storage+'-'+p.split('/').pop()+' ← '+p)).join(''))+
+      tree('worktrees/',Object.values(sim.worktrees).filter(w=>w.source===n.id).map(w=>tree(w.id+' / '+(w.deleted?'[软删] ':''),
+        leaf('SMB '+w.name+' · '+Object.keys(sim.view(w)).length+' 映射','map')+
+        (Object.keys(w.edits).length?Object.entries(w.edits).map(([p,e])=>leaf(p+' · '+bytes(e.body)+' bytes','new')).join(''):leaf('空正文目录','meta')))).join('')))).join(''));
+}
+function physicalDir(id) {
+  return Object.values(sim.dirs).filter(d=>d.parent===id).map(d=>tree(d.name+'/',physicalDir(d.id),true)).join('')+
+    Object.values(sim.files).filter(f=>f.dir===id&&!f.deleted).map(physicalFile).join('')+
+    Object.values(sim.repos).filter(r=>r.active&&r.dir===id).map(physicalRepo).join('');
+}
+function replicaTree(source,payload) {
+  const d=sim.disks[source];return tree(d.name+'--'+d.uuid+'/',
+    tree('common-data/',Object.values(payload.own.files).filter(f=>!f.deleted).map(physicalFile).join(''))+
+    tree('deleted-data/',Object.values(payload.own.files).filter(f=>f.deleted).map(physicalFile).join(''))+
+    tree('zxs-data/',leaf('DISK 数据库 / 整体单位 '+payload.own.units.length,'meta')+
+      leaf('仓库 '+payload.own.repos.length+' / 快照 '+payload.own.nodes.length+' / worktree '+payload.own.worktrees.length,'meta'))+
+    Object.entries(payload.inherited).map(([id,p])=>replicaTree(id,p)).join(''));
+}
+function disk() {
+  return tree('系统盘 /',leaf('SYSTEM 数据库：全局身份、位置、操作决定与登记','meta'),true)+
+    Object.values(sim.disks).map(d=>tree(d.name+' / '+(d.online?'在线':'离线')+(d.corrupt?' [损坏]':''),
+      leaf('UUID '+d.uuid+' / 组件上限 '+d.limit,'meta')+
+      tree('common-data/',physicalDir(d.root),true)+
+      tree('deleted-data/',Object.values(sim.files).filter(f=>f.disk===d.id&&f.deleted).map(physicalFile).join('')+
+        Object.values(sim.repos).filter(r=>!r.active&&sim.dirs[r.dir].disk===d.id).map(physicalRepo).join(''),true)+
+      tree('zxs-data/',tree('common-data/',leaf('DISK 当前对象索引、磁盘身份、操作日志','meta'))+
+        tree('deleted-data/',leaf('DISK 保留实体与恢复索引','meta')),true)+
+      Object.entries(d.replicas).map(([id,p])=>replicaTree(id,p)).join('')+
+      Object.values(sim.jobs).filter(j=>j.target===d.id&&!['installed','cancelled'].includes(j.phase)).map(j=>
+        tree('migration-'+j.id+'/',leaf(j.phase+'：未切换副本，原数据保留','new'))).join(''),d.id===sim.disk)).join('');
+}
+function render() {
+  const opened=new Set([...document.querySelectorAll('details.feature[open]')].map(d=>d.querySelector('summary').textContent));
+  const positions=[...document.querySelectorAll('.panel .content')].map(e=>e.scrollTop);
+  actions=[];
+  $('stats').innerHTML=`<div class="stat"><strong>${Object.keys(sim.disks).length}</strong>磁盘</div><div class="stat"><strong>${Object.keys(sim.files).length}</strong>容器</div><div class="stat"><strong>${Object.values(sim.files).reduce((n,f)=>n+f.versions.length,0)}</strong>内容节点</div><div class="stat"><strong>${Object.keys(sim.worktrees).length}</strong>worktree</div><span class="small">独立目标规则模拟 · 非产品完成度证明</span>`;
+  $('helperControls').innerHTML=helper();$('controls').innerHTML=zxsWeb();
+  $('smbControls').innerHTML=smbControls();$('smbView').innerHTML=smb();$('diskView').innerHTML=disk();
+  document.querySelectorAll('details.feature').forEach(d=>{if(opened.has(d.querySelector('summary').textContent))d.open=true;});
+  document.querySelectorAll('.panel .content').forEach((e,i)=>{e.scrollTop=positions[i]||0;});
+  $('events').innerHTML=sim.events.slice(-100).reverse().map(e=>`<div class="event"><time>${e.at.slice(11,19)}</time><div><b>${esc(e.title)}</b><div class="small">${esc(e.detail)}</div></div></div>`).join('');
+}
+function resetLayout(){const w=document.querySelector('#workspace');w.style.setProperty('--split',46);w.style.setProperty('--leftH',33);w.style.setProperty('--rightH',55);try{localStorage.removeItem('zxs-demo-layout')}catch{}}
+function setupSplitters(){const area=document.querySelector('#workspace');const keys={columns:'--split',left:'--leftH',right:'--rightH'};try{const v=JSON.parse(localStorage.getItem('zxs-demo-layout')||'null');if(v)for(const k of Object.values(keys))if(Number.isFinite(v[k]))area.style.setProperty(k,v[k])}catch{}
+function apply(el,value){const split=el.dataset.split;let lo=20,hi=80;if(split==='columns'){const width=area.getBoundingClientRect().width;lo=320/width*100;hi=100-350/width*100}value=Math.max(lo,Math.min(hi,value));area.style.setProperty(keys[split],value);el.setAttribute('aria-valuenow',Math.round(value));try{localStorage.setItem('zxs-demo-layout',JSON.stringify(Object.fromEntries(Object.values(keys).map(k=>[k,parseFloat(getComputedStyle(area).getPropertyValue(k))]))))}catch{}}
+for(const el of document.querySelectorAll('.separator')){el.setAttribute('aria-valuemin','20');el.setAttribute('aria-valuemax','80');el.setAttribute('aria-valuenow',parseFloat(getComputedStyle(area).getPropertyValue(keys[el.dataset.split])));el.addEventListener('pointerdown',e=>{el.setPointerCapture(e.pointerId);e.preventDefault()});el.addEventListener('pointermove',e=>{if(!el.hasPointerCapture(e.pointerId))return;const s=el.dataset.split,r=(s==='columns'?area:document.querySelector(s==='left'?'#leftColumn':'#rightColumn')).getBoundingClientRect();apply(el,s==='columns'?(e.clientX-r.left)/r.width*100:(e.clientY-r.top)/r.height*100)});el.addEventListener('pointerup',e=>{if(el.hasPointerCapture(e.pointerId))el.releasePointerCapture(e.pointerId)});el.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(e.key)){e.preventDefault();apply(el,e.key==='Home'?50:parseFloat(getComputedStyle(area).getPropertyValue(keys[el.dataset.split]))+(['ArrowRight','ArrowDown'].includes(e.key)?2:-2))}})}}
+
+render();setupSplitters();
+window.ZXSDemo={Simulation};
+</script></body></html>

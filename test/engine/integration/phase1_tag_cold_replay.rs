@@ -1,6 +1,6 @@
 //! Phase-one native saves and permanent tag receipts across cold reopens.
 //! Every mutation and content read uses the production Engine on temporary roots.
-use std::{collections::BTreeSet, io::Read};
+use std::{collections::BTreeSet, io::Read, os::unix::fs::DirBuilderExt};
 use storage_engine::*;
 use storage_engine as engine_api;
 use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
@@ -32,9 +32,13 @@ impl Labels {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let config =
-            Config::independent_roots(Mode::Development, [root.path().join("primary")]).unwrap();
-        let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+        let system = root.path().join("system");
+        let primary = root.path().join("primary");
+        for path in [&system, &primary] {
+            std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+        }
+        let config = Config::independent_roots(Mode::Development, [primary]).unwrap();
+        let mut engine = Engine::initialize_storage(&system, config, op()).unwrap();
         let repository = engine.create_disk_root("D01", "admin", op()).unwrap();
         Self {
             root,

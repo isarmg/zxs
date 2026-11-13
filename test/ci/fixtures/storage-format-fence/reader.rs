@@ -1,5 +1,6 @@
 //! Cross-revision executable wrapper. The Engine always comes from its own checkout.
 use std::{env, fs, path::Path, os::unix::fs::PermissionsExt};
+use std::io::Read;
 use storage_engine::{Config, Engine, OperationId};
 use platform_io::fs_safety::PrivateDirectory;
 
@@ -39,8 +40,11 @@ fn open(root: &Path) -> i32 {
             let branch = fs::read_to_string(root.join("branch")).unwrap();
             let entries = engine.list_tree(&branch).unwrap();
             let entry = entries.iter().find(|entry| entry.path() == "preserved.txt").unwrap();
-            let path = engine.valid_replica(&entry.version_id).unwrap().0;
-            assert_eq!(fs::read(path.path()).unwrap(), BODY);
+            let mut content = engine.open_content(&entry.version_id).unwrap();
+            let mut bytes = Vec::new();
+            content.file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(content.size, BODY.len() as u64);
+            assert_eq!(bytes, BODY);
             println!("opened exact retained file through actual Engine");
             0
         }
