@@ -391,7 +391,15 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
             OperationId::generate().unwrap(),
         )
         .unwrap();
-    let target = engine.create_disk_root("D04", "admin", OperationId::generate().unwrap())
+    // This is an independent history-copy target, not a secondary-slot disk root.
+    let target = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("audit copy target").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let operation = OperationId::generate().unwrap();
     let receipt = engine.copy_file_history(
@@ -412,6 +420,8 @@ fn file_lifecycle_new_graph_copy_rejects_missing_audit_without_repairing_source(
     let copied = engine.list_tree(&target.main_branch_id).unwrap().into_iter()
         .find(|entry| entry.path() == "copied.txt").unwrap();
     let copied_file = HistoryFileId::parse(&copied.file_id).unwrap();
+    assert_ne!(copied_file, file);
+    assert_ne!(copied.version_id, version.as_str());
     let retained = crate::business::history_copy::retained::read(&receipt, &copied.file_id)
         .unwrap();
     assert_eq!(retained.path_changes.len(), 1);

@@ -58,7 +58,7 @@ fn fixture() -> Fixture {
             "source_head":id("commit", 1), "source_entries":[],
             "target_head":id("commit", 2), "target_entries":[]
         },
-        "version_mapping":{}, "retained_version_ids":[],
+        "version_mapping":{}, "retained_version_ids":[], "path_changes":[],
         "source_deletions":[node(&source, 1)],
         "displaced_deletions":[node(&displaced, 2)],
         "imported_deletions":[node(&imported, 3)],
@@ -66,7 +66,7 @@ fn fixture() -> Fixture {
         "retained_lifecycle":[{
             "source_file_id":source, "source_history_tree_id":id("history", 2),
             "source_sequence":"1", "source_records_hash":"a".repeat(64),
-            "file_id":imported, "history_tree_id":history,
+            "file_id":imported, "history_tree_id":history, "path_changes":[],
             "events":[{
                 "operation_id":prior, "action":"delete", "sequence":"1", "author":"alice",
                 "node":{
@@ -217,6 +217,21 @@ fn file_principal_and_duplicate_members_are_still_rejected() {
 #[test]
 fn decoding_is_lazy_and_preserves_strict_payload_and_byte_limit() {
     let mut fixture = fixture();
+    for retained in [false, true] {
+        let mut missing = fixture.state.clone();
+        let result = &mut missing.operations.get_mut(&fixture.operation).unwrap().result;
+        let envelope = if retained {
+            &mut result["retained_lifecycle"][0]
+        } else {
+            result
+        };
+        envelope.as_object_mut().unwrap().remove("path_changes");
+        let projection = ProjectionSnapshot::new(&missing);
+        assert_eq!(
+            projection.view().object_move(fixture.operation).err().unwrap().code(),
+            ErrorCode::InvalidJson,
+        );
+    }
     fixture
         .state
         .operations

@@ -20,6 +20,22 @@ fn name(number: u8, text: &str) -> (FileId, Name) {
 }
 
 #[test]
+fn equivalent_lookup_rename_preserves_canonical_owner_and_cross_parent_destination() {
+    use crate::business::namespace::container_name::renamed_file_location;
+    let owner = PortablePath::parse("physical/Å.txt").unwrap();
+    let source = name_policy::LookupPath::parse("Cafe\u{301}/A\u{30a}.txt").unwrap();
+    let renamed = renamed_file_location(
+        &owner, &source, &PortablePath::parse("Café/가.txt").unwrap(),
+    ).unwrap();
+    assert_eq!(renamed.as_str(), "physical/가.txt");
+    assert_eq!(owner.as_str(), "physical/Å.txt");
+    let moved = renamed_file_location(
+        &owner, &source, &PortablePath::parse("elsewhere/deeper/가.txt").unwrap(),
+    ).unwrap();
+    assert_eq!(moved.as_str(), "elsewhere/deeper/가.txt");
+}
+
+#[test]
 fn current_names_plan_every_alias_without_changing_sources_or_content_identity() {
     let entries = vec![file("a/old.txt", 1), file("b/stale.txt", 1), file("c/other.txt", 2)];
     let original = entries.clone();

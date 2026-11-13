@@ -262,4 +262,13 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     assert_eq!(renamed.entry_id, original.entry_id);
     assert_eq!(renamed.file_id, original.file_id);
     assert_eq!(renamed.version_id, original.version_id);
+    assert_eq!(engine.state().file_locations[&renamed.file_id], "Café/가.txt");
+    drop(engine);
+    let engine = Engine::open(&root).unwrap();
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap(), entries);
+    assert_eq!(engine.state().file_locations[&renamed.file_id], "Café/가.txt");
+    let mut content = engine.open_content(&renamed.version_id).unwrap();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut content.file, &mut bytes).unwrap();
+    assert_eq!(bytes, b"unchanged body");
 }

@@ -520,10 +520,7 @@ impl PayloadProofCursor<'_> {
                 offset += count as u64;
             }
             if ContentHash::from_digest(full.finalize()) != version.content_hash {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::ChecksumMismatch,
-                    "renamed payload hash differs from its prepared version",
-                ));
+                return Err(Error::Payload(platform_io::payload::Error::Digest));
             }
             entry.body.validate_stamp(&entry.disk.root, &path, &current)?;
         } else {
