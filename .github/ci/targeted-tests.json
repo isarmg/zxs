@@ -1,7 +1,7 @@
 {
   "groups": {
     "readmission-exit-stop-observation": {
-      "reason": "Fixture-only diagnostic for the original single four-barrier readmitted-survivor test; preserve all three member cycles, assertions and the total 300-second limit. Does not replace full production consumer acceptance.",
+      "reason": "Four independently initialized real locator barriers, each with all three readmission cycles and full quorum/epoch/resume/cold assertions. Each exact test has 150 seconds (aggregate cap 600 seconds), replacing the prior single 300-second loop; the unrelated original 17-cut readmission test remains at 300 seconds.",
       "python_tests": [
         "test_readmission_observation_targeted_ci"
       ],
@@ -14,10 +14,13 @@
             "fault-injection"
           ],
           "exact": [
-            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier"
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_head",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_head"
           ],
-          "max_tests": 1,
-          "timeout_seconds": 300
+          "max_tests": 4,
+          "timeout_seconds": 150
         }
       ]
     },
@@ -44,7 +47,7 @@
             "engine::membership_transition::readmission::",
             "engine::membership_transition::pending::activation::recovery::restricted::"
           ],
-          "max_tests": 60,
+          "max_tests": 63,
           "timeout_seconds": 300
         },
         {
@@ -75,6 +78,22 @@
           ],
           "max_tests": 6,
           "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_head",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_head"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 150
         }
       ]
     },

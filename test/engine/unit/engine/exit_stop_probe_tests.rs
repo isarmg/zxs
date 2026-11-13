@@ -228,93 +228,105 @@ fn prepare_exit(engine: &mut Engine, disk: &str, operation: OperationId) {
     assert!(decision.all_certificates_synchronized());
 }
 
-#[test]
-fn prepared_exit_stop_uses_readmitted_survivors_at_every_locator_barrier() {
+fn readmitted_survivors_at_locator_barrier(phase: WriteFault) {
     use std::io::Write;
     let started = std::time::Instant::now();
-    for phase in [
-        WriteFault::BeforeRecord,
-        WriteFault::AfterRecord,
-        WriteFault::BeforeHead,
-        WriteFault::AfterHead,
-    ] {
-        let progress = |stage: &str| {
-            let message = format!("\nZXS_EXIT_STOP phase={phase:?} stage={stage} elapsed_ms={}\n",
-                started.elapsed().as_millis());
-            let mut stderr = std::io::stderr().lock();
-            stderr.write_all(message.as_bytes()).unwrap();
-            stderr.flush().unwrap();
-        };
-        let fixture = ReadmittedFixture::new_observed(phase, &progress);
-        progress("verify_survivors.begin");
-        let mut io = CountedIo::default();
-        let verified = fixture.verify(&mut io).unwrap();
-        assert_eq!(
-            (
-                verified.metadata_members().len(),
-                verified.metadata_quorum()
-            ),
-            (2, 2)
-        );
-        assert_eq!(io.stats.len(), 2);
-        assert_eq!(io.opens.len(), 2);
-        assert!(!io.stats.contains(&fixture.original.disks[0].root));
-        assert!(!io.opens.contains(&fixture.original.disks[0].root));
-        for disk in &fixture.original.disks[1..] {
-            assert!(io.stats.contains(&disk.root));
-            assert!(io.opens.contains(&disk.root));
-            let epoch = fixture.projected.io_admission_epoch(&disk.disk_id).unwrap();
-            assert!(epoch.is_some());
-            assert_eq!(verified.io_admission_epoch(&disk.disk_id).unwrap(), epoch);
-        }
-        progress("verify_survivors.end");
-        progress("resume.begin");
-        let mut resumed = Engine::resume_membership_activation(&fixture.system()).unwrap();
-        progress("resume.end");
-        progress("activate.begin");
-        let result = resumed.activate_pending_disk_exit().unwrap();
-        progress("activate.end");
-        assert_eq!(result.operation_id, fixture.operation);
-        for (operation, result) in fixture.before.operations.iter() {
-            assert_eq!(
-                resumed.operation_record(*operation).unwrap().result(),
-                result
-            );
-        }
-        assert!(
-            resumed
-                .config
-                .excludes_io_disk(&fixture.original.disks[0].disk_id)
-        );
-        progress("resumed_drop.begin");
-        drop(resumed);
-        progress("resumed_drop.end");
-        progress("cold.begin");
-        let reopened = Engine::open(&fixture.system()).unwrap();
-        progress("cold.end");
-        assert_eq!(
-            reopened
-                .operation_record(fixture.operation)
-                .unwrap()
-                .result(),
-            &result
-        );
-        assert_eq!(
-            (
-                reopened.config.metadata_members().len(),
-                reopened.config.metadata_quorum()
-            ),
-            (2, 2)
-        );
-        progress("cleanup.begin");
-        drop(reopened);
-        drop(result);
-        drop(verified);
-        drop(io);
-        drop(fixture);
-        progress("cleanup.end");
-        progress("phase.end");
+    let progress = |stage: &str| {
+        let message = format!("\nZXS_EXIT_STOP phase={phase:?} stage={stage} elapsed_ms={}\n",
+            started.elapsed().as_millis());
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(message.as_bytes()).unwrap();
+        stderr.flush().unwrap();
+    };
+    let fixture = ReadmittedFixture::new_observed(phase, &progress);
+    progress("verify_survivors.begin");
+    let mut io = CountedIo::default();
+    let verified = fixture.verify(&mut io).unwrap();
+    assert_eq!(
+        (
+            verified.metadata_members().len(),
+            verified.metadata_quorum()
+        ),
+        (2, 2)
+    );
+    assert_eq!(io.stats.len(), 2);
+    assert_eq!(io.opens.len(), 2);
+    assert!(!io.stats.contains(&fixture.original.disks[0].root));
+    assert!(!io.opens.contains(&fixture.original.disks[0].root));
+    for disk in &fixture.original.disks[1..] {
+        assert!(io.stats.contains(&disk.root));
+        assert!(io.opens.contains(&disk.root));
+        let epoch = fixture.projected.io_admission_epoch(&disk.disk_id).unwrap();
+        assert!(epoch.is_some());
+        assert_eq!(verified.io_admission_epoch(&disk.disk_id).unwrap(), epoch);
     }
+    progress("verify_survivors.end");
+    progress("resume.begin");
+    let mut resumed = Engine::resume_membership_activation(&fixture.system()).unwrap();
+    progress("resume.end");
+    progress("activate.begin");
+    let result = resumed.activate_pending_disk_exit().unwrap();
+    progress("activate.end");
+    assert_eq!(result.operation_id, fixture.operation);
+    for (operation, result) in fixture.before.operations.iter() {
+        assert_eq!(
+            resumed.operation_record(*operation).unwrap().result(),
+            result
+        );
+    }
+    assert!(
+        resumed
+            .config
+            .excludes_io_disk(&fixture.original.disks[0].disk_id)
+    );
+    progress("resumed_drop.begin");
+    drop(resumed);
+    progress("resumed_drop.end");
+    progress("cold.begin");
+    let reopened = Engine::open(&fixture.system()).unwrap();
+    progress("cold.end");
+    assert_eq!(
+        reopened
+            .operation_record(fixture.operation)
+            .unwrap()
+            .result(),
+        &result
+    );
+    assert_eq!(
+        (
+            reopened.config.metadata_members().len(),
+            reopened.config.metadata_quorum()
+        ),
+        (2, 2)
+    );
+    progress("cleanup.begin");
+    drop(reopened);
+    drop(result);
+    drop(verified);
+    drop(io);
+    drop(fixture);
+    progress("cleanup.end");
+    progress("phase.end");
+}
+
+#[test]
+fn prepared_exit_stop_uses_readmitted_survivors_before_record() {
+    readmitted_survivors_at_locator_barrier(WriteFault::BeforeRecord);
+}
+
+#[test]
+fn prepared_exit_stop_uses_readmitted_survivors_after_record() {
+    readmitted_survivors_at_locator_barrier(WriteFault::AfterRecord);
+}
+
+#[test]
+fn prepared_exit_stop_uses_readmitted_survivors_before_head() {
+    readmitted_survivors_at_locator_barrier(WriteFault::BeforeHead);
+}
+
+#[test]
+fn prepared_exit_stop_uses_readmitted_survivors_after_head() {
+    readmitted_survivors_at_locator_barrier(WriteFault::AfterHead);
 }
 
 #[test]

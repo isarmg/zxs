@@ -27,10 +27,10 @@ class ReadmissionTargetedCi(unittest.TestCase):
             'engine::membership_transition::readmission::',
             'engine::membership_transition::pending::activation::recovery::restricted::',
         ])
-        self.assertEqual(engine['max_tests'], 60)
+        self.assertEqual(engine['max_tests'], 63)
         self.assertEqual(engine['timeout_seconds'], 300)
         self.assertTrue(all(target.get('timeout_seconds', 300) == 300
-                            for target in targets))
+                            for target in targets[:4]))
         self.assertEqual(targets[2]['prefixes'], [
             'management::storage_readmission::tests::',
             'management::storage_readmission::exclusive::tests::',
