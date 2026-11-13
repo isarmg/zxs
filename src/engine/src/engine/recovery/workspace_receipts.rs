@@ -26,6 +26,17 @@ pub(in crate::engine) struct PublishedCarrierPrefix<'a> {
     recovery: Option<&'a OperationResult>,
 }
 
+struct OwnedCarrierPrefix {
+    state: Arc<State>,
+    recovery: Option<OperationResult>,
+}
+
+impl OwnedCarrierPrefix {
+    fn borrowed(&self) -> PublishedCarrierPrefix<'_> {
+        PublishedCarrierPrefix { state: &self.state, recovery: self.recovery.as_ref() }
+    }
+}
+
 impl PublishedCarrierPrefix<'_> {
     pub(in crate::engine) fn state(&self) -> &State {
         self.state
@@ -42,6 +53,22 @@ impl Engine {
         prepared: &mut PreparedRecovery,
     ) -> Result<()> {
         prepared.carrier = None;
+        let prefix = self.read_published_carrier_prefix(prepared)?;
+        let carrier = self.admit_recovery_carrier_prefix(prefix.borrowed())?;
+        // The seed is read-only and borrows this verified publication view only
+        // for admission. Replay must still start from its original prefix.
+        let original = self.named_namespaces.install_state(&mut self.state, prefix.state);
+        let admission = self.seed_workspace_recovery();
+        self.named_namespaces.install_state(&mut self.state, original);
+        admission?;
+        prepared.carrier = Some(carrier);
+        Ok(())
+    }
+
+    fn read_published_carrier_prefix(
+        &mut self,
+        prepared: &mut PreparedRecovery,
+    ) -> Result<OwnedCarrierPrefix> {
         let mut previous = self.snapshot.clone();
         let mut previous_state = Arc::clone(&self.state);
         let mut namespaces = self.current_namespaces.as_deref().cloned();
@@ -258,18 +285,18 @@ impl Engine {
         } else {
             Arc::clone(&self.state)
         };
-        let carrier = self.admit_recovery_carrier_prefix(PublishedCarrierPrefix {
-            state: &state,
-            recovery: latest_recovery.as_ref(),
-        })?;
-        // The seed is read-only and borrows this verified publication view only
-        // for admission. Replay must still start from its original prefix.
-        let original = self.named_namespaces.install_state(&mut self.state, state);
-        let admission = self.seed_workspace_recovery();
-        self.named_namespaces.install_state(&mut self.state, original);
-        admission?;
-        prepared.carrier = Some(carrier);
-        Ok(())
+        Ok(OwnedCarrierPrefix { state, recovery: latest_recovery })
+    }
+
+    pub(in crate::engine) fn preflight_bootstrap_completion(
+        &mut self,
+        prepared: &mut PreparedRecovery,
+        record: &crate::engine::snapshot_initialization::bootstrap::RootRecord,
+    ) -> Result<crate::engine::snapshot_initialization::bootstrap::decision
+        ::BootstrapCompletionAdmission> {
+        let prefix = self.read_published_carrier_prefix(prepared)?;
+        crate::engine::snapshot_initialization::bootstrap::decision
+            ::BootstrapCompletionAdmission::admit(self, prefix.borrowed(), record)
     }
 
     pub(super) fn read_workspace_receipt_candidate(

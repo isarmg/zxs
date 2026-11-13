@@ -60,6 +60,26 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     let file = engine.list_tree(&repository.main_branch_id).unwrap().into_iter()
         .find(|entry| entry.path() == "original.txt").unwrap();
     drop(engine);
+    // A later ordinary FILE publication is not a carrier change. Reconstructing
+    // only the missing installation marker for the original operation remains
+    // legal, without resetting its later history to the bootstrap snapshot.
+    let complete = system.join(
+        crate::engine::snapshot_initialization::bootstrap::COMPLETE,
+    );
+    let retained_initial_complete = temp.path().join("retained-initial-completion");
+    fs::rename(&complete, &retained_initial_complete).unwrap();
+    let retained_complete_bytes = fs::read(&retained_initial_complete).unwrap();
+    let initialized = Engine::initialize_storage(
+        &system, config.clone(), original_operation,
+    ).unwrap();
+    assert_eq!(initialized.state(), &original);
+    assert_eq!(fs::read(&complete).unwrap(), retained_complete_bytes);
+    assert_eq!(fs::read(initialized.valid_replica(&file.version_id).unwrap().0.path()).unwrap(),
+        b"original immutable bytes");
+    drop(initialized);
+    let cold = Engine::open(&system).unwrap();
+    assert_eq!(cold.state(), &original);
+    drop(cold);
     let lost = temp.path().join("preserved-original-system");
     fs::rename(&system, &lost).unwrap();
     fs::create_dir(&system).unwrap();
@@ -138,6 +158,20 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         ).is_err());
         assert_eq!(image(temp.path()), before_old_carrier);
     }
+    // Removing the original completion output cannot revive this obsolete
+    // carrier through the explicit same-operation initializer. That entry must
+    // authenticate the complete published prefix before restoring any marker.
+    let retained_obsolete_complete = temp.path().join("retained-obsolete-completion");
+    fs::rename(&complete, &retained_obsolete_complete).unwrap();
+    let before_obsolete_initialization = image(temp.path());
+    for _ in 0..2 {
+        assert!(Engine::initialize_storage(
+            &system, config.clone(), original_operation,
+        ).is_err());
+        assert_eq!(image(temp.path()), before_obsolete_initialization);
+        assert!(!complete.exists());
+    }
+    fs::rename(&retained_obsolete_complete, &complete).unwrap();
     // Missing one old seal still leaves the complete journal barrier as an
     // independent tip proof. It must not authorize repair on the old carrier.
     let retained_seal = original_seal.with_extension("retained");

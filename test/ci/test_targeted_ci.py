@@ -18,6 +18,7 @@ CENTRAL_CARRIER_PRODUCERS = (
     'src/engine/src/engine/recovery.rs',
     'src/engine/src/engine/recovery/workspace_receipts.rs',
     'src/engine/src/engine/snapshot_initialization/bootstrap.rs',
+    'src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs',
     'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery.rs',
     'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/decision.rs',
     'src/engine/src/engine/snapshot_initialization/bootstrap/system_recovery/admission.rs',
@@ -3802,6 +3803,23 @@ class CentralCarrierAdmissionSelection(unittest.TestCase):
             'unified-membership-successor',
         ]
         retained = {
+            'src/engine/src/engine/snapshot_initialization/bootstrap/decision.rs': [
+                'container-manual-drafts',
+                'container-manual-drafts-consumers',
+                'container-manual-fresh-format',
+                'container-manual-recovery',
+                'container-tags-format',
+                'directory-snapshot-initialization',
+                'directory-storage-bootstrap',
+                'held-directory-layout',
+                'membership-initializer-directory-locks',
+                'storage-setup-system-binding',
+                'storage-system-product-consumers',
+                'storage-system-recovery-admission',
+                'storage-system-recovery-execution',
+                'unified-membership-origin-consumers',
+                'unified-membership-successor',
+            ],
             'src/engine/src/engine/recovery.rs': [
                 'container-manual-drafts',
                 'container-manual-fresh-format',

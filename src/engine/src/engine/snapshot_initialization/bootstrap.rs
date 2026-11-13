@@ -15,7 +15,7 @@ use storage_contract::working_tree::{
 };
 use storage_contract::Generation;
 
-mod decision;
+pub(in crate::engine) mod decision;
 mod pending;
 pub(crate) mod successor;
 pub(in crate::engine) mod system_recovery;
@@ -299,14 +299,29 @@ impl FreshBootstrap {
         ).map_err(engine_error)?;
         let bootstrap = hold_registered_bootstrap(system, record).map_err(engine_error)?;
         if all_installed {
-            // Verification is read-only; only the last missing SYSTEM marker is
-            // restored after all original decision evidence has been admitted.
-            decision::restore_completion(system, &self.config, &self.resources, record)
+            // Original installation proofs alone cannot authorize rewriting a
+            // marker on a carrier superseded by a later recovery decision.
+            // Scan the complete held publication prefix before any repair write.
+            let mut engine = Engine::recovery_resources_with_locks(
+                self.root, self.config, self.resources, locks,
+            ).map_err(engine_error)?;
+            let mut prepared = engine.prepare_recovery().map_err(engine_error)?;
+            let admitted = engine.preflight_bootstrap_completion(&mut prepared, record)
                 .map_err(engine_error)?;
-            return Self::finish_completed(
-                self.root, self.config, self.resources, locks, self._directory_locks, system,
-                Some(bootstrap),
-            );
+            decision::restore_completion(
+                &engine, admitted, system, &engine.config, &engine.disk_resources, record,
+            ).map_err(engine_error)?;
+            drop(prepared);
+            let proof = require_complete_resources(
+                system, &engine.config, Some(&engine.disk_resources),
+            ).map_err(engine_error)?;
+            engine.config = engine.config.clone().with_fresh_completion(proof);
+            let engine = Engine::finish_open(
+                engine, Vec::new(), crate::engine::recovery::RecoveryMode::CompletePending,
+            ).map_err(engine_error)?;
+            drop(bootstrap);
+            drop(self._directory_locks);
+            return Ok(engine);
         }
         let writer = locks.system_identity().map_err(engine_error)?;
         let (bootstrap_root, bootstrap_writer) = bootstrap_identity(system)?;

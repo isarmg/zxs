@@ -286,12 +286,67 @@ impl Engine {
 /// Only an explicit retry of the original selected operation can restore a
 /// missing SYSTEM completion marker from every installed DISK decision proof.
 /// Missing/partial proof sets remain fenced; no directory or identity is adopted.
+/// Permission to restore only the original installation marker. This is not
+/// ordinary replay authority and cannot be constructed from a local Complete.
+pub(in crate::engine) struct BootstrapCompletionAdmission {
+    selected: crate::authority_selection::FreshSelection,
+}
+
+impl BootstrapCompletionAdmission {
+    pub(in crate::engine) fn admit(
+        engine: &Engine,
+        prefix: crate::engine::recovery::workspace_receipts::PublishedCarrierPrefix<'_>,
+        record: &RootRecord,
+    ) -> crate::Result<Self> {
+        if prefix.recovery().is_some()
+            || prefix.state().operations.values().any(|result| {
+                result.kind == "storage.recover-system"
+            })
+        {
+            return Err(rejected());
+        }
+        let initial = initial_state(record)?;
+        if prefix.state().operations.get(&record.operation)
+                != initial.operations.get(&record.operation)
+            || prefix.state().operation_principals.get(&record.operation)
+                != initial.operation_principals.get(&record.operation)
+        {
+            return Err(rejected());
+        }
+        engine._locks.require_selected()?;
+        let system = engine._locks.selected_directory()?;
+        let selected = crate::authority_selection::FreshSelection::read(&system)
+            .map_err(failure)?.ok_or_else(rejected)?;
+        selected.require_directory(&system).map_err(failure)?;
+        selected.require_config(&engine.config)?;
+        if selected.operation != record.operation || selected.commitment()? != record.selection {
+            return Err(rejected());
+        }
+        Ok(Self { selected })
+    }
+
+    fn require_current(&self, engine: &Engine) -> crate::Result<()> {
+        engine._locks.require_selected()?;
+        let system = engine._locks.selected_directory()?;
+        let current = crate::authority_selection::FreshSelection::read(&system)
+            .map_err(failure)?.ok_or_else(rejected)?;
+        current.require_directory(&system).map_err(failure)?;
+        if current != self.selected {
+            return Err(rejected());
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn restore_completion(
+    engine: &Engine,
+    admitted: BootstrapCompletionAdmission,
     system: &platform_io::fs_safety::PrivateDirectory,
     config: &crate::ValidatedConfig,
     resources: &crate::disk::DiskResources,
     record: &RootRecord,
 ) -> crate::Result<()> {
+    admitted.require_current(engine)?;
     let selector = crate::authority_selection::FreshSelection::read(system)
         .map_err(failure)?.ok_or_else(rejected)?;
     selector.require_directory(system).map_err(failure)?;
@@ -322,6 +377,7 @@ pub(super) fn restore_completion(
     )?;
     let proof = BootstrapDecision::decode(&bytes, record)?;
     proof.verify_installed(config, resources, record, &bytes)?;
+    admitted.require_current(engine)?;
     platform_io::fs_safety::AtomicFile::create(
         system, &super::name(super::COMPLETE).map_err(failure)?, &bytes,
     )?;
