@@ -169,7 +169,7 @@ fn collect_events<T>(
     let mut ids = BTreeSet::new();
     let mut insert = |event: LifecycleRow| -> Result<()> {
         checkpoint()?;
-        if events.len() == 65_536 {
+        if events.len() == storage_contract::file_lifecycle::MAX_AUDIT_EVENTS {
             return Err(Error::new(
                 ErrorCode::ResourceLimit,
                 "retained deletion audit exceeds its event budget",
@@ -191,8 +191,7 @@ fn collect_events<T>(
             for event in &movement.retained(file)?.events {
                 insert(event.clone())?;
             }
-        } else if receipt.kind == crate::business::history_copy::RETAINED_KIND
-            || receipt.kind == crate::business::history_copy::DIRECTORY_EXPORT_KIND
+        } else if crate::business::history_copy::is_kind(&receipt.kind)
             || receipt.kind == crate::business::FILE_HISTORY_MOVE_KIND
         {
             let copied = crate::business::history_copy::retained::read(receipt, file)?;

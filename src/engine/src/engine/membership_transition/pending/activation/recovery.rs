@@ -255,7 +255,7 @@ fn marker_path_at(
             };
             let value: json_codec::Value = decode_strict(&bytes).map_err(identity_error)?;
             if value.get("format").and_then(json_codec::Value::as_str)
-                == Some("container-tags-membership-pending")
+                == Some("container-path-facts-membership-pending")
             {
                 let _: PendingDiskSeal = decode_strict(&bytes).map_err(identity_error)?;
                 return Ok(None);
@@ -708,7 +708,7 @@ fn activation_namespace_present(
     predecessor_seal_matches(config, disk, root, &bytes, &expected)?;
     let value: json_codec::Value = decode_strict(&bytes)?;
     if value.get("format").and_then(json_codec::Value::as_str)
-        != Some("container-tags-membership-pending")
+        != Some("container-path-facts-membership-pending")
     {
         let seal = decode_seal(&bytes)?;
         if seal.format == expected.format {

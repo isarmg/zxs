@@ -17,6 +17,7 @@ mod graph;
 #[serialization(deny_unknown_fields)]
 pub(crate) struct ResultBody {
     pub movement: ObjectMoveFact,
+    pub path_changes: Vec<crate::persist::path_changes::PathChanged>,
     route: CopyRoute,
     namespace_basis: NamespaceBasis,
     pub version_mapping: BTreeMap<String, String>,
@@ -321,7 +322,8 @@ fn relocate_current_files(
     graph: Option<&graph::Graph>,
     arrived: &[Entry],
     event: &MoveEvent<'_>,
-) -> Result<()> {
+) -> Result<Vec<crate::persist::path_changes::PathChanged>> {
+    let mut path_changes = Vec::new();
     if !unit.copy_history {
         relocate_existing_locations(next, unit)?;
     }
@@ -345,11 +347,6 @@ fn relocate_current_files(
         }
     }
     let target_head = next.commits[&next.branches[&target.main_branch_id].head_commit_id].clone();
-    let entries_by_path = target_head
-        .entries
-        .iter()
-        .map(|entry| (entry.lookup_key(), entry))
-        .collect::<BTreeMap<_, _>>();
     for (member, entry) in unit.entries.iter().zip(arrived) {
         if entry.kind != NamespaceEntryKind::File {
             continue;
@@ -398,32 +395,27 @@ fn relocate_current_files(
             context.branch_id =
                 file::ensure_shared_file_branch_with_ids(next, &target_head, entry, &mut ids)?;
         }
-        if old.path() != entry.path() {
-            // Borrowed contents have no file-owned node before their first
-            // save. Move the pending occurrence without forging that node.
-            if next.versions[&entry.version_id].file_id == entry.file_id {
-                context = file_paths::rename_node_with_ids(
-                    next,
-                    &target.repository_id,
-                    file_paths::PathChange {
-                        old: &old,
-                        new: entry,
-                        context: Some(context),
-                    },
-                    event.principal,
-                    event.operation,
-                    event.created_at,
-                    &mut ids,
-                )?;
-            }
-            file::relocate_namespace_file_branch_with_ids(
+        if !unit.copy_history
+            && (old.path() != entry.path()
+                || unit.source_repository.repository_id != target.repository_id)
+        {
+            let changed = file_paths::record_change_with_ids(
                 next,
-                &context,
-                &entries_by_path,
-                entry,
+                &unit.source_repository.repository_id,
+                &target.repository_id,
+                file_paths::PathChange {
+                    old: &old,
+                    new: entry,
+                    after_entries: &target_head.entries,
+                    context: Some(context),
+                },
+                event.principal,
                 event.operation,
+                event.created_at,
                 &mut ids,
             )?;
+            path_changes.push(changed.fact);
+            context = changed.context;
         }
         next.file_contexts.insert(
             directory::context_key_from_key(&target.repository_id, entry.lookup_key()),
@@ -436,7 +428,8 @@ fn relocate_current_files(
                 .insert(entry.file_id.clone(), entry.path().into());
         }
     }
-    Ok(())
+    path_changes.sort_by_key(|fact| fact.event_id);
+    Ok(path_changes)
 }
 
 fn refresh_working(
@@ -520,7 +513,7 @@ fn compose(
     let mut imported_directory_deletions = Vec::new();
     let graph = if unit.copy_history {
         let graph = graph::copy(
-            previous, &mut next, &unit, &target, route, principal, operation,
+            previous, &mut next, &unit, &target, route, operation,
         )?;
         imported_directory_deletions =
             directories::copy(previous, &mut next, &unit, &target, &graph, &event)?;
@@ -623,7 +616,7 @@ fn compose(
             .expect("invariant: new source commit exists")
             .namespace_deletions = namespace::deletion_record(removed, route.created_at);
     }
-    relocate_current_files(
+    let path_changes = relocate_current_files(
         previous,
         &mut next,
         &unit,
@@ -795,6 +788,7 @@ fn compose(
     };
     let result = ResultBody {
         movement,
+        path_changes,
         route: route.clone(),
         namespace_basis,
         version_mapping,

@@ -82,9 +82,9 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
-    #[serialization(rename = "container-tags-managed-directory")]
+    #[serialization(rename = "container-path-facts-managed-directory")]
     ManagedDirectory,
-    #[serialization(rename = "container-tags-membership-generation")]
+    #[serialization(rename = "container-path-facts-membership-generation")]
     MembershipGeneration { authority_hash: String },
 }
 

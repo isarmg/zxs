@@ -4441,6 +4441,119 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     );
 }
 
+// A node-note target must be a real metadata merge, never a path-change fact.
+async fn retained_note_merge(
+    app: &Router,
+    token: &str,
+    file: &str,
+    chosen: &str,
+    path: &str,
+) -> Value {
+    let branch = success(
+        app,
+        token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/branches"),
+        Some(json!({
+            "source_version_id":chosen,"source_node_id":chosen,
+            "name":"Note source","operation_id":new_id("op").unwrap()
+        })),
+    )
+    .await;
+    let branch = branch["result"]["branch_id"].as_str().unwrap();
+    success(
+        app,
+        token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/select"),
+        Some(json!({"branch_id":branch,"operation_id":new_id("op").unwrap()})),
+    )
+    .await;
+    manager_upload(app, token, path, b"distinct retained note source").await;
+    let history_route = format!("/api/file-manager/files/{file}/history");
+    let history = success(app, token, "GET", &history_route, None).await;
+    let second = history["identity"]["context"]["current_node_id"].as_str().unwrap();
+    assert_ne!(second, chosen);
+    let merged = success(
+        app,
+        token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/merge-history"),
+        Some(json!({
+            "inputs":[
+                {"branch_id":branch,"source_node_id":chosen,"expected_node_id":second},
+                {"branch_id":branch,"source_node_id":second,"expected_node_id":second}
+            ],
+            "chosen_node_id":chosen,"name":"Note metadata","confirmed":true,
+            "operation_id":new_id("op").unwrap()
+        })),
+    )
+    .await;
+    assert!(merged["result"]["node_id"].as_str().unwrap().starts_with("fmeta_"));
+    success(
+        app,
+        token,
+        "POST",
+        &format!("/api/file-manager/files/{file}/select"),
+        Some(json!({
+            "branch_id":merged["result"]["branch_id"],
+            "operation_id":new_id("op").unwrap()
+        })),
+    )
+    .await;
+    let selected = success(app, token, "GET", &history_route, None).await;
+    assert_eq!(selected["context"]["content"]["version_id"], chosen);
+    merged
+}
+
+async fn assert_retained_path_change(
+    app: &Router,
+    token: &str,
+    file: &str,
+    history: &Value,
+    repository: &str,
+    before: &str,
+    after: &str,
+) {
+    use storage_contract::file_lifecycle::{Detail, Page, Request as LifecycleRequest};
+    let request = LifecycleRequest::parse(
+        file,
+        history["identity"]["history_root"].as_str().unwrap(),
+        Some(repository),
+        history["identity"]["context"]["path"].as_str(),
+        None,
+        64,
+    )
+    .unwrap();
+    let mut query = url_encoding::form::Serializer::new(String::new());
+    for (name, value) in request.query_fields() {
+        query.append_pair(&name, &value);
+    }
+    let value = success(
+        app,
+        token,
+        "GET",
+        &format!("{}?{}", request.route(), query.finish()),
+        None,
+    )
+    .await;
+    let page: Page = json_codec::from_value(value).unwrap();
+    page.validate(&request).unwrap();
+    assert!(page.events.iter().any(|event| match &event.detail {
+        Detail::PathChanged {
+            before: old,
+            after: new,
+            ..
+        } => {
+            old.repository_id.to_string() == repository
+                && new.repository_id.to_string() == repository
+                && old.path.as_str() == before
+                && new.path.as_str() == after
+        }
+        Detail::Delete { .. } | Detail::Undo { .. } | Detail::Import { .. } => false,
+    }));
+}
+
 #[tokio::test]
 async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_sources() {
     let root = tempfile::tempdir().unwrap();
@@ -4494,31 +4607,21 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             "renaming a folder reuses the real content identity and body"
         );
     }
-    assert_eq!(after["nodes"].as_array().unwrap().len(), 2);
-    let path_node = after["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["kind"] == "rename")
-        .unwrap()
-        .clone();
-    let node = path_node["node_id"].as_str().unwrap();
-    assert!(node.starts_with("fnode_"));
-    assert_eq!(path_node["version_id"], body);
-    let parents = history_related(
+    assert_eq!(
+        after["nodes"], before["nodes"],
+        "rename does not change content graph nodes"
+    );
+    assert_eq!(after["identity"]["context"]["current_node_id"], body);
+    assert_retained_path_change(
         &app,
         &admin,
         file,
         &after,
-        &format!("nodes/{node}/parents"),
-        Some((repo, "archive/one.txt")),
+        repo,
+        "documents/one.txt",
+        "archive/one.txt",
     )
     .await;
-    assert_eq!(parents["parents"], json!([{"parent_node_id":body}]));
-    assert_eq!(path_node["path"], "archive/one.txt");
-    assert_eq!(path_node["previous_path"], "documents/one.txt");
-    assert_eq!(path_node["current"], true);
-    assert_eq!(after["identity"]["context"]["current_node_id"], node);
     let nested = success(
         &app,
         &admin,
@@ -4530,8 +4633,8 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     let two = &nested["entries"][0];
     let two_file = two["file_id"].as_str().unwrap();
     let two_node = two["node_id"].as_str().unwrap();
-    assert!(two_node.starts_with("fnode_"));
-    assert_ne!(two_node, node);
+    assert_eq!(two["node_id"], two["version_id"]);
+    assert_ne!(two_node, body);
     let two_history = success(
         &app,
         &admin,
@@ -4547,7 +4650,35 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .len(),
         1
     );
-    assert_eq!(two_history["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(two_history["nodes"].as_array().unwrap().len(), 1);
+    assert_retained_path_change(
+        &app,
+        &admin,
+        two_file,
+        &two_history,
+        repo,
+        "documents/nested/two.txt",
+        "archive/nested/two.txt",
+    )
+    .await;
+    let merged = retained_note_merge(&app, &admin, file, body, "archive/one.txt").await;
+    let node = merged["result"]["node_id"].as_str().unwrap();
+    let merged_history = success(&app, &admin, "GET", &history_route, None).await;
+    let parents = history_related(
+        &app,
+        &admin,
+        file,
+        &merged_history,
+        &format!("nodes/{node}/parents"),
+        None,
+    )
+    .await;
+    assert_eq!(parents["parents"].as_array().unwrap().len(), 2);
+    for input in merged["result"]["source_inputs"].as_array().unwrap() {
+        assert!(parents["parents"].as_array().unwrap().iter().any(|parent| {
+            parent["parent_node_id"] == input["source_node_id"]
+        }));
+    }
     assert_eq!(version_bytes(&app, &admin, body).await, b"original one");
     let scopes = success(
         &app,
@@ -4563,7 +4694,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         &admin,
         "PATCH",
         &note_route,
-        Some(json!({"note":"路径改名备注","operation_id":new_id("op").unwrap()})),
+        Some(json!({"note":"历史合并备注","operation_id":new_id("op").unwrap()})),
     )
     .await;
     success(
@@ -4582,7 +4713,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .iter()
             .find(|n| n["node_id"] == node)
             .unwrap()["note"],
-        "路径改名备注"
+        "历史合并备注"
     );
     assert_eq!(
         noted["nodes"]
@@ -4634,16 +4765,16 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     );
     let branch_route = format!("/api/file-manager/files/{file}/branches");
     assert_eq!(send(&app,Some(&admin),"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":two_node,"name":"foreign","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::NOT_FOUND);
-    let branch=success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":node,"name":"from-path","operation_id":new_id("op").unwrap()}))).await;
+    let branch=success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":node,"name":"from-metadata","operation_id":new_id("op").unwrap()}))).await;
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let registered = success(&app, &admin, "GET", &history_route, None).await;
-    assert_eq!(registered["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(registered["nodes"].as_array().unwrap().len(), 3);
     assert_eq!(
         history_versions(&app, &admin, file, &registered, None).await["versions"]
             .as_array()
             .unwrap()
             .len(),
-        1
+        2
     );
     let registered_branches =
         history_related(&app, &admin, file, &registered, "branches", None).await;
@@ -4666,9 +4797,9 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .as_array()
             .unwrap()
             .len(),
-        2
+        3
     );
-    assert_eq!(written["nodes"].as_array().unwrap().len(), 3);
+    assert_eq!(written["nodes"].as_array().unwrap().len(), 4);
     let current_body = written["context"]["content"]["version_id"]
         .as_str()
         .unwrap();
@@ -4729,10 +4860,10 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .as_array()
             .unwrap()
             .len(),
-        3
+        4
     );
     let audit = success(&app, &admin, "GET", "/api/file-manager/history", None).await;
-    for action in ["file.path.rename", "file.path.metadata"] {
+    for action in ["file.path.metadata"] {
         assert!(
             audit["events"]
                 .as_array()
@@ -5415,12 +5546,9 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
         .unwrap()
         .to_owned();
     let history_route = format!("/api/file-manager/files/{file}/history");
-    let history = success(&app, &token, "GET", &history_route, None).await;
-    let node = history["identity"]["context"]["current_node_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(node.starts_with("fnode_"));
+    let merged = retained_note_merge(&app, &token, &file, &version, "renamed.txt").await;
+    let node = merged["result"]["node_id"].as_str().unwrap().to_owned();
+    assert!(node.starts_with("fmeta_"));
     let mut receipts = Vec::new();
     for (method, route, kind, id_key, canonical) in [
         (

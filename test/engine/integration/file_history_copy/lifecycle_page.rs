@@ -1,8 +1,8 @@
 //! Published retained copies and imported D records through the lifecycle reader.
 use crate::{Fixture, entry, op, request, save};
 use storage_contract::{
-    BranchName, ErrorCode,
-    file_lifecycle::{Action, Page, Request},
+    BranchName,
+    file_lifecycle::{Detail, Page, Request},
     file_relocation::{NamespaceEntryId, ObjectMoveRequest},
     history_window::{HistoryFileId, HistoryRepositoryId, HistoryWindowCancellation},
 };
@@ -39,7 +39,7 @@ fn delete(engine: &mut Engine, repository: &Repository, file: &storage_contract:
         .unwrap();
 }
 #[test]
-fn file_lifecycle_retained_copy_has_original_operations_and_graph_only_copy_refuses_unknown_prefix() {
+fn file_lifecycle_retained_and_graph_copies_preserve_original_audit_members() {
     for current in [false, true] {
         let Fixture {
             temp,
@@ -77,10 +77,14 @@ fn file_lifecycle_retained_copy_has_original_operations_and_graph_only_copy_refu
         for (original, copied) in expected.iter().zip(&actual) {
             assert_eq!(original.operation_id, copied.operation_id);
             assert_eq!(original.sequence, copied.sequence);
-            assert_eq!(original.action, copied.action);
+            assert_eq!(
+                std::mem::discriminant(&original.detail),
+                std::mem::discriminant(&copied.detail),
+            );
             assert_eq!(original.occurred_at, copied.occurred_at);
-            assert_ne!(original.deletion_id, copied.deletion_id);
+            assert_ne!(original.source_id(), copied.source_id());
         }
+        let mut graph_evidence = None;
         if !current {
             let graph_target = engine.create_disk_root("D05", "admin", op()).unwrap();
             let mut graph_only = request(&engine, &source, &graph_target);
@@ -96,12 +100,28 @@ fn file_lifecycle_retained_copy_has_original_operations_and_graph_only_copy_refu
             let read = engine
                 .capture_file_lifecycle(request, HistoryWindowCancellation::new())
                 .unwrap();
-            assert_eq!(read.page().unwrap_err().code(), ErrorCode::PublicationInvalid);
+            let graph_events = read.page().unwrap().events;
+            engine.recheck_file_lifecycle(&read).unwrap();
+            assert_eq!(graph_events.len(), expected.len());
+            for (original, copied) in expected.iter().zip(&graph_events) {
+                assert_eq!(original.operation_id, copied.operation_id);
+                assert_eq!(original.sequence, copied.sequence);
+                assert_eq!(original.occurred_at, copied.occurred_at);
+                assert_eq!(
+                    std::mem::discriminant(&original.detail),
+                    std::mem::discriminant(&copied.detail),
+                );
+                assert_ne!(original.source_id(), copied.source_id());
+            }
             drop(read);
+            graph_evidence = Some((graph_target, graph.file_id, graph_events));
         }
         drop(engine);
         let engine = Engine::open(&temp.path().join("system")).unwrap();
         assert_eq!(page(&engine, &target, &copied.file_id).events, actual);
+        if let Some((repository, file, events)) = graph_evidence {
+            assert_eq!(page(&engine, &repository, &file).events, events);
+        }
     }
 }
 
@@ -155,15 +175,15 @@ fn file_lifecycle_cross_directory_import_is_distinct_without_a_fabricated_timest
     let result = page(&engine, &target, &imported.file_id);
     assert_eq!(result.events.len(), 2);
     assert_eq!(result.events[0].operation_id, before.events[0].operation_id);
-    assert_eq!(result.events[0].action, Action::Delete);
+    assert!(matches!(&result.events[0].detail, Detail::Delete { .. }));
     assert_eq!(result.events[1].operation_id, operation);
-    assert_eq!(result.events[1].action, Action::Import);
-    assert_eq!(result.events[1].deletion_id.to_string(), imported.node_id);
-    assert_ne!(result.events[1].deletion_id, before.events[0].deletion_id);
+    assert!(matches!(&result.events[1].detail, Detail::Import { .. }));
+    assert_eq!(result.events[1].source_id().to_string(), imported.node_id);
+    assert_ne!(result.events[1].source_id(), before.events[0].source_id());
     assert!(result.events[1].occurred_at.is_none());
     // The retained prefix keeps its mapped historical D. Graph construction
     // assigns the current imported D a separate import-marker identity.
-    assert_ne!(result.events[0].deletion_id, result.events[1].deletion_id);
+    assert_ne!(result.events[0].source_id(), result.events[1].source_id());
     assert_ne!(result.events[0].operation_id, result.events[1].operation_id);
     drop(engine);
     let engine = Engine::open(&temp.path().join("system")).unwrap();

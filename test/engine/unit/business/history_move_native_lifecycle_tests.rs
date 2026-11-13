@@ -78,6 +78,7 @@ impl Fixture {
             file_id: target_file.clone(),
             history_tree_id: target.history_tree_id.clone(),
             events: Vec::new(),
+            path_changes: Vec::new(),
         };
         let versions = [(source_version, target_version.clone())].into();
         let branches = [(

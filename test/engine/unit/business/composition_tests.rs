@@ -268,7 +268,7 @@ fn item(e: &Engine, src: &str, path: &str, dst: Option<(&str, &str)>) -> Directo
 }
 
 #[test]
-fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
+fn batch_move_path_fact_receipt_is_exact_ordered_and_replayed_after_restart() {
     let (temporary, mut engine, repo) = fixture();
     save(&mut engine, &repo, "a/z.txt", b"Z");
     save(&mut engine, &repo, "a/a.txt", b"A");
@@ -282,7 +282,7 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
         )
         .unwrap();
     let older_nodes = engine.state().file_path_nodes.clone();
-    assert_eq!(older_nodes.len(), 2);
+    assert!(older_nodes.is_empty());
     let owner = create(&mut engine, &repo, "", "move branch");
     select(&mut engine, &repo, "", "move branch");
     let request = DirectoryNamespaceBatch {
@@ -296,22 +296,17 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
     let receipt = engine
         .directory_namespace_batch(&repo.repository_id, &request, "admin", operation)
         .unwrap();
-    let expected = engine
-        .state()
-        .file_path_nodes
-        .values()
-        .filter(|node| node.operation_id == operation && node.sequence == receipt.sequence)
-        .map(|node| node.node_id.clone())
-        .collect::<Vec<_>>();
+    let expected = crate::persist::path_changes::read(&receipt).unwrap();
     assert_eq!(expected.len(), 2);
-    assert!(expected.windows(2).all(|pair| pair[0] < pair[1]));
-    assert_eq!(receipt.result["file_node_ids"], json_codec::json!(expected));
-    assert!(older_nodes.values().all(|node| {
-        node.operation_id != operation
-            && node.sequence < receipt.sequence
-            && !expected.contains(&node.node_id)
+    assert!(expected.windows(2).all(|pair| pair[0].event_id < pair[1].event_id));
+    assert!(expected.iter().all(|fact| {
+        fact.operation_id == operation && fact.sequence.get() == receipt.sequence
+            && fact.before.path.as_str().starts_with("source/")
+            && fact.after.path.as_str().starts_with("b/")
+            && fact.before_version_id == fact.after_version_id
     }));
-    engine
+    assert_eq!(engine.state().file_path_nodes, older_nodes);
+    let later = engine
         .file_namespace(
             &repo.repository_id,
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "b", Some("later")).unwrap(),
@@ -319,13 +314,11 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
             OperationId::generate().unwrap(),
         )
         .unwrap();
-    assert!(
-        engine
-            .state()
-            .file_path_nodes
-            .values()
-            .any(|node| { node.operation_id != operation && node.sequence > receipt.sequence })
-    );
+    let later_facts = crate::persist::path_changes::read(&later).unwrap();
+    assert!(later_facts.iter().all(|fact| {
+        fact.operation_id != operation && fact.sequence.get() > receipt.sequence
+            && expected.iter().all(|old| old.event_id != fact.event_id)
+    }));
     for reopened in [false, true] {
         if reopened {
             drop(engine);
@@ -642,7 +635,7 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
         let mut e = Engine::open(&temporary.path().join("system")).unwrap();
         assert_eq!(entries(&e, &r)[original_path], current);
         // Explicit equivalent-key renames remain real metadata changes.
-        e.file_namespace(
+        let renamed = e.file_namespace(
             &r.repository_id,
             NamespaceOperation::parse(
                 NamespaceOperationKind::Rename,
@@ -655,11 +648,14 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
         )
         .unwrap();
         assert_eq!(entries(&e, &r)[lookup_path].version_id, current.version_id);
-        assert!(e.state().file_path_nodes.values().any(|node| {
-            node.file_id == current.file_id
-                && node.path == lookup_path
-                && node.version_id == current.version_id
-        }));
+        assert!(e.state().file_path_nodes.is_empty());
+        let facts = crate::persist::path_changes::read(&renamed).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].file_id.to_string(), current.file_id);
+        assert_eq!(facts[0].before.path.as_str(), original_path);
+        assert_eq!(facts[0].after.path.as_str(), lookup_path);
+        assert_eq!(facts[0].before_version_id.to_string(), current.version_id);
+        assert_eq!(facts[0].before_version_id, facts[0].after_version_id);
     }
 }
 

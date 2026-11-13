@@ -496,6 +496,30 @@ HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始�
 
 当前范围限同一历史域。完整分量最多 64 文件、512 事件、256 分支、2048 祖先边、1 MiB JSON；请求索引最多 65,536 同域版本，扫描总计费最多 1,048,576 记录。工作／图超限为 429，不成功返回不完整连通分量；未知或重复查询参数 400、身份失效 401、文件不存在 404、根变化 409、编码超限 500。鉴权和当前根在锁外准备前后复核，槽持续持有到响应缓冲释放。跨域永久关联、解除关系和磁盘退出不由本读接口实现，详见[精确语义与复杂度](design/shared-file-history.md)。
 
+### 文件容器删除、恢复与路径记录
+
+`GET /api/file-manager/files/{file}/history/lifecycle?history_root=...&limit=16`
+返回严格 `FileLifecyclePage`。`limit` 必填且为 1–64；可选 `repository_id` 与 `path`
+必须成对，保留历史可不提供当前位置。请求仍需当前授权和准确历史根；返回前复验观察序号。
+响应最多 64 KiB，页内数量可因字节预算少于 `limit`，只按显式 `next_cursor` 判断续页。
+空页不得携带续页；坏来源／取消不转换为空成功或末页。当前根不是历史根租约。
+
+每项严格为 `{operation_id,sequence,occurred_at,detail}`，不兼容旧平铺动作字段。
+`detail.action` 为 `delete`／`undo`／`import` 时仅另有 `deletion_id`；
+`path_changed` 时另有 `event_id`（`fpath_`）、`before` 与 `after`，两个位置都严格包含
+`repository_id` 和规范 `path`。路径事实展示真实前后位置，不由名字猜测改名或移动类型。
+Delete 与 PathChanged 携带记录中的 Unix 整秒时间；Undo／Import 必须为显式 `null`，
+不借用删除时间、序号或浏览器时钟。路径项仅枚举本容器直接发生的事实；复制保留的原路径来源
+在 SYSTEM／FILE 审计中保存，但不在此页展示，更不自动成为目标容器的新操作。
+
+成员身份为 `(operation_id,source_id)`；一个操作可有多条路径事实。
+顺序为 `(sequence,operation_id,source_id)`，不是跨来源的时钟顺序。
+四段游标为 `binding:operation_id:sequence:source_id`，来源为真实 `fdel_` 或 `fpath_` ID；
+三段旧游标拒绝。binding 绑定文件、根、实际上下文、请求位置、页大小与观察序号，
+续页须精确对应上一页最后成员，任意发布前移观察序号均需从第一页刷新。
+该只读入口不产生正文节点或写入权限，不代表完整操作时间线、复制来源完整验收或 O(page) 成本。
+见[来源和成本边界](design/container-lifecycle-read.md)。
+
 ### 超预算单文件删除记录审阅与恢复
 
 完整 D 超过既有 4096 条 frontier 或 1 MiB 响应预算时，可使用以下管理员接口。

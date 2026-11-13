@@ -390,6 +390,12 @@ impl Engine {
         if let Some(view) = self.admitted_current_namespaces()? {
             verify_current_candidate_transition(view, &self.state, next, candidate)?;
         } else {
+            crate::engine::disk_registry::current::verify_path_changes(
+                &self.state,
+                next,
+                None,
+                None,
+            )?;
             crate::engine::disk_registry::current::verify_container_tags(
                 &self.state,
                 next,
@@ -401,6 +407,7 @@ impl Engine {
                 .get(&candidate.operation_id)
                 .is_some_and(|receipt| {
                     receipt.kind == storage_contract::file_container_tags::KIND
+                        || crate::persist::path_changes::is_kind(&receipt.kind)
                 })
             {
                 verify_current_candidate_receipt(candidate, next)?;

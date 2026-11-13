@@ -834,14 +834,16 @@ fn pending_old_seal_format_rejects_without_rewriting_any_member() {
     let path = f.target.disks[2].root.join("disk.json");
     let original = fs::read(&path).unwrap();
     let mut seal: json_codec::Value = json_codec::from_slice(&original).unwrap();
-    assert_eq!(seal["format"], "container-tags-membership-pending");
-    seal["format"] = json_codec::json!("membership-pending");
-    let changed = canonical_json(&seal).unwrap();
-    assert!(decode_strict::<PendingDiskSeal>(&changed).is_err());
-    fs::write(&path, changed).unwrap();
-    let before = format_tree(f.temp.path());
-    assert!(f.enroll().is_err());
-    assert_eq!(format_tree(f.temp.path()), before);
+    assert_eq!(seal["format"], "container-path-facts-membership-pending");
+    for format in ["membership-pending", "container-tags-membership-pending"] {
+        seal["format"] = json_codec::json!(format);
+        let changed = canonical_json(&seal).unwrap();
+        assert!(decode_strict::<PendingDiskSeal>(&changed).is_err());
+        fs::write(&path, changed).unwrap();
+        let before = format_tree(f.temp.path());
+        assert!(f.enroll().is_err());
+        assert_eq!(format_tree(f.temp.path()), before);
+    }
     fs::write(&path, original).unwrap();
     f.reopen();
     assert_eq!(f.enroll().unwrap(), status);
@@ -852,6 +854,8 @@ fn pending_rejects_old_archive_root_even_with_matching_outer_hash() {
     for old_format in [
         "frozen-control-metadata",
         "retained-exit-quorum-control-metadata",
+        "container-tags-frozen-control-metadata",
+        "container-tags-retained-exit-quorum-control-metadata",
     ] {
         let mut f = Fixture::new();
         let path = f.source.join("archive-root.json");
@@ -885,6 +889,8 @@ fn control_archive_old_binding_rejects_before_existing_stage_writes() {
     for old_format in [
         "frozen-control-metadata",
         "retained-exit-quorum-control-metadata",
+        "container-tags-frozen-control-metadata",
+        "container-tags-retained-exit-quorum-control-metadata",
     ] {
         let mut f = Fixture::new();
         let path = f.source.join("archive-binding.json");
@@ -906,7 +912,12 @@ fn control_archive_old_binding_rejects_before_existing_stage_writes() {
 
 #[test]
 fn pending_current_seal_cannot_resume_old_archive_binding() {
-    for keep_seal in [true, false] {
+    for (keep_seal, old_format) in [
+        (true, "frozen-control-metadata"),
+        (false, "frozen-control-metadata"),
+        (true, "container-tags-frozen-control-metadata"),
+        (false, "container-tags-frozen-control-metadata"),
+    ] {
         let mut f = Fixture::new();
         let status = f.enroll().unwrap();
         f.reopen();
@@ -916,7 +927,7 @@ fn pending_current_seal_cannot_resume_old_archive_binding() {
         let path = f.pending_path(2).join("control-archive/archive-binding.json");
         let binding = fs::read(&path).unwrap();
         let mut changed: json_codec::Value = json_codec::from_slice(&binding).unwrap();
-        changed["format"] = json_codec::json!("frozen-control-metadata");
+        changed["format"] = json_codec::json!(old_format);
         fs::write(&path, canonical_json(&changed).unwrap()).unwrap();
         if !keep_seal {
             fs::remove_file(&seal_path).unwrap();

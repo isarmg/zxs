@@ -416,6 +416,12 @@ fn membership_registry_current_file_delete_batch_keeps_each_shared_scope_precond
     let operation = op();
     let receipt = apply(&mut fixture, &request, operation).unwrap();
     assert_eq!(receipt.kind, "file.delete.batch");
+    crate::persist::path_changes::admit_ledger(fixture.engine.state()).unwrap();
+    let decoded: State = json_codec::from_slice(
+        &canonical_json(fixture.engine.state()).unwrap(),
+    )
+    .unwrap();
+    crate::persist::path_changes::admit_ledger(&decoded).unwrap();
     assert_eq!(fixture.engine.state.file_deletions.len(), 2);
     assert!(
         !fixture

@@ -5752,6 +5752,112 @@
           }
         }
       }
+    },
+    {
+      "name": "lifecycle-path-members-and-delete-undo-import",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-empty-complete-observation",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-four-part-source-cursor",
+      "schema": "FileLifecycleCursor",
+      "layer": "schema",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:op_00000000000000000000000000000001:1:fpath_00000000000000000000000000000001"
     }
   ],
   "negative": [
@@ -22450,6 +22556,899 @@
           }
         ]
       }
+    },
+    {
+      "name": "lifecycle-prior-flat-event",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "action": "delete",
+            "deletion_id": "fdel_00000000000000000000000000000001",
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-unknown-detail-field",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              },
+              "rename": true
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-path-node-id-is-not-source",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fmeta_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-missing-recorded-time-field",
+      "schema": "FileLifecyclePage",
+      "layer": "schema",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            }
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-path-time-must-be-recorded",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-undo-cannot-borrow-delete-time",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-no-op-path-location-is-not-event",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-invalid-retained-path",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "../old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-duplicate-operation-member",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-member-order-is-not-clock-order",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "6",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-source-sequence-after-observation",
+      "schema": "FileLifecyclePage",
+      "layer": "semantic",
+      "value": {
+        "file_id": "file_00000000000000000000000000000001",
+        "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context": {
+          "repository_id": "repo_00000000000000000000000000000001",
+          "history_tree_id": "history_00000000000000000000000000000001",
+          "path": null,
+          "current_node_id": null,
+          "selected_branch_id": null
+        },
+        "observation_sequence": "3",
+        "events": [
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000001",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000001",
+            "sequence": "1",
+            "detail": {
+              "action": "path_changed",
+              "event_id": "fpath_00000000000000000000000000000002",
+              "before": {
+                "repository_id": "repo_00000000000000000000000000000001",
+                "path": "old/a.txt"
+              },
+              "after": {
+                "repository_id": "repo_00000000000000000000000000000002",
+                "path": "new/b.txt"
+              }
+            },
+            "occurred_at": "123"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000002",
+            "sequence": "2",
+            "detail": {
+              "action": "delete",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": "124"
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000003",
+            "sequence": "3",
+            "detail": {
+              "action": "undo",
+              "deletion_id": "fdel_00000000000000000000000000000001"
+            },
+            "occurred_at": null
+          },
+          {
+            "operation_id": "op_00000000000000000000000000000004",
+            "sequence": "4",
+            "detail": {
+              "action": "import",
+              "deletion_id": "fdel_00000000000000000000000000000002"
+            },
+            "occurred_at": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "name": "lifecycle-prior-three-part-cursor",
+      "schema": "FileLifecycleCursor",
+      "layer": "schema",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:op_00000000000000000000000000000001:1"
+    },
+    {
+      "name": "lifecycle-cursor-u64-overflow",
+      "schema": "FileLifecycleCursor",
+      "layer": "semantic",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:op_00000000000000000000000000000001:18446744073709551616:fpath_00000000000000000000000000000001"
     }
   ],
   "canonical": [

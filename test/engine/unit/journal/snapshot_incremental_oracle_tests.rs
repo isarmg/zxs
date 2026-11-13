@@ -266,10 +266,12 @@ fn assert_explicit_empty_roots(snapshot: &Snapshot) {
     );
     assert_eq!(snapshot.events.hash(), expected_hash);
     let encoded = json_codec::to_value(snapshot).unwrap();
-    assert_eq!(encoded["format"], "container-tags-radix-map-roots");
-    let mut prior_format = encoded.clone();
-    prior_format["format"] = "radix-map-roots".into();
-    assert!(json_codec::from_value::<Snapshot>(prior_format).is_err());
+    assert_eq!(encoded["format"], "container-path-facts-radix-map-roots");
+    for format in ["radix-map-roots", "container-tags-radix-map-roots"] {
+        let mut prior_format = encoded.clone();
+        prior_format["format"] = format.into();
+        assert!(json_codec::from_value::<Snapshot>(prior_format).is_err());
+    }
     assert!(encoded.get("pages").is_none());
     assert!(encoded.get("scalars").is_none());
 }

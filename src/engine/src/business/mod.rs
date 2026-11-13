@@ -57,6 +57,7 @@ pub(crate) use namespace::{
     validate_workspace_dependencies,
 };
 pub use workspace::{PreparedUpload, UploadPreparation};
+pub(crate) use workspace::file_location::project as workspace_file_entries;
 pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};
 
 pub(crate) fn now() -> Result<u64> {

@@ -3,11 +3,14 @@
 //! their original scopes; local lifecycle rows are pathless audit projections.
 use super::{rows::*, *};
 use crate::{ContentState, business::file_nodes};
+use crate::business::history_copy::retained::{self, RetainedPathChange};
 
 pub(super) use super::super::local_database::MAX_RECORD_BYTES;
 pub(super) fn records(view: StateProjection<'_>, file: &str) -> Result<ProjectedRecords> {
     let events = crate::file_deletion::retained::events(view, file)?;
-    let records = with_events(view, file, &events)?;
+    let file_id = storage_contract::history_window::HistoryFileId::parse(file)?;
+    let paths = retained::path_changes(view, &file_id)?;
+    let records = with_events(view, file, &events, &paths)?;
     Ok(ProjectedRecords { records, events })
 }
 
@@ -17,6 +20,7 @@ pub(super) fn move_records(
     view: StateProjection<'_>,
     file: &str,
     events: &[LifecycleRow],
+    paths: &[RetainedPathChange],
 ) -> Result<Vec<Record>> {
     if view.state().file_deletions.contains_key(file)
         || view.owners().file_rows(file).is_some_and(|rows| {
@@ -27,7 +31,7 @@ pub(super) fn move_records(
             "move target database requires a fresh undeleted identity",
         ));
     }
-    with_events(view, file, events)
+    with_events(view, file, events, paths)
 }
 
 /// The same retained source graph with its proposed all-frontier D and one
@@ -42,14 +46,20 @@ pub(super) fn move_source_records(
             "move source database requires its exact proposed deletion",
         ));
     }
-    with_events(view, &node.file_id, events)
+    let file = storage_contract::history_window::HistoryFileId::parse(&node.file_id)?;
+    let paths = retained::path_changes(view, &file)?;
+    with_events(view, &node.file_id, events, &paths)
 }
 
 fn with_events(
     view: StateProjection<'_>,
     file: &str,
     events: &[LifecycleRow],
+    paths: &[RetainedPathChange],
 ) -> Result<Vec<Record>> {
+    if !view.state().file_path_nodes.is_empty() {
+        return Err(crate::persist::path_changes::invalid());
+    }
     if view.owners().malformed_deletion_receipts() {
         return Err(invalid(
             "retained deletion receipt has no complete file ownership",
@@ -113,26 +123,6 @@ fn with_events(
                 },
             )?;
         }
-        for id in memberships.path_nodes.keys() {
-            let node = &state.file_path_nodes[id];
-            rows.add(
-                "anchor",
-                id,
-                &AnchorRow {
-                    node_id: id.clone(),
-                    history_tree_id: node.history_tree_id.clone(),
-                    file_id: file.to_owned(),
-                    version_id: node.version_id.clone(),
-                    branch_id: node.branch_id.clone(),
-                    parent_node_ids: nodes.parents(id),
-                    note: state.file_path_notes.get(id).cloned(),
-                    operation_id: node.operation_id,
-                    author: node.author.clone(),
-                    sequence: node.sequence,
-                    created_at: node.created_at,
-                },
-            )?;
-        }
         for id in memberships.metadata_nodes.keys() {
             rows.add(
                 "metadata",
@@ -160,6 +150,13 @@ fn with_events(
     }
     for event in events {
         rows.add("lifecycle", &event.operation_id.to_string(), event)?;
+    }
+    for event in paths {
+        rows.add(
+            "path_change",
+            &event.source.event_id.to_string(),
+            &PathChangeRow::from(event),
+        )?;
     }
     if let Some(node) = state.file_deletions.get(file) {
         rows.add("deletion", &node.node_id, &DeletionRow::from(node))?;

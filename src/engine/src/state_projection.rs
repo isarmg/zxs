@@ -403,6 +403,7 @@ pub(crate) struct DerivedOwners {
     branch_links: References,
     unscoped_deletions: lifecycles::DeletionOperations,
     unscoped_history_copies: lifecycles::DeletionOperations,
+    unscoped_path_changes: lifecycles::DeletionOperations,
 }
 
 #[derive(Clone, Default)]

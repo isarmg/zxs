@@ -358,35 +358,12 @@ async fn file_note_wire_digest_and_permanent_receipts_survive_clear_replay_and_r
 
 async fn node_note_fixture() -> (tempfile::TempDir, Router, String, String, [String; 2]) {
     let (root, app, token, file, version) = note_target_fixture().await;
-    let branch = success(
-        &app,
-        &token,
-        "POST",
-        &format!("/api/file-manager/files/{file}/branches"),
-        Some(json!({
-            "source_version_id":version,
-            "source_node_id":version,
-            "name":"Note target",
-            "operation_id":new_id("op").unwrap(),
-        })),
-    )
-    .await["result"]["branch_id"].as_str().unwrap().to_owned();
-    success(
-        &app,
-        &token,
-        "POST",
-        &format!("/api/file-manager/files/{file}/select"),
-        Some(json!({"branch_id":branch,"operation_id":new_id("op").unwrap()})),
-    )
-    .await;
     manager_namespace(&app, &token, "rename", "version-note.txt", Some("node-note.txt")).await;
-    let listing = success(
-        &app, &token, "GET", "/api/file-manager/disks/P01/entries", None,
-    )
-    .await;
-    let anchor = listing["entries"][0]["node_id"].as_str().unwrap().to_owned();
-    // Container labels do not create metadata nodes. A real historical merge
-    // of the retained content and its rename anchor supplies the second kind.
+    let first = retained_note_merge(&app, &token, &file, &version, "node-note.txt").await;
+    let anchor = first["result"]["node_id"].as_str().unwrap().to_owned();
+    let branch = first["result"]["branch_id"].as_str().unwrap();
+    // Distinct retained graph inputs create a second real metadata node, while
+    // choosing the first merge preserves the originally selected content bytes.
     let merged = success(
         &app,
         &token,
@@ -397,16 +374,15 @@ async fn node_note_fixture() -> (tempfile::TempDir, Router, String, String, [Str
                 {"branch_id":branch,"source_node_id":version,"expected_node_id":anchor},
                 {"branch_id":branch,"source_node_id":anchor,"expected_node_id":anchor}
             ],
-            "chosen_node_id":version,
-            "name":"Node note metadata",
-            "confirmed":true,
+            "chosen_node_id":anchor,"name":"Second node note metadata","confirmed":true,
             "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
     let metadata = merged["result"]["node_id"].as_str().unwrap().to_owned();
-    assert!(anchor.starts_with("fnode_"));
+    assert!(anchor.starts_with("fmeta_"));
     assert!(metadata.starts_with("fmeta_"));
+    assert_ne!(anchor, metadata);
     (root, app, token, file, [anchor, metadata])
 }
 

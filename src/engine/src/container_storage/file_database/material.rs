@@ -32,7 +32,7 @@ pub(in crate::container_storage) fn reconstruct_material(
             "file" => "file",
             "version" => "version",
             "branch" => "branch",
-            "anchor" => "anchor",
+            "path_change" => "path_change",
             "metadata" => "metadata",
             "deletion" => "deletion",
             "lifecycle" => "lifecycle",

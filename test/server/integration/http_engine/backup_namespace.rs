@@ -175,12 +175,7 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
     }
     let renamed = listing(&app, &admin, "P01", "archive/nested").await;
     assert_eq!(renamed["entries"][0]["version_id"], current_version);
-    assert!(
-        renamed["entries"][0]["node_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("fnode_")
-    );
+    assert_eq!(renamed["entries"][0]["node_id"], current["entries"][0]["node_id"]);
     let backup = listing(&app, &admin, "B01", "WorkBackup/nested").await;
     read_only_listing(&backup);
     let entry = &backup["entries"][0];
@@ -193,6 +188,26 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
     assert_eq!(entry["node_id"], version);
     let history=success(&app,&admin,"GET",&format!("/api/file-manager/files/{file}/history?repository_id={repo}&path=archive/nested/renamed.txt"),None).await;
     assert_eq!(history["context"]["content"]["version_id"], current_version);
+    assert_retained_path_change(
+        &app,
+        &admin,
+        file,
+        &history,
+        repo,
+        "docs/nested/report.txt",
+        "archive/nested/report.txt",
+    )
+    .await;
+    assert_retained_path_change(
+        &app,
+        &admin,
+        file,
+        &history,
+        repo,
+        "archive/nested/report.txt",
+        "archive/nested/renamed.txt",
+    )
+    .await;
     let versions = history_versions(
         &app,
         &admin,

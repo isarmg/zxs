@@ -40,99 +40,6 @@ fn file_snapshot(entries: &[Entry], file: &Entry) -> Vec<Entry> {
         .collect()
 }
 
-/// Follow an exact path-node head in its independent file namespace as well.
-/// Other aliases can have different frozen contexts; their branch heads must
-/// not be relocated merely because they happen to name the same file ID.
-pub(crate) fn relocate_namespace_file_branch(
-    state: &mut State,
-    context: &FileContext,
-    entries: &std::collections::BTreeMap<&str, &Entry>,
-    file: &Entry,
-    operation: OperationId,
-) -> Result<()> {
-    relocate_namespace_file_branch_with_ids(
-        state,
-        context,
-        entries,
-        file,
-        operation,
-        &mut |prefix| Ok(new_id(prefix)?),
-    )
-}
-
-pub(super) fn relocate_namespace_file_branch_with_ids(
-    state: &mut State,
-    context: &FileContext,
-    entries: &std::collections::BTreeMap<&str, &Entry>,
-    file: &Entry,
-    operation: OperationId,
-    ids: &mut impl FnMut(&str) -> Result<String>,
-) -> Result<()> {
-    let Some(node) = context
-        .node_id
-        .as_ref()
-        .and_then(|id| state.file_path_nodes.get(id))
-    else {
-        return Ok(());
-    };
-    if node.operation_id != operation || node.path != file.path() {
-        return Ok(());
-    }
-    let Some(branch) = state
-        .branches
-        .get(&context.branch_id)
-        .filter(|branch| {
-            branch.file_id.as_deref() == Some(file.file_id.as_str())
-                && branch.file_node_id == context.node_id
-        })
-        .cloned()
-    else {
-        return Ok(());
-    };
-    let previous = state.commits.get(&branch.head_commit_id).ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "file path head missing",
-        )
-    })?;
-    let mut snapshot = vec![file.clone()];
-    let mut key = file.lookup_key();
-    while let Some((parent, _)) = key.rsplit_once('/') {
-        snapshot.push(
-            (**entries
-                .get(parent)
-                .expect("invariant: namespace replay preserved the renamed file's parents"))
-            .clone(),
-        );
-        key = parent;
-    }
-    namespace::sorted(&mut snapshot);
-    if previous.entries == snapshot {
-        return Ok(());
-    }
-    let commit_id = ids("commit")?;
-    let next = Commit {
-        commit_id: commit_id.clone(),
-        tree_id: ids("tree")?,
-        parent_commit_ids: vec![previous.commit_id.clone()],
-        entries: snapshot,
-        ..previous.clone()
-    };
-    state.commits.insert(commit_id.clone(), next);
-    let target = state
-        .branches
-        .get_mut(&branch.branch_id)
-        .expect("invariant: exact path-node branch was resolved above");
-    target.head_commit_id = commit_id;
-    target.generation = target.generation.checked_add(1).ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::ResourceLimit,
-            "branch generation exhausted",
-        )
-    })?;
-    Ok(())
-}
-
 pub(crate) fn synchronize_directory_edits(
     state: &mut State,
     commit_id: &str,
@@ -896,7 +803,7 @@ impl Engine {
             validate_entries(&mut entries,engine.config.max_entries)?;
             if let Some(view) = &engine.current_namespaces { view.validate_draft(&repo.main_branch_id, &entries)?; }
             let renamed_directories=directory::prepare_current_renamed_directories(state,repository,&previous.entries,&entries,std::slice::from_ref(&change))?;
-            super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
+            let path_changes = super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit")?;
             state.commits.insert(id.clone(),Commit{ namespace_deletions: namespace::deletion_record(deleted, now()?),commit_id:id.clone(),history_tree_id:branch.history_tree_id.clone(),kind:"namespace".into(),parent_commit_ids:vec![previous.commit_id],tree_id:new_id("tree")?,sequence:state.sequence,operation_id:operation,author:principal.into(),message:format!("{} {}",change.kind().as_str(),change.path()),entries,pending_file_versions,provenance:None});
@@ -907,10 +814,10 @@ impl Engine {
             changed_paths.extend(renamed_directories);
             if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
             let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;
-            let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories,"file_node_ids":file_paths::operation_nodes(state,operation)});
+            let mut result = json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories});
             if let Some(original) = original { result["original_file"] = json!(original); }
             if crate::engine::CurrentNamespaces::recursive_namespace_kind(kind) { result["namespace_request"] = request; }
-            Ok(result)
+            crate::persist::path_changes::attach(result, path_changes)
         })
     }
     pub fn create_file_branch(

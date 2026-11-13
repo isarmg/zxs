@@ -29,6 +29,8 @@ mod history_move;
 mod merge_links;
 mod new_scope;
 mod path_notes;
+mod path_changes;
+pub(in crate::engine) use path_changes::verify as verify_path_changes;
 mod plan_cancellation;
 mod publication_delta;
 mod recursive_follow;
@@ -448,10 +450,28 @@ impl CurrentNamespaces {
         &self,
         previous: &State,
         next: &State,
-        branch: &str,
+        workspace: &Workspace,
         entries: &[Entry],
     ) -> Result<()> {
-        let scope = self.branches.get(branch).ok_or_else(stale)?;
+        let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
+        let mut projected;
+        let scope = if previous.branches.get(&workspace.branch_id)
+            .is_some_and(|branch| branch.file_id.is_some())
+            && let Some(file) = workspace.files.values().next()
+        {
+            let source = crate::business::workspace_file_entries(
+                previous,
+                Some(self),
+                workspace,
+                &scope.entries,
+                &file.path,
+            )?;
+            projected = scope.as_ref().clone();
+            projected.entries = Arc::new(source.into_owned());
+            &projected
+        } else {
+            scope.as_ref()
+        };
         let changes = VerifiedEntryChanges::between_states(&scope.entries, entries, previous, next);
         self.validate_entry_changes(Some(scope), entries, &changes)
     }
@@ -546,6 +566,12 @@ impl CurrentNamespaces {
     }
 
     pub(in crate::engine) fn advance(&self, previous: &State, next: &State) -> Result<Self> {
+        let published = self.advance_namespaces(previous, next)?;
+        path_changes::verify(previous, next, Some(self), Some(&published))?;
+        Ok(published)
+    }
+
+    fn advance_namespaces(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
         if let Some(view) = self.advance_history_move(previous, next)? {

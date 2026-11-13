@@ -7,7 +7,7 @@
 pub use storage_contract::offline_maintenance;
 mod error;
 pub use error::{
-    ContainerTagsError,
+    ContainerTagsError, PathChangeError,
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
     RecoveryReconciliationStage,
 };

@@ -844,7 +844,7 @@ pub(crate) fn namespace_locations(
     changes: &[NamespaceOperation],
     principal: &str,
     operation: OperationId,
-) -> Result<()> {
+) -> Result<Vec<crate::persist::path_changes::PathChanged>> {
     if changes.iter().any(|change| {
         matches!(
             change,
@@ -875,6 +875,7 @@ pub(crate) fn namespace_locations(
         .collect::<BTreeMap<_, _>>();
     let mut physical_outcomes = BTreeMap::<String, String>::new();
     let mut contexts = BTreeMap::new();
+    let mut path_changes = Vec::new();
     for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
         // Replay each entry's path independently. Looking only at the first
         // rename loses chained moves; matching by file ID alone confuses aliases.
@@ -937,9 +938,20 @@ pub(crate) fn namespace_locations(
                 .get(&context_key_from_key(repository, old.lookup_key()))
                 .cloned();
             let context = if current.path() != old.path() {
-                Some(file_paths::rename_node(
-                    state, repository, old, current, context, principal, operation,
-                )?)
+                let changed = file_paths::record_change(
+                    state,
+                    repository,
+                    file_paths::PathChange {
+                        old,
+                        new: current,
+                        after_entries: after,
+                        context,
+                    },
+                    principal,
+                    operation,
+                )?;
+                path_changes.push(changed.fact);
+                Some(changed.context)
             } else {
                 state
                     .file_contexts
@@ -947,15 +959,6 @@ pub(crate) fn namespace_locations(
                     .cloned()
             };
             if let Some(context) = context {
-                if current.path() != old.path() {
-                    file::relocate_namespace_file_branch(
-                        state,
-                        &context,
-                        &after_by_path,
-                        current,
-                        operation,
-                    )?;
-                }
                 contexts.insert(
                     context_key_from_key(repository, current.lookup_key()),
                     context,
@@ -1007,7 +1010,7 @@ pub(crate) fn namespace_locations(
         state.file_selections.remove(&old.file_id);
         state.file_write_origins.remove(&old.file_id);
     }
-    Ok(())
+    Ok(path_changes)
 }
 
 pub(crate) fn unwritten_source_at<'a>(

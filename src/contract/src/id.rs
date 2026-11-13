@@ -155,6 +155,7 @@ pub type DiskId = Id<kind::Disk>;
 pub type FileAnchorId = Id<kind::FileAnchor>;
 pub type FileMetadataId = Id<kind::FileMetadata>;
 pub type FileDeletionId = Id<kind::FileDeletion>;
+pub type FilePathEventId = Id<kind::FilePathEvent>;
 pub type FileMergeId = Id<kind::FileMerge>;
 
 #[cfg(test)]

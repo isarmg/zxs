@@ -12,6 +12,8 @@ pub enum Error {
     #[error(transparent)]
     ContainerTags(ContainerTagsError),
     #[error(transparent)]
+    PathChange(PathChangeError),
+    #[error(transparent)]
     ConversionNameBudget(crate::directory_conversion::NameBudgetError),
     #[error(transparent)]
     HistoricalBranch(#[from] HistoricalBranchError),
@@ -105,6 +107,7 @@ impl Error {
             },
             source @ (Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::PathChange(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -137,6 +140,7 @@ impl Error {
             Self::Context { retryable, .. } => *retryable,
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::PathChange(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -163,6 +167,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.code(),
             Self::ContainerTags(error) => error.code(),
+            Self::PathChange(error) => error.code(),
             Self::BatchUndo(error) => error.code(),
             Self::ConversionNameBudget(_) => ErrorCode::PlanInvalid,
             Self::DirectoryLayout(error) => match error.as_ref() {
@@ -215,6 +220,7 @@ impl Error {
         match self {
             Self::HistoricalBranch(error) => error.to_string().into(),
             Self::ContainerTags(error) => error.to_string().into(),
+            Self::PathChange(error) => error.to_string().into(),
             Self::BatchUndo(error) => error.to_string().into(),
             Self::ConversionNameBudget(error) => error.to_string().into(),
             Self::DirectoryLayout(error) => error.to_string().into(),
@@ -271,6 +277,7 @@ impl Error {
             Self::Cleanup { operation, .. } => operation.published_result(),
             Self::HistoricalBranch(_)
             | Self::ContainerTags(_)
+            | Self::PathChange(_)
             | Self::BatchUndo(_)
             | Self::ConversionNameBudget(_)
             | Self::DirectoryLayout(_)
@@ -472,6 +479,34 @@ impl ContainerTagsError {
             | Self::PublicationGeneration(_)
             | Self::Encoding(_) => ErrorCode::PublicationInvalid,
             Self::Exhausted(_) => ErrorCode::ResourceLimit,
+        }
+    }
+}
+
+/// Failures at the permanent namespace-fact publication boundary.
+#[derive(Debug, error_definition::Error)]
+pub enum PathChangeError {
+    #[error("foreign admission cannot preserve path/copy audit; original records were not changed")]
+    ForeignSource,
+    #[error("file workspace occurrence changed; staged bytes are preserved")]
+    WorkspaceLocation,
+    #[error("path change does not match its permanent publication")]
+    Publication,
+    #[error("path change publication exceeds its fact or byte limit")]
+    Limit,
+    #[error("path change envelope could not be encoded or decoded")]
+    Encoding(#[source] json_codec::Error),
+    #[error("path change author is missing")]
+    Principal(#[source] storage_contract::EmptyPrincipal),
+}
+
+impl PathChangeError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Limit => ErrorCode::ResourceLimit,
+            Self::WorkspaceLocation => ErrorCode::FileBranchConflict,
+            Self::ForeignSource => ErrorCode::UnsupportedOperation,
+            Self::Publication | Self::Encoding(_) | Self::Principal(_) => ErrorCode::PublicationInvalid,
         }
     }
 }

@@ -556,11 +556,44 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
     assert_eq!(new_pages.difference(&old_pages).count(), 1);
 }
 
-// Current-format bytes captured from run 43227505812, head 09b7715f3,
+// Prior-format bytes captured from run 43227505812, head 09b7715f3,
 // artifact 13952565718, 594.stdout.log actual canonical bundle.
 // SHA-256: 0af2b80f5e291e88bd8ca21acd72559772e7b6cdf48cc42330d7629b36f603d9.
 // Fixed codec fixture, independent of random IDs and wall-clock time. It need
-// not be a semantically valid history: this pins the logical/graph wire format.
+// not be a semantically valid history. The current expectation changes only
+// the root discriminant, never the preserved fixture or the production codec.
+fn path_fact_golden() -> Vec<u8> {
+    fn hash(bytes: &[u8]) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"zxs:history-manifest\0");
+        hasher.update(bytes);
+        hasher.finalize().to_hex().to_string()
+    }
+    let mut bundle: Value = json_codec::from_slice(include_bytes!(
+        "manifest-sharing-container-tags-golden.json"
+    ))
+    .unwrap();
+    let mut replacement = None;
+    for object in bundle["objects"].as_array_mut().unwrap() {
+        if object["kind"] != "history-manifest" {
+            continue;
+        }
+        let bytes = object["bytes"].as_str().unwrap();
+        assert_eq!(hash(bytes.as_bytes()), object["hash"].as_str().unwrap());
+        assert_eq!(bytes.matches("container-tags-radix-map-roots").count(), 1);
+        let current = bytes.replace(
+            "container-tags-radix-map-roots",
+            "container-path-facts-radix-map-roots",
+        );
+        let digest = hash(current.as_bytes());
+        assert!(replacement.replace(digest.clone()).is_none());
+        object["bytes"] = json!(current);
+        object["hash"] = json!(digest);
+    }
+    bundle["root"] = json!(replacement.unwrap());
+    canonical_json(&bundle).unwrap()
+}
+
 #[test]
 fn shared_manifest_projection_preserves_canonical_golden() {
     let mut logical = json_codec::to_value(manifest()).unwrap();
@@ -591,7 +624,7 @@ fn shared_manifest_projection_preserves_canonical_golden() {
     });
     assert_eq!(
         canonical_json(&bundle).unwrap(),
-        include_bytes!("manifest-sharing-container-tags-golden.json")
+        path_fact_golden()
     );
 }
 
@@ -751,8 +784,15 @@ fn prior_history_root_format_is_rejected_without_loading_dependencies() {
     let manifest = manifest();
     let (_, objects) = prepare(&manifest, MAX_METADATA).unwrap();
     let mut root: Value = json_codec::from_slice(objects.last().unwrap().bytes()).unwrap();
-    root["format"] = json!("radix-map-roots");
-    assert!(resolve(root, |_, _| panic!("unsupported root must reject before dependencies")).is_err());
+    for format in ["radix-map-roots", "container-tags-radix-map-roots"] {
+        root["format"] = json!(format);
+        assert!(
+            resolve(root.clone(), |_, _| {
+                panic!("unsupported root must reject before dependencies")
+            })
+            .is_err()
+        );
+    }
 }
 
 #[test]

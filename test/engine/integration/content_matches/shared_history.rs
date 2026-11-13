@@ -226,8 +226,10 @@ fn shared_history_new_file_joins_soft_deleted_history_and_remains_writable_after
     );
     let events = lifecycle(&pool, &old.file_id);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].deletion_id.to_string(), deletion.node_id);
-    assert_eq!(events[0].action, storage_contract::file_lifecycle::Action::Delete);
+    assert_eq!(events[0].source_id().to_string(), deletion.node_id);
+    assert!(matches!(
+        &events[0].detail, storage_contract::file_lifecycle::Detail::Delete { .. },
+    ));
     assert_eq!(container_tags_fixture::tags(&pool.engine, &old.file_id),
         BTreeSet::from(["keep".into()]));
     assert!(container_tags_fixture::tags(&pool.engine, &new.file_id).is_empty());
@@ -429,8 +431,10 @@ fn shared_history_undoing_one_file_deletion_keeps_both_parallel_content_connecti
     );
     let events = lifecycle(&pool, &a.file_id);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].action, storage_contract::file_lifecycle::Action::Delete);
-    assert_eq!(events[0].deletion_id.to_string(), deletion.node_id);
+    assert!(matches!(
+        &events[0].detail, storage_contract::file_lifecycle::Detail::Delete { .. },
+    ));
+    assert_eq!(events[0].source_id().to_string(), deletion.node_id);
     let root = pool.root.clone();
     drop(pool.engine);
     pool.engine = Engine::open(&root).unwrap();
@@ -448,11 +452,10 @@ fn shared_history_undoing_one_file_deletion_keeps_both_parallel_content_connecti
     let restored_events = lifecycle(&pool, &a.file_id);
     assert_eq!(restored_events.len(), 2);
     assert_eq!(restored_events[0], events[0]);
-    assert_eq!(
-        restored_events[1].action,
-        storage_contract::file_lifecycle::Action::Undo,
-    );
-    assert_eq!(restored_events[1].deletion_id.to_string(), deletion.node_id);
+    assert!(matches!(
+        &restored_events[1].detail, storage_contract::file_lifecycle::Detail::Undo { .. },
+    ));
+    assert_eq!(restored_events[1].source_id().to_string(), deletion.node_id);
     assert!(pool.engine.file_deletion(&a.file_id).is_none());
     assert!(pool.engine.file_deletion(&b.file_id).is_none());
     drop(pool.engine);

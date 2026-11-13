@@ -130,7 +130,7 @@ impl Fixture {
 #[test]
 fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
     let mut fixture = Fixture::prepared();
-    assert_eq!(FORMAT, "zxs-container-tags-backup-native-control");
+    assert_eq!(FORMAT, "zxs-container-path-facts-backup-native-control");
     let task = fixture.task();
     let report = fixture.read(&task.archive_hash).unwrap();
     assert_eq!(report.original_members, 3);
@@ -141,7 +141,7 @@ fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
         let path = object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
         let bytes = fs::read(path).unwrap();
         let value = storage_contract::strict_json(&bytes).unwrap();
-        assert_eq!(value["format"], "container-tags-managed-directory");
+        assert_eq!(value["format"], "container-path-facts-managed-directory");
         let seal: DiskSeal = decode_proof(&bytes).unwrap();
         assert_eq!(seal.format, DiskSealFormat::ManagedDirectory);
     }
@@ -172,44 +172,49 @@ fn current_native_archive_survives_cold_reopen_and_exact_continuation() {
 
 #[test]
 fn old_native_manifest_is_rejected_even_with_current_hash_domain_without_writes() {
-    let fixture = Fixture::prepared();
-    let mut manifest = fixture.manifest();
-    manifest.format = "zxs-backup-native-control".into();
-    let expected = fixture.write_manifest(&manifest);
-    assert_eq!(object_hash(FORMAT, &fixture.manifest()).unwrap(), expected);
-    let before = fixture.bytes();
-    assert_eq!(
-        fixture.read(&expected).unwrap_err().code(),
-        ErrorCode::PublicationInvalid
-    );
-    assert_eq!(fixture.bytes(), before);
+    for format in ["zxs-backup-native-control", "zxs-container-tags-backup-native-control"] {
+        let fixture = Fixture::prepared();
+        let mut manifest = fixture.manifest();
+        manifest.format = format.into();
+        let expected = fixture.write_manifest(&manifest);
+        assert_eq!(object_hash(FORMAT, &fixture.manifest()).unwrap(), expected);
+        let before = fixture.bytes();
+        assert_eq!(
+            fixture.read(&expected).unwrap_err().code(),
+            ErrorCode::PublicationInvalid
+        );
+        assert_eq!(fixture.bytes(), before);
+    }
 }
 
 #[test]
 fn old_original_seal_is_rejected_inside_current_rehashed_archive_without_writes() {
-    let fixture = Fixture::prepared();
-    let mut manifest = fixture.manifest();
-    assert_eq!(manifest.format, "zxs-container-tags-backup-native-control");
-    let member = &mut manifest.members[0];
-    let original = object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
-    let mut seal = storage_contract::strict_json(&fs::read(original).unwrap()).unwrap();
-    assert_eq!(seal["format"], "container-tags-managed-directory");
-    seal["format"] = json_codec::Value::String("managed-directory".into());
-    let hash = storage_contract::object_hash_value("backup-original-seal", &seal).unwrap();
-    let bytes = canonical_json(&seal).unwrap();
-    fs::write(
-        object_path(&fixture.target, "backup-original-seal", &hash).unwrap(),
-        &bytes,
-    )
-    .unwrap();
-    member.seal_hash = hash.clone();
-    let expected = fixture.write_manifest(&manifest);
-    // Authenticate the changed object and outer envelope independently. Failure
-    // must be format admission, not stale digests from the deliberate fixture edit.
-    AuthenticatedMetadataObject::authenticate("backup-original-seal", &hash, seal).unwrap();
-    assert_eq!(decode_proof::<DiskSeal>(&bytes).unwrap_err().code(), ErrorCode::InvalidJson);
-    assert_eq!(object_hash(FORMAT, &fixture.manifest()).unwrap(), expected);
-    let before = fixture.bytes();
-    assert_eq!(fixture.read(&expected).unwrap_err().code(), ErrorCode::InvalidJson);
-    assert_eq!(fixture.bytes(), before);
+    for format in ["managed-directory", "container-tags-managed-directory"] {
+        let fixture = Fixture::prepared();
+        let mut manifest = fixture.manifest();
+        assert_eq!(manifest.format, "zxs-container-path-facts-backup-native-control");
+        let member = &mut manifest.members[0];
+        let original =
+            object_path(&fixture.target, "backup-original-seal", &member.seal_hash).unwrap();
+        let mut seal = storage_contract::strict_json(&fs::read(original).unwrap()).unwrap();
+        assert_eq!(seal["format"], "container-path-facts-managed-directory");
+        seal["format"] = json_codec::Value::String(format.into());
+        let hash = storage_contract::object_hash_value("backup-original-seal", &seal).unwrap();
+        let bytes = canonical_json(&seal).unwrap();
+        fs::write(
+            object_path(&fixture.target, "backup-original-seal", &hash).unwrap(),
+            &bytes,
+        )
+        .unwrap();
+        member.seal_hash = hash.clone();
+        let expected = fixture.write_manifest(&manifest);
+        // Authenticate the changed object and outer envelope independently. Failure
+        // must be format admission, not stale digests from the deliberate fixture edit.
+        AuthenticatedMetadataObject::authenticate("backup-original-seal", &hash, seal).unwrap();
+        assert_eq!(decode_proof::<DiskSeal>(&bytes).unwrap_err().code(), ErrorCode::InvalidJson);
+        assert_eq!(object_hash(FORMAT, &fixture.manifest()).unwrap(), expected);
+        let before = fixture.bytes();
+        assert_eq!(fixture.read(&expected).unwrap_err().code(), ErrorCode::InvalidJson);
+        assert_eq!(fixture.bytes(), before);
+    }
 }
