@@ -49,7 +49,11 @@ fn usage(path: &Path, engine_store: bool) -> Usage {
 
 #[test]
 fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_close() {
-    let (root, shared, backend, branch) = manual_fixture();
+    let (root, mut shared, backend, branch) = manual_fixture();
+    // The generic tiny-file fixture reserves only 4 KiB per file/session.
+    // This bounded acceptance uses 512 KiB bodies inside the unchanged
+    // 16 MiB account / 64 MiB global spool limits, not product quota changes.
+    Arc::get_mut(&mut shared).unwrap().max_file_bytes = BODY_BYTES as u64;
     let actor = identity(&shared);
     let entry = session(shared.clone(), &branch).entries().unwrap().remove(0);
     let context = crate::ReadContainerEdit {
@@ -72,6 +76,7 @@ fn repeated_large_manual_flushes_release_superseded_engine_bodies_after_readers_
     let mut operations = Vec::new();
     for index in 1..=ROUNDS {
         let mut client = session(shared.clone(), &branch);
+        client.max_file_bytes = BODY_BYTES as u64;
         let (opened, descriptor) = client.open(
             "report.txt".into(), true, false, false, false, false,
         ).unwrap();
