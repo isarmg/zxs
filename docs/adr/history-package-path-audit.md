@@ -30,7 +30,11 @@ copy 只改 typed 目标 file／history／branch／version 投影，并记录 ty
 仅复制多文件 rename 中一个文件后导出会明确拒绝，而不是漏掉其他成员或暗中导出包外数据。
 上述含路径审计的 batch 中，没有文件端点证明的空目录 transfer 同样拒绝。
 含既有路径来源前缀的混合 object_move 保留完整原 payload，但当前不能规范化为可携带证据，
-故 portable export／以它为来源的 copy 明确拒绝。原生日常读取与发布不因此被整体禁用。
+故 portable export，以及以它为来源、需要 capture_mapped 的历史复制／移动明确拒绝。
+后者包含再次启用 copy_history 的 object_move，不只是包出口或 copy API 的限制。
+原生日常读取及不重新捕获该混合来源的操作没有被整体禁用，不能据此声称所有后续移动可用。
+静态调用链中，拒绝发生于 plan → compose 的候选 State 克隆内，先于 publish_move；
+真实混合来源再次移动的 source／target／磁盘不变回归尚未运行，不能称已有运行证明。
 foreign identity remap 遇非空 path_audit 在改名或写入前拒绝；空 audit 的原能力保持。
 
 ## 格式与资源

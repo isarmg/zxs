@@ -94,6 +94,7 @@ fn assert_audit_roundtrip(engine: &Engine, history: &str, root: &Path) {
 #[test]
 fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temporary.path().join("source"));
     let repo = engine.create_disk_root("P01", "alice", OperationId::generate().unwrap()).unwrap();
     save(&mut engine, &repo.main_branch_id, b"immutable body");
@@ -129,6 +130,7 @@ fn native_rename_audit_and_audit_free_packages_both_roundtrip() {
 #[test]
 fn retained_copy_path_audit_is_not_mistaken_for_an_audit_free_history() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut config = Config::development(
         (0..6).map(|index| temporary.path().join(format!("disk-{index}"))),
     ).unwrap();
@@ -180,6 +182,7 @@ fn retained_copy_path_audit_is_not_mistaken_for_an_audit_free_history() {
 #[test]
 fn copied_subset_of_directory_rename_batch_refuses_without_output_or_source_writes() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut config = Config::development(
         (0..4).map(|index| temporary.path().join(format!("disk-{index}"))),
     ).unwrap();

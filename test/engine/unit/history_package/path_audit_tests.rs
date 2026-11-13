@@ -19,6 +19,7 @@ fn source(root: &Path) -> (Engine, crate::Repository, crate::OperationResult) {
 #[test]
 fn path_audit_rejects_changed_principal_endpoint_source_fact_and_same_id_different_proof() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (engine, repo, receipt) = source(&temporary.path().join("source"));
     let manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
     let original = canonical_json(&manifest).unwrap();
@@ -55,6 +56,7 @@ fn path_audit_rejects_changed_principal_endpoint_source_fact_and_same_id_differe
 #[test]
 fn restore_rejects_same_operation_id_with_different_native_proof_without_writes() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (engine, repo, receipt) = source(&temporary.path().join("source"));
     let package = temporary.path().join("package");
     engine.export_history_package(&repo.history_tree_id, &package).unwrap();
@@ -81,6 +83,7 @@ fn restore_rejects_same_operation_id_with_different_native_proof_without_writes(
 #[test]
 fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_without_writes() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (first, first_repo, native) = source(&temporary.path().join("first"));
     let first_package = temporary.path().join("first-package");
     first.export_history_package(&first_repo.history_tree_id, &first_package).unwrap();
@@ -135,6 +138,7 @@ fn restore_rejects_conflicting_source_id_retained_only_in_a_prior_restore_withou
 #[test]
 fn copied_restored_provenance_survives_cold_open_without_inventing_source_operations() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (source, repo, native) = source(&temporary.path().join("source"));
     let package = temporary.path().join("package");
     source.export_history_package(&repo.history_tree_id, &package).unwrap();
@@ -212,6 +216,7 @@ fn copied_restored_provenance_survives_cold_open_without_inventing_source_operat
 #[test]
 fn required_path_audit_schema_rejects_old_graph_without_rewrite() {
     let temporary = tempfile::tempdir().unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let (engine, repo, _) = source(&temporary.path().join("source"));
     let package = temporary.path().join("package");
     engine.export_history_package(&repo.history_tree_id, &package).unwrap();
