@@ -875,8 +875,13 @@ fn new_publication_state(engine: &Engine, candidate: &Candidate) -> (State, Oper
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
     let mut result = next.operations[&candidate.operation_id].clone();
+    // This descriptor-lifetime fixture republishes bodies, not path events.
+    // Never re-identify an original rename proof when creating its synthetic slot.
+    assert!(crate::persist::path_changes::read(&result).unwrap().is_empty());
+    let principal = next.operation_principals[&candidate.operation_id].clone();
     result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
+    next.operation_principals.insert(result.operation_id, principal);
     next.operations.insert(result.operation_id, result.clone());
     (next, result)
 }

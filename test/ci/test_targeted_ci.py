@@ -2789,3 +2789,48 @@ class CurrentNameConsumerSelection(unittest.TestCase):
         self.assertEqual(len(http['exact']), 2)
         self.assertEqual(http['timeout_seconds'], 900)
         self.assertIs(http['isolate'], True)
+
+
+class CurrentNameFixtureSelection(unittest.TestCase):
+    def test_fixture_edits_select_complete_modules_without_other_consumer_suites(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        cases = [
+            ('test/engine/unit/engine/verified_payloads/tests.rs',
+             'current-name-publication-fixtures',
+             'engine::publication::verified_payloads::tests::', 160),
+            ('test/engine/unit/engine/current_selected_batch_tests.rs',
+             'current-name-selected-batch-fixtures',
+             'engine::disk_registry::current::batch::tests::', 96),
+            ('test/engine/unit/engine/current_namespace_directory_label_tests.rs',
+             'current-name-directory-label-fixtures',
+             'engine::disk_registry::current::tests::directory_labels::', 192),
+        ]
+        for path, group, prefix, budget in cases:
+            with self.subTest(path=path):
+                plan = CI.select_plan(policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], [group])
+                targets = origin_selections(plan, group)
+                self.assertEqual(len(targets), 1)
+                self.assertEqual(targets[0]['prefixes'], [prefix])
+                self.assertNotIn('exact', targets[0])
+                self.assertEqual(targets[0]['max_tests'], budget)
+                self.assertEqual(targets[0]['timeout_seconds'], 900)
+
+    def test_production_sources_keep_all_preexisting_consumer_groups(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        cases = {
+            'src/engine/src/engine/verified_payloads.rs': ['held-directory-layout'],
+            'src/engine/src/engine/disk_registry/current/batch.rs': [
+                'current-name-namespace-consumers', 'container-current-name',
+            ],
+            'src/engine/src/engine/named_namespaces.rs': [
+                'current-name-namespace-consumers', 'container-current-name',
+            ],
+        }
+        for path, groups in cases.items():
+            with self.subTest(path=path):
+                plan = CI.select_plan(policy, [path], shardable=True)
+                self.assertTrue(set(groups) <= set(plan['groups']))
+                for group in groups:
+                    self.assertCountEqual(origin_selections(plan, group),
+                                          policy['groups'][group]['rust_targets'])

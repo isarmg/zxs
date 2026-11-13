@@ -77,108 +77,101 @@ fn membership_registry_current_directory_label_reuses_the_exact_owned_projection
 }
 
 #[test]
-fn membership_registry_current_directory_label_rejects_reused_path_identity() {
+fn membership_registry_current_directory_label_path_reuse_keeps_id_addressing() {
     let mut fixture = Fixture::new(true);
-    let rule = new_id("rule").unwrap();
-    fixture.engine.update_placement_rule(PlacementRuleUpdate {
-        rule_id: &rule,
-        repository_id: &fixture.repo.repository_id,
-        path_prefix: "retired/only",
-        primary_slot_id: "P01",
-        expected_generation: 0,
-        principal: "admin",
-        operation_id: op(),
-    }).unwrap();
-    save(
-        &mut fixture.engine,
-        &fixture.repo.main_branch_id,
-        "retired/only",
-        b"old scope",
-    );
-    let branch_id = crate::directory_git_fixture::checkpoint(
-        &mut fixture.engine, &fixture.repo, "retired",
-    ).directory_branch_id.unwrap();
-    fixture.engine.update_placement_rule(PlacementRuleUpdate {
-        rule_id: &rule,
-        repository_id: &fixture.repo.repository_id,
-        path_prefix: "retired/only",
-        primary_slot_id: "D04",
-        expected_generation: 1,
-        principal: "admin",
-        operation_id: op(),
-    }).unwrap();
-    let old_directory = fixture.engine.state.directory_branches[&branch_id]
-        .directory_id
-        .clone();
-    let name = BranchName::parse("Before removal").unwrap();
+    let branch_id = directory_branch(&mut fixture);
+    let old_directory = fixture.engine.state.directory_branches[&branch_id].directory_id.clone();
+    let old_tree = fixture.engine.state.directory_trees[
+        &fixture.engine.state.directory_branches[&branch_id].head_tree_id
+    ].clone();
+    fixture.project(false);
+    // A directory owned by D04 survives loss of its P01 file. Explicitly move
+    // it before reusing the path; this is not delete/recreate or D3 retirement.
+    fixture.engine.file_namespace(
+        &fixture.repo.repository_id,
+        NamespaceOperation::parse(NamespaceOperationKind::Rename, "dir", Some("relocated"))
+            .unwrap(),
+        "admin",
+        op(),
+    ).unwrap();
+    save(&mut fixture.engine, &fixture.repo.main_branch_id, "dir/new", b"new scope");
+    let replacement = directory_branch(&mut fixture);
+    let new_branch = fixture.engine.state.directory_branches[&replacement].clone();
+    let new_tree = fixture.engine.state.directory_trees[&new_branch.head_tree_id].clone();
+    assert_ne!(new_branch.directory_id, old_directory);
+    assert_ne!(replacement, branch_id);
+    let name = BranchName::parse("Relocated label").unwrap();
+    let mut expected_old = fixture.engine.state.directory_branches[&branch_id].clone();
+    expected_old.name = name.as_str().into();
     let operation = op();
-    let receipt = fixture
-        .engine
-        .rename_directory_branch(
-            &fixture.repo.repository_id,
-            &branch_id,
-            &name,
-            "admin",
-            operation,
-        )
-        .unwrap();
+    let receipt = fixture.engine.rename_directory_branch(
+        &fixture.repo.repository_id, &branch_id, &name, "admin", operation,
+    ).unwrap();
+    let renamed = fixture.engine.state.directory_branches[&branch_id].clone();
+    assert_eq!(renamed, expected_old);
+    assert_eq!(renamed.directory_id, old_directory);
+    assert_eq!(renamed.path, "relocated");
+    assert_eq!(renamed.name, name.as_str());
+    assert_eq!(fixture.engine.state.directory_branches[&replacement], new_branch);
+    assert_eq!(fixture.engine.state.directory_trees[&new_tree.tree_id], new_tree);
+    assert_eq!(fixture.engine.state.directory_trees[&old_tree.tree_id], old_tree);
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(fixture.engine.rename_directory_branch(
+        &fixture.repo.repository_id, &branch_id, &name, "admin", operation,
+    ).unwrap(), receipt);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+
+    drop(fixture.engine);
+    fixture.engine = Engine::open(&fixture._temp.path().join("system")).unwrap();
+    // This fixture reinstalls a verified projection; it does not persist a D3 exit.
+    fixture.project(false);
+    let namespace = fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap();
+    assert_eq!(namespace.get("relocated").unwrap().entry_id, old_directory);
+    assert_eq!(namespace.get("dir").unwrap().entry_id, new_branch.directory_id);
+    assert_eq!(fixture.engine.state.directory_branches[&branch_id], renamed);
+    assert_eq!(fixture.engine.state.directory_branches[&replacement], new_branch);
+    assert_eq!(fixture.engine.state.directory_trees[&old_tree.tree_id], old_tree);
+    assert_eq!(fixture.engine.state.directory_trees[&new_tree.tree_id], new_tree);
+    let before = canonical_json(fixture.engine.state()).unwrap();
+    assert_eq!(fixture.engine.rename_directory_branch(
+        &fixture.repo.repository_id, &branch_id, &name, "admin", operation,
+    ).unwrap(), receipt);
+    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+}
+
+#[test]
+fn membership_registry_current_directory_label_rejects_absent_owned_identity() {
+    let mut fixture = Fixture::new(true);
+    let retired = fixture.engine.create_repository(
+        &RepositoryName::parse("retired owner").unwrap(), "P01", 1, "admin", op(),
+    ).unwrap();
+    save(&mut fixture.engine, &retired.main_branch_id, "dir/only", b"old scope");
+    let branch_id = crate::directory_git_fixture::checkpoint(
+        &mut fixture.engine, &retired, "dir",
+    ).directory_branch_id.unwrap();
     let old_branch = fixture.engine.state.directory_branches[&branch_id].clone();
     let old_tree = fixture.engine.state.directory_trees[&old_branch.head_tree_id].clone();
-    // The admitted Current projection omits the old directory because all its
-    // occurrences live on P01. This checks projection identity, not D3 durability
-    // or physical retirement, and does not delete an initialized repository.
-    fixture.project(false);
-    assert!(
-        fixture.engine.namespace_tree(&fixture.repo.main_branch_id).unwrap()
-            .get("retired").is_none()
-    );
-    save(
-        &mut fixture.engine,
-        &fixture.repo.main_branch_id,
-        "retired/new",
-        b"new scope",
-    );
-    assert_ne!(
-        fixture
-            .engine
-            .namespace_tree(&fixture.repo.main_branch_id)
-            .unwrap()
-            .get("retired")
-            .unwrap()
-            .entry_id,
-        old_directory
-    );
-    let state = canonical_json(fixture.engine.state()).unwrap();
-    assert_eq!(
-        fixture
-            .engine
-            .rename_directory_branch(
-                &fixture.repo.repository_id,
-                &branch_id,
-                &name,
-                "admin",
-                op()
-            )
-            .unwrap_err()
-            .code(),
-        ErrorCode::DirectoryBranchNotFound
-    );
-    assert_eq!(
-        fixture
-            .engine
-            .rename_directory_branch(
-                &fixture.repo.repository_id,
-                &branch_id,
-                &name,
-                "admin",
-                operation
-            )
-            .unwrap(),
-        receipt
-    );
-    assert_eq!(canonical_json(fixture.engine.state()).unwrap(), state);
-    assert_eq!(fixture.engine.state.directory_branches[&branch_id], old_branch);
-    assert_eq!(fixture.engine.state.directory_trees[&old_tree.tree_id], old_tree);
+    for reopen in [false, true] {
+        if reopen {
+            drop(fixture.engine);
+            fixture.engine = Engine::open(&fixture._temp.path().join("system")).unwrap();
+        }
+        // Unlike a D04 directory with a P01 file, this namespace owner is P01.
+        // Re-derive the admitted Current projection, not a physical D3 exit.
+        fixture.project(false);
+        assert!(fixture.engine.namespace_tree(&retired.main_branch_id).unwrap()
+            .get("dir").is_none());
+        let before = canonical_json(fixture.engine.state()).unwrap();
+        let refused = op();
+        assert_eq!(fixture.engine.rename_directory_branch(
+            &retired.repository_id, &branch_id,
+            &BranchName::parse("Unavailable label").unwrap(), "admin", refused,
+        ).unwrap_err().code(), ErrorCode::DirectoryBranchNotFound);
+        assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
+        assert!(!fixture.engine.state.operations.contains_key(&refused));
+        assert_eq!(fixture.engine.state.directory_branches[&branch_id], old_branch);
+        assert_eq!(fixture.engine.state.directory_trees[&old_tree.tree_id], old_tree);
+    }
 }
 
 #[test]
