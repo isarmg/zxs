@@ -227,7 +227,7 @@ impl Engine {
     }
 
     pub(in crate::engine) fn verify_draft_material(&self, next: &State) -> crate::Result<()> {
-        for (file, edit) in &next.container_edits {
+        for (file, edit) in next.container_edits.iter() {
             if self.state.container_edits.get(file) == Some(edit) {
                 continue;
             }
@@ -257,7 +257,7 @@ pub(crate) fn verify_transition(previous: &State, next: &State) -> crate::Result
     let directory_commit = next.events.last().is_some_and(|event| {
         event.sequence == next.sequence && event.kind == "directory.changes.commit"
     });
-    for (file, edit) in &previous.container_edits {
+    for (file, edit) in previous.container_edits.iter() {
         // A clean manual container also cannot be auto-published by a legacy
         // content-save path that forgot to route through shared draft storage.
         if !directory_commit && consumed != Some(*file)

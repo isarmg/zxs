@@ -74,6 +74,8 @@ pub(crate) struct WorkspaceResponse {
 impl From<storage_contract::Workspace> for WorkspaceResponse {
     fn from(workspace: storage_contract::Workspace) -> Self {
         let storage_contract::Workspace {
+            // Explicit consumption is exposed by its sealed envelope, not ordinary workspace info.
+            container_draft_commit: _,
             workspace_id,
             purpose,
             branch_id,

@@ -15,6 +15,8 @@ use json_codec::json;
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum ApiErrorSource {
     #[error("{0}")]
+    GenerationExhausted(#[source] storage_contract::GenerationExhausted),
+    #[error("{0}")]
     ContainerTagsWire(#[source] crate::operation_wire::ContainerTagsWireError),
     #[error("{0}")]
     AuthenticatedPrincipal(#[source] storage_contract::EmptyPrincipal),
@@ -119,6 +121,10 @@ pub struct ApiError {
     pub(crate) source: Option<Box<ApiErrorSource>>,
 }
 impl ApiError {
+    pub(crate) fn exhausted_generation(source: storage_contract::GenerationExhausted) -> Self {
+        Self::limit(&source.to_string()).with_source(ApiErrorSource::GenerationExhausted(source))
+    }
+
     pub(crate) fn container_tags_wire(source: crate::operation_wire::ContainerTagsWireError) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,

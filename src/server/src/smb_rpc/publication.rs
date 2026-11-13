@@ -525,7 +525,7 @@ fn flush_container_draft(
     }, &writer.file)?;
     let (actual_hash, actual_size) = draft_fingerprint(&writer.file)?;
     let container = writer.container.as_mut().unwrap();
-    let generation = revision.expected_generation.next().map_err(ApiError::invalid_source)?;
+    let generation = revision.expected_generation.next().map_err(ApiError::exhausted_generation)?;
     container.edit = storage_contract::container_edit::ContainerEdit::ManualDirty {
         generation, draft: persisted.revision,
     };

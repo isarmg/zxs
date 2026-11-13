@@ -2947,3 +2947,12 @@ class ManualDraftSmbAdmissionSelection(unittest.TestCase):
                      'src/server/src/smb_rpc/session.rs']:
             with self.subTest(path=path):
                 assert_path_group_extension(self, policy, [path], groups, [])
+
+
+class ManualDraftWorkspaceProjectionSelection(unittest.TestCase):
+    def test_workspace_projection_keeps_complete_consumer_targets(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        assert_path_group_extension(self, policy, ['src/server/src/backend_workspace.rs'], [
+            'portable-path-consumers', 'container-tags-http',
+            'container-manual-drafts-consumers',
+        ], [])

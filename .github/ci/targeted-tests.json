@@ -10591,6 +10591,14 @@
       ]
     },
     {
+      "path": "src/server/src/backend_workspace.rs",
+      "groups": [
+        "portable-path-consumers",
+        "container-tags-http",
+        "container-manual-drafts-consumers"
+      ]
+    },
+    {
       "path": "src/server/src/smb_rpc/session.rs",
       "groups": [
         "portable-path-consumers",
