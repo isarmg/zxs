@@ -3703,6 +3703,103 @@
         "test_zxs_demo"
       ],
       "rust_targets": []
+    },
+    "readmission-member-proof-scope": {
+      "reason": "One verify_member call retains its immutable full proposal proof only. Keep the original single 17-cut regression under its unchanged total 300-second timeout, all readmission core/runtime tests, restricted cold consumers and server readmission entry points. No cross-root or cross-cut cache.",
+      "python_tests": [
+        "test_readmission_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "engine::membership_transition::readmission::",
+            "engine::membership_transition::pending::activation::recovery::restricted::"
+          ],
+          "max_tests": 63,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "management::storage_readmission::tests::",
+            "management::storage_readmission::exclusive::tests::",
+            "management::terminal_readmission::tests::"
+          ],
+          "max_tests": 24,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "features": [
+            "core"
+          ],
+          "prefixes": [
+            "offline::disk_readmission::tests::"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_head",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_head"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 150
+        }
+      ]
+    },
+    "readmission-exit-stop-observation": {
+      "reason": "Four independently initialized real locator barriers, each with all three readmission cycles and full quorum/epoch/resume/cold assertions. Each exact test has 150 seconds (aggregate cap 600 seconds), replacing the prior single 300-second loop; the unrelated original 17-cut readmission test remains at 300 seconds.",
+      "python_tests": [
+        "test_readmission_observation_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_record",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_before_head",
+            "engine::membership_transition::pending::activation::recovery::restricted::exit_stop::tests::prepared_exit_stop_uses_readmitted_survivors_after_head"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 150
+        }
+      ]
     }
   },
   "rules": [
@@ -10190,6 +10287,36 @@
       "path": "test/ci/test_zxs_demo.py",
       "groups": [
         "standalone-demo"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/readmission/core.rs",
+      "groups": [
+        "readmission-member-proof-scope"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/readmission_core_tests.rs",
+      "groups": [
+        "readmission-member-proof-scope"
+      ]
+    },
+    {
+      "path": "test/ci/test_readmission_targeted_ci.py",
+      "groups": [
+        "readmission-member-proof-scope"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/exit_stop_probe_tests.rs",
+      "groups": [
+        "readmission-exit-stop-observation"
+      ]
+    },
+    {
+      "path": "test/ci/test_readmission_observation_targeted_ci.py",
+      "groups": [
+        "readmission-exit-stop-observation"
       ]
     }
   ],
