@@ -8,6 +8,8 @@ mod empty_target_move_tests;
 mod object_move_tests;
 #[path = "phase1_new_file_tests.rs"]
 mod phase1_new_file_tests;
+#[path = "ordinary_rmdir_tests.rs"]
+mod ordinary_rmdir_tests;
 
 fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let temp = tempfile::tempdir().unwrap();

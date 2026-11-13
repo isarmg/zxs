@@ -1187,7 +1187,7 @@ class TargetedSelection(unittest.TestCase):
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'container-manual-drafts'])
+            'container-manual-drafts', 'container-manual-recovery'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -2961,7 +2961,7 @@ class ContainerManualDraftSelection(unittest.TestCase):
                 'container-tags-engine', 'container-unchanged-save',
                 'portable-path-consumers', 'container-path-facts-engine',
                 'container-lifecycle-engine',
-            ], ['container-manual-drafts']),
+            ], ['container-manual-drafts', 'container-manual-recovery']),
             ('src/engine/src/wire.rs', ['portable-path-consumers'], ['container-manual-drafts']),
             ('src/server/src/lib.rs', ['directory-rename-http-retirement', 'paged-deletion-review'],
              ['container-manual-drafts-consumers']),
@@ -3079,3 +3079,31 @@ class MembershipInitializerDirectoryLockSelection(unittest.TestCase):
             'max_tests': 8,
             'timeout_seconds': 900,
         }])
+
+
+class OrdinaryCurrentRemovalSelection(unittest.TestCase):
+    def test_current_removal_preserves_workspace_namespace_and_real_smb_consumers(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        group = 'container-manual-recovery'
+        for path in [
+            'src/engine/src/business/namespace/current_removal.rs',
+            'src/engine/src/business/namespace.rs',
+            'src/engine/src/business/workspace.rs',
+            'src/server/src/smb_rpc/namespace.rs',
+            'test/server/unit/smb_rpc/default_share_tests.rs',
+            'test/server/unit/smb_rpc/ordinary_rmdir_tests.rs',
+        ]:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, policy, [path], None, [group])
+        assert_path_group_extension(self, policy, [
+            'src/engine/src/business/namespace/current_removal.rs',
+        ], [
+            'current-name-namespace-consumers', 'container-current-name',
+            'container-tags-engine', 'container-manual-drafts',
+            'container-unchanged-save', 'portable-path-consumers',
+            'container-path-facts-engine', 'container-lifecycle-engine',
+        ], [group])
+        target = policy['groups'][group]['rust_targets'][0]
+        self.assertIn('smb_rpc::tests::default_share_tests::', target['prefixes'])
+        self.assertEqual((target['max_tests'], target['timeout_seconds']), (96, 900))
+        self.assertEqual(target['features'], ['core'])
