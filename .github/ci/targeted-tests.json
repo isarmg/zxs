@@ -3696,6 +3696,13 @@
           "max_tests": 192
         }
       ]
+    },
+    "standalone-demo": {
+      "reason": "Exercise standalone browser simulation state transitions without building or importing ZXS product code.",
+      "python_tests": [
+        "test_zxs_demo"
+      ],
+      "rust_targets": []
     }
   },
   "rules": [
@@ -10171,6 +10178,18 @@
       "path": "test/ci/test_rust_toolchain.py",
       "groups": [
         "rust-toolchain-upgrade"
+      ]
+    },
+    {
+      "path": "demo/*",
+      "groups": [
+        "standalone-demo"
+      ]
+    },
+    {
+      "path": "test/ci/test_zxs_demo.py",
+      "groups": [
+        "standalone-demo"
       ]
     }
   ],
