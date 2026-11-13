@@ -3068,6 +3068,22 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "directory-history-worktree": {
+      "reason": "Independent history worktree lifecycle, full-file publication mode, restore without duplicate nodes, current-HEAD branch selection and bounded collision-safe sibling name planning.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "directory_worktree::lifecycle::tests::",
+            "directory_worktree::names::tests::"
+          ],
+          "max_tests": 32,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -8768,6 +8784,24 @@
       "path": "test/engine/unit/backup_generation_encoding_probe.rs",
       "groups": [
         "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/*",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_worktree/*",
+      "groups": [
+        "directory-history-worktree"
       ]
     }
   ],
