@@ -6844,13 +6844,13 @@
       ]
     },
     {
-      "path": "禁止防御性编程.md",
+      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "工程规范.md",
+      "path": "\u5de5\u7a0b\u89c4\u8303.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -9677,6 +9677,24 @@
     },
     {
       "path": "test/engine/unit/engine/current_namespace_placement_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_directory_label_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_initialization_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_selected_batch_tests.rs",
       "groups": [
         "current-name-namespace-consumers"
       ]
