@@ -1,5 +1,23 @@
 {
   "groups": {
+    "history-package-audit-guard": {
+      "reason": "Fail closed before package output writes when native or retained permanent path audit cannot be represented; preserves audit-free export/restore and ordinary copy. This does not implement portable audit.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "history_package::tests::export_audit_guard::"
+          ],
+          "exact": [
+            "history_package::tests::namespace_deletions_survive_export_restore_and_replay_without_operation_records"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "container-deletion-graph": {
       "reason": "Keep deletion facts outside shared content ancestry while preserving typed deletion review, frozen frontiers, cold lifecycle evidence, permanent retirement, strict schemas and real HTTP/Web consumers.",
       "python_tests": [],
@@ -3489,6 +3507,30 @@
   },
   "rules": [
     {
+      "path": "src/engine/src/history_package/audit_guard.rs",
+      "groups": [
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/history_package.rs",
+      "groups": [
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "history-package-audit-guard"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/export_audit_guard_tests.rs",
+      "groups": [
+        "history-package-audit-guard"
+      ]
+    },
+    {
       "path": "src/contract/src/id/node.rs",
       "groups": [
         "container-deletion-graph",
@@ -6848,13 +6890,13 @@
       ]
     },
     {
-      "path": "禁止防御性编程.md",
+      "path": "\u7981\u6b62\u9632\u5fa1\u6027\u7f16\u7a0b.md",
       "groups": [
         "engineering-guidance"
       ]
     },
     {
-      "path": "工程规范.md",
+      "path": "\u5de5\u7a0b\u89c4\u8303.md",
       "groups": [
         "engineering-guidance"
       ]
@@ -9755,6 +9797,24 @@
     },
     {
       "path": "test/engine/unit/engine/current_namespace_placement_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_directory_label_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_namespace_initialization_tests.rs",
+      "groups": [
+        "current-name-namespace-consumers"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_selected_batch_tests.rs",
       "groups": [
         "current-name-namespace-consumers"
       ]

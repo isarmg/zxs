@@ -9,6 +9,7 @@ mod changes;
 #[cfg(test)]
 use crate::state_projection::DerivedOwners;
 use crate::state_projection::ProjectionTransition;
+mod audit_guard;
 mod directory_git;
 mod graph;
 #[cfg(test)]
@@ -841,6 +842,7 @@ impl Engine {
         history: &str,
         destination: &Path,
     ) -> Result<HistoryPackageReport> {
+        audit_guard::require_representable(&self.state, history)?;
         let preparation::HistoryMetadata {
             manifest,
             proof,
