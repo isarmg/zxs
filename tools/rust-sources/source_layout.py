@@ -869,6 +869,15 @@ def activate(layout):
         return
     if not isinstance(layout, Layout) or layout.catalog_digest is None:
         raise ValueError('layout context requires authenticated current catalog')
+    if _ACTIVE.get() is layout:
+        # The enclosing operation owns full entry/exit authentication.
+        # Nested calls still reject changed catalog stamps immediately.
+        layout.check_disk_catalog()
+        try:
+            yield
+        finally:
+            layout.check_disk_catalog()
+        return
     layout.check_disk_catalog(force=True)
     token = _ACTIVE.set(layout)
     try:

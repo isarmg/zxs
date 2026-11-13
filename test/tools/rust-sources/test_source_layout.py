@@ -441,6 +441,72 @@ class PathEditFailures(LayoutFixture):
 
 
 class ContextFailures(LayoutFixture):
+    def test_nested_context_hashes_only_outer_boundaries_and_preserves_context(self):
+        view=self.install();catalog=(self.root/'compliance/rust-sources.json').read_bytes()
+        original=layout.digest;catalog_hashes=[]
+        def counted(data):
+            if data==catalog:catalog_hashes.append(True)
+            return original(data)
+        with patch.object(layout,'digest',side_effect=counted):
+            with layout.activate(view):
+                for _ in range(1000):
+                    with layout.activate(view):self.assertIs(layout._ACTIVE.get(),view)
+                with self.assertRaisesRegex(RuntimeError,'nested failure'):
+                    with layout.activate(view):raise RuntimeError('nested failure')
+                self.assertIs(layout._ACTIVE.get(),view)
+        self.assertEqual(len(catalog_hashes),2)
+        self.assertIsNone(layout._ACTIVE.get())
+
+    def test_nested_entry_rejects_same_size_write_with_restored_mtime(self):
+        view=self.install();path=self.root/'compliance/rust-sources.json';before=path.read_bytes();stat=path.stat()
+        changed=before.replace(b'"name": "plain"',b'"name": "evill"',1)
+        self.assertNotEqual(before,changed);self.assertEqual(len(before),len(changed))
+        with layout.activate(view):
+            try:
+                path.write_bytes(changed);os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+                entered=[]
+                with self.assertRaises(ValueError):
+                    with layout.activate(view):entered.append(True)
+                self.assertEqual(entered,[])
+                self.assertIs(layout._ACTIVE.get(),view)
+            finally:path.write_bytes(before)
+
+    def test_nested_exit_rejects_catalog_inode_replacement(self):
+        view=self.install();path=self.root/'compliance/rust-sources.json';before=path.read_bytes();stat=path.stat()
+        changed=before.replace(b'"name": "plain"',b'"name": "evill"',1)
+        self.assertNotEqual(before,changed)
+        with layout.activate(view):
+            try:
+                with self.assertRaises(ValueError):
+                    with layout.activate(view):
+                        replacement=path.with_suffix('.replacement');replacement.write_bytes(changed)
+                        os.utime(replacement,ns=(stat.st_atime_ns,stat.st_mtime_ns));replacement.replace(path)
+                self.assertIs(layout._ACTIVE.get(),view)
+            finally:path.write_bytes(before)
+
+    def test_nested_context_keeps_forced_outer_exit_with_unchanged_reported_stamp(self):
+        view=self.install();path=self.root/'compliance/rust-sources.json';before=path.read_bytes()
+        with self.assertRaises(ValueError):
+            with patch.object(layout,'_stamp',return_value=view.disk_catalog_stamp):
+                with layout.activate(view):
+                    with layout.activate(view):path.write_bytes(before+b' ')
+                    self.assertIs(layout._ACTIVE.get(),view)
+        self.assertIsNone(layout._ACTIVE.get())
+
+    def test_different_instance_still_authenticates_inside_context(self):
+        view=self.install();other=self.load();catalog=(self.root/'compliance/rust-sources.json').read_bytes()
+        self.assertIsNot(view,other)
+        original=layout.digest;catalog_hashes=[]
+        def counted(data):
+            if data==catalog:catalog_hashes.append(True)
+            return original(data)
+        with patch.object(layout,'digest',side_effect=counted):
+            with layout.activate(view):
+                with layout.activate(other):self.assertIs(layout._ACTIVE.get(),other)
+                self.assertIs(layout._ACTIVE.get(),view)
+        self.assertEqual(len(catalog_hashes),4)
+        self.assertIsNone(layout._ACTIVE.get())
+
     def test_context_clears_on_success_and_exception(self):
         view=self.install()
         with layout.activate(view):self.assertIs(layout.load(self.root),view)
