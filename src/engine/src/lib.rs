@@ -67,6 +67,8 @@ pub use engine::FileHistoryMoveTargetReport;
 pub use engine::FilePathChange;
 pub use engine::ReadView;
 pub use engine::StorageRecoveryAdmission;
+pub use engine::StorageRecoveryControl;
+pub use engine::{StorageControlBinding, StorageControlOwner, StorageOwnerEvidence, StorageRecoveryPredecessor};
 pub use engine::{
     BackupCommonDatabasesReport, BackupConfigurationReport, BackupCurrentReadReport,
     BackupDatabaseAlias, BackupDatabaseAliasesReport, BackupDatabaseFile, BackupDatabaseRange,

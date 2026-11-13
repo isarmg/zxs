@@ -24,8 +24,15 @@ impl Engine {
         principal: Principal,
         mut admission: StorageRecoveryAdmission,
         control_intent: MaterialCommitment,
+        control: crate::StorageRecoveryControl,
         workspace_limits: Option<crate::RetainedWorkspaceLimits>,
     ) -> crate::Result<Self> {
+        control.require_origin(&admission.origin)?;
+        if control.commitment()? != control_intent || control.binding.operation != operation
+            || control.principal != principal
+        { return Err(refused()); }
+        admission.require_recovery_intent_source(operation, &principal,
+            control.source_evidence, control_intent)?;
         admission.config = admission.config.with_workspace_limits(workspace_limits)?;
         if admission.resources.handles().count() != admission.config.disks.len() {
             return Err(failure(FreshBootstrapError::Incomplete));
@@ -57,7 +64,7 @@ impl Engine {
             source_snapshot: admission.source.snapshot_hash.parse::<ContentHash>().map_err(|_| refused())?,
             system: LocalEntityIdentity::new(identity.device, identity.inode),
         };
-        let selected = RecoverySelection::new(admission.origin.clone(), request.clone());
+        let selected = RecoverySelection::new(admission.origin.clone(), request.clone(), control);
         let selection = SelectionGuard::acquire_held(system.try_clone()?)?.select_recovery(selected)?;
         let writer = system.open_payload(&crate::persist::layout::CONTROL_WRITER_LOCK,
             PayloadOpenMode::CreateNew)?;
@@ -104,7 +111,7 @@ impl Engine {
             writer.verify_retained_name()?;
             engine.journals.insert(disk, writer);
         }
-        engine.install_recovered_namespace_state(admission.state, admission.source.snapshot_hash)?;
+        engine.install_recovered_namespace_state(admission.state, admission.source.snapshot_hash.clone())?;
         engine.next_slot = engine.state.sequence.checked_add(1).ok_or_else(refused)?;
         let mut next = (*engine.state).clone();
         next.sequence = engine.next_slot;

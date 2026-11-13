@@ -669,9 +669,13 @@ impl SetupRecovery {
     /// A previous create/rename may be visible after its directory barrier
     /// failed. Re-admit the exact bytes only after file and held-parent sync.
     fn read_durable_control<T: data_serialization::de::DeserializeOwned>(
-        &self,
-        name: &str,
+        &self, name: &str,
     ) -> Result<T, ApiError> {
+        storage_contract::decode_strict(&self.read_durable_control_bytes(name)?)
+            .map_err(ApiError::invalid_source)
+    }
+
+    fn read_durable_control_bytes(&self, name: &str) -> Result<Vec<u8>, ApiError> {
         use platform_io::fs_safety::{EntryName, linux::open_private_regular};
         let directory = self.control_directory.try_clone().map_err(control_publication_error)?;
         let name = EntryName::new(name).map_err(ApiError::invalid_source)?;
@@ -693,11 +697,10 @@ impl SetupRecovery {
         if bytes.len() > MAX_LOCAL_CONFIG_BYTES {
             return Err(ApiError::invalid("setup control record exceeds limit"));
         }
-        let value = storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)?;
         file.sync_all()
             .map_err(|error| control_publication_error(error.into()))?;
         directory.sync().map_err(control_publication_error)?;
-        Ok(value)
+        Ok(bytes)
     }
 
     fn write_control<T: Serialize>(&self, name: &str, value: &T) -> Result<(), ApiError> {

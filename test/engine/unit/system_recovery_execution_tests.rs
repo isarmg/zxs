@@ -3,8 +3,21 @@ use crate::{Engine, OperationId};
 use crate::engine::snapshot_initialization::bootstrap::system_recovery::tests::{fixture, image};
 use platform_io::fs_safety::PrivateDirectory;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, MetadataExt};
 use storage_contract::working_tree::MaterialCommitment;
+
+fn control(system: &std::path::Path, operation: OperationId, source: MaterialCommitment)
+    -> crate::StorageRecoveryControl
+{
+    let parent = system.parent().unwrap().metadata().unwrap();
+    let child = system.metadata().unwrap();
+    crate::StorageRecoveryControl::new(crate::StorageControlBinding {
+        operation,
+        control: storage_contract::working_tree::LocalEntityIdentity::new(parent.dev(), parent.ino()),
+        system: storage_contract::working_tree::LocalEntityIdentity::new(child.dev(), child.ino()),
+    }, source, "recovery-owner".parse().unwrap(), vec!["selected-members".into()],
+        crate::StorageRecoveryPredecessor::NewControl)
+}
 
 #[test]
 fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt() {
@@ -41,10 +54,11 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     let admitted = Engine::admit_storage_recovery(handles).unwrap();
     let source_evidence = admitted.evidence_commitment();
     let operation = OperationId::generate().unwrap();
-    let intent = MaterialCommitment::from_digest(blake3::hash(b"durable explicit recovery intent"));
+    let control = control(&system, operation, source_evidence);
+    let intent = control.commitment().unwrap();
     let mut engine = Engine::restore_storage_held(
         PrivateDirectory::open_existing(&system).unwrap(), operation, "recovery-owner".parse().unwrap(),
-        admitted, intent, None,
+        admitted, intent, control.clone(), None,
     ).unwrap();
     assert_eq!(engine.state().versions, original.versions);
     assert_eq!(engine.state().commits, original.commits);
@@ -110,7 +124,7 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     let before = image(temp.path());
     assert!(Engine::restore_storage_held(
         PrivateDirectory::open_existing(&system).unwrap(), operation, "different-owner".parse().unwrap(),
-        wrong_owner, intent, None,
+        wrong_owner, intent, control.clone(), None,
     ).is_err());
     assert_eq!(image(temp.path()), before);
     let handles = config.disks.iter()
@@ -118,7 +132,7 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
     let admitted = Engine::admit_storage_recovery(handles).unwrap();
     let repeated = Engine::restore_storage_held(
         PrivateDirectory::open_existing(&system).unwrap(), operation, "recovery-owner".parse().unwrap(),
-        admitted, intent, None,
+        admitted, intent, control.clone(), None,
     ).unwrap();
     assert_eq!(repeated.state(), &published);
     assert_eq!(repeated.state().operations.get(&operation), Some(&recovery_receipt));
@@ -138,10 +152,11 @@ fn new_carrier_preserves_original_file_history_and_cold_exact_recovery_receipt()
         .map(|disk| PrivateDirectory::open_existing(&disk.root).unwrap()).collect();
     let admitted = Engine::admit_storage_recovery(handles).unwrap();
     let third_operation = OperationId::generate().unwrap();
+    let third_control = self::control(&system, third_operation, admitted.evidence_commitment());
     let third = Engine::restore_storage_held(
         PrivateDirectory::open_existing(&system).unwrap(), third_operation,
         "recovery-owner".parse().unwrap(), admitted,
-        MaterialCommitment::from_digest(blake3::hash(b"second explicit SYSTEM recovery")), None,
+        third_control.commitment().unwrap(), third_control, None,
     ).unwrap();
     assert_eq!(third.state().versions, published.versions);
     assert_eq!(third.state().commits, published.commits);
@@ -199,11 +214,13 @@ fn recovery_refuses_existing_destination_before_source_publication() {
     let handles = config.disks.iter()
         .map(|disk| PrivateDirectory::open_existing(&disk.root).unwrap()).collect();
     let admitted = Engine::admit_storage_recovery(handles).unwrap();
+    let operation = OperationId::generate().unwrap();
+    let control = control(&destination, operation, admitted.evidence_commitment());
     let before = image(temp.path());
     assert!(Engine::restore_storage_held(
-        PrivateDirectory::open_existing(&destination).unwrap(), OperationId::generate().unwrap(),
+        PrivateDirectory::open_existing(&destination).unwrap(), operation,
         "recovery-owner".parse().unwrap(), admitted,
-        MaterialCommitment::from_digest(blake3::hash(b"explicit control intent")), None,
+        control.commitment().unwrap(), control, None,
     ).is_err());
     assert_eq!(image(temp.path()), before);
 }

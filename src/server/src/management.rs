@@ -665,6 +665,7 @@ impl Inner {
                     return Ok(());
                 }
             };
+            setup.require_recovered_engine(&engine)?;
             Arc::new(EngineBackend::new(engine))
         };
         let auth = crate::lock(&self.auth).clone().ok_or_else(|| {

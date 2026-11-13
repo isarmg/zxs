@@ -48,7 +48,7 @@ type Result<T> = std::result::Result<T, FreshBootstrapError>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "unified-storage-system-v2")]
+    #[serialization(rename = "unified-storage-system-v3")]
     UnifiedStorage,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

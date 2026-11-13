@@ -67,21 +67,21 @@ enum ActivationFormat {
 pub(super) struct StorageActivationIntent {
     format: ActivationFormat,
     pub(super) storage_system: crate::setup_recovery::storage_system::StorageSystemBinding,
-    config: ValidatedConfig,
+    pub(super) config: ValidatedConfig,
     selections: Vec<storage_contract::storage_directories::CandidateSelection>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct StorageActivationReady {
-    intent_digest: String,
+pub(super) struct StorageActivationReady {
+    pub(super) intent_digest: String,
     disk_seals: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-struct StorageActivationComplete {
-    intent_digest: String,
+pub(super) struct StorageActivationComplete {
+    pub(super) intent_digest: String,
 }
 
 struct InitialActivationProof {
@@ -254,6 +254,7 @@ impl SetupRecovery {
     /// Call before ordinary background Engine::open. A config file created by
     /// an interrupted genesis is not permission to admit user storage writes.
     pub fn activation_admitted(&self) -> Result<(), ApiError> {
+        if self.recovery_control_admitted()? { return Ok(()); }
         let _system = self.storage_system_if_bound()?;
         if !present(&self.data_root.join(ACTIVATION_INTENT))? {
             if present(&self.data_root.join(ACTIVATION_COMPLETE))?
@@ -414,6 +415,11 @@ impl SetupRecovery {
     ) -> Result<(), ApiError> {
         revalidate(identity)?;
         let _lock = self.lock()?;
+        if present(&self.data_root.join(super::recovery::RECOVERY_INTENT))? {
+            return Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
+                "a recovered carrier cannot replay original initialization completion"));
+        }
+
         if let Some(expected) = expected
             && !self.initial_activation_matches(expected)?
         {

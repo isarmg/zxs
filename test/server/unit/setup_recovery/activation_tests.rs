@@ -1369,3 +1369,36 @@ fn exact_completed_activation_preserves_receipt_when_callback_or_authority_fails
     assert_eq!(fs::read(&completion).unwrap(), bytes);
     assert!(f.service.activation_admitted().is_ok());
 }
+
+#[test]
+fn completed_activation_system_loss_keeps_original_owner_and_cold_successor() {
+    let f = fixture_with_disks(&["one"]);
+    initialize(&f.service);
+    f.service.activate(&admin(), request(&f.service, &["one"]), |_| Ok(()), |mut engine| {
+        let auth = crate::auth::AuthStore::open_system_management_directory(
+            platform_io::fs_safety::PrivateDirectory::open_existing(&f.service.management_root)
+                .map_err(control_publication_error)?,
+        )?;
+        engine.persist_auth_state(auth.snapshot()?, "system_auth",
+            storage_contract::OperationId::generate().unwrap()).map_err(engine_error)?;
+        Ok(())
+    }).unwrap();
+    let names = [ACTIVATION_INTENT, ACTIVATION_READY, ACTIVATION_COMPLETE];
+    let original = names.map(|name| fs::read(f.service.data_root.join(name)).unwrap());
+    let preserved = f._temp.path().join("preserved-activation-system");
+    fs::rename(storage_path(&f.service), preserved).unwrap();
+    f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |_| Ok(())).unwrap();
+    for (name, bytes) in names.into_iter().zip(original) {
+        assert_eq!(fs::read(f.service.data_root.join(name)).unwrap(), bytes);
+    }
+    f.service.activation_admitted().unwrap();
+    let prepared = crate::startup_admission::PreparedService::open(
+        &f.service.data_root, &f.service.management_root).unwrap();
+    let engine = Engine::open_storage_held(prepared.system_directory().unwrap(), None).unwrap();
+    prepared.require_engine(&engine).unwrap();
+    drop(engine);
+    assert!(f.service.complete_activation(&admin(), |_| Ok(()),
+        |_| panic!("recovery cannot replay original activation")).is_err());
+}

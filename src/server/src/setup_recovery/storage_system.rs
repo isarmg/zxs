@@ -29,6 +29,27 @@ fn control(path: &Path) -> Result<OpenAt2Root, ApiError> {
 }
 
 impl StorageSystemBinding {
+    pub(super) fn evidence(&self) -> storage_engine::StorageControlBinding {
+        storage_engine::StorageControlBinding {
+            operation: self.operation, control: self.control, system: self.system,
+        }
+    }
+
+    pub(super) fn from_evidence(value: &storage_engine::StorageControlBinding) -> Self {
+        Self { operation: value.operation, control: value.control, system: value.system }
+    }
+
+    pub(super) fn require_missing_original(&self, path: &Path) -> Result<(), ApiError> {
+        let parent = self.verify_parent(path)?;
+        match parent.open_directory(&layout::SYSTEM) {
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(control_publication_error(error)),
+            Ok(_) => Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
+                "existing or replaced SYSTEM is preserved; only a missing original carrier can be recovered")),
+        }
+    }
+
     pub(super) fn create(
         control_directory: &PrivateDirectory,
         operation: OperationId,
@@ -106,13 +127,11 @@ impl crate::setup_recovery::SetupRecovery {
         let setup = present(&self.data_root.join("setup-intent.json"))?;
         let recovery = present(&self.data_root.join(super::recovery::RECOVERY_INTENT))?;
         if recovery {
-            if activation || setup || present(&self.data_root.join("config.json"))? {
-                return Err(ApiError::conflict(storage_contract::ErrorCode::SetupProofInvalid,
-                    "recovery cannot replace an existing initialization owner"));
-            }
             let intent: super::recovery::StorageRecoveryIntent =
                 self.read_durable_control(super::recovery::RECOVERY_INTENT)?;
-            return intent.storage_system.open(&self.data_root).map(Some);
+            self.require_recovery_predecessor(&intent.control.predecessor)?;
+            return StorageSystemBinding::from_evidence(&intent.control.binding)
+                .open(&self.data_root).map(Some);
         }
         let binding = match (activation, setup) {
             (true, false) => {

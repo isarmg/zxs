@@ -133,6 +133,14 @@ impl PreparedService {
             source,
         })
     }
+    /// Validate the same durable control lineage against the fully opened Engine.
+    pub fn require_engine(&self, engine: &storage_engine::Engine) -> Result<(), Error> {
+        self.recheck()?;
+        let setup = SetupRecovery::new(self.control.path().to_owned(),
+            self.management.path().to_owned(), BTreeMap::new())
+            .map_err(|source| Error::Activation { source })?;
+        setup.require_recovered_engine(engine).map_err(|source| Error::Activation { source })
+    }
     pub(crate) fn require_current_authority(&self) -> Result<(), Error> {
         self.recheck()?;
         require_existing_authority(&self.control)

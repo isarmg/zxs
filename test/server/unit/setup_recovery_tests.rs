@@ -1564,3 +1564,48 @@ fn completed_system_recovery_rejects_a_different_principal_without_writes() {
     assert_eq!(tree_digest(&f.service.data_root).unwrap(), control);
     assert_eq!(tree_digest(&f.service.disks["one"]).unwrap(), source);
 }
+
+#[test]
+fn bound_setup_system_loss_preserves_owner_and_cold_reopens_exact_successor() {
+    let f = fixture_with_disks(&["one"]);
+    let request = SetupRequest { disk_ids: vec!["one".into()], mode: Mode::Development,
+        username: "admin".into(), password: "long-valid-password".into() };
+    f.service.initialize(&permit(&f.service), request, |mut engine, username, password| {
+        let auth = crate::auth::AuthStore::initialize_management(
+            &f.service.management_root, username, password,
+        )?;
+        engine.persist_auth_state(auth.snapshot()?, "system_auth",
+            storage_contract::OperationId::generate().unwrap()).map_err(engine_error)?;
+        crate::management::claim_authority(&f.service.data_root)
+    }).unwrap();
+    let owner_names = ["setup-intent.json", "setup-ready.json", "management-authority.json"];
+    let originals = owner_names.map(|name| fs::read(f.service.data_root.join(name)).unwrap());
+    let old_system = f.service.storage_system().unwrap().path().to_owned();
+    let preserved = f._temp.path().join("preserved-lost-system");
+    fs::rename(&old_system, &preserved).unwrap();
+    f.service.restore_authenticated(&admin(), RestoreRequest {
+        disk_ids: vec!["one".into()], accept_stale_credentials: false,
+    }, |_| Ok(()), |_| Ok(())).unwrap();
+    for (name, bytes) in owner_names.into_iter().zip(originals) {
+        assert_eq!(fs::read(f.service.data_root.join(name)).unwrap(), bytes);
+    }
+    let prepared = crate::startup_admission::PreparedService::open(
+        &f.service.data_root, &f.service.management_root,
+    ).unwrap();
+    let engine = Engine::open_storage_held(prepared.system_directory().unwrap(), None).unwrap();
+    prepared.require_engine(&engine).unwrap();
+    assert!(engine.auth_state().is_some());
+    drop(engine);
+    let before = tree_digest(&f.service.data_root).unwrap();
+    assert!(f.service.complete_initialization(&permit(&f.service), CompleteSetupRequest {
+        username: "admin".into(), password: "long-valid-password".into(),
+    }, |_, _, _| panic!("recovered carrier is not first-account completion")).is_err());
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), before);
+    let ready = f.service.data_root.join("setup-ready.json");
+    fs::write(&ready, b"{}").unwrap();
+    let changed = tree_digest(&f.service.data_root).unwrap();
+    assert!(f.service.storage_system_if_bound().is_err());
+    assert!(crate::startup_admission::PreparedService::open(
+        &f.service.data_root, &f.service.management_root).is_err());
+    assert_eq!(tree_digest(&f.service.data_root).unwrap(), changed);
+}
