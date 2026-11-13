@@ -3083,7 +3083,8 @@
             "directory_worktree::store::tests::",
             "directory_worktree::projection::tests::",
             "directory_worktree::ledger::tests::",
-            "directory_worktree::io::tests::"
+            "directory_worktree::io::tests::",
+            "disk::owned::worktree_move::tests::"
           ],
           "max_tests": 72,
           "timeout_seconds": 900
@@ -3100,7 +3101,8 @@
           "prefixes": [
             "working_tree::snapshot::manifest::tests::",
             "working_tree::snapshot::store::tests::",
-            "disk::owned::worktree_io::tests::"
+            "disk::owned::worktree_io::tests::",
+            "disk::owned::worktree_move::tests::"
           ],
           "max_tests": 32,
           "timeout_seconds": 300
@@ -8872,6 +8874,20 @@
       "path": "src/engine/src/persist/layout/worktree.rs",
       "groups": [
         "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/worktree_move.rs",
+      "groups": [
+        "directory-history-worktree",
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/worktree_move.rs",
+      "groups": [
+        "directory-history-worktree",
+        "directory-snapshot-material"
       ]
     }
   ],

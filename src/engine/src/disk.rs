@@ -21,7 +21,10 @@ pub use admission::{
 };
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
-pub(crate) use owned::{FileStamp, HeldRegular, InstallExchange, NewEntryCopyError};
+pub(crate) use owned::{
+    FileMoveError, FileMoveFault, FileStamp, FrozenFileMove, HeldRegular, InstallExchange,
+    NewEntryCopyError,
+};
 pub(crate) use owned::{
     DirectoryCreateOutcome, DirectoryInstallOutcome, DirectoryIoError, RepositoryLeaf,
     WorkingDirectory, WorkingDirectoryIdentity,
