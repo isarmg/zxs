@@ -1216,7 +1216,7 @@ class TargetedSelection(unittest.TestCase):
             'portable-path-consumers', 'typed-name-consumers',
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
-            'container-path-facts-http', 'container-lifecycle-http',
+            'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',
@@ -2664,3 +2664,43 @@ class PathFactActivitySelection(unittest.TestCase):
         self.assertEqual(targets[1]['name'], 'http_engine')
         self.assertEqual(targets[2]['mode'], 'check')
         self.assertIs(targets[2]['default_features'], False)
+
+
+class CurrentNameConsumerSelection(unittest.TestCase):
+    def test_consumers_retain_reviewed_runtime_and_compile_only_boundaries(self):
+        policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
+        cases = {
+            'current-name-namespace-consumers': [
+                'src/engine/src/engine/named_namespaces.rs',
+                'test/engine/unit/engine/current_namespace_workspace_names_tests.rs',
+            ],
+            'current-name-layout-consumers': [
+                'src/engine/src/container_storage/file_database/install.rs',
+                'test/engine/integration/directory_layout_execution.rs',
+            ],
+            'current-name-backup-consumers': [
+                'src/engine/src/engine/backup_preparation.rs',
+                'test/engine/integration/recursive_backup_paths.rs',
+            ],
+            'current-name-record-consumers': [
+                'src/server/src/backend_read.rs',
+                'test/contract/unit/shared_records.rs',
+            ],
+            'current-name-recursive-http-consumers': [
+                'test/server/integration/recursive_backup_http.rs',
+                'test/server/integration/recursive_mixed_backup_http.rs',
+            ],
+        }
+        for group, paths in cases.items():
+            for path in paths:
+                with self.subTest(group=group, path=path):
+                    plan = CI.select_plan(policy, [path], shardable=True)
+                    self.assertCountEqual(origin_selections(plan, group),
+                                          policy['groups'][group]['rust_targets'])
+        backup = policy['groups']['current-name-backup-consumers']['rust_targets'][1]
+        self.assertEqual((backup['name'], backup['mode']), ('recursive_backup_paths', 'check'))
+        self.assertNotIn('exact', backup)
+        http = policy['groups']['current-name-recursive-http-consumers']['rust_targets'][0]
+        self.assertEqual(len(http['exact']), 2)
+        self.assertEqual(http['timeout_seconds'], 900)
+        self.assertIs(http['isolate'], True)
