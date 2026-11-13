@@ -219,7 +219,8 @@ pub(in crate::engine) fn read_original_configuration(
             return Err(failure(FreshBootstrapError::Changed));
         }
         let bytes = root.read_bytes(&probe.path().join(layout::GENESIS_CONFIG.as_path()), MAX_BYTES)?;
-        let config = crate::ValidatedConfig::try_from(storage_contract::decode_strict(&bytes)?)?;
+        let saved: storage_contract::Config = storage_contract::decode_strict(&bytes)?;
+        let config = crate::ValidatedConfig::try_from(saved)?;
         origin.require_config(&config)?;
         original = Some(config.with_fresh_bootstrap(origin)?);
         Ok(())

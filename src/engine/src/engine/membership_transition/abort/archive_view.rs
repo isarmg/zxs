@@ -276,7 +276,7 @@ impl PortableAbortArchive {
             let seal = decode_seal(bytes)?;
             verify_archived_member_identity(
                 config,
-                intent.origin.predecessor(),
+                &intent.origin.retained_seal_format()?,
                 disk,
                 &member,
                 &seal,
