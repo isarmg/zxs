@@ -1,5 +1,20 @@
 {
   "groups": {
+    "publication-cache-budget": {
+      "reason": "Fixture-only route for the complete publication cache budget module, including explicit fault-injection recovery; production consumer routes remain unchanged.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": ["fault-injection"],
+          "prefixes": ["engine::publication::cache_budget_tests::"],
+          "max_tests": 160,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "directory-storage-bootstrap": {
       "reason": "Explicit fresh SYSTEM selection precedes writer sidecars; new disk format, exact completed cold admission, original-byte preservation and refusal by legacy discovery/import. Partial unclaimed material is fenced, not adopted.",
       "python_tests": [],
@@ -6220,7 +6235,7 @@
     {
       "path": "test/engine/unit/engine/publication/cache_budget_tests.rs",
       "groups": [
-        "portable-path-consumers"
+        "publication-cache-budget"
       ]
     },
     {

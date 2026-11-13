@@ -47,8 +47,13 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     storage_contract::validate_note(&note).unwrap();
     next.file_notes.insert(file, note);
     let mut result = next.operations.values().next().unwrap().clone();
+    // This synthetic budget slot is not allowed to re-identify a path receipt.
+    assert!(crate::persist::path_changes::read(&result).unwrap().is_empty());
+    let original_operation = result.operation_id;
+    let principal = next.operation_principals[&original_operation].clone();
     result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
+    next.operation_principals.insert(result.operation_id, principal);
     next.operations.insert(result.operation_id, result.clone());
     let logs: Vec<_> = engine
         .members()
@@ -57,7 +62,9 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .collect();
     let error = engine
         .planning_context()
-        .prepare_publication_bounded(next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128)
+        .prepare_publication_bounded(
+            next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128, None,
+        )
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
@@ -83,7 +90,9 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let detached = engine
         .planning_context()
-        .prepare_publication_bounded(next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA)
+        .prepare_publication_bounded(
+            next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA, None,
+        )
         .unwrap();
     engine.inject_fault_once("after_accept_1");
     assert_eq!(
@@ -207,8 +216,13 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     next.file_locations
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
     let mut result = next.operations.values().next().unwrap().clone();
+    // Preserve the real receipt's actor without reusing any path-fact identity.
+    assert!(crate::persist::path_changes::read(&result).unwrap().is_empty());
+    let original_operation = result.operation_id;
+    let principal = next.operation_principals[&original_operation].clone();
     result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
+    next.operation_principals.insert(result.operation_id, principal);
     next.operations.insert(result.operation_id, result.clone());
     let retry_pending = pending
         .iter()
@@ -220,7 +234,9 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .collect();
     let error = engine
         .planning_context()
-        .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
+        .prepare_publication_bounded(
+            next.clone(), pending, result.clone(), MAX_METADATA, 128, None,
+        )
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
@@ -265,6 +281,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
             result.clone(),
             MAX_METADATA,
             MAX_METADATA,
+            None,
         )
         .unwrap();
     engine.decide_publication(detached).unwrap();

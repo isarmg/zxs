@@ -67,6 +67,44 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 class TargetedSelection(unittest.TestCase):
 
+    def test_cache_budget_fixture_routes_full_fault_module_without_production_scope_changes(self):
+        fixture = 'test/engine/unit/engine/publication/cache_budget_tests.rs'
+        plan = assert_path_group_extension(
+            self, self.policy, [fixture], ['publication-cache-budget'], [])
+        self.assertEqual(plan['python_tests'], [])
+        self.assertEqual(len(plan['rust_targets']), 1)
+        expected = {
+            'package': 'storage-engine',
+            'manifest': 'src/engine/Cargo.toml',
+            'kind': 'lib',
+            'features': ['fault-injection'],
+            'prefixes': ['engine::publication::cache_budget_tests::'],
+            'max_tests': 160,
+            'timeout_seconds': 900,
+        }
+        self.assertEqual(origin_selections(plan, 'publication-cache-budget'), [expected])
+        target = plan['rust_targets'][0]
+        prefix = 'engine::publication::cache_budget_tests::'
+        names = [
+            prefix + 'cache_encoder_rejects_before_accept_and_reopens_cleanly',
+            prefix + 'payload_cache_rejection_preserves_names_and_retries_installed_payloads',
+        ]
+        self.assertEqual(CI.selected_tests(names + ['unrelated::test'], [], target), sorted(names))
+        with self.assertRaises(ValueError):
+            CI.selected_tests(['unrelated::test'], [], target)
+        with self.assertRaises(ValueError):
+            CI.selected_tests([prefix + f'behavior_{index}' for index in range(161)], [], target)
+        production = assert_path_group_extension(
+            self, self.policy, ['src/engine/src/engine/publication.rs'],
+            ['container-current-name', 'current-name-layout-consumers',
+             'directory-snapshot-initialization'], [])
+        self.assertNotIn('publication-cache-budget', production['groups'])
+        self.assertEqual(
+            [rule for rule in self.policy['rules']
+             if 'publication-cache-budget' in rule['groups']],
+            [{'path': fixture, 'groups': ['publication-cache-budget']}],
+        )
+
     def test_deletion_graph_sources_keep_lifecycle_and_http_consumers(self):
         paths = [
             'src/contract/src/id/node.rs',
