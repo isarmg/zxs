@@ -1,140 +1,47 @@
 # ZXS 当前任务清单
 
-- [ ] #1160 quality：按准确 CI rustfmt 日志修复原批次撤销相关 16 文件的 53 处格式差异，保留后继 WASM 默认展开修复；未本地编译、测试或运行 rustfmt，待准确提交 CI 验证。
+## 当前优先级与交付边界
 
-## 当前 CI 与失败闭环
+- [ ] 先完成文件容器、目录仓库 worktree 及其生产接线；多级磁盘备份留到最后。保留文件容器节点／分支／标签、三份 ZXS 数据与 `common-data`／`deleted-data`／`zxs-data`。不恢复已停止的非容器文件／非容器目录功能及多文件共同分支树；未完成旧工作只保全，不继续扩展。
+- [ ] 按 2026-11-13 核对的 main `c735e4a61` 继续闭环定向失败：[准确运行](https://github.com/isarmg/zxs/actions/runs/43373768174) 仍有 12 项失败，不能宣称 main 全绿。逐项区分真实实现缺陷与失效夹具，保留安全／恢复断言；本机只写代码，编译和测试只在 GitHub 按变更定向执行。
+- [ ] 审查并整合已远端保全的文件容器命名与目录 worktree 候选。候选代码、分片通过和备份归档不等于 main 已上线；核对最终提交的全部必要消费者、编译库存、选择清单、实际完成及未执行范围后再发布。
 
-- [ ] 完成[文件容器唯一当前名称](docs/adr/container-current-name.md)：SMB 与历史选择始终显示最新容器名；所有已装版本同步名称部分、保留 15 位身份与正文，补 inode/no-clobber 中断恢复、全部 occurrence 碰撞／授权／精确重放及新格式拒绝。当前 WIP 已可靠归档，尚待最终 main 的 GitHub 定向证据；多级磁盘备份与原超时优化保持最后执行。
+## 文件容器、当前名称与时间线
 
-- [ ] 验证并完成[容器路径事实新格式](docs/adr/container-path-facts.md)：真实改名／同身份移动保持内容 HEAD／父边，永久 path_changes、完整批次成员、Current／冷快照准入、复制来源和无路径 FILE 投影同批闭合；显式路径工作区在改名后仍能保存，Web／HTTP 使用真实四段游标。稳定引用与目标摘要预算已接入，仍待本批准确 main 的 GitHub 定向证据；旧池／旧备份拒绝但不修改，未知时间不造。Merge 等其他非内容操作、完整时间线和真实 Chrome 尚未完成。
+- [ ] 完成唯一当前名称：容器名就是暴露给 SMB 的文件名，切换旧节点不回退名称；内部各版本统一 `15位身份ID-文件名`，改名只同步名称部分，保留身份与正文。覆盖所有 occurrence、碰撞／权限、inode 绑定、改名中断与冷恢复；不能以候选实现或局部通过替代最终验收。
+- [ ] 完成[路径事实](docs/adr/container-path-facts.md)与内容图分离：改名、移动、删除等非内容操作进入时间线，标签属于容器而非节点／分支；完整路径批次、主体与永久收据须跨 Current、FILE、冷快照、复制来源和分页闭合。补齐 Merge 等其他非内容操作及真实浏览器验收。
+- [ ] 落实时间线界面：分支树左侧纵线、操作点和向右延伸虚线，虚线下方小号浅色操作说明；按上次操作后最高节点矩形上方对齐，点击跳转，验证分页、迟到回调、刷新和未知结果恢复。
+- [ ] 继续[生命周期读取](docs/design/container-lifecycle-read.md)的大历史成本与分页验收；消除逐页扫描全部永久收据的瓶颈前，不宣称 O(page) 或实测加速。补容器标签的真实 Chrome 和完整池恢复验证。
+- [ ] 统一名称预算：目标文件系统实际组件上限减 16 字节，按 UTF-8 字节含扩展名校验；现有数据转换遇到超限提示用户改名，不静默截断／覆盖。完整路径另行校验；内部身份不从可见名称反推。
 
-- [ ] 继续[容器生命周期读取](docs/design/container-lifecycle-read.md)的大来源耗时／分配与真实 Chrome 验收：目标收据来源在 #1309 已获定向证据，但仍逐页扫描全部永久收据，单收据解码只能前后取消，不宣称 O(page) 或实测加速。
+## 目录仓库与稀疏 worktree
 
-- [ ] 完成[容器标签新格式](docs/adr/container-tags.md)的剩余实体验收：#1320 准确 1c0cfb4／39b 完整六片已取齐，2174 Rust／270 Python／11 编译检查通过、无 skipped/blocked；两项失败是原备份 900 秒事务和文档锚点，后者已在准确 2b22／1c0 的 #1321 全部所选验证通过。仍须闭环原备份事务、真实 Chrome 和完整池恢复；后继备份修改不能借用旧 SHA 的成功，旧数据不自动迁移、删除或覆盖。
+- [ ] 完成 `.zxs` 仓库生产初始化、SYSTEM／DISK 权威登记、不可变节点快照与冷启动；目录快照只保存文件正文及 SMB 文件名，不复制文件容器数据库／标签／整套历史。父目录快照对子仓只保存暴露文件；撤销仓库保留原目录文件，将 `.zxs` 按目录名和约定前缀保留至删除区。不要把旧目录 Git checkout 接口当作新流程完成。
+- [ ] 接通历史节点创建 worktree：SMB 显示在原目录父目录，名称 `worktree-分支名-001` 至 `999`；物理位于 `.zxs` 对应节点的 worktree 区。相同节点可有多个独立实例；并发名称分配、耗尽、软删恢复碰撞不得覆盖数据。
+- [ ] 创建时 worktree 正文目录为空，未修改文件映射原节点，仅修改后的文件落入稀疏层。再次从同节点创建必须从原快照开始，不带入旧软删实例内容；补新增／删除／改名、实际读取与枚举、权威路由和 SMB／HTTP 入口。
+- [ ] 完成提交事务：修改文件 MOVE 到 `.zxs` 新节点，未修改文件从原节点 COPY；按约定节点文件名存放，SMB 仍显示提交前结构，不回填双份正文。固定来源 branch／node／version；提交时源仍为分支 HEAD 则续原分支，否则新建分支和节点。覆盖并发、永久决定、NO REPLACE、目录同步及每个中断点恢复。
+- [ ] 同步对应文件容器：即使容器位于其他目录或 `deleted-data`，也向其发布修改节点／必要分支；权威确认容器已被物理删除时不重建，仅保留 worktree 或 `.zxs` 文件。磁盘离线／不可读不是“容器不存在”。“只有修改文件创建文件节点”目前是对相互冲突旧要求的暂行解释，仍须保留这一决策边界。
+- [ ] 完成未提交即删除的流程：先保存相应文件修改并创建文件节点，不创建目录分支／节点，worktree 软删除且管理员可恢复。永久记录逐文件发布结果与新基线，恢复和重试不重复创建节点；恢复原实例不与同节点新建实例混用。
+- [ ] 新文件进入 ZXS 即创建容器，不等目录提交。通过 SMB 复制到普通目录，在目标目录创建独立容器；进入 worktree 则在 `deleted-data` 创建独立容器并映射。同节点多个 worktree 各自进入同名文件也各有独立身份，不按名称或内容合并。
+- [ ] 明确 SMB 移动外部容器文件到 worktree 时，将既有容器整体移到 `deleted-data`，映射移入前实际暴露节点，保留原身份。仅识别 SMB 明确传达的操作；不以内容、哈希、文件名猜复制来源或用户意图，哈希仅用于完整性证明。
+- [ ] 将候选中的来源上下文、ledger、稀疏读路由和 MOVE 原语接入同一生产事务。已有目录 worktree 分片通过不代表这些入口可用；补即时容器创建、跨 FILE／目录发布、外部导入、恢复、真实 Samba 与浏览器验收。
 
-- [ ] 继续分阶段删除旧目录 Backend 类型／授权适配器／Engine 转发，保留全部消费者的构建闭包、永久收据与用户数据，不恢复非容器功能；已完成的 HTTP 写入口退役见[说明](docs/design/directory-rename-http-retirement.md)。
+## 删除、审计包与恢复
 
-- [ ] GitHub 定向 CI 验证磁盘来源名＋完整UUID的Engine只读预览：全部当前登记含Disabled、多级/扇出链与最外改名影响、Unicode冲突、真实持有根组件预算及State/配置/文件不变；明确preview_only。HTTP接线、持久名称权威、实际改名及恢复闭环尚未完成，见[验证范围](docs/validation/disk-source-name-preview.md)。
+- [ ] 完成三目录与管理数据双分区布局的真实搬移、恢复和名称预算。删除移动完整文件容器；SMB 删除区只读、显示约定前缀名称并可切分支；受控移回恢复读写，验证会话隔离、旧句柄与分页。取消旧删除内容节点，不破坏已有数据或永久审计。
+- [ ] 补删除后同路径同名新文件的独立身份、旧分支拒绝、准确撤销及路径被新身份占用的行为；已初始化目录旧 delete_tree 禁令不能代替新生命周期验收。
+- [ ] 完成历史包永久路径审计的新格式闭环：完整原始 receipt／principal、批次成员、显式身份映射、restore、copy、冷恢复与扁平再导出。候选 path_audit 封装尚未取得完整验证；临时导出拒绝仅作候选安全保护，不称完整功能，不借空审计相等伪装成功。
+- [ ] 补齐 Foreign remap、D／undo／退役与混合来源的完整审计支持；无法证明闭包时明确拒绝且不泄露包外数据。旧格式不兼容、不补默认值、不重写原摘要／主体，不自动迁移、删除或覆盖用户材料。
+- [ ] 验证单文件／批量软删除、恢复、原目标与范围外别名、永久幂等、准确冷重试及大回执分页；永久退役需闭合旧副本与防复活，但不恢复多文件共享树开发，也不以任务授权代替真实数据物理删除授权。
+- [ ] 完成 FILE／DISK／SYSTEM 三范围数据库权威、完整索引与单盘恢复；验证 SQLite checkpoint、冷镜像、页额／FD预算、连接与关闭错误、日志完整性、成员／代际／终态恢复和损坏保旧拒绝。
 
-- [ ] 闭环 Backup 原900秒事务超时：#1332准确f6/34bc完整467 Rust／186 Python／1产品检查通过，但原900仍失败；readmission原300秒仅本轮298.55秒通过，不预称成本已修复。#1333准确40ef/f6的published scopes真实probe及86 Rust／186 Python／1产品检查已过，原900仍失败。后继Current archive replay仅命中同一账户已提交纯编码，不预留/填充/commit；保留真实读取、strict parse、完整State/history/finish及全部尾验，68a23的#1334主Engine和原900仍待验证；下一窄片将generation-control原前缀收集接入同一只读账户，完整Control/材料读回不变，待准确后继GitHub验证。不缓存准入结果、不放宽原900、不预称三范围恢复完成。见[编码与成本证据](docs/validation/backup-scoped-encoding-memo.md)及[外部能力探测](docs/validation/backup-profiler-capability.md)。
+## 工程规范与未完成验证
 
-- [ ] GitHub 定向复验 #1269 的四项测试前提修正：同正文保持原节点／分支／标签／来源，实际内容修改后验证分叉与标签继承；用两个明确同源文件分支验证选择围栏、失败不变与无收据；已初始化目录删除验证明确拒绝、完整状态不变、无收据、读投影和注销授权、冷开原数据保留，不恢复已停功能。仍保留空文件、A→B→A、混合上传、两故障点及 CurrentNamespaces 冷恢复覆盖；删除后同名重建的身份失效另待新可逆生命周期接线，不能以拒绝替代。仅此保存切片，不代表容器标签、删除／移动／改名时间线或新物理布局已完成；未本地编译或测试。
-
-- [ ] GitHub 定向 CI 验证文件容器备份镜像的完整条目预算：预备图与普通图补父目录后不越过 100,000 项，文件与 locator 的精确上限、已有父目录及完整原生 Backup 冷重放；未本地编译或测试，见[验证范围](docs/validation/backup-entity-entry-budget.md)。
-
-- [ ] 删除后同名重建的旧分支身份拒绝仍待新可逆生命周期接线后补验；已初始化仓库的 workspace delete_tree 拒绝及原状态不变已由定向 CI 验证，不能用该禁令或普通 rename 替代身份消失场景。 selected-batch 新回归仅验证直接重建拒绝、精确 undo、显式移走后路径复用；目录标签另验证已准入 Current projection 撤下整个旧目录后的同路径新身份，不将两者冒充直接 delete→recreate 或 D3 持久激活验收。
-
-- [ ] 定向 CI 验证历史目录节点建分支的 Web 接线：可写目录加载节点与冻结干净审阅、原请求字节／摘要／会话与边界预算、未知结果只查原 operation ID、显式原请求重试、不自动 checkout。原生行为选择与 WASM 编译须分别取得证据，真实浏览器仍待验；新增原请求摘要／HTTP 正文边界使 web json_value +2、api_path_literal +1，显式导入替换 glob_super -1，其余指标不变。
-
-- [ ] 定向 CI 验证历史目录分支 Core／HTTP：准确历史提交与当前 CAS、旧入口旧 source 409、权限撤销、本仓干净围栏、固定三级子仓引用、完整写集与永久重放、checkout／标签后冷重开。Web 另片接线；本次仅新增持久请求／完整回执编解码与 HTTP 边界计数：engine json_value +8，server json_value +1、api_path_literal +1，其余指标不变。
-
-- [ ] 验证按实际变更选择的 GitHub 定向 CI，核对当前编译库存、非空选择、逐测试完成与未执行清单。完整 workspace、ignored、跨特性及其余恢复场景尚未验证；后续语义变化须审阅并扩展持久路径映射。
-
-- [ ] 完成 D 审阅的真实浏览器验收：准确页面／节点／读取代数／会话绑定、旧行及旧续页回调隔离、分页范围完整、恢复后第一页重读与原未知结果围栏。相关原生定向测试已通过；超预算 D 的分页／紧凑恢复已实现，其剩余验证见删除与审计项。
-
-- [ ] 按每批实际变更只运行相关定向测试，核对准确 main 提交的选择范围、当前二进制库存与逐项完成证据；继续处理已知失败。未选择的 static、quality、contracts、security、workspace 分片、生产 WASM、一期 core、Samba SDK／真实 Samba、独立 ELF 与 Chrome 验收仍未完成，不以定向通过替代完整覆盖。
-- [ ] 验证 13 片的当前产物／测试库存、分配并集与互斥、完整回执、11 个 I/O 门禁和三项显式 ignored 验收；验证参考配方不受分片环境污染、保存配方可达性及失败证据。完成各功能项仍待执行的原生、集成和浏览器测试。
-- [ ] GitHub CI 验证新版 T13 磁盘满映射：`ErrorKind::StorageFull` 保持 `NO_SPACE` 与来源，`QuotaExceeded` 继续 `IO_ERROR`；errno 28 回归仅 Linux，ErrorKind 回归覆盖所有目标。
-- [ ] GitHub CI 验证跨已提交目录的 `object.move` 恢复：双故障、原操作冷开重试、目标当前版本映射、两版本三盘独立容器、源 inode／正文与冻结视图、二次冷开无重复发布。
-- [ ] GitHub CI 验证保留移动意图的 source 身份改动返回 `IdempotencyKeyReused`，首次捕获漂移返回 `WorkspaceChanged`，失败保留原意图与完整 State。
-- [ ] 解决 SQLite 派生存储更新后的 checkpoint 失效及 workspace namespace／history 失败族；验证容器重命名的已持有版本序号、未知收据／主体表变化的完整历史重建、rename 后目录快照路径／物化序号、显式重建哈希与冷开一致性。
-- [ ] GitHub CI 验证冻结目录预览夹具：合法同目录 rename、分页／只读／版本／游标、陈旧快照与撤权、稳定身份及全状态不变、结构 Delete 拒绝且无发布。
-- [ ] GitHub CI 验证授权 backend 的 `ReviewedCreate` 准确 source 和完整参数／身份／结果／撤销矩阵；验证 HTTP 目录分支 panic 夹具实际进入 backend，保留 `INTERNAL_ERROR`、500、可重试与隐私断言。
-- [ ] GitHub CI 验证首管理员 0700 私有目录夹具：准确重复创建、后续会话冲突、不同账户／密码拒绝及凭据原字节保留；验证 contract 严格可空／空变体解析和 auth 夹具。
-- [ ] GitHub CI 验证 Backup serving 保留 Genesis discovery config，冷启动由已认证 native bootstrap extension 选择扇出，完整事务与精确重试保持 discovery 原字节。
-- [ ] GitHub CI 验证离线激活精确重试的完成收据保留、回调与撤权失败行为。
-- [ ] GitHub CI 验证 #1164 原批次撤销清单的 WASM HTML `open=""` 属性，保持默认展开与用户折叠。
-- [ ] GitHub CI 验证登录前安装浏览观察器后的首次主盘浏览：磁盘身份、空根、重读、浏览无变更；验证当前四个管理入口、八项主导航、双语只读动作与反馈生命周期。
-- [ ] 复验待验的格式／Clippy／类型及接线修复，覆盖 SQLite 新来源与特性图、安全公告、依赖／许可材料、CLI golden、私有目录夹具、独立 mount namespace、helper publication 故障与真实 SDK 编译诊断。
-
-- [ ] 闭环历史包永久路径审计：manifest/export/restore 当前尚未完整携带 path_changes，不能用空 file_path_nodes 相等宣称恢复审计。新增必填 typed 审计封装、原事件／操作／主体证明、完整批次、identity-preserving restore 与扁平再导出待远端验证；无法证明完整包外批次时明确拒绝导出，foreign remap 的非空审计在显式映射来源证明完成前 fail-closed，不改写原 receipt／digest、不静默丢字段。跨来源复制与导入的完整正向支持须单独取得证据。
-
-## 新版规范的底层重构
-
-
-
-
-
-
-
-- [ ] 定向 CI 验证 T07 首批真实类型边界：Name／LookupName／SlotId 构造与原文本 serde、RepositoryName、Foreign 目标映射与槽位、历史保存名称、server listing 和源槽位搬移。名称错误顺序、碰撞 key、路径预算与原 wire 保持；manifest 准入与其余公开 validator 尚待逐域迁移。文本 parse_discard 模式亦匹配本批六处持有结果的 let 绑定，准确更新计数并保留规则，不以计数名称代替数据流审查。
-- [ ] GitHub 定向 CI 验证 T08 两个 operation 查询端点：OperationLookupPath 保留 OperationId 或解析来源，维持认证／路径解码／query／容量／404／当前凭据与收据所有者的原次序。覆盖 malformed 不调用 Backend、重复 query、注销、观察与 outcome 字段、原永久收据冷开读取；其余 HTTP 类型化、未选覆盖与既有 CI 失败仍待推进。
-
-- [ ] 定向 CI 验证 T07 object-move 目标槽位边界：完整 body 解码后构造持有 SlotId 的 MoveDiskObject，经过源／目标盘检查后一次转回原 engine 请求；验证大小写、64 字节上限、非法槽位、可空／覆盖目标、原 lookup 拼写、wire／canonical 字节和请求摘要。server 文本计数 validate_fn 34→33、parse_discard 34→35；新增匹配来自持有结果的 target_slot_id let 绑定，计数规则保持不变。其余 T07 准入与公开 validator 迁移仍未完成。
-
-- [ ] 定向 CI 验证 T07 foreign-plan 目标槽位边界：ForeignDestination 从原 TryFrom 位置保留 SlotId 至 engine 映射，维持槽位先于 parent 的错误顺序和原始 history_names 延后准入；覆盖大小写、64 字节边界、原父路径与命名错误源，并运行既有 foreign-plan 管理行为。server 文本计数 validate_fn 33→32、parse_discard 35→36，新增匹配为持有 slot 的 let 绑定；其余 T07 迁移继续保留。
-
-- [ ] 按 §7 收紧 engine validate_slot 公有再导出，取得完整消费者编译证据后处理未使用项；继续迁移其余 naming 公开 validator 与 manifest 准入。
-
-- [ ] 定向 CI 验证 T06：PortablePath 删除隐式字符串 Deref／PartialEq 后，naming／contract、engine、server 与 perf 消费者显式使用原文本；验证命名、namespace／alias／history 回归与相关 native／WASM 编译。真实来源摘要已更新，文本棘轮无变化；未以静态审查替代编译闭包或全部集成测试。
-
-- [ ] GitHub CI 验证 T15 首批四种布局名字的 EntryName 接线：disk.json、writer.lock、.writer.lock、journal.bin 保持原字节／目录／锁用途；验证持有 fd、权限和链接拒绝、租约撤销、读取上限、原子替换与同步尾。其余布局名字尚待分轮迁移。
-- [ ] GitHub 定向 CI 验证独立盘 projection/cache 布局 EntryName：保留 cache.db、cache.lock、projection-kind.json 与 cache-build 临时名字节，验证原子发布、持锁期限、链接／权限拒绝、目录／staging 替换及原进程崩溃恢复；独立组静态预算 52 条，排除 2 条需专用 interposer 环境的 ignored 用例，待编译库存复核。
-
-- [ ] GitHub CI 验证 T05 Generation／Sequence／Principal／Timestamp 定义和既有固定字节向量：完整 u64 字符串、MAX 耗尽、主体非空及原 Unicode／空白、Unix 整秒和 epoch 前错误来源。两个集中 next 保留可失败 checked_add；尚未迁移使用点或执行 T16 时钟迁移。
-
-- [ ] GitHub CI 验证 T14 两计数 ReadView：Engine／终态视图仅借用 sequence 和 topology_generation，16 处生产读取保持原鉴权、锁与事件迭代；验证真实发布、重放、冷开、终态与 ready／topology 快照及借用约束。其余实体／收据读取和测试投影钩子仍待分轮迁移。
-
-- [ ] GitHub CI 验证 T04 Id<K>／OperationId 的原编码、排序、serde 收据字节、解析错误与熵错误兼容；FileNodeId 五变体仅作基础类型，逐入口接入须保留原允许域。确定性 derive 尚须核实既有领域派生协议，不擅自引入新算法。
-
-- [ ] GitHub CI 采集并审查 T03 的 quality／smb-sdk 完整 Clippy 警告报告，提交真实基线后验证精确八类、第一方包范围、计数增减与其余诊断严格门禁；缺基线仍失败，完整性为 false 的报告不得用作基线。验证 workspace lint 继承、原有 unsafe 拒绝与最小 FFI 例外。
-
-- [ ] 完成《工程规范》§13 阶段 0：验证过程入口、blocking／watch 分级与已确认违规棘轮，建立 workspace lint、Clippy 阈值及警告数棘轮；第一方继承规则保留 smb-vfs 自有许可证与最小 FFI deny 边界。
-- [ ] 清点并逐类替换读取第一方源码或绑定测试名的 CI 门禁，改为行为验证；保留 foundation 依赖图、Cargo 元数据、来源与许可检查。
-- [ ] 按 §19 的新版 T04–T07 完成 contract／naming 类型地基：`Id<K>`、多前缀 ID、`Generation`／`Sequence`／`Principal`／`Timestamp`、名称构造器及路径去字符串退化；补齐 `Hash<D>`、`TrackedMap<K, V>` 与 `EncodedLen`。
-- [ ] 按新版 T08–T09 推进 HTTP 提取器、类型化备注目标、Web 操作号、会话 DTO 与 `SetupCall`，继续逐领域迁移 Web Endpoint／响应 DTO；保持现有未知字段错误、响应关联和凭据代数边界。
-- [ ] 完成 Web 会话主体与恢复的真实浏览器验收：存储旧记录、跨标签页锁、同主体恢复／异主体清理，以及注销／旧代次／迟到响应的交互闭环。
-- [ ] 按新版 T10–T11 保留并传递现有 `AdmittedState` 证明、提升本状态访问器；错误改 panic 前先完成 §5.15／§15 第 1 项的确认与定向故障验证，补准入性质／模糊／真实镜像语料；完成 `BusinessState`／类型化 `AuthState` 与授权收据读接口，逐领域迁移 server 的裸 State 读取。
-- [ ] 按新版 T12、T14–T16 推进错误显式映射、计数查询、`persist/layout` 句柄名字及确定性计划时间；迁移 serde 表示时完成真实快照／收据字节往返和摘要固定向量。
-- [ ] 逐 kind 完成 `Command → plan → linearize → publish`，收敛 `Activity`／`Availability`、`BranchScope`／`DirectoryComposition`／`PolicyScope` 与文件属性聚合；先核实可达状态及写集成本。
-- [ ] 完成领域错误枚举、按领域公共导出与模块结构收敛；公共项先降可见性，再依据完整 CI 目标／特性矩阵处理。
-- [ ] 完成 platform 故障注入集中、业务 trait 接缝和产品／注入两档测试；清理随已删除防御分支失效的测试，保留准入、对外行为及真实字节验证。
-- [ ] 完成 SMB 请求字段、auth 秘密类型、Web 表单／视图与 helper 输出的类型化；保留普通职责、算法、锁与生命周期注释及现有产品文档。
-- [ ] 为 §15 与 §20 的待定事项逐项准备 ADR 并取得明确确认后实施：panic 围栏、HTTP 故障状态、EDQUOT、server core、FileRecord 持久形态、engine 拆 crate、Plan／收据表示、SMB 绑定代数位置、共享端点目录及 view 宏格式化方案。
-
-## 目录、文件与移动
-
-- [ ] 定向 CI 验证普通盘转换的目标名称预算：新预览/新提交用已核目标句柄的组件上限预留16字节，导入绑定及写入前沿已准入磁盘复核源与目的父组件；超限只报告遇到的原路径，由用户改名后重新预览。保留原终态/注册恢复、原operation及源数据；仍未覆盖所有普通创建入口、既有对象删除或完整超限清单。
-
-- [ ] 校准 [分支系统逻辑 §23](docs/design/branch-system-logic.md) 的单容器描述，区分同所有者路径移动与跨已提交目录／仓库的完整历史复制及独立身份规则，落实跨仓库复制要求。
-- [ ] M01／M09：完成 [目录仓库](docs/design/directory-git-repositories.md) 的整体功能验收：空仓手动初始化／首空提交、保存／暂存／用户提交分离、父子独立提交、显式子提交引用、分支创建／改名／默认切换及只读工作树／提交快照导航。
-- [ ] M01：完成独立 main 森林、脱挂／重新挂载、父 checkout 祖先身份、同名新身份、普通目录 scope、冻结组合、子仓归属与保旧实体布局的运行验证；覆盖冷恢复和完整文件归属。
-- [ ] 验证普通 copy 仍创建不继承源历史的新文件；与跨已提交目录／仓库的 move 按完整历史复制并建立独立身份的规则分别验收，不混用两者语义。
-- [ ] M01／M06：完成文件与整目录同盘／跨盘 `object.move`、空目标／非空目标、显式覆盖、已提交所有者间完整历史复制、独立身份与独立 FULL 副本的端到端验收；补齐仍受限的递归历史导出、分散正文、未物化继承及策略迁移。
-- [ ] 验证移动的源／覆盖 occurrence、范围外别名、逐路径 context／节点、原目标 D 与准确恢复、隐藏目标额度、完整普通目录历史闭包；覆盖源冻结视图、旧读取句柄、目标兄弟项与两端权限。
-- [ ] 验证共同移动执行器的 intent／choice／completion、首槽与归档缺失边界、Current candidate／membership 晋升、FILE／DISK／SYSTEM 全范围安装及一次发布；覆盖取消、丢响应、损坏 FULL、阶段中断、冷开精确重放与无重复发布。
-- [ ] 验证目录路径／提交图投影、批来源持有、文件创建结果、State 跟踪／发布字段、冷热回执扫描、生命周期索引和同源投影复用，保持原身份、引用闭包、预算与持久字节。
-- [ ] M03：完成 [共享文件历史](docs/design/shared-file-history.md) 的跨历史域关联需求及永久节点删除后的权威解绑／拆分；验证内容匹配、传递联合图和真实文件／节点身份。
-- [ ] 完成目录高级操作的真实 API 缺口评估与实现：任意旧节点建分支、目录合并、已提交节点说明修改；核对目录标签缺失身份场景。
-- [ ] 验证 Web 文件／目录导航、刷新、提交说明保留和非法输入拒绝、目标逐级浏览／分页、移动完成去向、取消及迟到回调隔离、Back／Forward。
-- [ ] 验证 Web 分支树与控件外观：统一行高、输入下方无额外线条、下拉边框约原来两倍且略深于背景、背景保持；节点两行圆角卡片约十个英文字符宽，备注在上、彩色动作图标在下，共享节点以平滑虚线连接。
-
-## 删除、永久退役与审计
-
-- [ ] 按最新要求将文件删除生命周期与历史节点分离：新删除不创建分支“删除”节点，恢复不撤销该节点；清点现有D/undo、投影、复制、批次与永久收据依赖，先设计格式边界和旧材料处理，保留证据与幂等，不静默清理旧节点或真实盘数据。下列现有D相关验证须按新语义重新评估，不能直接当作新方案验收。
-
-- [ ] 按 [磁盘名称与保留区布局草案](docs/adr/disk-names-and-retained-layout.md) 实现 Linux 物理名称预算、16 字节前缀和名＋UUID 来源组件的纯规划；闭合存量超长容器名策略、复制闭包耐久证明和跨盘读代际后才接真实搬移。保持文件容器整体移动、撤销仓库完整复制与原位子仓继续工作、三目录及管理数据双分区；SMB 两区可见且删除区只读，显示实际前缀＋原名并支持会话级只读分支浏览，验证会话隔离、旧句柄/分页及SMB选择入口，独立文件/最外围仓库移出通过受控恢复，仓库内部文件/子仓取出为保源复制，复制完整历史分支/版本并建立独立身份及完整子仓引用闭包；先核同共享 rename 与跨共享 copy/delete 差异；不操作用户真实磁盘。
-
-- [ ] 完成单文件、多选文件、初始化 owner 内普通目录整体软删除及准确撤销的 Engine／HTTP／Web／SMB 验收；保留稳定身份、原路径行、HEAD／index、全部正文和永久 D／undo 审计。
-- [ ] 验证批量别名只生成一个文件 D、完整 frontier／回执预算、失败无部分发布、Current selected tree 与 CAS tree 区别；目录撤销只恢复本次创建的 D，保持先前删除和其他活动目录 D 的引用关系。
-- [ ] 补齐初始化仓库实体／嵌套初始化子仓库、跨仓库批次和原子整批撤销的剩余需求；分别验证原批次撤销清单、准确原目标恢复及路径被新身份占用时的拒绝。
-- [ ] 验证当前／备份 listing、名称查找、已打开 SMB 目录分页与删除列表的生命周期可见性；原始保留行、冻结树、当前稳定目录身份与冷重开一致。
-- [ ] 完成已实现的超预算单文件 D 分页／紧凑恢复剩余验收：server 紧凑投影单测、WASM 编译、真实浏览器和大规模成本。准确提交 `b07dd3da` 的 [#1188 定向 CI](https://github.com/isarmg/zxs/actions/runs/42993088091) 已执行通过 contract 4 项、Web 69 项及 HTTP 4 项，覆盖摘要、4097 分支与完整父边分页、永久完整收据及冷恢复、主体／新 D 隔离、原操作恢复和未知结果围栏；不等于全量或后继提交通过。目录／整批 D 仍沿原预算和恢复流程。
-- [ ] 完成永久节点退役与共享关系拆分的剩余闭包：D／namespace 共同终止、原副本退出／换代、独立旧备份防复活和全记录物理删除；复验末节点／保留分支终止及 FILE 冷重建。
-- [ ] 完成 [保留审计复制](docs/design/retained-history-copy.md)、公开单历史包及离线材料的完整 operation／principal／D／undo／退休凭据闭包；接入 Foreign 的 batch／directory delete、copy／move、原子替换和退役审计，保持源审计且不继承权限。
-
-## 备份、数据库与恢复
-
-- [ ] M02／M07：完成 [递归备份](docs/design/recursive-backup-file-publication.md) 与 [整体迁移](docs/adr/backup-target-replacement.md) 的多下级扇出、父子整体同盘迁移及最终换盘切换；每个真实目标保有完整独立副本。
-- [ ] 验证 Backup 唯一原请求前的源序列／完整拓扑／目标空目录准入、未停写未决定取消、worker stop／join、保留式归档、原 op tombstone、取消中断恢复及明确新任务。
-- [ ] 验证 Backup common transaction、原 seal／selector／bootstrap、全体 writer 与 Current／SYSTEM／Config 交接、后继布局、原 stop 收束和 history 重建；覆盖在线 Resume、晚失败收尾、混合 selector 冷恢复及完成后缺件拒绝。
-- [ ] 验证 Backup 根记录、不可变材料配方、隔离目标写入、完成记录、后台 owner／取消／Drop、观察入口和共同成员决定模型；逐目标损坏／缺失仍拒绝，保留源围栏、原根和真实数据。
-- [ ] M04／M05：完成 FILE、DIRECTORY、盘根 current／history 与 SYSTEM 三范围权威协议、全对象／别名／副本位置目录及 HTTP／Web 查询；验证每盘真实完整数据库和任意单盘独立恢复。见 [系统变更库](docs/design/system-change-database.md)。
-- [ ] 验证 SQLite 连接／冷镜像生命周期、页额与有界读取、schema／完整性／引用闭包、事务和关闭双错误、SYSTEM WAL 原连接读回、选中分支准入，以及完成后损坏保旧拒绝。
-- [ ] 验证真实日志的完整历史枚举、Backup 原盘／新目标首像与后继、准确 publication 序列、checkpoint 与自动历史维护的独立计量；测量最大规模的内存、FD、锁等待和同步成本。
-- [ ] 验证成员 Add／Exit／readmission／terminal resume 的权威、代际晋升、stop 与混合协议残留拒绝；保持真实外部 owner 排空、同锁凭据复核及冷恢复完整性。
-- [ ] 验证布局 locator 的当前位置／最终目标分离、双位置正文清理的顺序和父目录同步尾、缺失 owner／硬链接／替换拒绝、停止盘零访问及原操作重试。
-- [ ] 完成取消用户新发起“离线／计划下线”的剩余入口；保留注销／移除、物理失联检测、安全围栏及既有未决操作的诊断与收束。
+- [ ] 按《工程规范》继续 contract／naming 类型地基和消费者迁移：ID、哈希、代数、主体、名称与路径、TrackedMap／EncodedLen；保留原契约固定向量、排序与准入闭包，不将“定义类型”当迁移结束。
+- [ ] 推进 HTTP 提取器、Web DTO／表单、SMB 请求字段、auth 秘密类型与 helper 输出类型化；保留凭据、CSRF、锁、预算及未知结果恢复。核对全部实际消费者后再删除公共项或旧适配层。
+- [ ] 完成 AdmittedState 证明传递、受限读视图、领域错误、layout 名称和确定性计划时间；panic 改造须先满足规范的故障策略前置条件。保持 Command／plan／linearize／publish 与真实故障注入边界。
+- [ ] 取得当前提交的格式／Clippy、blocking／watch、契约／来源／许可／安全及受影响特性编译证据；旧 #1160 的格式日志仅作定位线索，不把历史数量当当前精确欠账。补准入性质、固定语料与模糊测试预算。
+- [ ] 逐批校准定向 CI 路径映射、编译库存、非零选择和执行结果；合并重复／已解决的旧测试待验条目，但保留未执行的真实 Samba SDK、WASM、ELF、Chrome、发行及恢复验证，不以局部成功概括全量。
 
 ## 辅助工具与外来链
 
@@ -152,7 +59,7 @@
 - [ ] H07：完成一条龙离线首装验收：Debian 13 amd64 依赖、独立非 root Unix 账户、同版 ZXS／Web／VFS、配置／运行目录、首管理员、1–32 个原批次空目录、生产存储与 systemd／SMB 交接。
 - [ ] H07：验收 APT 刷新／解析／安装的原计划、包脚本服务动作隔离、部分 dpkg 状态及中断恢复；验证 HTTP-only systemd 与固定版本 Samba 两类依赖、双账户原请求隔离和真实 sysusers。
 - [ ] H07：补齐既有配置替换／回滚、既有 VFS 升级／保留式替换；验证同版 VFS 真实安装、ABI 加载、网络登录／读写、原配置恢复、同载荷修复及文件／目录发布 inode 与同步身份。
-- [ ] H07：完成 helper 页面真实 Chrome、普通目录转换离线向导、首装八步冻结输入、明确预览更正、响应丢失／刷新／重开、跨页与迟到响应验收；核对 helper 退出后服务接管和双向互斥。
+- [ ] H07：完成 helper 页面真实 Chrome、首装八步冻结输入、明确预览更正、响应丢失／刷新／重开、跨页与迟到响应验收；核对 helper 退出后服务接管和双向互斥。
 - [ ] H08：完成内置同源码载荷与许可材料的实际构建／导出／安装验收，核对损坏主程序修复、保留备份与原摘要续作；明确任意历史安装修复的剩余范围。
 
 ## Web、SMB 与发行验收
@@ -167,3 +74,11 @@
 - [ ] 核对并完成 Release 四文件收敛：ZXS、helper、完整源码归档与 SHA256SUMS；BUILD／VFS／安装说明、全部来源与许可证保留在源码包或工具内，两个 ELF 绑定同次构建。
 - [ ] 补齐完全离线发行所需 Debian 包／对应源／签名索引、固定 OCI、Rust／WASM 工具链材料，以及 SDK 缓存未命中的 apt／Docker 联网边界；验证下载复验、完整 Git 身份、真实 helper 导出与首次离线安装。
 - [ ] 在获准环境完成物理掉盘／断电、真实目标设备、最大规模与性能验收；完成准确集成版本的全量运行后，另行取得发行演练、正式发布和真实部署授权。
+
+## 最后执行：多级磁盘备份
+
+- [ ] 其他部分完成后再恢复多级备份开发及原 900 秒事务超时优化；保留现有候选和数据。先核最新准确提交的失败，不延长超时、减少数据或缓存准入结果来冒充完成。
+- [ ] 完成多下级扇出、整体迁移和更换下一级备份盘：迁移全部数据，每个目标保有完整独立副本，验证 common／deleted／zxs 数据及三范围权威材料，完整核验后切换，不自动提升备份为主盘。
+- [ ] 完成磁盘名称＋UUID 来源目录、不可重名、改名传播和真实组件预算；只读预览不是持久改名。核对所有下级目录、离线状态、恢复与碰撞。
+- [ ] 验证 Backup 的源序列／拓扑／空目录准入、准备／取消／stop／join、共同决定、原操作回执、归档保全、在线续作和混合 selector 冷恢复；失败／缺件不发布半套数据。
+- [ ] 补真实完整条目预算、父目录计数、原生日志／bootstrap／Current／SYSTEM／Config 交接、三范围独立恢复与最大规模成本；完成多级读取、SMB 隔离、管理页和真实浏览器验收。
