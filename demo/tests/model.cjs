@@ -111,3 +111,35 @@ test('only SMB exposes folder creation and its action updates the shared directo
   assert(create);const parent=s.currentDir;create.action();
   assert(Object.values(s.dirs).some(d=>d.name==='SMB新目录'&&d.parent===parent));
 });
+test('explicit SMB transfers preserve move identity and isolate copies and conflicts',()=>{
+  const {s,f}=fixture(),target=s.mkdir(f.dir,'目标');
+  s.transferSMB({kind:'file',id:f.id},{kind:'dir',id:target.id});
+  assert.equal(s.files[f.id].dir,target.id);
+  const copied=s.transferSMB({kind:'file',id:f.id},{kind:'dir',id:s.disks[f.disk].root},true);
+  assert.notEqual(copied.id,f.id);
+  assert.throws(()=>s.transferSMB({kind:'file',id:f.id},{kind:'dir',id:s.disks[f.disk].root},true));
+  s.remove(f.id);s.transferSMB({kind:'file',id:f.id},{kind:'dir',id:target.id});assert.equal(f.deleted,false);
+  const backup=Object.values(s.disks).find(d=>d.level===2);
+  assert.throws(()=>s.transferSMB({kind:'file',id:f.id},{kind:'dir',id:backup.root}));
+});
+test('SMB worktree drop uses explicit container identity and rejects unknown sources',()=>{
+  const {s,f,r}=fixture(),w=s.createWT(r.heads[r.branch]);s.rename(f.id,'新导入.txt');
+  s.transferSMB({kind:'file',id:f.id},{kind:'wt',id:w.id});
+  assert.equal(s.view(w)['新导入.txt'].fileId,f.id);assert.equal(f.deleted,true);
+  assert.throws(()=>s.transferSMB({kind:'unknown',id:f.id},{kind:'wt',id:w.id}));
+  assert.throws(()=>s.transferSMB({kind:'file',id:f.id},{kind:'wt',id:w.id}));
+});
+test('SMB keyboard shortcuts dispatch only within the file browser and outside editors',()=>{
+  let handler;const calls=[];
+  const c=vm.createContext({document:{addEventListener:(_event,fn)=>{handler=fn;}},
+    ui:{},act:fn=>fn(),smbClipboard:copy=>calls.push(copy?'copy':'cut'),
+    smbPaste:()=>calls.push('paste'),smbEdit:mode=>calls.push(mode),smbDelete:()=>calls.push('delete')});
+  const begin=script.indexOf("document.addEventListener('keydown',event=>{");
+  vm.runInContext(script.slice(begin,script.indexOf('\nfunction render()',begin)),c);
+  const key=(key,extra={})=>handler({key,preventDefault(){},target:{closest:()=>true,matches:()=>false},...extra});
+  key('c',{ctrlKey:true});key('x',{metaKey:true});key('v',{ctrlKey:true});key('F2');key('Delete');
+  assert.deepEqual(calls,['copy','cut','paste','rename','delete']);
+  key('c',{ctrlKey:true,target:{closest:()=>false}});
+  key('c',{ctrlKey:true,target:{closest:()=>true,matches:()=>true}});
+  assert.equal(calls.length,5);
+});
