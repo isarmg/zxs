@@ -181,7 +181,22 @@ fn payload_mapping_requires_full_inventory_and_original_alias_spelling() {
     assert!(matches!(
         AdmittedSnapshotManifest::admit(record), Err(SnapshotManifestError::Payloads),
     ));
-    let long = "a".repeat(240);
+    // Exercise the stored basename budget, not the independent 200 UTF-16
+    // unit path limit: these Unicode names are portable at both byte lengths.
+    let boundary = format!("{}aa", "界".repeat(79));
+    assert_eq!(boundary.len(), 239);
+    let accepted = prepare(vec![entry(&boundary, content(common))]).unwrap();
+    let recovered = AdmittedSnapshotManifest::decode(
+        accepted.bytes(), accepted.reference(),
+    ).unwrap();
+    assert_eq!(recovered.entries(), accepted.entries());
+    let payload = &recovered.payloads()[&common.version_id];
+    assert_eq!(payload.source_path.as_str(), boundary);
+    assert_eq!(payload.storage_id.as_str().len(), 15);
+    assert_eq!(layout::snapshot::file(payload).as_os_str().to_str().unwrap().len(), 255);
+    let long = "界".repeat(80);
+    assert_eq!(long.len(), 240);
+    assert!(PortablePath::parse(&long).is_ok());
     assert!(matches!(prepare(vec![entry(&long, content(common))]),
         Err(SnapshotManifestError::Filename)));
 }
