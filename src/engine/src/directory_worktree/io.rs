@@ -84,6 +84,7 @@ enum Backing<'a> {
 }
 pub(crate) struct HeldReadView<'a> {
     stamp: ViewStamp,
+    ledger: &'a HeldWorktreeLedger<'a>,
     backing: Backing<'a>,
 }
 impl<'a> HeldReadView<'a> {
@@ -93,6 +94,7 @@ impl<'a> HeldReadView<'a> {
         source: &'a HeldSnapshotNode,
         ledger: &'a HeldWorktreeLedger<'a>,
     ) -> Result<Self, ViewError> {
+        ledger.admit_read_view().map_err(ViewError::Ledger)?;
         let Phase::Active { saved } = ledger.worktree().phase() else {
             return Err(ViewError::Phase);
         };
@@ -105,7 +107,7 @@ impl<'a> HeldReadView<'a> {
         let instance = HeldSparseWorktree::reopen(source, ledger.instance())
             .map_err(ViewError::Worktree)?;
         Ok(Self {
-            stamp: stamp(ledger, source.manifest().reference()),
+            stamp: stamp(ledger, source.manifest().reference()), ledger,
             backing: Backing::Sparse {
                 source, instance, projection: ledger.projection().map_err(ViewError::Ledger)?,
             },
@@ -118,6 +120,7 @@ impl<'a> HeldReadView<'a> {
         node: &'a HeldSnapshotNode,
         ledger: &'a HeldWorktreeLedger<'a>,
     ) -> Result<Self, ViewError> {
+        ledger.admit_read_view().map_err(ViewError::Ledger)?;
         let Phase::Active { saved: Some(saved) } = ledger.worktree().phase() else {
             return Err(ViewError::Phase);
         };
@@ -135,7 +138,7 @@ impl<'a> HeldReadView<'a> {
         ledger.projection().map_err(ViewError::Ledger)?
             .published_view(node.manifest(), &sources).map_err(ViewError::Projection)?;
         Ok(Self {
-            stamp: stamp(ledger, node.manifest().reference()),
+            stamp: stamp(ledger, node.manifest().reference()), ledger,
             backing: Backing::Published { node },
         })
     }
@@ -144,6 +147,7 @@ impl<'a> HeldReadView<'a> {
         self.stamp
     }
     pub(crate) fn open_file(&self, path: &LookupPath) -> Result<crate::ReadFile, ViewError> {
+        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
         match &self.backing {
             Backing::Sparse { source, instance, projection } => {
                 match projection.route(path).ok_or(ViewError::Missing)? {
@@ -156,7 +160,7 @@ impl<'a> HeldReadView<'a> {
                     }
                 }
             }
-            Backing::Published { node } => match self.content(path)? {
+            Backing::Published { node } => match self.admitted_content(path)? {
                 EntryContent::Directory => Err(ViewError::IsDirectory),
                 EntryContent::File { material } => {
                     node.open_payload(material.version_id).map_err(ViewError::Snapshot)
@@ -165,6 +169,10 @@ impl<'a> HeldReadView<'a> {
         }
     }
     pub(crate) fn content(&self, path: &LookupPath) -> Result<EntryContent, ViewError> {
+        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
+        self.admitted_content(path)
+    }
+    fn admitted_content(&self, path: &LookupPath) -> Result<EntryContent, ViewError> {
         match &self.backing {
             Backing::Sparse { projection, .. } => {
                 Ok(match projection.route(path).ok_or(ViewError::Missing)? {
@@ -193,11 +201,12 @@ impl<'a> HeldReadView<'a> {
         cursor: Option<&Cursor>,
         limit: NonZeroU16,
     ) -> Result<Page, ViewError> {
+        self.ledger.admit_read_view().map_err(ViewError::Ledger)?;
         if limit.get() > MAX_PAGE_ENTRIES {
             return Err(ViewError::Budget);
         }
         if let Some(parent) = parent {
-            if !matches!(self.content(parent)?, EntryContent::Directory) {
+            if !matches!(self.admitted_content(parent)?, EntryContent::Directory) {
                 return Err(ViewError::NotDirectory);
             }
         }
@@ -219,7 +228,7 @@ impl<'a> HeldReadView<'a> {
                 continue;
             }
             let item = Entry {
-                path: entry.path.clone(), content: self.content(&LookupPath::from(&entry.path))?,
+                path: entry.path.clone(), content: self.admitted_content(&LookupPath::from(&entry.path))?,
             };
             let encoded = storage_contract::canonical_json(&item).map_err(ViewError::Encoding)?;
             let next_bytes = bytes.checked_add(encoded.len()).and_then(|total| total.checked_add(1))

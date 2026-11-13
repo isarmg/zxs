@@ -237,3 +237,40 @@ fn completed_directory_view_reads_new_node_without_refilling_moved_worktree_bodi
     assert_eq!(fixture.instance.directory().root_entries().unwrap().count(), 0);
     assert!(matches!(HeldReadView::published(&fixture.source, &ledger), Err(ViewError::Binding)));
 }
+
+#[test]
+fn uncertain_or_replaced_ledger_cannot_expose_cached_active_reads() {
+    let fixture = Fixture::new();
+    let mut ledger = fixture.ledger();
+    {
+        let view = HeldReadView::sparse(&fixture.source, &ledger).unwrap();
+        let ledger_path = fixture.source.worktrees_directory().path()
+            .join(layout::ledger(fixture.instance.binding().worktree()).as_path());
+        fs::rename(&ledger_path, fixture.temp.path().join("retained-ledger")).unwrap();
+        PrivateDirectory::create(&ledger_path).unwrap();
+        assert!(matches!(view.open_file(&lookup("Root.txt")), Err(ViewError::Ledger(_))));
+        assert!(matches!(view.directory(None, None, NonZeroU16::new(1).unwrap()),
+            Err(ViewError::Ledger(_))));
+    }
+    assert!(ledger.append(Event::Delete {
+        operation: operation(10), expected: ledger.worktree().revision(),
+    }, trusted).is_err());
+    assert!(matches!(HeldReadView::sparse(&fixture.source, &ledger),
+        Err(ViewError::Ledger(LedgerError::Uncertain))));
+}
+
+#[test]
+fn another_writer_advancing_the_checkpoint_fences_an_already_open_read_view() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger();
+    let mut writer = HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+    ).unwrap();
+    let view = HeldReadView::sparse(&fixture.source, &ledger).unwrap();
+    assert_eq!(read(&view, "Root.txt"), b"root");
+    writer.append(Event::Delete {
+        operation: operation(10), expected: writer.worktree().revision(),
+    }, trusted).unwrap();
+    assert!(matches!(view.open_file(&lookup("Root.txt")),
+        Err(ViewError::Ledger(LedgerError::Chain))));
+}

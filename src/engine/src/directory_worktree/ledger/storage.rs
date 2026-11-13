@@ -279,16 +279,8 @@ impl<'a> HeldWorktreeLedger<'a> {
             return Err(LedgerError::Uncertain);
         }
         self.append = AppendState::Uncertain;
+        self.check_current_location()?;
         let parent = self.source.worktrees_directory();
-        if parent.held_identity().map_err(LedgerError::Directory)?
-            != file_identity(self.binding.parent_entity)
-        {
-            return Err(LedgerError::Binding);
-        }
-        parent.private_entry_matching(
-            &layout::ledger(self.binding.worktree), file_identity(self.binding.ledger_entity),
-        ).map_err(LedgerError::Directory)?;
-        verify_inventory(&self.directory, self.checkpoint)?;
         self.append = AppendState::Ready;
         if let Event::Edits { edits, .. } = &event {
             if edits.len() > self.source.manifest().entries().len() {
@@ -368,6 +360,33 @@ impl<'a> HeldWorktreeLedger<'a> {
             self.source.worktrees_directory().sync_private_entry_matching(
                 &layout::instance(self.instance.worktree()), identity,
             ).map_err(LedgerError::Directory)?;
+        }
+        Ok(())
+    }
+    /// Read/list consumers must not expose the cached state after an uncertain
+    /// append, replacement of the bound directory, or another writer's advance.
+    pub(crate) fn admit_read_view(&self) -> Result<(), LedgerError> {
+        if matches!(self.append, AppendState::Uncertain) {
+            return Err(LedgerError::Uncertain);
+        }
+        self.check_current_location()
+    }
+    fn check_current_location(&self) -> Result<(), LedgerError> {
+        let parent = self.source.worktrees_directory();
+        if parent.held_identity().map_err(LedgerError::Directory)?
+            != file_identity(self.binding.parent_entity)
+        {
+            return Err(LedgerError::Binding);
+        }
+        parent.private_entry_matching(
+            &layout::ledger(self.binding.worktree), file_identity(self.binding.ledger_entity),
+        ).map_err(LedgerError::Directory)?;
+        verify_inventory(&self.directory, self.checkpoint)?;
+        let bytes = self.directory.read_entry_bytes(
+            &layout::frame(self.checkpoint.sequence), MAX_FRAME_BYTES,
+        ).map_err(LedgerError::Disk)?;
+        if super::record::commitment(&bytes) != self.checkpoint.commitment {
+            return Err(LedgerError::Chain);
         }
         Ok(())
     }

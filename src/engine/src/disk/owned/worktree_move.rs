@@ -26,6 +26,8 @@ pub(crate) enum FileMoveFault {
     Payload(#[source] platform_io::payload::Error),
     #[error("file move inode observation failed")]
     Io(#[source] io::Error),
+    #[error("file move payload synchronization failed")]
+    PayloadSync(#[source] io::Error),
     #[error("file move crosses device or disk-admission domains")]
     Domain,
     #[error("file move names do not identify the independently frozen inode")]
@@ -63,7 +65,7 @@ pub(crate) enum FileMoveError {
 }
 
 struct HeldPayload {
-    _file: File,
+    file: File,
     receipt: Receipt,
 }
 enum Location {
@@ -113,6 +115,8 @@ impl DiskRoot {
         match locate(&source, from, &destination, to, expected).map_err(FileMoveError::Recovery)? {
             Location::Source(held) => move_held(&source, from, &destination, to, expected, held),
             Location::Destination(held) => {
+                held.file.sync_all().map_err(FileMoveFault::PayloadSync)
+                    .map_err(FileMoveError::Recovery)?;
                 sync_both(&source, &destination, Ok(())).map_err(FileMoveError::Recovery)?;
                 verify_destination(&source, from, &destination, to, expected)
                     .map_err(FileMoveError::Recovery)?;
@@ -156,7 +160,7 @@ fn inspect(
             io::Error::new(io::ErrorKind::PermissionDenied, source)
         }),
     ).map_err(FileMoveFault::Payload)?;
-    Ok(Some(HeldPayload { _file: file, receipt }))
+    Ok(Some(HeldPayload { file, receipt }))
 }
 fn locate(
     source: &RootOperation<'_>,
@@ -182,6 +186,7 @@ fn move_held(
     expected: FrozenFileMove,
     held: HeldPayload,
 ) -> Result<Receipt, FileMoveError> {
+    held.file.sync_all().map_err(FileMoveFault::PayloadSync).map_err(FileMoveError::Rejected)?;
     source.check_running().map_err(FileMoveFault::Gate).map_err(FileMoveError::Rejected)?;
     destination.check_running().map_err(FileMoveFault::Gate).map_err(FileMoveError::Rejected)?;
     let renamed = rustix::fs::renameat_with(
