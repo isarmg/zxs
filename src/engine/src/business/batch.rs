@@ -1136,6 +1136,10 @@ fn apply(
     }
     validate_entries(&mut entries, engine.config.max_entries)?;
     validate_identities(&entries)?;
+    // A root-scope edit must refresh the actual changed descendants before
+    // freezing its root. Reporting only the scope path leaves stale child refs.
+    changed_paths.extend(changed_entry_paths(current.entries(), &entries)
+        .into_iter().map(|path| path.as_str().to_owned()));
     let active_deleted = active_deleted
         .into_iter()
         .map(|(scope, mut deleted)| {
@@ -1225,6 +1229,52 @@ fn apply(
         path_changes,
     )
 }
+/// Exact changed occurrences, including identity-only separation at the same
+/// path. Both inputs were admitted in lookup-key order; unchanged subtrees do
+/// not need new snapshots merely because their containing scope was edited.
+fn changed_entry_paths<'a>(
+    before: &'a [Entry],
+    after: &'a [Entry],
+) -> Vec<&'a name_policy::PortablePath> {
+    let mut old = before.iter().peekable();
+    let mut new = after.iter().peekable();
+    let mut paths = Vec::new();
+    loop {
+        match (old.peek().copied(), new.peek().copied()) {
+            (Some(left), Some(right)) => match left.lookup_key().cmp(right.lookup_key()) {
+                std::cmp::Ordering::Less => {
+                    paths.push(left.location());
+                    old.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    paths.push(right.location());
+                    new.next();
+                }
+                std::cmp::Ordering::Equal => {
+                    if left != right {
+                        paths.push(left.location());
+                        if left.location() != right.location() {
+                            paths.push(right.location());
+                        }
+                    }
+                    old.next();
+                    new.next();
+                }
+            },
+            (Some(_), None) => {
+                paths.extend(old.map(Entry::location));
+                break;
+            }
+            (None, Some(_)) => {
+                paths.extend(new.map(Entry::location));
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    paths
+}
+
 fn ensure_parents_for_scope(
     state: &State,
     branch: &DirectoryBranch,

@@ -3068,6 +3068,26 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "batch-descendant-snapshots": {
+      "reason": "Verify exact ordinary child snapshots after batch Move and same-path identity separation, including retained body/context evidence and cold idempotent retry; this does not change the file-container format.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "directory_git_index",
+          "features": [
+            "fault-injection"
+          ],
+          "prefixes": [
+            "file_separation::"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -8142,7 +8162,8 @@
       "path": "src/engine/src/business/batch.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "batch-descendant-snapshots"
       ]
     },
     {
@@ -8768,6 +8789,12 @@
       "path": "test/engine/unit/backup_generation_encoding_probe.rs",
       "groups": [
         "backup-scoped-encoding-memo"
+      ]
+    },
+    {
+      "path": "test/engine/integration/directory_git_index/file_separation.rs",
+      "groups": [
+        "batch-descendant-snapshots"
       ]
     }
   ],
