@@ -47,3 +47,7 @@ OS 锁、inode、fsync、真实原子事务或跨进程恢复。所有删除、�
 GitHub 定向组 `standalone-demo` 通过 `test/ci/test_zxs_demo.py` 执行该行为套件。
 本次未在本地运行正式测试或编译产品。浏览器单独验证真实点击、创建和 worktree 编辑提交。
 其结果不代替 GitHub 精确提交测试，更不代替 ZXS 的真实 Samba、恢复和硬件测试。
+
+## 界面来源
+
+四区内部正逐步对齐主线真实前端。详情、来源路径与未达到精确复刻的部分见 [UI-REFERENCE.md](UI-REFERENCE.md)。辅助安装回执仅为演示，不执行任何宿主操作；完整状态模型仍在明确标注的“演示扩展”中。
