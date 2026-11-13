@@ -66,7 +66,7 @@ fn fixture() -> Fixture {
         "retained_lifecycle":[{
             "source_file_id":source, "source_history_tree_id":id("history", 2),
             "source_sequence":"1", "source_records_hash":"a".repeat(64),
-            "file_id":imported, "history_tree_id":history, "path_changes":[],
+            "file_id":imported, "history_tree_id":history, "path_changes":[], "path_audit":{},
             "events":[{
                 "operation_id":prior, "action":"delete", "sequence":"1", "author":"alice",
                 "node":{
@@ -217,7 +217,9 @@ fn file_principal_and_duplicate_members_are_still_rejected() {
 #[test]
 fn decoding_is_lazy_and_preserves_strict_payload_and_byte_limit() {
     let mut fixture = fixture();
-    for retained in [false, true] {
+    for (retained, field) in [
+        (false, "path_changes"), (true, "path_changes"), (true, "path_audit"),
+    ] {
         let mut missing = fixture.state.clone();
         let result = &mut missing.operations.get_mut(&fixture.operation).unwrap().result;
         let envelope = if retained {
@@ -225,12 +227,14 @@ fn decoding_is_lazy_and_preserves_strict_payload_and_byte_limit() {
         } else {
             result
         };
-        envelope.as_object_mut().unwrap().remove("path_changes");
+        assert!(envelope.as_object_mut().unwrap().remove(field).is_some());
+        let original = crate::canonical_json(&missing).unwrap();
         let projection = ProjectionSnapshot::new(&missing);
         assert_eq!(
             projection.view().object_move(fixture.operation).err().unwrap().code(),
             ErrorCode::InvalidJson,
         );
+        assert_eq!(crate::canonical_json(&missing).unwrap(), original);
     }
     fixture
         .state
