@@ -3561,7 +3561,11 @@
             "history_package::tests::path_audit::"
           ],
           "max_tests": 16,
-          "timeout_seconds": 900
+          "timeout_seconds": 900,
+          "exact": [
+            "history_package::tests::nested_directory_compositions_keep_frozen_paths_and_restore_after_rename",
+            "history_package::tests::rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_restore"
+          ]
         }
       ]
     },
@@ -10030,6 +10034,13 @@
         "history-package-path-audit",
         "history-package-audit-guard",
         "history-path-audit-projection"
+      ]
+    },
+    {
+      "path": "test/engine/unit/state_projection/audit_tests.rs",
+      "groups": [
+        "history-package-path-audit",
+        "history-package-audit-guard"
       ]
     }
   ],
