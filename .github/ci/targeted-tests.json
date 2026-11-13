@@ -1670,7 +1670,7 @@
           "prefixes": [
             "container_storage::file_database::tests::"
           ],
-          "max_tests": 17,
+          "max_tests": 18,
           "timeout_seconds": 900
         },
         {
@@ -8909,7 +8909,8 @@
       "path": "test/engine/unit/container_storage/file_database_tests.rs",
       "groups": [
         "container-path-facts-engine",
-        "container-lifecycle-engine"
+        "container-lifecycle-engine",
+        "current-name-layout-consumers"
       ]
     },
     {
@@ -9517,7 +9518,8 @@
       "path": "src/engine/src/container_storage/file_database/install.rs",
       "groups": [
         "current-name-layout-consumers",
-        "container-current-name"
+        "container-current-name",
+        "container-lifecycle-engine"
       ]
     },
     {

@@ -1028,3 +1028,91 @@ fn path_audit_missing_local_branch_is_rejected_after_rehash_and_by_rescue() {
         state_before,
     );
 }
+
+#[test]
+fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body() {
+    use crate::container_storage::{installed_version_path, version_rename};
+    use crate::database_install::InstallAdmission;
+    use crate::disk::DiskRoot;
+    use crate::state_projection::ProjectionSnapshot;
+    use std::io::Read;
+
+    #[derive(Debug)]
+    enum Case {
+        CompletedLeaves,
+        MissingIntent,
+        ReplacedInode,
+        ForgedOwner,
+        AmbiguousLeaves,
+    }
+    let fixture = Fixture::new();
+    let state = fixture.engine.state();
+    let projection = ProjectionSnapshot::new(state);
+    for case in [
+        Case::CompletedLeaves,
+        Case::MissingIntent,
+        Case::ReplacedInode,
+        Case::ForgedOwner,
+        Case::AmbiguousLeaves,
+    ] {
+        // Reproduce the real pre-marker layout using admitted versions and their
+        // actual complete bodies, without fabricating a publication decision.
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = DiskRoot::open(temp.path()).unwrap();
+        let history = temp.path().join("histories").join(&fixture.repo.history_tree_id);
+        let container = history.join("file-containers").join(&fixture.file.file_id)
+            .join("source.txt");
+        root.private_dir(&container.join("versions")).unwrap();
+        let versions = state.versions.values()
+            .filter(|version| version.file_id == fixture.file.file_id)
+            .collect::<Vec<_>>();
+        for version in &versions {
+            let mut bytes = Vec::new();
+            fixture.engine.open_content(&version.version_id).unwrap().file
+                .read_to_end(&mut bytes).unwrap();
+            let body = installed_version_path(&container, version).unwrap();
+            root.write_atomic(&body, &bytes, false).unwrap();
+        }
+        let prepared = version_rename::Prepared::capture(
+            &root, &container, state, &fixture.file.file_id, &fixture.repo.history_tree_id,
+            &name_policy::Name::parse("moved.txt").unwrap(),
+        ).unwrap().unwrap();
+        prepared.apply(&root, &container, &mut |_| Ok(())).unwrap();
+        let intent = container.join(crate::persist::layout::VERSION_NAMES_INTENT.as_path());
+        match case {
+            Case::CompletedLeaves => {}
+            Case::MissingIntent => root.remove_file_synced(&intent).unwrap(),
+            Case::ForgedOwner => {
+                let mut value: json_codec::Value = storage_contract::decode_strict(
+                    &std::fs::read(&intent).unwrap(),
+                ).unwrap();
+                value["file"] = json_codec::to_value(storage_contract::FileId::generate().unwrap())
+                    .unwrap();
+                root.write_atomic(&intent, &json_codec::to_vec(&value).unwrap(), true).unwrap();
+            }
+            Case::ReplacedInode | Case::AmbiguousLeaves => {
+                for version in &versions {
+                    let body = version_rename::interrupted_path(&root, &container, version)
+                        .unwrap().unwrap();
+                    let bytes = std::fs::read(&body).unwrap();
+                    if matches!(case, Case::ReplacedInode) {
+                        root.write_atomic(&body, &bytes, true).unwrap();
+                    } else {
+                        let old = installed_version_path(&container, version).unwrap();
+                        root.write_atomic(&old, &bytes, false).unwrap();
+                    }
+                }
+            }
+        }
+        let result = install::PreparedFile::capture(
+            &root, (&history, &fixture.repo.history_tree_id), &container,
+            &fixture.file.file_id, projection.view(), InstallAdmission::DecidedRecovery,
+        );
+        match case {
+            Case::CompletedLeaves => assert!(result.is_ok(), "{case:?}"),
+            _ => assert!(result.is_err(), "{case:?}"),
+        }
+        assert!(!container.join(".zxs-container-owner.json").exists());
+    }
+}

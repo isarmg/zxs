@@ -148,7 +148,14 @@ fn capture_entity(
         let mut proved = false;
         for id in view.owners().versions(file) {
             let version = &view.state().versions[id];
-            let body = crate::container_storage::installed_version_path(held.path(), version)?;
+            // A decided leaf rename can precede the outer container/owner marker.
+            // Its inode-bound intent locates the body; only a complete hash proves it.
+            let body = match crate::container_storage::version_rename::interrupted_path(
+                &held, held.path(), version,
+            )? {
+                Some(body) => body,
+                None => crate::container_storage::installed_version_path(held.path(), version)?,
+            };
             if held.optional_metadata(&body)?.is_some() {
                 verify_body(&held, &body, version)?;
                 proved = true;
