@@ -3078,7 +3078,8 @@
           "manifest": "src/engine/Cargo.toml",
           "prefixes": [
             "directory_worktree::lifecycle::tests::",
-            "directory_worktree::names::tests::"
+            "directory_worktree::names::tests::",
+            "disk::owned::worktree_io::tests::"
           ],
           "max_tests": 32,
           "timeout_seconds": 900
@@ -8800,6 +8801,18 @@
     },
     {
       "path": "test/engine/unit/directory_worktree/*",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/worktree_io.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/new_entry_copy.rs",
       "groups": [
         "directory-history-worktree"
       ]

@@ -10,6 +10,8 @@ use std::{
 };
 
 mod install;
+mod worktree_io;
+pub(crate) use worktree_io::NewEntryCopyError;
 pub(crate) use install::{FileStamp, HeldRegular, InstallExchange};
 
 #[path = "working_directory.rs"]
