@@ -204,6 +204,21 @@ impl<'a> WorkingDirectory<'a> {
         Ok(())
     }
 
+    /// Retain the exact admitted host FD, never reopen its display path.
+    /// The caller must continue revalidating the original ancestor chain.
+    pub(crate) fn retain_host(&self) -> IoResult<DiskRoot> {
+        self.revalidate()?;
+        Ok(retain_root(self.host()))
+    }
+
+    /// Keep every original inode alive while callers verify immutable material.
+    pub(crate) fn retain_chain(&self) -> IoResult<Vec<DiskRoot>> {
+        self.revalidate()?;
+        let mut held = vec![retain_root(&self.disk), retain_root(&self.common)];
+        held.extend(self.ancestors.iter().map(|ancestor| retain_root(&ancestor.directory)));
+        Ok(held)
+    }
+
     pub(crate) fn identity(&self) -> IoResult<FileIdentity> {
         self.host().held_identity()
     }

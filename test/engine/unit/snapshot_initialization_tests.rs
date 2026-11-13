@@ -66,7 +66,9 @@ fn intent(operation: OperationId, target_operation: OperationId, snapshot_only: 
         },
         target,
         root,
-        LocalEntityIdentity::new(1, 20),
+        LocalEntityIdentity::new(1, 4),
+        DirectoryId::from_random([4; 16]),
+        Vec::new(),
         vec![registration],
         SnapshotRepositoryId::from_random([11; 16]),
         SnapshotBranchId::from_random([12; 16]),
@@ -274,4 +276,57 @@ fn directory_candidate_binds_original_registration_without_changing_legacy_candi
         &storage_contract::canonical_json(&missing).unwrap(),
     ).is_err());
     assert_eq!(storage_contract::canonical_json(&legacy).unwrap(), legacy_bytes);
+}
+
+#[test]
+fn exact_directory_chain_is_required_without_reassigning_host_identity() {
+    let operation = OperationId::generate().unwrap();
+    let original = intent(operation, operation, false).unwrap();
+    let mut record = original.record().clone();
+    let directory = DirectoryBinding {
+        directory_id: DirectoryId::from_random([31; 16]),
+        root_id: record.root.root_id,
+        parent_directory_id: record.root.roots.common_data.directory_id,
+        name: name_policy::LookupName::parse("existing directory").unwrap(),
+        entity: LocalEntityIdentity::new(1, 31),
+        lifecycle: BindingLifecycle::Current,
+        operation_id: operation,
+    };
+    record.target.path = DirectoryTargetPath::Relative(
+        DirectoryRelativePath::parse("existing directory").unwrap(),
+    );
+    record.host_directory_id = directory.directory_id;
+    record.host_entity = directory.entity;
+    record.directories = vec![directory];
+    let bytes = storage_contract::canonical_json(&record).unwrap();
+    let decoded = AdmittedIntent::decode(&bytes).unwrap();
+    assert_eq!(decoded.record(), &record);
+    assert_eq!(decoded.bytes(), bytes);
+
+    for attack in 0..6 {
+        let mut changed = record.clone();
+        match attack {
+            0 => changed.directories.clear(),
+            1 => changed.directories[0].parent_directory_id =
+                changed.root.roots.deleted_data.directory_id,
+            2 => changed.directories[0].entity = LocalEntityIdentity::new(1, 32),
+            3 => changed.directories[0].name = name_policy::LookupName::parse("other").unwrap(),
+            4 => changed.host_directory_id = DirectoryId::from_random([32; 16]),
+            _ => changed.directories[0].directory_id =
+                changed.root.roots.common_data.directory_id,
+        }
+        let rejected = storage_contract::canonical_json(&changed).unwrap();
+        assert!(AdmittedIntent::decode(&rejected).is_err());
+        assert_eq!(storage_contract::canonical_json(&record).unwrap(), bytes);
+    }
+    // Missing new evidence or an older intent format is not a migration request.
+    let value: json_codec::Value = storage_contract::decode_strict(&bytes).unwrap();
+    for field in ["directories", "host_directory_id"] {
+        let mut old = value.clone();
+        old.as_object_mut().unwrap().remove(field);
+        assert!(AdmittedIntent::decode(&storage_contract::canonical_json(&old).unwrap()).is_err());
+    }
+    let mut old = value;
+    old["format"] = json_codec::json!("directory-snapshot-initialization-intent-v1");
+    assert!(AdmittedIntent::decode(&storage_contract::canonical_json(&old).unwrap()).is_err());
 }

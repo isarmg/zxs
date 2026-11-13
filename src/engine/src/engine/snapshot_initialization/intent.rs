@@ -5,7 +5,8 @@ use crate::working_tree::snapshot::{
 };
 use data_serialization::{Deserialize, Serialize};
 use storage_contract::working_tree::{
-    DirectoryTargetRequest, DiskRegistrationIdentity, LocalEntityIdentity, MaterialCommitment, RootBinding,
+    BindingLifecycle, DirectoryBinding, DirectoryId, DirectoryTargetPath, DirectoryTargetRequest,
+    DiskRegistrationIdentity, LocalEntityIdentity, MaterialCommitment, RootBinding,
     SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId,
 };
 use storage_contract::{BranchId, CommitId, OperationId, Principal, RepositoryId, Sequence};
@@ -14,7 +15,7 @@ pub(super) const MAX_INTENT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum Format {
-    #[serialization(rename = "directory-snapshot-initialization-intent-v1")]
+    #[serialization(rename = "directory-snapshot-initialization-intent-v2")]
     FreshDirectorySnapshot,
 }
 
@@ -39,6 +40,9 @@ pub(super) struct SnapshotInitIntent {
     pub(super) target: DirectoryTargetRequest,
     pub(super) root: RootBinding,
     pub(super) host_entity: LocalEntityIdentity,
+    pub(super) host_directory_id: DirectoryId,
+    /// Exact root-to-host chain, not a recipe for assigning identities on recovery.
+    pub(super) directories: Vec<DirectoryBinding>,
     pub(super) metadata_members: Vec<DiskRegistrationIdentity>,
     pub(super) repository: SnapshotRepositoryId,
     pub(super) branch: SnapshotBranchId,
@@ -82,6 +86,8 @@ impl AdmittedIntent {
         target: DirectoryTargetRequest,
         root: RootBinding,
         host_entity: LocalEntityIdentity,
+        host_directory_id: DirectoryId,
+        directories: Vec<DirectoryBinding>,
         metadata_members: Vec<DiskRegistrationIdentity>,
         repository: SnapshotRepositoryId,
         branch: SnapshotBranchId,
@@ -99,6 +105,8 @@ impl AdmittedIntent {
             target,
             root,
             host_entity,
+            host_directory_id,
+            directories,
             metadata_members,
             repository,
             branch,
@@ -136,6 +144,7 @@ impl AdmittedIntent {
         {
             return Err(IntentError::Target);
         }
+        require_directory_chain(&record)?;
         // A missing/offline container is not permission to invent SnapshotOnly.
         // That variant is for a later authoritatively proven absence workflow.
         if record.entries.iter().any(|entry| matches!(entry.content,
@@ -172,4 +181,47 @@ impl AdmittedIntent {
             self.record.entries.clone(),
         ).map_err(IntentError::Manifest)
     }
+}
+
+/// This only validates the original persisted chain. Physical admission still
+/// requires every held ancestor and the independent permanent root decision.
+fn require_directory_chain(record: &SnapshotInitIntent) -> Result<(), IntentError> {
+    let components = match &record.target.path {
+        DirectoryTargetPath::Root => &[][..],
+        DirectoryTargetPath::Relative(path) => path.components(),
+    };
+    if components.len() != record.directories.len() {
+        return Err(IntentError::Target);
+    }
+    let mut parent = record.root.roots.common_data.directory_id;
+    let mut entity = record.root.roots.common_data.entity;
+    let mut ids = std::collections::BTreeSet::from([
+        parent,
+        record.root.roots.deleted_data.directory_id,
+        record.root.roots.zxs_data.directory_id,
+    ]);
+    let mut entities = std::collections::BTreeSet::from([
+        record.root.root_entity,
+        entity,
+        record.root.roots.deleted_data.entity,
+        record.root.roots.zxs_data.entity,
+    ]);
+    for (name, directory) in components.iter().zip(&record.directories) {
+        if directory.root_id != record.root.root_id
+            || directory.parent_directory_id != parent
+            || directory.name != *name
+            || directory.lifecycle != BindingLifecycle::Current
+            || directory.entity.device() != record.root.root_entity.device()
+            || !ids.insert(directory.directory_id)
+            || !entities.insert(directory.entity)
+        {
+            return Err(IntentError::Target);
+        }
+        parent = directory.directory_id;
+        entity = directory.entity;
+    }
+    if parent != record.host_directory_id || entity != record.host_entity {
+        return Err(IntentError::Target);
+    }
+    Ok(())
 }

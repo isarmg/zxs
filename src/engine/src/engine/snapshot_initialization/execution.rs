@@ -37,7 +37,7 @@ struct MaterialDecision {
 pub(in crate::engine) struct RegisteredSnapshot {
     candidate: Candidate,
     publication: Publication,
-    record: RegistrationRecord,
+    pub(super) record: RegistrationRecord,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +85,26 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> crate::Result<OperationResult> {
+        let root = self.fresh_directory_root(root_id)?;
+        let target = self.capture_directory_snapshot_target(DirectoryTargetRequest {
+            root_id,
+            path: DirectoryTargetPath::Root,
+            expected_root_generation: root.binding().generation,
+            operation_id: operation,
+        }, None)?;
+        self.initialize_directory_snapshot_at_target(target, verified, principal)
+    }
+
+    /// Publish only the explicitly captured host. The caller must authorize both
+    /// the supplied source and its correspondence to this local held directory.
+    pub fn initialize_directory_snapshot_at_target(
+        &mut self,
+        target: super::target::PreparedDirectorySnapshotTarget,
+        verified: VerifiedDirectorySnapshotSource,
+        principal: &str,
+    ) -> crate::Result<OperationResult> {
+        let operation = target.request.operation_id;
+        let root_id = target.request.root_id;
         Self::require_actor(principal)?;
         self.require_write()?;
         if self.state.operations.contains_key(&operation)
@@ -94,6 +114,13 @@ impl Engine {
         }
         let admitted = self.fresh_directory_root(root_id)?;
         let root = admitted.binding().clone();
+        if target.root != root {
+            return Err(rejected());
+        }
+        let _host_pins = &target.pins;
+        if let Some(host) = &target.explicit_host {
+            host.verify_identity()?;
+        }
         let frozen = self.freeze_snapshot_initialization_source(verified)
             .map_err(|error| failure(Failure::Source(error)))?;
         let source_branch = frozen.branch().to_string();
@@ -147,7 +174,11 @@ impl Engine {
                 return Err(rejected());
             }
             let retained = &original.record.intent;
-            if retained.root.root_id != root_id
+            if retained.target != target.request
+                || retained.host_entity != target.host
+                || retained.host_directory_id != target.host_id
+                || retained.directories != target.directories
+                || retained.root.root_id != root_id
                 || retained.principal.as_str() != principal
                 || retained.source.repository != source.repository
                 || retained.source.branch != source.branch
@@ -184,14 +215,11 @@ impl Engine {
             operation,
             Principal::new(principal.into()).map_err(|_| rejected())?,
             source,
-            DirectoryTargetRequest {
-                root_id,
-                path: DirectoryTargetPath::Root,
-                expected_root_generation: root.generation,
-                operation_id: operation,
-            },
+            target.request.clone(),
             root.clone(),
-            root.roots.common_data.entity,
+            target.host,
+            target.host_id,
+            target.directories.clone(),
             members,
             SnapshotRepositoryId::generate().map_err(|error| failure(Failure::Contract(error)))?,
             SnapshotBranchId::generate().map_err(|error| failure(Failure::Contract(error)))?,
@@ -203,6 +231,7 @@ impl Engine {
         material::require_empty_target(
             &admitted,
             self.disk_resources.get(self.disk(&root.registration.slot_id)?)?,
+            intent.record(),
         )
         .map_err(|error| failure(Failure::Material(error)))?;
         self.retain_snapshot_initialization(&intent)?;
@@ -278,10 +307,7 @@ impl Engine {
     ) -> crate::Result<(AdmittedFreshRoot, std::sync::Arc<crate::disk::DiskHandle>)> {
         let root = &retained.intent.root;
         let admitted = self.fresh_directory_root(root.root_id)?;
-        if admitted.binding() != root
-            || retained.intent.target.path != DirectoryTargetPath::Root
-            || retained.intent.host_entity != root.roots.common_data.entity
-        {
+        if admitted.binding() != root {
             return Err(rejected());
         }
         let registered = self.registered_disk(&root.registration.disk_id).ok_or_else(rejected)?;
@@ -462,7 +488,7 @@ impl Engine {
         let (admitted, handle) = self.snapshot_material_root(&retained)?;
         // A prior FINALIZE may already have installed exactly this entity.
         // Only true target-leaf absence selects the original stage.
-        material::reopen_decided(&admitted, &handle, retained.material, candidate.operation_id)
+        material::reopen_decided(&admitted, &handle, retained.material, candidate.operation_id, &retained.intent)
             .map_err(|error| failure(Failure::Material(error)))?;
         Ok(())
     }
@@ -490,7 +516,7 @@ impl Engine {
         crate::journal::verify_finalized_publication(candidate, &provisional)?;
         let (admitted, handle) = self.snapshot_material_root(&retained)?;
         let mut held = material::reopen_decided(&admitted, &handle,
-            retained.material, candidate.operation_id)
+            retained.material, candidate.operation_id, &retained.intent)
             .map_err(|error| failure(Failure::Material(error)))?;
         held.install(&admitted, &handle).map_err(|error| failure(Failure::Material(error)))?;
         // The permanent FINALIZE and original material binding already exist.
@@ -505,7 +531,7 @@ impl Engine {
         }
         #[cfg(feature = "fault-injection")]
         self.failpoint("snapshot_after_material_proof")?;
-        material::reopen_installed(&admitted, &handle, retained.material, candidate.operation_id)
+        material::reopen_installed(&admitted, &handle, retained.material, candidate.operation_id, &retained.intent)
             .map_err(|error| failure(Failure::Material(error)))?;
         Ok(())
     }
@@ -558,7 +584,7 @@ impl Engine {
         }
         let (admitted, handle) = self.snapshot_material_root(&registered.record)?;
         let held = material::reopen_installed(&admitted, &handle,
-            registered.record.material, candidate.operation_id)
+            registered.record.material, candidate.operation_id, &registered.record.intent)
             .map_err(|error| failure(Failure::Material(error)))?;
         let expected = storage_contract::canonical_json(&proof(candidate, &publication.finalize)?)?;
         if held.repository().read_entry_bytes(&PROOF, expected.len())? != expected {

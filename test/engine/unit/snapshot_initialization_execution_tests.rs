@@ -503,3 +503,172 @@ fn decided_initialization_cold_recovery_keeps_original_operation_and_material() 
     // cache. The complete image includes every inode, not only the unknown target.
     assert_eq!(image(fixture.temp.path()), before);
 }
+
+fn target_request(fixture: &Fixture, operation: OperationId)
+    -> storage_contract::working_tree::DirectoryTargetRequest
+{
+    let root = fixture.engine.directory_storage_roots().unwrap().into_iter()
+        .find(|root| root.root_id == fixture.root).unwrap();
+    storage_contract::working_tree::DirectoryTargetRequest {
+        root_id: root.root_id,
+        expected_root_generation: root.generation,
+        path: storage_contract::working_tree::DirectoryTargetPath::Relative(
+            storage_contract::working_tree::DirectoryRelativePath::parse("existing/host").unwrap(),
+        ),
+        operation_id: operation,
+    }
+}
+
+fn explicit_host(fixture: &Fixture) -> PathBuf {
+    fixture.temp.path().join("disk").join(layout::COMMON_DATA_ROOT.as_path())
+        .join("existing/host")
+}
+
+fn create_explicit_host(fixture: &Fixture) {
+    let common = fixture.temp.path().join("disk").join(layout::COMMON_DATA_ROOT.as_path());
+    PrivateDirectory::create(&common.join("existing")).unwrap();
+    PrivateDirectory::create(&explicit_host(fixture)).unwrap();
+    PrivateDirectory::create(&explicit_host(fixture).join("ordinary child")).unwrap();
+    fs::write(explicit_host(fixture).join("ordinary child/keep.bin"), b"unchanged live data").unwrap();
+}
+
+fn publish_explicit_host(
+    fixture: &mut Fixture,
+    target: crate::PreparedDirectorySnapshotTarget,
+) -> crate::Result<crate::OperationResult> {
+    let source = fixture.engine.prepare_directory_snapshot_source(
+        fixture.repository.main_branch_id.parse().unwrap(), None, Default::default(),
+        HistoryWindowCancellation::new(),
+    ).unwrap().verify(|_| Ok::<(), ()>(())).ok().unwrap();
+    fixture.engine.initialize_directory_snapshot_at_target(target, source, "admin")
+}
+
+#[test]
+fn explicit_nested_host_preserves_live_entries_and_cold_original_operation() {
+    let mut fixture = Fixture::new();
+    create_explicit_host(&fixture);
+    let host = explicit_host(&fixture);
+    let ordinary = image(&host.join("ordinary child"));
+    let operation = OperationId::generate().unwrap();
+    let before_capture = image(fixture.temp.path());
+    let target = fixture.engine.prepare_directory_snapshot_target(
+        target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+    ).unwrap();
+    assert_eq!(image(fixture.temp.path()), before_capture);
+    let history = fixture.engine.state().versions.clone();
+    let receipt = publish_explicit_host(&mut fixture, target).unwrap();
+    assert_eq!(image(&host.join("ordinary child")), ordinary);
+    assert_eq!(fixture.engine.state().versions, history);
+    assert!(host.join(layout::SNAPSHOT_REPOSITORY.as_path()).is_dir());
+    assert!(!repository_path(&fixture).exists());
+    let mut fixture = fixture.cold();
+    let target = fixture.engine.prepare_directory_snapshot_target(
+        target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+    ).unwrap();
+    let before_retry = image(fixture.temp.path());
+    assert_eq!(publish_explicit_host(&mut fixture, target).unwrap(), receipt);
+    assert_eq!(image(fixture.temp.path()), before_retry);
+    let mut body = fixture.engine.open_initialized_directory_file(
+        operation, &PortablePath::parse("original.txt").unwrap(),
+    ).unwrap();
+    let mut bytes = Vec::new();
+    body.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, BODY);
+    assert_eq!(image(&host.join("ordinary child")), ordinary);
+}
+
+#[test]
+fn captured_ancestor_or_host_replacement_is_rejected_without_intent_or_adoption() {
+    for replace_ancestor in [false, true] {
+        let mut fixture = Fixture::new();
+        create_explicit_host(&fixture);
+        let host = explicit_host(&fixture);
+        let operation = OperationId::generate().unwrap();
+        let target = fixture.engine.prepare_directory_snapshot_target(
+            target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+        ).unwrap();
+        let replaced = if replace_ancestor { host.parent().unwrap().to_owned() } else { host.clone() };
+        let retained = fixture.temp.path().join("retained original directory");
+        fs::rename(&replaced, &retained).unwrap();
+        PrivateDirectory::create(&replaced).unwrap();
+        if replace_ancestor {
+            PrivateDirectory::create(&host).unwrap();
+        }
+        let before = image(fixture.temp.path());
+        let state = fixture.engine.state().clone();
+        assert!(publish_explicit_host(&mut fixture, target).is_err());
+        assert_eq!(image(fixture.temp.path()), before);
+        assert_eq!(fixture.engine.state(), &state);
+    }
+}
+
+#[test]
+fn explicit_host_unknown_repository_is_preserved_without_initialization() {
+    let mut fixture = Fixture::new();
+    create_explicit_host(&fixture);
+    let host = explicit_host(&fixture);
+    PrivateDirectory::create(&host.join(layout::SNAPSHOT_REPOSITORY.as_path())).unwrap();
+    fs::write(host.join(layout::SNAPSHOT_REPOSITORY.as_path()).join("unknown"), b"retain me").unwrap();
+    let before = image(fixture.temp.path());
+    let target = fixture.engine.prepare_directory_snapshot_target(
+        target_request(&fixture, OperationId::generate().unwrap()),
+        PrivateDirectory::open_existing(&host).unwrap(),
+    ).unwrap();
+    assert!(publish_explicit_host(&mut fixture, target).is_err());
+    assert_eq!(image(fixture.temp.path()), before);
+}
+
+#[test]
+fn explicit_host_dirty_source_is_rejected_before_permanent_or_material_writes() {
+    let mut fixture = Fixture::new();
+    create_explicit_host(&fixture);
+    let file = fixture.manual_source();
+    let revision = fixture.save_source_draft(file);
+    let operation = OperationId::generate().unwrap();
+    for cold in [false, true] {
+        if cold {
+            fixture = fixture.cold();
+        }
+        let before = image(fixture.temp.path());
+        let state = fixture.engine.state().clone();
+        let target = fixture.engine.prepare_directory_snapshot_target(
+            target_request(&fixture, operation),
+            PrivateDirectory::open_existing(&explicit_host(&fixture)).unwrap(),
+        ).unwrap();
+        let error = publish_explicit_host(&mut fixture, target).unwrap_err();
+        assert!(matches!(error, crate::Error::SnapshotInitialization(source)
+            if matches!(*source, super::SnapshotInitializationError::UncommittedSource(id)
+                if id == file)));
+        assert_eq!(image(fixture.temp.path()), before);
+        assert_eq!(fixture.engine.state(), &state);
+        fixture.assert_source_draft(file, &revision);
+    }
+}
+
+#[cfg(feature = "fault-injection")]
+#[test]
+fn decided_nested_host_recovers_original_chain_without_rewriting_live_contents() {
+    for fault in ["after_finalize", "snapshot_after_material_install"] {
+        let mut fixture = Fixture::new();
+        create_explicit_host(&fixture);
+        let host = explicit_host(&fixture);
+        let ordinary = image(&host.join("ordinary child"));
+        let operation = OperationId::generate().unwrap();
+        let target = fixture.engine.prepare_directory_snapshot_target(
+            target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+        ).unwrap();
+        fixture.engine.inject_fault_once(fault);
+        assert!(publish_explicit_host(&mut fixture, target).is_err());
+        let mut fixture = fixture.cold();
+        fixture.assert_body(operation);
+        assert_eq!(image(&host.join("ordinary child")), ordinary);
+        let before = image(&host);
+        let state = fixture.engine.state().clone();
+        let target = fixture.engine.prepare_directory_snapshot_target(
+            target_request(&fixture, operation), PrivateDirectory::open_existing(&host).unwrap(),
+        ).unwrap();
+        assert_eq!(publish_explicit_host(&mut fixture, target).unwrap().operation_id, operation);
+        assert_eq!(fixture.engine.state(), &state);
+        assert_eq!(image(&host), before);
+    }
+}

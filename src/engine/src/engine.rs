@@ -95,7 +95,7 @@ pub use disk_catalog::{
 };
 mod history_move_recovery;
 pub(crate) mod snapshot_initialization;
-pub use snapshot_initialization::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
+pub use snapshot_initialization::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead, PreparedDirectorySnapshotTarget};
 pub use history_move_recovery::{FileHistoryMoveRecoveryDigest, FileHistoryMoveRecoveryInfo};
 pub(crate) mod move_execution;
 pub(crate) use move_execution::PublishedMove;

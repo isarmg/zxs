@@ -6,6 +6,8 @@ pub(crate) mod registration;
 mod store;
 mod material;
 mod execution;
+mod target;
+pub use target::PreparedDirectorySnapshotTarget;
 pub(in crate::engine) use execution::RegisteredSnapshot;
 pub use execution::{InitializedDirectoryEntry, InitializedDirectoryFile, InitializedDirectoryRead};
 
