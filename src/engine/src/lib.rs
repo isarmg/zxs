@@ -31,6 +31,7 @@ pub use container_storage::{
 };
 mod directory_contents;
 mod directory_layout;
+mod directory_worktree;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;

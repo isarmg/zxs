@@ -3214,6 +3214,52 @@
           "timeout_seconds": 900
         }
       ]
+    },
+    "directory-history-worktree": {
+      "reason": "Sparse worktree lifecycle and fixed source provenance; anchored transition ledger with sealed edits, exact per-file results and dirty baselines; inode-bound original/edited/published read views and bounded logical directory pages. Live SMB registration, MOVE recovery and initial container import remain separate integration.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "directory_worktree::lifecycle::tests::",
+            "directory_worktree::names::tests::",
+            "disk::owned::worktree_io::tests::",
+            "directory_worktree::store::tests::",
+            "directory_worktree::projection::tests::",
+            "directory_worktree::ledger::tests::",
+            "directory_worktree::io::tests::",
+            "disk::owned::worktree_move::tests::"
+          ],
+          "max_tests": 80,
+          "timeout_seconds": 900
+        }
+      ]
+    },
+    "directory-snapshot-material": {
+      "reason": "Independent full snapshot node manifests and external identity-bound disk material: strict complete path closure, no old-format fallback, no-overwrite preparation, bounded full-body copies, cold reopening and corruption/identity refusal. This does not activate SYSTEM/DISK initialization or expose SMB worktrees.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "working_tree::snapshot::manifest::tests::",
+            "working_tree::snapshot::store::tests::",
+            "disk::owned::worktree_io::tests::",
+            "disk::owned::worktree_move::tests::"
+          ],
+          "max_tests": 32,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
     }
   },
   "rules": [
@@ -8998,6 +9044,80 @@
       "path": "test/server/integration/http_engine/history_alias_operations.rs",
       "groups": [
         "path-fact-activity"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/directory_worktree/*",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "test/engine/unit/directory_worktree/*",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/worktree_io.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/new_entry_copy.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot.rs",
+      "groups": [
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/working_tree/snapshot/*.rs",
+      "groups": [
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/snapshot.rs",
+      "groups": [
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "test/engine/unit/working_tree/snapshot/*.rs",
+      "groups": [
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/worktree.rs",
+      "groups": [
+        "directory-history-worktree"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk/owned/worktree_move.rs",
+      "groups": [
+        "directory-history-worktree",
+        "directory-snapshot-material"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/worktree_move.rs",
+      "groups": [
+        "directory-history-worktree",
+        "directory-snapshot-material"
       ]
     }
   ],

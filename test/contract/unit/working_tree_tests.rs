@@ -1,6 +1,6 @@
 use crate::working_tree::{
     DirectoryId, DirectoryRelativePath, DirectoryTargetPath, ReplicaId, ReplicaPurpose,
-    RootId, SnapshotRepositoryId, StorageLayout, WorkingTreeCatalog,
+    RootId, SnapshotBranchId, SnapshotNodeId, SnapshotRepositoryId, StorageLayout, WorkingTreeCatalog,
 };
 
 #[test]
@@ -19,6 +19,25 @@ fn working_tree_identity_domains_preserve_full_identity_and_order() {
     );
     assert!("directory_name".parse::<DirectoryId>().is_err());
     assert!("directory_00112233445566778899AABBCCDDEEFF".parse::<DirectoryId>().is_err());
+}
+
+#[test]
+fn snapshot_node_identity_is_not_a_directory_tree_or_repository() {
+    let node = SnapshotNodeId::from_random([3; 16]);
+    let next = SnapshotNodeId::from_random([4; 16]);
+    assert_eq!(node.to_string().parse::<SnapshotNodeId>().unwrap(), node);
+    assert!(node < next);
+    assert!(node.to_string() < next.to_string());
+    assert!(node.to_string().parse::<SnapshotRepositoryId>().is_err());
+    assert!(node.to_string().parse::<crate::DirectoryTreeId>().is_err());
+    assert!(crate::DirectoryTreeId::from_random([3; 16])
+        .to_string().parse::<SnapshotNodeId>().is_err());
+    let bytes = crate::canonical_json(&node).unwrap();
+    assert_eq!(crate::decode_strict::<SnapshotNodeId>(&bytes).unwrap(), node);
+    let branch = SnapshotBranchId::from_random([3; 16]);
+    assert_eq!(branch.to_string().parse::<SnapshotBranchId>().unwrap(), branch);
+    assert!(branch.to_string().parse::<SnapshotNodeId>().is_err());
+    assert!(branch.to_string().parse::<crate::DirectoryBranchId>().is_err());
 }
 
 #[test]

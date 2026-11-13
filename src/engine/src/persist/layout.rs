@@ -1,6 +1,9 @@
 //! Stable entry names shared by runtime publication and recovery.
+pub(crate) mod worktree;
 use platform_io::fs_safety::{EntryName, RelativePath};
 use std::sync::LazyLock;
+
+pub(crate) mod snapshot;
 
 /// Physical roots of the unified working-tree layout. These names do not by
 /// themselves admit a directory or authorize adoption of existing material.
