@@ -382,7 +382,7 @@ fn captured_window_does_not_retain_namespace_placement_or_policy_tables() {
     assert!(state.directory_trees.is_empty());
     assert!(state.directory_tree_selections.is_empty());
     assert!(!state.file_locations.is_empty());
-    assert!(state.file_locations.shares_storage_with(&engine.state.file_locations));
+    assert!(std::ptr::eq(&*state.file_locations, &*engine.state.file_locations));
     assert!(state.file_selections.is_empty());
     assert!(state.file_backup_paths.is_empty());
     assert!(state.file_backup_policies.is_empty());
