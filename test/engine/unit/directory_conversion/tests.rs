@@ -657,7 +657,7 @@ fn registered_import_budget_rejects_source_and_destination_parent_before_writes(
     let temp = tempfile::tempdir().unwrap();
     let source = make_source(temp.path());
     let mut engine = engine(temp.path());
-    let long = "界".repeat(80);
+    let long = format!("{}AAA", "界".repeat(79));
     fs::create_dir(source.join("旅行").join(&long)).unwrap();
     let original = contents(&source);
     let disk_before = contents(&engine.config().disks[0].root);
@@ -674,7 +674,7 @@ fn registered_import_budget_rejects_source_and_destination_parent_before_writes(
     assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
 
     fs::remove_dir(source.join("旅行").join(&long)).unwrap();
-    engine.create_disk_root("P01", "admin", operation()).unwrap();
+    let root = engine.create_disk_root("P01", "admin", operation()).unwrap();
     let disk_before = contents(&engine.config().disks[0].root);
     let state_before = json_codec::to_vec(engine.state()).unwrap();
     let destination = PortablePath::parse(&format!("{long}/child")).unwrap();
@@ -689,6 +689,65 @@ fn registered_import_budget_rejects_source_and_destination_parent_before_writes(
     ));
     assert_eq!(contents(&engine.config().disks[0].root), disk_before);
     assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+    // This existing namespace component is retained, not renamed or introduced.
+    engine.file_namespace(
+        &root.repository_id,
+        NamespaceOperation::Mkdir { path: PortablePath::parse(&long).unwrap() },
+        "admin",
+        operation(),
+    ).unwrap();
+    let parent = engine.namespace_tree(&root.main_branch_id).unwrap()
+        .get(&long).unwrap().clone();
+    let source_before = contents(&source);
+    let before = contents(temp.path());
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    for path in [
+        format!("{long}/{long}"),
+        format!("{long}/{long}/child"),
+        format!("{}/child", long.to_lowercase()),
+    ] {
+        let rejected = PortablePath::parse(&path).unwrap();
+        let result = engine.prepare_disk_directory_import(
+            fs::File::open(&source).unwrap(), &source, "P01", &rejected,
+        );
+        assert!(matches!(
+            result,
+            Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+                path, bytes: 240, allowed: 239,
+            })) if path == PathBuf::from(rejected.as_str())
+        ));
+        assert_eq!(contents(temp.path()), before);
+        assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+    }
+
+    let accepted = format!("{}ab", "界".repeat(79));
+    let destination = PortablePath::parse(&format!("{long}/{accepted}")).unwrap();
+    let plan = engine.prepare_disk_directory_import(
+        fs::File::open(&source).unwrap(), &source, "P01", &destination,
+    ).unwrap();
+    assert_eq!(contents(temp.path()), before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+    let digest = confirmation(&plan);
+    let operation = operation();
+    let result = plan.execute(&mut engine, "admin", operation, digest).unwrap();
+    assert_eq!(result.operation_id, operation);
+    let namespace = engine.namespace_tree(&root.main_branch_id).unwrap();
+    assert_eq!(namespace.get(&long), Some(&parent));
+    assert!(namespace.get(destination.as_str()).is_some());
+    for path in ["旅行", "旅行/empty", "旅行/notes.txt", "binary.bin", "zero"] {
+        assert!(namespace.get(&format!("{}/{path}", destination.as_str())).is_some());
+    }
+    assert_eq!(contents(&source), source_before);
+    let after = json_codec::to_vec(engine.state()).unwrap();
+    drop(namespace);
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(json_codec::to_vec(reopened.state()).unwrap(), after);
+    assert_eq!(
+        reopened.namespace_tree(&root.main_branch_id).unwrap().get(&long),
+        Some(&parent),
+    );
+    assert_eq!(contents(&source), source_before);
 }
 
 #[test]

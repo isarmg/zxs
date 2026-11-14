@@ -43,7 +43,7 @@ impl NameBudget {
         Ok(Self { allowed })
     }
 
-    /// Import introduces every component in each source/destination path.
+    /// Check a complete relative path only when every component is newly introduced.
     pub(crate) fn path<'a>(&self, path: &'a str) -> Result<&'a str, NameBudgetError> {
         for component in path.split('/') {
             self.component(component, path)?;

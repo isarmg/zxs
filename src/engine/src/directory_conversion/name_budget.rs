@@ -3,9 +3,11 @@ use super::source::Source;
 pub(super) use crate::name_budget::NameBudget;
 use crate::{Error, Result};
 use name_policy::PortablePath;
+use storage_contract::{Entry, NamespaceEntryKind};
 
-/// All prospective names in this immutable source and destination have been
-/// planned against one observation. The caller still owns disk admission.
+/// Check imported source and newly introduced destination components.
+/// Only unchanged ancestor spellings reuse their logical names. This is not
+/// physical-presence proof; the caller still owns disk admission.
 pub(super) struct ImportNames<'a> {
     pub(super) source: &'a Source,
     destination: Option<&'a PortablePath>,
@@ -15,10 +17,24 @@ impl<'a> ImportNames<'a> {
     pub(super) fn plan(
         source: &'a Source,
         destination: Option<&'a PortablePath>,
+        existing: &[Entry],
         budget: NameBudget,
     ) -> Result<Self> {
         if let Some(destination) = destination {
-            budget.path(destination.as_str()).map_err(Error::ConversionNameBudget)?;
+            budget.component(destination.file_name(), destination.as_str())
+                .map_err(Error::ConversionNameBudget)?;
+            let mut parent = destination.parent();
+            while let Some(path) = parent {
+                if !existing.iter().any(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry.lookup_key() == path.key()
+                        && entry.name() == path.file_name()
+                }) {
+                    budget.component(path.file_name(), destination.as_str())
+                        .map_err(Error::ConversionNameBudget)?;
+                }
+                parent = path.parent();
+            }
         }
         for item in source.items() {
             budget.path(item.path.as_str()).map_err(Error::ConversionNameBudget)?;

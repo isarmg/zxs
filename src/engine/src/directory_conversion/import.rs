@@ -265,6 +265,7 @@ impl Engine {
         let names = ImportNames::plan(
             &source.source,
             destination.as_ref(),
+            existing,
             self.conversion_name_budget(&registration.slot_id)?,
         )?;
         for item in names.source.items() {
@@ -384,9 +385,14 @@ impl PreparedDirectoryImport {
         external_root(engine, &self.preview.source)?;
         self.source.verify_named(&self.preview.source)?;
         self.source.verify_unchanged()?;
+        let existing = match &self.target {
+            Target::Branch { id, .. } => engine.list_tree_ref(id)?,
+            Target::NewRoot { .. } => &[][..],
+        };
         let names = ImportNames::plan(
             &self.source,
             self.destination.as_ref(),
+            existing,
             engine.conversion_name_budget(&self.registration.slot_id)?,
         )?;
         observer(progress)?;
