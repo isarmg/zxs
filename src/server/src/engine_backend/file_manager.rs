@@ -183,7 +183,7 @@ pub(super) fn resolve_smb_path(
     let path =
         name_policy::PortablePath::try_from(request.path).map_err(ApiError::invalid_source)?;
     Ok(crate::SmbPathLocation {
-        repository: create_disk_root(engine, identity, &request.slot_id)?,
+        repository: create_disk_root_for_path(engine, identity, &request.slot_id, &path)?,
         relative_path: crate::SmbRelativePath::Entry(path.into()),
     })
 }
@@ -219,6 +219,35 @@ fn resolve<'a>(
     }
 
     Ok((create_disk_root(engine, identity, slot)?, value))
+}
+
+fn resolve_write_path(
+    engine: &mut Engine,
+    identity: &Identity,
+    slot: &str,
+    path: &name_policy::PortablePath,
+    access: DiskAccess,
+) -> Result<Repository, ApiError> {
+    match resolve_existing(engine, slot, path.as_str(), access)? {
+        Some((repo, _)) => Ok(repo),
+        None if access == DiskAccess::Create => {
+            create_disk_root_for_path(engine, identity, slot, path)
+        }
+        None => Err(empty_directory()),
+    }
+}
+
+fn create_disk_root_for_path(
+    engine: &mut Engine,
+    identity: &Identity,
+    slot: &str,
+    path: &name_policy::PortablePath,
+) -> Result<Repository, ApiError> {
+    let primary = name_policy::SlotId::parse(slot).map_err(ApiError::invalid_source)?;
+    engine
+        .validate_new_disk_root_path(&primary, path)
+        .map_err(error)?;
+    create_disk_root(engine, identity, slot)
 }
 
 fn create_disk_root(
@@ -796,13 +825,7 @@ pub(super) fn mkdir(
     if needs_root && path.as_str().split('/').count() > engine.config().max_entries {
         return Err(ApiError::limit("directory entry limit exceeded"));
     }
-    let (repo, _) = resolve(
-        engine,
-        identity,
-        &slot_id,
-        path.as_str(),
-        DiskAccess::Create,
-    )?;
+    let repo = resolve_write_path(engine, identity, &slot_id, &path, DiskAccess::Create)?;
     let path = if repo.file_manager_root {
         path
     } else {
@@ -914,7 +937,7 @@ pub(super) fn write_session(
     } else {
         DiskAccess::Create
     };
-    let (repo, _) = resolve(engine, identity, &slot_id, path.as_str(), access)?;
+    let repo = resolve_write_path(engine, identity, &slot_id, &path, access)?;
     let relative = if repo.file_manager_root {
         Cow::Borrowed(&path)
     } else {

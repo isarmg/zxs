@@ -147,6 +147,28 @@ impl Engine {
     ) -> Result<Repository> {
         self.create_repository_kind(name, primary, copies, principal, operation, false)
     }
+    /// Check a prospective path before allocating its missing disk root.
+    /// Every component is new here; existing namespaces retain their spelling.
+    /// This observation grants no write authority and is not a replay rule.
+    pub fn validate_new_disk_root_path(
+        &self,
+        primary: &name_policy::SlotId,
+        path: &name_policy::PortablePath,
+    ) -> Result<()> {
+        self.require_write()?;
+        // A pending registry is not the pre-registry genesis configuration.
+        let disk = self.disk(primary.as_str())?;
+        if let Some(current) = self.admitted_current_namespaces()? {
+            current.require_write_slot(&disk.slot_id)?;
+        }
+        self.route(&disk.slot_id, 1)?;
+        let maximum = self.disk_resources.get(disk)?.root.component_name_maximum()?;
+        crate::name_budget::NameBudget::from_maximum(maximum)
+            .map_err(Error::ConversionNameBudget)?
+            .path(path.as_str())
+            .map_err(Error::ConversionNameBudget)?;
+        Ok(())
+    }
     pub fn create_disk_root(
         &mut self,
         primary: &str,

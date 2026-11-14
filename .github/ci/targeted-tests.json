@@ -1,5 +1,76 @@
 {
   "groups": {
+    "fresh-root-name-budget": {
+      "reason": "Use the held primary filesystem component budget before a first disk root or workspace is created by Web or default SMB RPC. Verify accepted names through cold reopen and keep product compile separate.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "isolate": true,
+          "exact": [
+            "fresh_disk_paths_apply_target_name_budget_before_root_or_workspace_creation",
+            "disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write",
+            "disk_mkdir_keeps_pre_root_admission_and_resolved_receipts",
+            "disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces"
+          ],
+          "max_tests": 4,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "smb_rpc::tests::default_share_tests::default_create_checks_every_new_component_before_allocating_a_disk_root",
+            "smb_rpc::tests::default_share_tests::default_share_creates_one_internal_root_on_write_and_reuses_it_after_real_rpc_save",
+            "smb_rpc::tests::default_share_tests::default_share_keeps_canonical_existing_path_and_validates_missing_create_before_root",
+            "smb_rpc::tests::default_share_tests::default_mkdir_replay_admission_precedes_any_internal_root_creation",
+            "smb_rpc::tests::default_share_tests::read_only_truncate_never_creates_a_default_root",
+            "smb_rpc::tests::default_share_tests::default_mkdir_exhausted_budget_never_creates_a_root_and_releases_operation"
+          ],
+          "max_tests": 6,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "history-package-audit-guard": {
       "reason": "Preserve native and retained permanent path audit through package export/restore; reject unrepresentable partial original batches before any output writes while retaining audit-free package support.",
       "python_tests": [],
@@ -3815,6 +3886,30 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/repository.rs",
+      "groups": [
+        "fresh-root-name-budget"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_manager.rs",
+      "groups": [
+        "fresh-root-name-budget"
+      ]
+    },
+    {
+      "path": "test/server/integration/http_engine.rs",
+      "groups": [
+        "fresh-root-name-budget"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/default_share_tests.rs",
+      "groups": [
+        "fresh-root-name-budget"
+      ]
+    },
     {
       "path": "src/engine/src/history_package/audit_guard.rs",
       "groups": [

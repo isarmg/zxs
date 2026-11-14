@@ -5730,6 +5730,110 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
 }
 
 #[tokio::test]
+async fn fresh_disk_paths_apply_target_name_budget_before_root_or_workspace_creation() {
+    use std::os::unix::fs::MetadataExt;
+
+    fn identities(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, (u64, u64)> {
+        fn visit(
+            path: &Path,
+            result: &mut std::collections::BTreeMap<std::path::PathBuf, (u64, u64)>,
+        ) {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            result.insert(path.to_owned(), (metadata.dev(), metadata.ino()));
+            if metadata.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    visit(&entry.unwrap().path(), result);
+                }
+            }
+        }
+        let mut result = std::collections::BTreeMap::new();
+        for disk in ["d1", "d2", "d3"] {
+            visit(&root.join(disk), &mut result);
+        }
+        result
+    }
+
+    for directory in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let app = application(root.path());
+        let token = login(&app, "admin", "integration-test-password").await;
+        let route = if directory {
+            "/api/file-manager/disks/P01/namespace"
+        } else {
+            "/api/file-manager/disks/P01/write-sessions"
+        };
+        let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
+        let events = success(&app, &token, "GET", "/api/events", None).await;
+        let bytes = manager_disk_files(root.path());
+        let inodes = identities(root.path());
+        let too_long = format!("{}abc", "界".repeat(79));
+        assert_eq!(too_long.len(), 240);
+        for path in [
+            too_long.clone(),
+            format!("{too_long}/child"),
+            format!("parent/{too_long}"),
+        ] {
+            let body = if directory {
+                json!({"kind":"mkdir","path":path,"operation_id":new_id("op").unwrap()})
+            } else {
+                json!({"path":path})
+            };
+            let (status, rejected) = send(&app, Some(&token), "POST", route, Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+            assert_eq!(rejected["error"]["code"], "PLAN_INVALID");
+            assert_eq!(
+                success(&app, &token, "GET", "/api/repositories", None).await,
+                repositories
+            );
+            assert_eq!(
+                success(&app, &token, "GET", "/api/events", None).await,
+                events
+            );
+            assert_eq!(manager_disk_files(root.path()), bytes);
+            assert_eq!(identities(root.path()), inodes);
+        }
+
+        // Include the extension in the byte budget and preserve all UTF-8 bytes.
+        let accepted = format!("{}a.txt", "界".repeat(78));
+        assert_eq!(accepted.len(), 239);
+        let body = if directory {
+            json!({"kind":"mkdir","path":accepted,"operation_id":new_id("op").unwrap()})
+        } else {
+            json!({"path":accepted})
+        };
+        let result = success(&app, &token, "POST", route, Some(body)).await;
+        if !directory {
+            assert_eq!(result["relative_path"], accepted);
+            assert_eq!(result["display_path"], accepted);
+            success(
+                &app,
+                &token,
+                "POST",
+                &format!("/api/workspaces/{}/abort", result["workspace_id"].as_str().unwrap()),
+                Some(json!({})),
+            )
+            .await;
+        }
+        drop(app);
+        let engine = reopen_after_router_drop(&root.path().join("system")).await;
+        let repository = engine
+            .state()
+            .repositories
+            .values()
+            .find(|repository| repository.file_manager_root)
+            .unwrap();
+        assert_eq!(repository.target_copies, 1);
+        let entries = engine.list_tree_ref(&repository.main_branch_id).unwrap();
+        if directory {
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].path(), accepted);
+        } else {
+            assert!(entries.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
     for existing in [false, true] {
         let root = tempfile::tempdir().unwrap();

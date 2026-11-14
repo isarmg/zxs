@@ -139,6 +139,128 @@ fn directory(stream: &mut FrameStream, path: &str) -> Vec<String> {
 }
 
 #[test]
+fn default_create_checks_every_new_component_before_allocating_a_disk_root() {
+    use std::os::unix::fs::MetadataExt;
+
+    fn evidence(root: &Path) -> BTreeMap<PathBuf, (u64, u64, Option<Vec<u8>>)> {
+        fn visit(path: &Path, output: &mut BTreeMap<PathBuf, (u64, u64, Option<Vec<u8>>)>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_dir() || metadata.is_file());
+            let bytes = metadata.is_file().then(|| fs::read(path).unwrap());
+            output.insert(path.to_owned(), (metadata.dev(), metadata.ino(), bytes));
+            if metadata.is_dir() {
+                for entry in fs::read_dir(path).unwrap() {
+                    visit(&entry.unwrap().path(), output);
+                }
+            }
+        }
+        let mut output = BTreeMap::new();
+        for name in ["p", "b", "state"] {
+            visit(&root.join(name), &mut output);
+        }
+        output
+    }
+
+    for make_directory in [false, true] {
+        let (fixture, shared, backend) = empty_fixture(false);
+        let (mut stream, worker, _) = wire(shared.clone(), "alice");
+        let before = evidence(fixture.path());
+        let too_long = format!("{}abc", "界".repeat(79));
+        assert_eq!(too_long.len(), 240);
+        for relative in [
+            too_long.clone(),
+            format!("{too_long}/child"),
+            format!("parent/{too_long}"),
+        ] {
+            let path = format!("p/{relative}");
+            let operation = OperationId::generate().unwrap();
+            let request = if make_directory {
+                Request::Namespace {
+                    kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
+                    path,
+                    destination: None,
+                    replace: false,
+                    operation_id: operation.to_string(),
+                }
+            } else {
+                Request::Open {
+                    path,
+                    writable: true,
+                    create: true,
+                    truncate: false,
+                    exclusive: true,
+                    write_through: false,
+                }
+            };
+            let (reply, descriptor) = binding_tests::exchange(&mut stream, request);
+            assert!(descriptor.is_none());
+            assert!(
+                matches!(reply, Response::Error {
+                    code: storage_contract::ErrorCode::PlanInvalid, ..
+                }),
+                "{reply:?}"
+            );
+            assert!(
+                shared
+                    .backend
+                    .repositories_snapshot(&identity(&shared))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(evidence(fixture.path()), before);
+            assert!(shared.namespace_operations.lock().unwrap().is_empty());
+            for extension in ["budget.json", "namespace.json"] {
+                assert!(
+                    !shared
+                        .spool
+                        .join(format!("{operation}.{extension}"))
+                        .try_exists()
+                        .unwrap()
+                );
+            }
+        }
+
+        let accepted = format!("{}a.txt", "界".repeat(78));
+        assert_eq!(accepted.len(), 239);
+        let path = format!("p/{accepted}");
+        if make_directory {
+            okay(
+                &mut stream,
+                Request::Namespace {
+                    kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
+                    path,
+                    destination: None,
+                    replace: false,
+                    operation_id: OperationId::generate().unwrap().to_string(),
+                },
+            );
+        } else {
+            let (opened, descriptor) = open(&mut stream, &path, true, true);
+            assert_eq!(opened.path, path);
+            save(&mut stream, &opened, &descriptor, b"exact UTF-8 name");
+        }
+        assert_eq!(directory(&mut stream, "p"), vec![accepted.clone()]);
+        close_wire(stream, worker);
+        drop(shared);
+        drop(backend);
+        let engine = Engine::open(&fixture.path().join("state")).unwrap();
+        let repository = engine
+            .state()
+            .repositories
+            .values()
+            .find(|repository| repository.file_manager_root)
+            .unwrap();
+        assert_eq!(repository.target_copies, 1);
+        let entries = engine.list_tree_ref(&repository.main_branch_id).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), accepted);
+        if !make_directory {
+            assert_eq!(engine.state().file_names[&entries[0].file_id], accepted);
+        }
+    }
+}
+
+#[test]
 fn default_share_creates_one_internal_root_on_write_and_reuses_it_after_real_rpc_save() {
     let (_temp, shared, _backend) = empty_fixture(false);
     let (mut stream, worker, reply) = wire(shared.clone(), "alice");
