@@ -113,11 +113,21 @@ fn real_publications_store_complete_global_receipts_and_exterior_path_rows_then_
     assert_eq!(operations(&engine, 1), expected);
     let saved_paths = path_facts(&engine);
     assert_eq!(saved_paths.len(), 2);
-    assert_eq!(saved_paths[0].before.path.as_str(), "a.txt");
-    assert_eq!(saved_paths[0].after.path.as_str(), "b.txt");
-    assert_eq!(saved_paths[1].history_tree_id.to_string(), right.history_tree_id);
+    // Ledger visitation is not publication order; bind each assertion to its history.
+    let left_fact = saved_paths
+        .iter()
+        .find(|fact| fact.history_tree_id.to_string() == left.history_tree_id)
+        .unwrap();
+    let right_fact = saved_paths
+        .iter()
+        .find(|fact| fact.history_tree_id.to_string() == right.history_tree_id)
+        .unwrap();
+    assert_eq!(left_fact.before.path.as_str(), "a.txt");
+    assert_eq!(left_fact.after.path.as_str(), "b.txt");
+    assert_eq!(right_fact.before.path.as_str(), "other.txt");
+    assert_eq!(right_fact.after.path.as_str(), "renamed.txt");
     assert!(engine.system_file_path_nodes(None, 100).unwrap().records.is_empty());
-    let operation = saved_paths[0].operation_id;
+    let operation = left_fact.operation_id;
     let actual: String = platform_io::sqlite::block_on_sqlite_connection(async {
         let mut c =
             platform_io::sqlite::open_index_read_connection(&engine.root.join("index.sqlite"))
