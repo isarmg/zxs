@@ -74,7 +74,7 @@ struct Materials {
     logical: Vec<u8>,
     projection_hash: String,
     versions: BTreeMap<String, FileVersion>,
-    database: crate::container_storage::file_database::PreparedMoveFile,
+    database: crate::container_storage::file_database::PreparedFileMaterial,
     body_bytes: u64,
     storage_bytes: u64,
 }

@@ -1,6 +1,6 @@
 //! Exact scope requirements and bounded, independently rebuilt proposal bytes.
 use super::*;
-use crate::container_storage::file_database::PreparedMoveFile;
+use crate::container_storage::file_database::PreparedFileMaterial;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serialization(rename_all = "kebab-case")]
@@ -70,9 +70,9 @@ pub(super) struct Materials {
     pub(super) digest: FileHistoryMoveDecisionDigest,
     pub(super) logical: Vec<u8>,
     pub(super) state: Vec<u8>,
-    pub(super) source: PreparedMoveFile,
-    pub(super) target: PreparedMoveFile,
-    pub(super) replacement: Option<PreparedMoveFile>,
+    pub(super) source: PreparedFileMaterial,
+    pub(super) target: PreparedFileMaterial,
+    pub(super) replacement: Option<PreparedFileMaterial>,
     pub(super) target_preparation_bytes: u64,
 }
 

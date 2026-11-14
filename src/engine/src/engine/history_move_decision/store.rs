@@ -119,7 +119,7 @@ pub(super) enum Artifact<'a> {
     },
     Database {
         name: &'a str,
-        prepared: &'a crate::container_storage::file_database::PreparedMoveFile,
+        prepared: &'a crate::container_storage::file_database::PreparedFileMaterial,
     },
 }
 impl Artifact<'_> {

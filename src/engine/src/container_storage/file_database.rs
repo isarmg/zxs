@@ -102,23 +102,35 @@ pub(crate) fn capture_projected_copy(
     history: &str,
 ) -> Result<CopyCapture> {
     let ProjectedRecords { records, events } = validated_records(view, file, history)?;
-    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+    let material = CapturedMaterial::from_validated_records(
+        records,
+        file.to_owned(),
+        history.to_owned(),
+        view.state().sequence,
+    )?;
     Ok(CopyCapture {
-        records_hash,
+        records_hash: material.records_hash,
         events,
     })
 }
 
 pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
     let ProjectedRecords { records, .. } = validated_records(view, file, history)?;
-    let hash = storage_contract::object_hash("file-local-records", &records)?;
-    let sequence = view.state().sequence;
-    SCHEMA.encode(records, [file, history], sequence, &hash)
+    let prepared = CapturedMaterial::from_validated_records(
+        records,
+        file.to_owned(),
+        history.to_owned(),
+        view.state().sequence,
+    )?
+    .encode()?;
+    Ok(Prepared {
+        bytes: prepared.bytes,
+    })
 }
 
-/// Only a logical staging database. Its constructors receive the typed joint
-/// projection's audit, not a forged copy/delete operation receipt.
-pub(crate) struct PreparedMoveFile {
+/// An encoded logical material, not publication or installation authority.
+/// Move staging still requires its typed joint audit instead of forged receipts.
+pub(crate) struct PreparedFileMaterial {
     bytes: Vec<u8>,
     file: String,
     history: String,
@@ -126,7 +138,7 @@ pub(crate) struct PreparedMoveFile {
     records_hash: String,
 }
 
-impl PreparedMoveFile {
+impl PreparedFileMaterial {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -153,7 +165,7 @@ impl PreparedMoveFile {
 pub(crate) fn prepare_move(
     state: &crate::State,
     audit: &crate::business::history_copy::retained::CopiedLifecycle,
-) -> Result<PreparedMoveFile> {
+) -> Result<PreparedFileMaterial> {
     let transition = crate::state_projection::ProjectionTransition::new(state, state, None)?;
     let view = transition.previous();
     validate_owner(view, &audit.file_id, &audit.history_tree_id)?;
@@ -163,26 +175,8 @@ pub(crate) fn prepare_move(
         &audit.events,
         &audit.path_changes,
     )?;
-    validate_records(
-        &records,
-        &audit.file_id,
-        &audit.history_tree_id,
-        state.sequence,
-    )?;
-    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
-    let prepared = SCHEMA.encode(
-        records,
-        [&audit.file_id, &audit.history_tree_id],
-        state.sequence,
-        &records_hash,
-    )?;
-    Ok(PreparedMoveFile {
-        bytes: prepared.bytes,
-        file: audit.file_id.clone(),
-        history: audit.history_tree_id.clone(),
-        sequence: state.sequence,
-        records_hash,
-    })
+    CapturedMaterial::capture(records, &audit.file_id, &audit.history_tree_id, state.sequence)?
+        .encode()
 }
 
 /// Preserve the complete source audit prefix and append the proposed move's
@@ -192,7 +186,7 @@ pub(crate) fn prepare_move_source(
     previous: &crate::State,
     next: &crate::State,
     node: &crate::FileDeletionNode,
-) -> Result<PreparedMoveFile> {
+) -> Result<PreparedFileMaterial> {
     use crate::file_deletion::retained::{DeletionAction, LifecycleRow};
     if previous.file_deletions.contains_key(&node.file_id)
         || previous.operations.contains_key(&node.operation_id)
@@ -216,26 +210,8 @@ pub(crate) fn prepare_move_source(
     let view = transition.previous();
     validate_owner(view, &node.file_id, &node.history_tree_id)?;
     let records = projection::move_source_records(view, node, &events)?;
-    validate_records(
-        &records,
-        &node.file_id,
-        &node.history_tree_id,
-        next.sequence,
-    )?;
-    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
-    let prepared = SCHEMA.encode(
-        records,
-        [&node.file_id, &node.history_tree_id],
-        next.sequence,
-        &records_hash,
-    )?;
-    Ok(PreparedMoveFile {
-        bytes: prepared.bytes,
-        file: node.file_id.clone(),
-        history: node.history_tree_id.clone(),
-        sequence: next.sequence,
-        records_hash,
-    })
+    CapturedMaterial::capture(records, &node.file_id, &node.history_tree_id, next.sequence)?
+        .encode()
 }
 
 /// A pure byte boundary. Resource identity and installation belong to the
@@ -258,7 +234,10 @@ fn verify(bytes: &[u8]) -> Result<(String, String)> {
     Ok((snapshot.file, snapshot.history))
 }
 
-struct VerifiedSnapshot {
+/// One captured FILE's canonical rows and local identity. This material does
+/// not prove a disk owner, a complete published inventory or an installation.
+/// Encoding consumes the same rows and digest without another State projection.
+struct CapturedMaterial {
     records: Vec<Record>,
     file: String,
     history: String,
@@ -266,13 +245,54 @@ struct VerifiedSnapshot {
     records_hash: String,
 }
 
-fn verify_snapshot(bytes: &[u8]) -> Result<VerifiedSnapshot> {
+impl CapturedMaterial {
+    fn capture(records: Vec<Record>, file: &str, history: &str, sequence: u64) -> Result<Self> {
+        validate_records(&records, file, history, sequence)?;
+        Self::from_validated_records(records, file.to_owned(), history.to_owned(), sequence)
+    }
+
+    /// Projection admission or streaming SQLite admission has already closed
+    /// these exact rows. Neither path repeats that admission while capturing.
+    fn from_validated_records(
+        records: Vec<Record>,
+        file: String,
+        history: String,
+        sequence: u64,
+    ) -> Result<Self> {
+        let records_hash = storage_contract::object_hash("file-local-records", &records)?;
+        Ok(Self {
+            records,
+            file,
+            history,
+            sequence,
+            records_hash,
+        })
+    }
+
+    fn encode(self) -> Result<PreparedFileMaterial> {
+        let prepared = SCHEMA.encode(
+            self.records,
+            [&self.file, &self.history],
+            self.sequence,
+            &self.records_hash,
+        )?;
+        Ok(PreparedFileMaterial {
+            bytes: prepared.bytes,
+            file: self.file,
+            history: self.history,
+            sequence: self.sequence,
+            records_hash: self.records_hash,
+        })
+    }
+}
+
+fn verify_snapshot(bytes: &[u8]) -> Result<CapturedMaterial> {
     if bytes.len() > MAX_BYTES {
         return Err(SCHEMA.budget());
     }
     crate::sqlite_connection::read_image(bytes, MAX_BYTES as u32, verify_connection)
 }
-async fn verify_connection(connection: &mut SqliteConnection) -> Result<VerifiedSnapshot> {
+async fn verify_connection(connection: &mut SqliteConnection) -> Result<CapturedMaterial> {
     SCHEMA.verify_schema(connection).await?;
     // Bound returned values in bytes, preserving NUL tails for exact rejection.
     let identities = sqlite_access::query(
@@ -301,20 +321,14 @@ async fn verify_connection(connection: &mut SqliteConnection) -> Result<Verified
         })
         .await?;
     validation.finish()?;
-    let records_hash = storage_contract::object_hash("file-local-records", &records)?;
-    if records_hash != owner.try_get::<String, _>("records_hash")? {
+    let material = CapturedMaterial::from_validated_records(records, file, history, sequence)?;
+    if material.records_hash != owner.try_get::<String, _>("records_hash")? {
         return Err(invalid(
             "file database records differ from their recorded digest",
         ));
     }
     crate::sqlite_integrity::verify(connection).await?;
-    Ok(VerifiedSnapshot {
-        file,
-        history,
-        sequence,
-        records_hash,
-        records,
-    })
+    Ok(material)
 }
 
 #[cfg(test)]

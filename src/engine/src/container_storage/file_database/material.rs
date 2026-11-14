@@ -51,12 +51,15 @@ pub(in crate::container_storage) fn reconstruct_material(
         });
     }
     validate_records(&records, file, history, material.source_sequence())?;
-    Ok(SCHEMA
-        .encode(
-            records,
-            [file, history],
-            material.source_sequence(),
-            material.records_hash(),
-        )?
-        .bytes)
+    // The archive envelope has already checked this digest. Preserve its exact
+    // bytes and hash; local row admission above does not grant publication.
+    Ok(CapturedMaterial {
+        records,
+        file: file.to_owned(),
+        history: history.to_owned(),
+        sequence: material.source_sequence(),
+        records_hash: material.records_hash().to_owned(),
+    }
+    .encode()?
+    .bytes)
 }

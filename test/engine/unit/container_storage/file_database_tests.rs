@@ -836,11 +836,60 @@ fn typed_copy_capture_preserves_record_hash_and_exact_lifecycle_without_json_rou
         assert_eq!(standalone.events, decoded);
         assert_eq!(shared.records_hash, expected_hash);
         assert_eq!(standalone.records_hash, expected_hash);
+        let expected_rows = storage_contract::canonical_json(&projected.records).unwrap();
+        let expected = SCHEMA
+            .encode(
+                projected.records,
+                [file, history],
+                fixture.engine.state().sequence,
+                &expected_hash,
+            )
+            .unwrap();
+        let prepared = prepare(projection.view(), file, history).unwrap();
+        assert_eq!(prepared.bytes, expected.bytes);
+        let readback = verify_snapshot(&prepared.bytes).unwrap();
+        assert_eq!(readback.file, *file);
+        assert_eq!(readback.history, *history);
+        assert_eq!(readback.sequence, fixture.engine.state().sequence);
+        assert_eq!(readback.records_hash, expected_hash);
+        assert_eq!(
+            storage_contract::canonical_json(&readback.records).unwrap(),
+            expected_rows,
+        );
+        let material = read_material(&prepared.bytes).unwrap();
+        let rebuilt = reconstruct_object_database_material(
+            &material.archive_bytes().unwrap(),
+            material.scope(),
+        )
+        .unwrap();
+        assert_eq!(rebuilt.database_bytes(), expected.bytes);
     }
 
     let mut fixture = Fixture::new();
     check(&fixture, 0);
+    let before = fixture.bytes();
+    let frozen = {
+        let projection = crate::state_projection::ProjectionSnapshot::new(fixture.engine.state());
+        let ProjectedRecords { records, .. } = validated_records(
+            projection.view(),
+            &fixture.file.file_id,
+            &fixture.repo.history_tree_id,
+        )
+        .unwrap();
+        CapturedMaterial::capture(
+            records,
+            &fixture.file.file_id,
+            &fixture.repo.history_tree_id,
+            fixture.engine.state().sequence,
+        )
+        .unwrap()
+    };
     let deleted = fixture.delete();
+    // Encoding owns the captured rows: later State changes cannot retake them.
+    let encoded = frozen.encode().unwrap();
+    assert_eq!(encoded.bytes(), before);
+    encoded.verify(&before).unwrap();
+    assert!(encoded.verify(&fixture.bytes()).is_err());
     check(&fixture, 1);
     fixture
         .engine

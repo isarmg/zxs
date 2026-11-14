@@ -154,7 +154,7 @@ impl FileHistoryMoveProjection {
 
     pub(crate) fn target_file_database(
         &self,
-    ) -> Result<crate::container_storage::file_database::PreparedMoveFile> {
+    ) -> Result<crate::container_storage::file_database::PreparedFileMaterial> {
         crate::container_storage::file_database::prepare_move(
             &self.writes.next,
             &self.writes.lifecycle,
@@ -164,7 +164,7 @@ impl FileHistoryMoveProjection {
     pub(crate) fn source_file_database(
         &self,
         previous: &State,
-    ) -> Result<crate::container_storage::file_database::PreparedMoveFile> {
+    ) -> Result<crate::container_storage::file_database::PreparedFileMaterial> {
         crate::container_storage::file_database::prepare_move_source(
             previous,
             &self.writes.next,
@@ -182,7 +182,7 @@ impl FileHistoryMoveProjection {
     pub(crate) fn replacement_file_database(
         &self,
         previous: &State,
-    ) -> Result<Option<crate::container_storage::file_database::PreparedMoveFile>> {
+    ) -> Result<Option<crate::container_storage::file_database::PreparedFileMaterial>> {
         self.proposed_replacement_deletion()
             .map(|node| {
                 crate::container_storage::file_database::prepare_move_source(
