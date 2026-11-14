@@ -1282,7 +1282,7 @@ class TargetedSelection(unittest.TestCase):
                           'ordinary-conversion-name-budget',
                           'portable-path-consumers', 'typed-name-consumers'])
         self.assertEqual([selection['max_tests'] for selection in engine['selections']],
-                         [171, 21, 22, 160, 40])
+                         [171, 21, 24, 160, 40])
         server = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-server'
                       and target.get('kind', 'lib') == 'lib'
@@ -1292,7 +1292,7 @@ class TargetedSelection(unittest.TestCase):
                          ['ordinary-conversion-name-budget', 'portable-path-consumers',
                           'typed-name-consumers'])
         self.assertEqual([selection['max_tests'] for selection in server['selections']],
-                         [20, 160, 16])
+                         [22, 160, 16])
         check = next(target for target in plan['rust_targets']
                      if target['package'] == 'storage-server' and target.get('mode') == 'check')
         self.assertFalse(check['default_features'])

@@ -1508,7 +1508,7 @@
             "directory_conversion::tests::",
             "directory_conversion::name_budget::tests::"
           ],
-          "max_tests": 22,
+          "max_tests": 24,
           "timeout_seconds": 900
         },
         {

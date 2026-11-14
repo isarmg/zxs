@@ -747,11 +747,11 @@ fn registered_target_inventory_cannot_bind_another_registration() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let source = make_source(temp.path());
-    let engine = Engine::initialize(
-        &temp.path().join("system"),
-        Config::development([temp.path().join("first"), temp.path().join("second")]).unwrap(),
-    )
-    .unwrap();
+    let mut config =
+        Config::development([temp.path().join("first"), temp.path().join("second")]).unwrap();
+    config.disks[1].level = 1;
+    config.disks[1].upstream_slot_id = None;
+    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let identities = engine
         .registered_disks()
         .map(|disk| disk.identity())
@@ -759,6 +759,11 @@ fn registered_target_inventory_cannot_bind_another_registration() {
     let expected = &identities[0];
     let before = contents(temp.path());
     let state_before = json_codec::to_vec(engine.state()).unwrap();
+    assert_ne!(expected.disk_id, identities[1].disk_id);
+    assert_ne!(expected.slot_id, identities[1].slot_id);
+    // Both registrations are eligible primaries; a backup-role rejection would
+    // never exercise the exact cross-registration inventory binding below.
+    PreparedOrdinaryDirectory::capture_registered_target(&engine, &identities[1]).unwrap();
     let mut changed = expected.clone();
     changed.binding_generation += 1;
     assert!(matches!(

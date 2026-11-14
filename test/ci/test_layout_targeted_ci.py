@@ -204,7 +204,7 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
                          ['held-directory-layout', 'held-directory-layout',
                           'ordinary-conversion-name-budget',
                           'projection-cache-layout'])
-        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 22, 52])
+        self.assertEqual([item['max_tests'] for item in engine['selections']], [171, 21, 24, 52])
         self.assertEqual([item.get('timeout_seconds', 300) for item in engine['selections']],
                          [300, 300, 900, 300])
         platform = next(target for target in plan['rust_targets']
@@ -213,7 +213,7 @@ class CheckpointLayoutTargetedCi(unittest.TestCase):
         server = next(target for target in plan['rust_targets']
                       if target['package'] == 'storage-server'
                       and target.get('mode', 'test') == 'test')
-        self.assertEqual(server['max_tests'], 20)
+        self.assertEqual(server['max_tests'], 22)
         self.assertEqual(server['features'], ['core'])
 
 
