@@ -1,5 +1,6 @@
 //! Existing-file sparse edits retain logical paths while physical bodies move.
 pub(crate) mod namespace;
+pub(crate) mod obligations;
 use data_serialization::{Deserialize, Serialize};
 use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, SnapshotEntryContent, SnapshotFile, SnapshotFileSource,
@@ -7,6 +8,9 @@ use crate::working_tree::snapshot::{
 };
 use name_policy::{LookupPath, PortablePath};
 use crate::directory_worktree::projection::namespace::{Content, Entry};
+use crate::directory_worktree::projection::obligations::{
+    FilePublicationRequirement, PlannedWorkingFile,
+};
 use platform_io::fs_safety::EntryName;
 use std::collections::BTreeMap;
 use storage_contract::{BranchId, DiskId, FileId, FileNodeId, VersionId};
@@ -231,12 +235,15 @@ impl<'a> SparseProjection<'a> {
         repository_disk: DiskId,
         mut locate: impl FnMut(DiskId, FileId) -> Result<ContainerPresence, E>,
     ) -> Result<Vec<PlannedEntry<'_>>, PlanError<E>> {
+        let files = self.file_obligations();
         let mut result = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             let transfer = match entry.content {
                 Content::Directory => Transfer::Directory,
-                Content::File { original, material, source } => {
-                    self.file_transfer(original, material, source, repository_disk, &mut locate)?
+                Content::File { original, material, .. } => {
+                    Self::file_transfer(
+                        material, files.for_original(original), repository_disk, &mut locate,
+                    )?
                 }
             };
             result.push(PlannedEntry { path: &entry.path, transfer });
@@ -244,58 +251,46 @@ impl<'a> SparseProjection<'a> {
         Ok(result)
     }
 
-    fn file_transfer<E>(
-        &self,
-        index: usize,
+    fn file_transfer<'view, E>(
         file: SnapshotFile,
-        source: SnapshotFileSource,
+        working: Option<&PlannedWorkingFile<'view>>,
         repository_disk: DiskId,
         locate: &mut impl FnMut(DiskId, FileId) -> Result<ContainerPresence, E>,
-    ) -> Result<Transfer<'_>, PlanError<E>> {
-        Ok(match self.edits.get(&index) {
-            Some(material) => {
-                let baseline = self.results.get(&index);
-                let (file, source) = match baseline {
-                    Some(saved) => (saved.material, saved.source),
-                    None => (file, source),
-                };
-                let container = if baseline.is_some()
-                    && file.version_id == material.file.version_id
-                {
-                    ContainerPublication::Retained { file, source }
-                } else {
-                    match source {
-                        SnapshotFileSource::SnapshotOnly => {
-                            ContainerPublication::SnapshotOnly { file: file.file_id }
-                        }
-                        SnapshotFileSource::Container { branch, node } => {
-                            match locate(repository_disk, file.file_id)
-                                .map_err(PlanError::Locate)?
-                            {
-                                ContainerPresence::Present { disk, entity } => {
-                                    require_container_disk(
-                                        repository_disk, file.file_id, disk,
-                                    ).map_err(PlanError::ContainerDisk)?;
-                                    ContainerPublication::Update {
-                                        file: file.file_id,
-                                        disk,
-                                        source_version: file.version_id,
-                                        source_branch: branch,
-                                        source_node: node,
-                                        entity,
-                                    }
-                                }
-                                ContainerPresence::Absent => {
-                                    ContainerPublication::SnapshotOnly { file: file.file_id }
-                                }
+    ) -> Result<Transfer<'view>, PlanError<E>> {
+        let Some(working) = working else {
+            return Ok(Transfer::CopyOriginal { file });
+        };
+        let container = match working.publication() {
+            FilePublicationRequirement::Recorded { result } => {
+                ContainerPublication::Retained { file: result.material(), source: result.source() }
+            }
+            FilePublicationRequirement::Pending { baseline } => match baseline.source() {
+                SnapshotFileSource::SnapshotOnly => {
+                    ContainerPublication::SnapshotOnly { file: baseline.material().file_id }
+                }
+                SnapshotFileSource::Container { branch, node } => {
+                    let file = baseline.material();
+                    match locate(repository_disk, file.file_id).map_err(PlanError::Locate)? {
+                        ContainerPresence::Present { disk, entity } => {
+                            require_container_disk(repository_disk, file.file_id, disk)
+                                .map_err(PlanError::ContainerDisk)?;
+                            ContainerPublication::Update {
+                                file: file.file_id,
+                                disk,
+                                source_version: file.version_id,
+                                source_branch: branch,
+                                source_node: node,
+                                entity,
                             }
                         }
+                        ContainerPresence::Absent => {
+                            ContainerPublication::SnapshotOnly { file: file.file_id }
+                        }
                     }
-                };
-                Transfer::MoveWorking { material, container }
-            }
-            None => Transfer::CopyOriginal { file },
-        })
+                }
+            },
+        };
+        Ok(Transfer::MoveWorking { material: working.material(), container })
     }
 
     /// After the permanent move/copy decision has completed, publish the new
