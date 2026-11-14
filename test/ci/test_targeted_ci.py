@@ -66,6 +66,41 @@ def assert_path_group_extension(case, policy, paths, retained, added):
 
 
 class TargetedSelection(unittest.TestCase):
+    def test_shared_component_budget_runs_both_actual_consumers_with_separate_caps(self):
+        plan = CI.select_plan(self.policy, ['src/engine/src/name_budget.rs'])
+        self.assertEqual(plan['groups'],
+                         ['directory-history-worktree', 'ordinary-conversion-name-budget'])
+        for name in plan['groups']:
+            self.assertCountEqual(origin_selections(plan, name),
+                                  self.policy['groups'][name]['rust_targets'])
+        worktree, = origin_selections(plan, 'directory-history-worktree')
+        self.assertEqual(worktree['max_tests'], 114)
+        self.assertIn('directory_worktree::ledger::tests::', worktree['prefixes'])
+        conversion = origin_selections(plan, 'ordinary-conversion-name-budget')
+        engine = next(target for target in conversion if target['package'] == 'storage-engine')
+        server = next(target for target in conversion
+                      if target['package'] == 'storage-server'
+                      and target.get('mode', 'test') == 'test')
+        product = next(target for target in conversion if target.get('mode') == 'check')
+        self.assertEqual(engine['prefixes'], [
+            'directory_conversion::tests::',
+            'directory_conversion::name_budget::tests::',
+        ])
+        self.assertEqual(engine['max_tests'], 24)
+        self.assertEqual(server['max_tests'], 22)
+        self.assertEqual(server['features'], ['core'])
+        self.assertFalse(product['default_features'])
+        for path in [
+            'src/engine/src/directory_worktree/ledger.rs',
+            'src/engine/src/directory_worktree/ledger/storage.rs',
+            'test/engine/unit/directory_worktree/ledger.rs',
+        ]:
+            with self.subTest(path=path):
+                actual = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn('directory-history-worktree', actual['groups'])
+                self.assertCountEqual(
+                    origin_selections(actual, 'directory-history-worktree'), [worktree])
+
 
     def test_published_snapshot_bridge_keeps_real_readers_and_no_inventory_claim(self):
         group = self.policy['groups']['published-snapshot-proof']

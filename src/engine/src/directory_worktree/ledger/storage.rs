@@ -1,4 +1,6 @@
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
+use crate::directory_worktree::projection::namespace::NamespaceChange;
+use crate::name_budget::NameBudget;
 use super::record::{Body, Checkpoint, Event, Format, Frame, Genesis};
 use super::state::State;
 use super::{LedgerError, MAX_FRAME_BYTES, MAX_FRAMES, MAX_LEDGER_BYTES};
@@ -317,7 +319,8 @@ impl<'a> HeldWorktreeLedger<'a> {
                 if matches!(publication.scope, PublicationScope::FilesOnly) => {
                     self.verify_edits(&self.state.edits, EditAccess::ReadOnly)?;
                 }
-            Event::Namespace { .. } | Event::Commit { .. } | Event::Delete { .. }
+            Event::Namespace { changes, .. } => self.verify_prospective_names(changes)?,
+            Event::Commit { .. } | Event::Delete { .. }
                 | Event::Restored { .. } | Event::Completed { .. } => {}
         }
         self.append = AppendState::Uncertain;
@@ -331,6 +334,26 @@ impl<'a> HeldWorktreeLedger<'a> {
         self.append = AppendState::Ready;
         Ok(checkpoint)
     }
+    fn verify_prospective_names(&self, changes: &[NamespaceChange]) -> Result<(), LedgerError> {
+        let mut paths = changes.iter().filter_map(|change| match change {
+            NamespaceChange::AddDirectory { path } => Some(path),
+            NamespaceChange::Rename { target, .. } => Some(target),
+            NamespaceChange::RemoveSubtree { .. } => None,
+        });
+        let Some(first) = paths.next() else {
+            return Ok(());
+        };
+        let instance = HeldSparseWorktree::reopen(self.source, self.instance)
+            .map_err(LedgerError::Instance)?;
+        let maximum = instance.directory().component_name_maximum().map_err(LedgerError::Disk)?;
+        let budget = NameBudget::from_maximum(maximum).map_err(LedgerError::NameBudget)?;
+        // Only new durable intents are admitted against today's filesystem budget.
+        for path in std::iter::once(first).chain(paths) {
+            budget.component(path.file_name(), path.as_str()).map_err(LedgerError::NameBudget)?;
+        }
+        Ok(())
+    }
+
     fn verify_edits(
         &self, edits: &[super::record::EditRecord], access: EditAccess,
     ) -> Result<(), LedgerError> {

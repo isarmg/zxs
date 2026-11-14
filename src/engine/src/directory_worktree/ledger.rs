@@ -40,6 +40,8 @@ pub(crate) enum LedgerError {
     Projection(#[source] super::projection::ProjectionError),
     #[error("worktree ledger namespace transition is invalid")]
     Namespace(#[source] crate::directory_worktree::projection::namespace::NamespaceError),
+    #[error("new worktree component exceeds the held target name budget")]
+    NameBudget(#[source] crate::name_budget::NameBudgetError),
     #[error("worktree namespace changes require durable FILE publication obligations")]
     NamespacePublicationRequired,
     #[error("worktree ledger differs from its independent identity or checkpoint")]

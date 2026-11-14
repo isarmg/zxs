@@ -1,6 +1,6 @@
 //! Ordinary input is an immutable inventory, admitted through one held root.
 use super::{invalid, io, name_budget::NameBudget};
-use crate::Result;
+use crate::{Error, Result};
 use crate::persist::layout;
 use name_policy::PortablePath;
 use platform_io::fs_safety::{
@@ -184,7 +184,7 @@ fn scan(root: &OpenAt2Root, limits: Limits, budget: Option<NameBudget>) -> Resul
             // Check the original spelling before PortablePath applies its
             // independent component and total-path limits. Report one offender.
             let path = PortablePath::parse(match budget {
-                Some(budget) => budget.path(&raw_path)?,
+                Some(budget) => budget.path(&raw_path).map_err(Error::ConversionNameBudget)?,
                 None => &raw_path,
             })?;
             let metadata = statat(

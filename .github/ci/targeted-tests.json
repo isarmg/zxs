@@ -3267,7 +3267,7 @@
             "directory_worktree::io::tests::",
             "disk::owned::worktree_move::tests::"
           ],
-          "max_tests": 111,
+          "max_tests": 114,
           "timeout_seconds": 900
         }
       ]
@@ -7592,6 +7592,13 @@
     {
       "path": "src/engine/src/directory_conversion.rs",
       "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/engine/src/name_budget.rs",
+      "groups": [
+        "directory-history-worktree",
         "ordinary-conversion-name-budget"
       ]
     },

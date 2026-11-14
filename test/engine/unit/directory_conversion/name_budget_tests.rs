@@ -1,4 +1,6 @@
 use super::*;
+use crate::name_budget::NameBudgetError;
+use std::path::PathBuf;
 
 #[test]
 fn component_budget_uses_utf8_bytes_and_keeps_original_path() {
@@ -10,9 +12,9 @@ fn component_budget_uses_utf8_bytes_and_keeps_original_path() {
     for name in ["a".repeat(240), "界".repeat(80)] {
         let original = format!("parent/{name}/child");
         match budget.path(&original) {
-            Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+            Err(NameBudgetError::ComponentTooLong {
                 path, bytes, allowed,
-            })) => {
+            }) => {
                 assert_eq!(path, PathBuf::from(original));
                 assert_eq!(bytes, 240);
                 assert_eq!(allowed, 239);
@@ -27,26 +29,26 @@ fn component_budget_handles_small_and_host_range_limits_without_a_default() {
     for maximum in [0, 1, 15, 16] {
         assert!(matches!(
             NameBudget::from_maximum(maximum),
-            Err(Error::ConversionNameBudget(NameBudgetError::UnusableMaximum {
+            Err(NameBudgetError::UnusableMaximum {
                 maximum: observed,
-            })) if observed == maximum
+            }) if observed == maximum
         ));
     }
     let smallest = NameBudget::from_maximum(17).unwrap();
     assert_eq!(smallest.path("a/b").unwrap(), "a/b");
     assert!(matches!(
         smallest.path("é"),
-        Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+        Err(NameBudgetError::ComponentTooLong {
             bytes: 2, allowed: 1, ..
-        }))
+        })
     ));
     match usize::try_from(u64::MAX - 16) {
-        Ok(allowed) => {
-            assert_eq!(NameBudget::from_maximum(u64::MAX).unwrap().allowed, allowed);
+        Ok(_) => {
+            assert_eq!(NameBudget::from_maximum(u64::MAX).unwrap().path("界").unwrap(), "界");
         }
         Err(_) => assert!(matches!(
             NameBudget::from_maximum(u64::MAX),
-            Err(Error::ConversionNameBudget(NameBudgetError::MaximumRange { .. }))
+            Err(NameBudgetError::MaximumRange { .. })
         )),
     }
 }

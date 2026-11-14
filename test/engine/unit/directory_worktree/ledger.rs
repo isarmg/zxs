@@ -48,14 +48,7 @@ impl Fixture {
         version: u8,
         sibling: SnapshotFileSource,
     ) -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("repository");
-        PrivateDirectory::create_all(&path).unwrap();
-        let repository = DiskRoot::open(&path).unwrap();
-        let manifest = AdmittedSnapshotManifest::prepare(
-            SnapshotRepositoryId::from_random([1; 16]),
-            SnapshotNodeId::from_random([2; 16]), operation(3),
-            vec![SnapshotEntry {
+        Self::with_entries(vec![SnapshotEntry {
                 path: PortablePath::parse("file.txt").unwrap(),
                 content: SnapshotEntryContent::File {
                     material: SnapshotFile {
@@ -75,7 +68,17 @@ impl Fixture {
                     },
                     source: sibling,
                 },
-            }],
+            }])
+    }
+    fn with_entries(entries: Vec<SnapshotEntry>) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("repository");
+        PrivateDirectory::create_all(&path).unwrap();
+        let repository = DiskRoot::open(&path).unwrap();
+        let manifest = AdmittedSnapshotManifest::prepare(
+            SnapshotRepositoryId::from_random([1; 16]),
+            SnapshotNodeId::from_random([2; 16]), operation(3),
+            entries,
         ).unwrap();
         let source = HeldSnapshotNode::prepare(&repository, manifest, |_| {
             Ok(Cursor::new(b"original"))
@@ -895,9 +898,32 @@ fn namespace_edits_bind_original_occurrences_and_complete_history() {
 #[test]
 fn namespace_current_material_is_admitted_without_reinterpreting_old_batches() {
     let fixture = Fixture::aliases();
-    let mut ledger = fixture.ledger();
+    let ledger = fixture.ledger();
     let long = "界".repeat(80);
-    ledger.append(namespace_event(&ledger, 10, vec![rename("other.txt", &long)]), trusted).unwrap();
+    let anchored = namespace_event(&ledger, 10, vec![rename("other.txt", &long)]);
+    // Preserve the anchored frame. New names must not reinterpret old revisions.
+    let frame = record::Frame {
+        format: record::Format::WorktreeTransitions,
+        sequence: ledger.checkpoint().sequence.next().unwrap(),
+        previous: Some(ledger.checkpoint().commitment),
+        body: record::Body::Event(anchored.clone()),
+    };
+    let bytes = frame.bytes().unwrap();
+    let checkpoint = frame.checkpoint(&bytes);
+    let binding = ledger.binding();
+    let directory = DiskRoot::open(fixture.frame_path(0).parent().unwrap()).unwrap();
+    directory.copy_new_entry_verified_synced(
+        &layout::frame(checkpoint.sequence),
+        &mut Cursor::new(&bytes),
+        Expectation { bytes: bytes.len() as u64, blake3: Some(blake3::hash(&bytes)) },
+    ).unwrap();
+    drop(directory);
+    drop(ledger);
+    let mut ledger = HeldWorktreeLedger::reopen(
+        &fixture.source, binding, checkpoint, trusted,
+    ).unwrap();
+    assert_eq!(ledger.append(anchored, trusted).unwrap(), checkpoint);
+    assert_eq!(fs::read(fixture.frame_path(1)).unwrap(), bytes);
     let first = fixture.edit();
     let checkpoint = ledger.checkpoint();
     let revision = ledger.worktree().revision();
@@ -922,6 +948,7 @@ fn namespace_current_material_is_admitted_without_reinterpreting_old_batches() {
     assert_working(&recovered, "file.txt", &first);
     assert!(matches!(recovered.projection().unwrap()
         .route(&LookupPath::parse("other.txt").unwrap()), Some(ReadRoute::Original { .. })));
+    assert_eq!(fs::read(fixture.frame_path(1)).unwrap(), bytes);
 }
 
 #[test]
@@ -1085,4 +1112,191 @@ fn namespace_rebase_and_inactive_lifecycle_guards_reject_before_persistence() {
         assert_eq!(ledger.checkpoint(), checkpoint);
         assert!(!fixture.frame_path(checkpoint.sequence.get() + 1).exists());
     }
+}
+
+fn ledger_files(root: &std::path::Path)
+    -> std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)>
+{
+    use std::os::unix::fs::MetadataExt;
+    fn visit(
+        root: &std::path::Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, (u64, Vec<u8>)>,
+    ) {
+        for entry in fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                visit(&entry.path(), files);
+            } else {
+                files.insert(entry.path(), (metadata.ino(), fs::read(entry.path()).unwrap()));
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, &mut files);
+    files
+}
+
+#[test]
+fn namespace_admission_keeps_239_byte_components_editable_across_cold_reopen() {
+    for (directory, name) in [
+        ("d".repeat(239), format!("{}.txt", "a".repeat(235))),
+        (format!("{}ab", "界".repeat(79)), format!("{}a.txt", "界".repeat(78))),
+    ] {
+        let fixture = Fixture::new();
+        assert_eq!(fixture.instance.directory().component_name_maximum().unwrap(), 255);
+        assert_eq!(directory.len(), 239);
+        assert_eq!(name.len(), 239);
+        let destination = format!("{directory}/{name}");
+        let mut ledger = fixture.ledger();
+        let event = namespace_event(&ledger, 10, vec![
+            NamespaceChange::AddDirectory { path: PortablePath::parse(&directory).unwrap() },
+            rename("file.txt", &destination),
+        ]);
+        ledger.append(event.clone(), trusted).unwrap();
+        assert!(matches!(
+            ledger.projection().unwrap().route(&LookupPath::parse(&destination).unwrap()),
+            Some(ReadRoute::Original { .. }),
+        ));
+        let edit = fixture.edit();
+        ledger.append(Event::Edits {
+            operation: operation(11),
+            expected: ledger.worktree().revision(),
+            edits: vec![edit.clone()],
+        }, trusted).unwrap();
+        assert_working(&ledger, &destination, &edit);
+        let binding = ledger.binding();
+        let checkpoint = ledger.checkpoint();
+        let revision = ledger.worktree().revision();
+        let frames = ledger_files(fixture.source.worktrees_directory().path());
+        drop(ledger);
+        let mut recovered = HeldWorktreeLedger::reopen(
+            &fixture.source, binding, checkpoint, trusted,
+        ).unwrap();
+        assert_working(&recovered, &destination, &edit);
+        assert_eq!(recovered.append(event, trusted).unwrap(), checkpoint);
+        assert_eq!(recovered.worktree().revision(), revision);
+        assert_eq!(ledger_files(fixture.source.worktrees_directory().path()), frames);
+    }
+}
+
+#[test]
+fn namespace_240_byte_new_basename_rejects_the_whole_batch_before_any_write() {
+    for name in ["a".repeat(240), "界".repeat(80), format!("{}ab.txt", "界".repeat(78))] {
+        let fixture = Fixture::new();
+        assert_eq!(fixture.instance.directory().component_name_maximum().unwrap(), 255);
+        assert_eq!(name.len(), 240);
+        let mut ledger = fixture.ledger();
+        let checkpoint = ledger.checkpoint();
+        let revision = ledger.worktree().revision();
+        let files = ledger_files(fixture._temp.path());
+        let destination = format!("fresh/{name}");
+        for changes in [
+            vec![NamespaceChange::AddDirectory { path: PortablePath::parse(&name).unwrap() }],
+            vec![
+                NamespaceChange::AddDirectory { path: PortablePath::parse("fresh").unwrap() },
+                rename("file.txt", &destination),
+            ],
+            vec![
+                NamespaceChange::AddDirectory { path: PortablePath::parse("fresh").unwrap() },
+                rename("fresh", &name),
+            ],
+        ] {
+            let expected_path = match changes.last().unwrap() {
+                NamespaceChange::AddDirectory { path } => path.as_str(),
+                NamespaceChange::Rename { target, .. } => target.as_str(),
+                NamespaceChange::RemoveSubtree { .. } => panic!("new-name fixture"),
+            }.to_owned();
+            assert!(matches!(
+                ledger.append(namespace_event(&ledger, 10, changes), trusted),
+                Err(LedgerError::NameBudget(crate::NameBudgetError::ComponentTooLong {
+                    path, bytes: 240, allowed: 239,
+                })) if path == std::path::PathBuf::from(expected_path)
+            ));
+            assert_eq!(ledger.checkpoint(), checkpoint);
+            assert_eq!(ledger.worktree().revision(), revision);
+            assert_eq!(ledger_files(fixture._temp.path()), files);
+            assert!(!fixture.frame_path(1).exists());
+        }
+        assert!(matches!(
+            ledger.append(namespace_event(&ledger, 10, vec![rename("missing", &name)]), trusted),
+            Err(LedgerError::Namespace(NamespaceError::Missing)),
+        ));
+        ledger.append(namespace_event(&ledger, 10, vec![NamespaceChange::AddDirectory {
+            path: PortablePath::parse("fresh").unwrap(),
+        }]), trusted).unwrap();
+        let admitted = ledger.checkpoint();
+        let frames = ledger_files(fixture._temp.path());
+        assert!(matches!(
+            ledger.append(Event::Namespace {
+                operation: operation(11), expected: revision,
+                changes: vec![rename("file.txt", &name)],
+            }, trusted),
+            Err(LedgerError::Stale),
+        ));
+        assert_eq!(ledger.checkpoint(), admitted);
+        assert_eq!(ledger_files(fixture._temp.path()), frames);
+        let instance = fixture.instance.directory().path().to_owned();
+        fs::rename(&instance, instance.with_extension("retained")).unwrap();
+        PrivateDirectory::create_all(&instance).unwrap();
+        let files = ledger_files(fixture._temp.path());
+        let request = namespace_event(&ledger, 11, vec![rename("file.txt", "allowed")]);
+        assert!(matches!(ledger.append(request, trusted), Err(LedgerError::Instance(_))));
+        assert_eq!(ledger.checkpoint(), admitted);
+        assert_eq!(ledger_files(fixture._temp.path()), files);
+        assert!(!fixture.frame_path(2).exists());
+    }
+}
+
+#[test]
+fn namespace_budget_preserves_existing_ancestor_components_and_removal() {
+    let parent = "界".repeat(80);
+    let original = format!("{parent}/file.txt");
+    let fixture = Fixture::with_entries(vec![
+        SnapshotEntry {
+            path: PortablePath::parse(&parent).unwrap(),
+            content: SnapshotEntryContent::Directory {},
+        },
+        SnapshotEntry {
+            path: PortablePath::parse(&original).unwrap(),
+            content: SnapshotEntryContent::File {
+                material: SnapshotFile {
+                    file_id: FileId::from_random([4; 16]),
+                    version_id: VersionId::from_random([5; 16]),
+                    size: 8,
+                    content_hash: ContentHash::from_digest(blake3::hash(b"original")),
+                },
+                source: SnapshotFileSource::SnapshotOnly,
+            },
+        },
+    ]);
+    assert_eq!(fixture.instance.directory().component_name_maximum().unwrap(), 255);
+    let source = fixture.source.manifest().reference();
+    let mut ledger = fixture.ledger();
+    let name = format!("{}a.txt", "界".repeat(78));
+    let destination = format!("{parent}/{name}");
+    let event = namespace_event(&ledger, 10, vec![
+        NamespaceChange::AddDirectory {
+            path: PortablePath::parse(&format!("{parent}/fresh")).unwrap(),
+        },
+        rename(&original, &destination),
+    ]);
+    ledger.append(event, trusted).unwrap();
+    let edit = fixture.write(&original, 4, 8);
+    ledger.append(Event::Edits {
+        operation: operation(11), expected: ledger.worktree().revision(),
+        edits: vec![edit.clone()],
+    }, trusted).unwrap();
+    assert_working(&ledger, &destination, &edit);
+    ledger.append(namespace_event(&ledger, 12, vec![NamespaceChange::RemoveSubtree {
+        path: LookupPath::parse(&parent).unwrap(),
+    }]), trusted).unwrap();
+    let recovered = HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+    ).unwrap();
+    assert_eq!(fixture.source.manifest().reference(), source);
+    assert_eq!(recovered.edits(), [edit]);
+    assert!(recovered.projection().unwrap().route(&LookupPath::parse(&parent).unwrap()).is_none());
+    let body = fixture.instance.directory().path().join(recovered.edits()[0].leaf.as_str());
+    assert_eq!(fs::read(body).unwrap(), b"edited");
 }

@@ -9,7 +9,7 @@ use std::{
 };
 mod import;
 mod name_budget;
-pub use name_budget::NameBudgetError;
+pub use crate::name_budget::NameBudgetError;
 mod output;
 mod source;
 mod stop;

@@ -35,6 +35,7 @@ mod directory_worktree;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;
+mod name_budget;
 pub use directory_conversion::{
     DirectoryConversionConfirmation, DirectoryConversionDigest, DirectoryConversionPreview,
     DirectoryExportOutcome, DirectoryImportFailure, DirectoryImportProgress,

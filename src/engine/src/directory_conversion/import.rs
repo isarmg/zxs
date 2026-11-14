@@ -75,7 +75,7 @@ impl PreparedOrdinaryDirectory {
                 bytes: 1 << 40,
                 file_bytes: 1 << 40,
             },
-            Some(NameBudget::from_maximum(maximum)?),
+            Some(NameBudget::from_maximum(maximum).map_err(Error::ConversionNameBudget)?),
         )
     }
     /// Capture planning evidence under the caller's engine lock. The returned
@@ -209,7 +209,7 @@ impl Engine {
     fn conversion_name_budget(&self, slot: &str) -> Result<NameBudget> {
         let disk = self.disk(slot)?;
         let maximum = self.disk_resources.get(disk)?.root.component_name_maximum()?;
-        NameBudget::from_maximum(maximum)
+        NameBudget::from_maximum(maximum).map_err(Error::ConversionNameBudget)
     }
     fn bind_import(
         &self,
