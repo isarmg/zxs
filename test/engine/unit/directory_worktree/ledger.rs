@@ -1139,8 +1139,13 @@ fn ledger_files(root: &std::path::Path)
 
 #[test]
 fn namespace_admission_keeps_239_byte_components_editable_across_cold_reopen() {
+    // Component bytes and the portable full path's UTF-16 units are independent.
+    assert!(matches!(
+        PortablePath::parse(&"a".repeat(239)),
+        Err(name_policy::Error::InvalidPath),
+    ));
     for (directory, name) in [
-        ("d".repeat(239), format!("{}.txt", "a".repeat(235))),
+        (format!("{}ééabcd", "界".repeat(77)), format!("{}a.txt", "字".repeat(78))),
         (format!("{}ab", "界".repeat(79)), format!("{}a.txt", "界".repeat(78))),
     ] {
         let fixture = Fixture::new();
@@ -1182,7 +1187,7 @@ fn namespace_admission_keeps_239_byte_components_editable_across_cold_reopen() {
 
 #[test]
 fn namespace_240_byte_new_basename_rejects_the_whole_batch_before_any_write() {
-    for name in ["a".repeat(240), "界".repeat(80), format!("{}ab.txt", "界".repeat(78))] {
+    for name in ["界".repeat(80), format!("{}ab.txt", "界".repeat(78))] {
         let fixture = Fixture::new();
         assert_eq!(fixture.instance.directory().component_name_maximum().unwrap(), 255);
         assert_eq!(name.len(), 240);
