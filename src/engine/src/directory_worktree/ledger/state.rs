@@ -101,12 +101,7 @@ impl State {
                         return Err(LedgerError::OperationConflict);
                     }
                     match merged.binary_search_by(|old| old.path.key().cmp(edit.path.key())) {
-                        Ok(index) => {
-                            if merged[index].material.version_id == edit.material.version_id {
-                                return Err(LedgerError::OperationConflict);
-                            }
-                            merged[index] = edit.clone();
-                        }
+                        Ok(index) => merged[index] = edit.clone(),
                         Err(index) => merged.insert(index, edit.clone()),
                     }
                 }

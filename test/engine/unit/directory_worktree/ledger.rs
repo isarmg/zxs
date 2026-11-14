@@ -362,7 +362,7 @@ fn replacing_a_held_ledger_parent_name_never_publishes_to_a_detached_directory()
 }
 
 #[test]
-fn older_sealed_versions_cannot_be_redefined_after_a_later_edit_replaces_them() {
+fn cold_ledger_refuses_reuse_of_current_and_replaced_sealed_versions() {
     let fixture = Fixture::new();
     let mut ledger = fixture.ledger();
     let first = fixture.edit();
@@ -371,15 +371,21 @@ fn older_sealed_versions_cannot_be_redefined_after_a_later_edit_replaces_them() 
     }, trusted).unwrap();
     let second = fixture.write("file.txt", 4, 9);
     ledger.append(Event::Edits {
-        operation: operation(11), expected: ledger.worktree().revision(), edits: vec![second],
+        operation: operation(11), expected: ledger.worktree().revision(), edits: vec![second.clone()],
     }, trusted).unwrap();
     let mut recovered = HeldWorktreeLedger::reopen(
         &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
     ).unwrap();
-    assert!(matches!(recovered.append(Event::Edits {
-        operation: operation(12), expected: recovered.worktree().revision(), edits: vec![first],
-    }, trusted), Err(LedgerError::OperationConflict)));
-    assert!(!fixture.frame_path(3).exists());
+    let checkpoint = recovered.checkpoint();
+    let revision = recovered.worktree().revision();
+    for (id, reused) in [(12, second), (13, first)] {
+        assert!(matches!(recovered.append(Event::Edits {
+            operation: operation(id), expected: revision, edits: vec![reused],
+        }, trusted), Err(LedgerError::OperationConflict)));
+        assert_eq!(recovered.checkpoint(), checkpoint);
+        assert_eq!(recovered.worktree().revision(), revision);
+        assert!(!fixture.frame_path(3).exists());
+    }
 }
 
 fn result_files(ledger: &HeldWorktreeLedger<'_>) -> Vec<FileResult> {
