@@ -284,3 +284,20 @@ fn maximum_batch_of_identity_preserving_renames_keeps_one_complete_view() {
     assert_eq!(view.paths().map(PortablePath::as_str).collect::<Vec<_>>(),
         source.entries().iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>());
 }
+
+
+#[test]
+fn retained_namespace_proof_cannot_rebind_source_occurrences_to_another_snapshot() {
+    let source = source();
+    let namespace = project(&source, &[NamespaceChange::Rename {
+        source: lookup("Dir"), target: path("Moved"),
+    }]).unwrap().into_namespace();
+    let other = manifest(20, source.entries().to_vec());
+    assert!(matches!(SparseProjection::admit(&other, vec![]).unwrap().with_namespace(&namespace),
+        Err(NamespaceError::Source)));
+    let bound = SparseProjection::admit(&source, vec![edit()]).unwrap()
+        .with_namespace(&namespace).unwrap();
+    assert!(bound.route(&lookup("Dir/B.txt")).is_none());
+    assert_eq!(bound.route(&lookup("Moved/B.txt")),
+        Some(ReadRoute::Working { material: &edit().material }));
+}

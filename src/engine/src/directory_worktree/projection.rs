@@ -197,6 +197,16 @@ impl<'a> SparseProjection<'a> {
         Ok(view)
     }
 
+    /// An edit remains keyed by its exact original snapshot occurrence, even
+    /// after a rename. File identity and visible path alone cannot select an
+    /// occurrence when a snapshot contains aliases of the same container.
+    pub(crate) fn contains_source_file(&self, path: &PortablePath) -> bool {
+        self.entries.iter().any(|entry| match entry.content {
+            Content::Directory => false,
+            Content::File { original, .. } => self.source.entries()[original].path == *path,
+        })
+    }
+
     pub(crate) fn paths(&self) -> impl Iterator<Item = &PortablePath> {
         self.entries.iter().map(|entry| &entry.path)
     }

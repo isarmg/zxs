@@ -1,5 +1,7 @@
 use crate::directory_worktree::projection::{ContainerPresence, ContainerPublication, FileResult, Transfer};
 use super::*;
+use crate::directory_worktree::projection::{ProjectionError, ReadRoute};
+use crate::directory_worktree::projection::namespace::{NamespaceChange, NamespaceError};
 use crate::directory_worktree::lifecycle::{Mount, Phase, Publication, PublicationScope, WorktreeId};
 use crate::directory_worktree::store::HeldSparseWorktree;
 use crate::disk::DiskRoot;
@@ -9,7 +11,7 @@ use crate::working_tree::snapshot::{
     AdmittedSnapshotManifest, HeldSnapshotNode, SnapshotEntry, SnapshotEntryContent,
     SnapshotFile, SnapshotFileSource,
 };
-use name_policy::{LookupName, PortablePath};
+use name_policy::{LookupName, LookupPath, PortablePath};
 use platform_io::{fs_safety::PrivateDirectory, payload::Expectation};
 use std::{fs, io::Cursor};
 use storage_contract::{ContentHash, FileId, OperationId, VersionId};
@@ -32,6 +34,12 @@ impl Fixture {
         Self::with_origin(SnapshotFileSource::SnapshotOnly)
     }
     fn with_origin(origin: SnapshotFileSource) -> Self {
+        Self::with_sibling(origin, 44, 55)
+    }
+    fn aliases() -> Self {
+        Self::with_sibling(SnapshotFileSource::SnapshotOnly, 4, 5)
+    }
+    fn with_sibling(origin: SnapshotFileSource, file: u8, version: u8) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("repository");
         PrivateDirectory::create_all(&path).unwrap();
@@ -53,8 +61,8 @@ impl Fixture {
                 path: PortablePath::parse("other.txt").unwrap(),
                 content: SnapshotEntryContent::File {
                     material: SnapshotFile {
-                        file_id: FileId::from_random([44; 16]),
-                        version_id: VersionId::from_random([55; 16]),
+                        file_id: FileId::from_random([file; 16]),
+                        version_id: VersionId::from_random([version; 16]),
                         size: 8, content_hash: ContentHash::from_digest(blake3::hash(b"original")),
                     },
                     source: SnapshotFileSource::SnapshotOnly,
@@ -559,4 +567,338 @@ fn cold_file_baseline_preserves_selected_branch_and_excludes_saved_siblings_from
     }).unwrap();
     assert!(recovered.dirty_edits().is_empty());
     assert_eq!(recovered.file_results().len(), 2);
+}
+
+fn rename(source: &str, target: &str) -> NamespaceChange {
+    NamespaceChange::Rename {
+        source: LookupPath::parse(source).unwrap(),
+        target: PortablePath::parse(target).unwrap(),
+    }
+}
+fn namespace_event(
+    ledger: &HeldWorktreeLedger<'_>, byte: u8, changes: Vec<NamespaceChange>,
+) -> Event {
+    Event::Namespace { operation: operation(byte), expected: ledger.worktree().revision(), changes }
+}
+fn assert_working(ledger: &HeldWorktreeLedger<'_>, visible: &str, edit: &EditRecord) {
+    let projection = ledger.projection().unwrap();
+    assert_eq!(projection.route(&LookupPath::parse(visible).unwrap()),
+        Some(ReadRoute::Working { material: &edit.file_edit().unwrap().material }));
+}
+
+#[test]
+fn namespace_retries_keep_exact_identity_and_latest_append_checkpoint() {
+    let fixture = Fixture::new();
+    let mut ledger = fixture.ledger();
+    let first = namespace_event(&ledger, 10, vec![rename("file.txt", "moved.txt")]);
+    let first_checkpoint = ledger.append(first.clone(), trusted).unwrap();
+    let second = namespace_event(&ledger, 11, vec![rename("moved.txt", "MOVED.txt")]);
+    let latest = ledger.append(second.clone(), trusted).unwrap();
+    let genesis: record::Frame = storage_contract::decode_strict(
+        &fs::read(fixture.frame_path(0)).unwrap(),
+    ).unwrap();
+    let record::Body::Genesis(genesis) = genesis.body else { panic!("genesis fixture") };
+    let mut replay = state::State::new(&genesis);
+    replay.apply(fixture.source.manifest(), &first, first_checkpoint, &mut trusted).unwrap();
+    replay.apply(fixture.source.manifest(), &second, latest, &mut trusted).unwrap();
+    assert_eq!(replay.prior(&first).unwrap(), Some(first_checkpoint));
+    let state = ledger.worktree().clone();
+    let first_bytes = fs::read(fixture.frame_path(1)).unwrap();
+    let last_bytes = fs::read(fixture.frame_path(2)).unwrap();
+    assert_ne!(latest, first_checkpoint);
+    assert_eq!(ledger.append(first.clone(), trusted).unwrap(), latest);
+    let mut recovered = HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), latest, trusted,
+    ).unwrap();
+    assert_eq!(recovered.append(first.clone(), trusted).unwrap(), latest);
+    assert_eq!(recovered.worktree(), &state);
+    let Event::Namespace { expected, .. } = first else { panic!("namespace fixture") };
+    assert!(matches!(recovered.append(Event::Namespace {
+        operation: operation(10), expected, changes: vec![rename("file.txt", "elsewhere.txt")],
+    }, trusted), Err(LedgerError::OperationConflict)));
+    assert!(matches!(recovered.append(Event::Delete {
+        operation: operation(10), expected: recovered.worktree().revision(),
+    }, trusted), Err(LedgerError::OperationConflict)));
+    assert_eq!(fs::read(fixture.frame_path(1)).unwrap(), first_bytes);
+    assert_eq!(fs::read(fixture.frame_path(2)).unwrap(), last_bytes);
+    assert!(!fixture.frame_path(3).exists());
+}
+
+#[test]
+fn namespace_rejections_leave_no_frame_and_do_not_advance_revision() {
+    let fixture = Fixture::new();
+    let mut ledger = fixture.ledger();
+    let state = ledger.worktree().clone();
+    let checkpoint = ledger.checkpoint();
+    let directory = NamespaceChange::AddDirectory { path: PortablePath::parse("Fresh").unwrap() };
+    let bad = vec![
+        vec![],
+        vec![rename("file.txt", "OTHER.txt")],
+        vec![rename("missing.txt", "Moved.txt")],
+        vec![NamespaceChange::RemoveSubtree { path: LookupPath::parse("absent").unwrap() }],
+        vec![NamespaceChange::AddDirectory { path: PortablePath::parse("Missing/Child").unwrap() }],
+        vec![NamespaceChange::AddDirectory { path: PortablePath::parse(".ZXS").unwrap() }],
+        vec![directory.clone(), rename("Fresh", "Fresh/Child")],
+        vec![directory.clone(), rename("missing", "Gone")],
+        vec![directory.clone(); 33],
+    ];
+    for changes in bad {
+        assert!(ledger.append(namespace_event(&ledger, 10, changes), trusted).is_err());
+        assert_eq!(ledger.worktree(), &state);
+        assert_eq!(ledger.checkpoint(), checkpoint);
+        assert!(!fixture.frame_path(1).exists());
+    }
+    assert!(matches!(ledger.append(namespace_event(&ledger, 6, vec![directory.clone()]), trusted),
+        Err(LedgerError::OperationConflict)));
+    ledger.append(namespace_event(&ledger, 10, vec![directory]), trusted).unwrap();
+    assert!(matches!(ledger.append(Event::Namespace {
+        operation: operation(11), expected: state.revision(),
+        changes: vec![rename("file.txt", "Moved.txt")],
+    }, trusted), Err(LedgerError::Stale)));
+    assert!(!fixture.frame_path(2).exists());
+}
+
+#[test]
+fn namespace_edits_bind_original_occurrences_and_complete_history() {
+    let fixture = Fixture::aliases();
+    let mut ledger = fixture.ledger();
+    let first = fixture.edit();
+    ledger.append(Event::Edits {
+        operation: operation(10), expected: ledger.worktree().revision(),
+        edits: vec![first.clone()],
+    }, trusted).unwrap();
+    let old_bytes = storage_contract::canonical_json(&(
+        fixture.source.manifest().reference(), vec![first.clone()],
+    )).unwrap();
+    assert_eq!(ledger.worktree().revision().manifest, record::commitment(&old_bytes));
+    let changes = vec![
+        rename("file.txt", "Temporary.txt"),
+        rename("other.txt", "file.txt"),
+        rename("Temporary.txt", "OTHER.txt"),
+    ];
+    ledger.append(namespace_event(&ledger, 11, changes.clone()), trusted).unwrap();
+    assert_working(&ledger, "OTHER.txt", &first);
+    let second = fixture.write("other.txt", 4, 9);
+    ledger.append(Event::Edits {
+        operation: operation(12), expected: ledger.worktree().revision(),
+        edits: vec![second.clone()],
+    }, trusted).unwrap();
+    assert_working(&ledger, "file.txt", &second);
+    assert_working(&ledger, "OTHER.txt", &first);
+    let bound_bytes = storage_contract::canonical_json(&(
+        fixture.source.manifest().reference(), ledger.edits(), vec![changes],
+    )).unwrap();
+    assert_eq!(ledger.worktree().revision().manifest, record::commitment(&bound_bytes));
+    let remove = NamespaceChange::RemoveSubtree { path: LookupPath::parse("file.txt").unwrap() };
+    ledger.append(namespace_event(&ledger, 13, vec![remove]), trusted).unwrap();
+    let mut recovered = HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+    ).unwrap();
+    assert_eq!(recovered.edits(), [first.clone(), second]);
+    assert_working(&recovered, "other.txt", &first);
+    assert!(recovered.projection().unwrap()
+        .route(&LookupPath::parse("file.txt").unwrap()).is_none());
+    let checkpoint = recovered.checkpoint();
+    let removed_write = fixture.write("other.txt", 4, 14);
+    assert!(matches!(recovered.append(Event::Edits {
+        operation: operation(14), expected: recovered.worktree().revision(),
+        edits: vec![removed_write],
+    }, trusted), Err(LedgerError::Projection(ProjectionError::Source))));
+    assert_eq!(recovered.checkpoint(), checkpoint);
+    assert!(!fixture.frame_path(5).exists());
+}
+
+#[test]
+fn namespace_current_material_is_admitted_without_reinterpreting_old_batches() {
+    let fixture = Fixture::aliases();
+    let mut ledger = fixture.ledger();
+    let long = "界".repeat(80);
+    ledger.append(namespace_event(&ledger, 10, vec![rename("other.txt", &long)]), trusted).unwrap();
+    let first = fixture.edit();
+    let checkpoint = ledger.checkpoint();
+    let revision = ledger.worktree().revision();
+    assert!(matches!(ledger.append(Event::Edits {
+        operation: operation(11), expected: revision, edits: vec![first.clone()],
+    }, trusted), Err(LedgerError::Namespace(NamespaceError::Material(
+        crate::working_tree::snapshot::SnapshotManifestError::Filename,
+    )))));
+    assert_eq!(ledger.worktree().revision(), revision);
+    assert_eq!(ledger.checkpoint(), checkpoint);
+    assert!(!fixture.frame_path(2).exists());
+    ledger.append(namespace_event(&ledger, 12, vec![rename(&long, "other.txt")]), trusted).unwrap();
+    ledger.append(Event::Edits {
+        operation: operation(11), expected: ledger.worktree().revision(),
+        edits: vec![first.clone()],
+    }, trusted).unwrap();
+    assert_working(&ledger, "file.txt", &first);
+    let recovered = HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+    ).unwrap();
+    assert_eq!(recovered.worktree(), ledger.worktree());
+    assert_working(&recovered, "file.txt", &first);
+    assert!(matches!(recovered.projection().unwrap()
+        .route(&LookupPath::parse("other.txt").unwrap()), Some(ReadRoute::Original { .. })));
+}
+
+#[test]
+fn namespace_removal_retains_and_reverifies_the_hidden_sealed_body() {
+    for substitute in [false, true] {
+        let fixture = Fixture::new();
+        let mut ledger = fixture.ledger();
+        let edit = fixture.edit();
+        ledger.append(Event::Edits {
+            operation: operation(10), expected: ledger.worktree().revision(),
+            edits: vec![edit.clone()],
+        }, trusted).unwrap();
+        ledger.append(namespace_event(&ledger, 11, vec![NamespaceChange::RemoveSubtree {
+            path: LookupPath::parse("file.txt").unwrap(),
+        }]), trusted).unwrap();
+        let path = fixture.instance.directory().path().join(edit.leaf.as_str());
+        assert_eq!(fs::read(&path).unwrap(), b"edited");
+        let recovered = HeldWorktreeLedger::reopen(
+            &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+        ).unwrap();
+        assert_eq!(recovered.edits(), [edit]);
+        assert!(recovered.projection().unwrap()
+            .route(&LookupPath::parse("file.txt").unwrap()).is_none());
+        if substitute {
+            fs::rename(&path, path.with_extension("retained")).unwrap();
+            fs::write(&path, b"edited").unwrap();
+        } else {
+            fs::write(&path, b"broken").unwrap();
+        }
+        assert!(HeldWorktreeLedger::reopen(
+            &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+        ).is_err());
+        assert!(!fixture.frame_path(3).exists());
+    }
+}
+
+#[test]
+fn namespace_changes_cannot_enter_publication_or_soft_delete() {
+    for scenario in 0..3 {
+        let fixture = Fixture::new();
+        let mut ledger = fixture.ledger();
+        if scenario > 0 {
+            ledger.append(Event::Edits {
+                operation: operation(10), expected: ledger.worktree().revision(),
+                edits: vec![fixture.edit()],
+            }, trusted).unwrap();
+        }
+        if scenario == 2 {
+            ledger.append(delete_event(&ledger, 11), trusted).unwrap();
+            ledger.append(Event::Completed {
+                publication: completed(&ledger), files: result_files(&ledger),
+            }, trusted).unwrap();
+            ledger.append(Event::Restored {
+                operation: operation(12), mount: mount("worktree-main-002"),
+            }, trusted).unwrap();
+        }
+        let changes = if scenario == 1 {
+            vec![NamespaceChange::RemoveSubtree { path: LookupPath::parse("file.txt").unwrap() }]
+        } else {
+            vec![rename("file.txt", "Moved.txt")]
+        };
+        ledger.append(namespace_event(&ledger, 13, changes), trusted).unwrap();
+        let mut recovered = HeldWorktreeLedger::reopen(
+            &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+        ).unwrap();
+        let before = recovered.worktree().clone();
+        let checkpoint = recovered.checkpoint();
+        let events = [
+            Event::Commit {
+                operation: operation(14), expected: before.revision(),
+                current_head: fixture.source.manifest().node_id(),
+                fork_branch: SnapshotBranchId::from_random([20; 16]),
+            },
+            Event::Delete { operation: operation(15), expected: before.revision() },
+        ];
+        for event in events {
+            assert!(matches!(recovered.append(event, |_, _| {
+                panic!("namespace-only replay cannot authorize publication")
+            }), Err(LedgerError::NamespacePublicationRequired)));
+            assert_eq!(recovered.worktree(), &before);
+            assert_eq!(recovered.checkpoint(), checkpoint);
+            assert!(!fixture.frame_path(checkpoint.sequence.get() + 1).exists());
+        }
+    }
+}
+
+#[test]
+fn namespace_strict_frames_and_exact_checkpoint_reject_unknown_or_undecided_bytes() {
+    for mutation in 0..4 {
+        let fixture = Fixture::new();
+        let mut ledger = fixture.ledger();
+        let initial = ledger.checkpoint();
+        let event = namespace_event(&ledger, 10, vec![NamespaceChange::AddDirectory {
+            path: PortablePath::parse("Fresh").unwrap(),
+        }]);
+        let encoded = storage_contract::canonical_json(&event).unwrap();
+        assert_eq!(storage_contract::decode_strict::<Event>(&encoded).unwrap(), event);
+        ledger.append(event, trusted).unwrap();
+        assert!(HeldWorktreeLedger::reopen(
+            &fixture.source, ledger.binding(), initial, trusted,
+        ).is_err());
+        let bytes = String::from_utf8(fs::read(fixture.frame_path(1)).unwrap()).unwrap();
+        let invalid = match mutation {
+            0 => bytes.replace("\"add_directory\"", "\"unknown_change\""),
+            1 => bytes.replace("\"Fresh\"", "\"../Fresh\""),
+            2 => bytes.replace("\"changes\":[{", "\"changes\":[{\"foreign\":true,"),
+            3 => bytes.replace("\"path\":\"Fresh\"", "\"path\":\"Fresh\",\"path\":\"Other\""),
+            _ => panic!("bounded mutation fixture"),
+        };
+        assert_ne!(invalid, bytes);
+        fs::write(fixture.frame_path(1), invalid.as_bytes()).unwrap();
+        let checkpoint = Checkpoint {
+            sequence: ledger.checkpoint().sequence,
+            commitment: record::commitment(invalid.as_bytes()),
+        };
+        assert!(HeldWorktreeLedger::reopen(
+            &fixture.source, ledger.binding(), checkpoint, trusted,
+        ).is_err());
+        assert_eq!(fs::read(fixture.frame_path(1)).unwrap(), invalid.as_bytes());
+        assert!(!fixture.frame_path(2).exists());
+    }
+}
+
+#[test]
+fn namespace_rebase_and_inactive_lifecycle_guards_reject_before_persistence() {
+    for scenario in 0..3 {
+        let fixture = Fixture::new();
+        let mut ledger = fixture.ledger();
+        if scenario == 2 {
+            ledger.append(Event::Commit {
+                operation: operation(10), expected: ledger.worktree().revision(),
+                current_head: fixture.source.manifest().node_id(),
+                fork_branch: SnapshotBranchId::from_random([20; 16]),
+            }, trusted).unwrap();
+            let Phase::Publishing { intent, .. } = ledger.worktree().phase() else {
+                panic!("directory publication fixture")
+            };
+            ledger.append(Event::Completed {
+                publication: Publication { intent, scope: PublicationScope::Directory {
+                    branch: intent.source.branch, node: SnapshotNodeId::from_random([30; 16]),
+                }}, files: vec![],
+            }, trusted).unwrap();
+        } else {
+            ledger.append(delete_event(&ledger, 10), trusted).unwrap();
+            if scenario == 1 {
+                ledger.append(Event::Completed {
+                    publication: completed(&ledger), files: vec![],
+                }, trusted).unwrap();
+            }
+        }
+        let before = ledger.worktree().clone();
+        let checkpoint = ledger.checkpoint();
+        let event = namespace_event(&ledger, 11, vec![rename("file.txt", "Moved")]);
+        let rejected = ledger.append(event, trusted);
+        if scenario == 2 {
+            assert!(matches!(rejected, Err(LedgerError::RebaseRequired)));
+        } else {
+            assert!(matches!(rejected, Err(LedgerError::Lifecycle(_))));
+        }
+        assert_eq!(ledger.worktree(), &before);
+        assert_eq!(ledger.checkpoint(), checkpoint);
+        assert!(!fixture.frame_path(checkpoint.sequence.get() + 1).exists());
+    }
 }

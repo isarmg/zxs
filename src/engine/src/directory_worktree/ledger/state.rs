@@ -4,19 +4,23 @@ use crate::directory_worktree::lifecycle::{
     Phase, Publication, PublicationMode, PublicationScope, Worktree,
 };
 use crate::directory_worktree::projection::{FileResult, SparseProjection};
+use crate::directory_worktree::projection::namespace::{NamespaceChange, NamespaceView};
 use crate::working_tree::snapshot::AdmittedSnapshotManifest;
 use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::OperationId;
 use storage_contract::working_tree::MaterialCommitment;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OperationKind { Edits, Commit, Delete, Restore }
+enum OperationKind { Edits, Namespace, Commit, Delete, Restore }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Stage { Requested, Completed }
 impl Event {
     fn identity(&self) -> (OperationId, OperationKind, Stage) {
         match self {
             Self::Edits { operation, .. } => (*operation, OperationKind::Edits, Stage::Requested),
+            Self::Namespace { operation, .. } => {
+                (*operation, OperationKind::Namespace, Stage::Requested)
+            }
             Self::Commit { operation, .. } => (*operation, OperationKind::Commit, Stage::Requested),
             Self::Delete { operation, .. } => (*operation, OperationKind::Delete, Stage::Requested),
             Self::Restored { operation, .. } => {
@@ -35,10 +39,31 @@ impl Event {
 }
 
 #[derive(Clone)]
+enum NamespaceState {
+    Original,
+    Edited {
+        // Keep ordered batches for the revision commitment; the view is their
+        // derived mapping, admitted with each event's material during replay.
+        batches: Vec<Vec<NamespaceChange>>,
+        view: NamespaceView,
+    },
+}
+impl NamespaceState {
+    fn batches(&self) -> &[Vec<NamespaceChange>] {
+        match self {
+            Self::Original => &[],
+            Self::Edited { batches, .. } => batches,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct State {
     pub(super) worktree: Worktree,
     pub(super) edits: Vec<EditRecord>,
     pub(super) file_results: Vec<FileResult>,
+    // Frame and ledger byte limits bound the retained history on append/replay.
+    namespace: NamespaceState,
     creation: OperationId,
     versions: BTreeSet<storage_contract::VersionId>,
     operations: BTreeMap<OperationId, OperationKind>,
@@ -52,6 +77,7 @@ impl State {
             ),
             edits: Vec::new(),
             file_results: Vec::new(),
+            namespace: NamespaceState::Original,
             creation: genesis.binding.operation(),
             versions: BTreeSet::new(),
             operations: BTreeMap::new(),
@@ -95,6 +121,14 @@ impl State {
                     return Err(LedgerError::Chain);
                 }
                 admit_edits(source, edits)?;
+                if matches!(self.namespace, NamespaceState::Edited { .. }) {
+                    let view = self.projection(source)?;
+                    if edits.iter().any(|edit| !view.contains_source_file(&edit.path)) {
+                        return Err(LedgerError::Projection(
+                            crate::directory_worktree::projection::ProjectionError::Source,
+                        ));
+                    }
+                }
                 let mut merged = self.edits.clone();
                 for edit in edits {
                     if self.versions.contains(&edit.material.version_id) {
@@ -106,11 +140,30 @@ impl State {
                     }
                 }
                 admit_edits(source, &merged)?;
-                let bytes = storage_contract::canonical_json(&(source.reference(), &merged))
-                    .map_err(LedgerError::Codec)?;
-                self.worktree.record_edit(commitment(&bytes)).map_err(LedgerError::Lifecycle)?;
+                if matches!(self.namespace, NamespaceState::Edited { .. }) {
+                    self.projection_with_edits(source, &merged)?;
+                }
+                let manifest = revision_commitment(source, &merged, self.namespace.batches())?;
+                self.worktree.record_edit(manifest).map_err(LedgerError::Lifecycle)?;
                 self.edits = merged;
                 self.versions.extend(edits.iter().map(|edit| edit.material.version_id));
+            }
+            Event::Namespace { expected, changes, .. } => {
+                self.expected(*expected)?;
+                if matches!(self.worktree.phase(), Phase::Active { saved: Some(publication) }
+                    if matches!(publication.scope, PublicationScope::Directory { .. })) {
+                    return Err(LedgerError::RebaseRequired);
+                }
+                if changes.is_empty() {
+                    return Err(LedgerError::Chain);
+                }
+                let view = self.projection(source)?.namespace(changes)
+                    .map_err(LedgerError::Namespace)?.into_namespace();
+                let mut batches = self.namespace.batches().to_vec();
+                batches.push(changes.clone());
+                let manifest = revision_commitment(source, &self.edits, &batches)?;
+                self.worktree.record_edit(manifest).map_err(LedgerError::Lifecycle)?;
+                self.namespace = NamespaceState::Edited { batches, view };
             }
             Event::Commit { expected, current_head, fork_branch, .. } => {
                 self.expected(*expected)?;
@@ -118,11 +171,13 @@ impl State {
                     if matches!(publication.scope, PublicationScope::Directory { .. })) {
                     return Err(LedgerError::RebaseRequired);
                 }
+                self.require_publication_scope()?;
                 self.worktree.prepare_commit(operation, *current_head, *fork_branch)
                     .map_err(LedgerError::Lifecycle)?;
             }
             Event::Delete { expected, .. } => {
                 self.expected(*expected)?;
+                self.require_publication_scope()?;
                 self.worktree.prepare_delete(operation).map_err(LedgerError::Lifecycle)?;
             }
             Event::Completed { publication, files } => {
@@ -168,6 +223,36 @@ impl State {
         self.results.insert((operation, stage), (event_commitment(event)?, checkpoint));
         Ok(())
     }
+    pub(super) fn projection<'a>(
+        &self,
+        source: &'a AdmittedSnapshotManifest,
+    ) -> Result<SparseProjection<'a>, LedgerError> {
+        self.projection_with_edits(source, &self.edits)
+    }
+    fn projection_with_edits<'a>(
+        &self,
+        source: &'a AdmittedSnapshotManifest,
+        edits: &[EditRecord],
+    ) -> Result<SparseProjection<'a>, LedgerError> {
+        let edits = edits.iter().map(EditRecord::file_edit).collect::<Result<Vec<_>, _>>()?;
+        let view = SparseProjection::admit_with_results(source, edits, &self.file_results)
+            .map_err(LedgerError::Projection)?;
+        match &self.namespace {
+            NamespaceState::Original => Ok(view),
+            NamespaceState::Edited { view: namespace, .. } => {
+                view.with_namespace(namespace).map_err(LedgerError::Namespace)
+            }
+        }
+    }
+    fn require_publication_scope(&self) -> Result<(), LedgerError> {
+        // Publication still associates FILE results with original paths. Until
+        // durable obligations cover removed and renamed occurrences, neither a
+        // directory commit nor files-before-delete can consume this namespace.
+        if matches!(self.namespace, NamespaceState::Edited { .. }) {
+            return Err(LedgerError::NamespacePublicationRequired);
+        }
+        Ok(())
+    }
     pub(super) fn dirty_edits(&self) -> Vec<&EditRecord> {
         self.edits.iter().filter(|edit| {
             // A previously verified version result suppresses republication.
@@ -186,6 +271,20 @@ impl State {
         }
         Ok(())
     }
+}
+fn revision_commitment(
+    source: &AdmittedSnapshotManifest,
+    edits: &[EditRecord],
+    namespace: &[Vec<NamespaceChange>],
+) -> Result<MaterialCommitment, LedgerError> {
+    // Preserve the existing edit-only revision bytes. Once namespace intent is
+    // recorded, every later revision binds its complete ordered batch history.
+    let bytes = if namespace.is_empty() {
+        storage_contract::canonical_json(&(source.reference(), edits))
+    } else {
+        storage_contract::canonical_json(&(source.reference(), edits, namespace))
+    }.map_err(LedgerError::Codec)?;
+    Ok(commitment(&bytes))
 }
 fn event_commitment(event: &Event) -> Result<MaterialCommitment, LedgerError> {
     let bytes = storage_contract::canonical_json(event).map_err(LedgerError::Codec)?;

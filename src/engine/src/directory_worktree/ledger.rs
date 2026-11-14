@@ -3,6 +3,9 @@
 //! The owning repository decision retains Binding and Checkpoint. Cold opening
 //! accepts exactly that checkpoint, not a newer self-reported tail. FILE and
 //! directory receipts are verified by their own authority on append and replay.
+//! Namespace frames currently authorize prepublication reads only. Commit and
+//! soft-delete remain fenced until durable FILE obligations cover renamed and
+//! removed occurrences; no production SMB namespace is registered here.
 mod record;
 mod state;
 mod storage;
@@ -33,6 +36,10 @@ pub(crate) enum LedgerError {
     Lifecycle(#[source] LifecycleError),
     #[error("worktree ledger sparse view is invalid")]
     Projection(#[source] super::projection::ProjectionError),
+    #[error("worktree ledger namespace transition is invalid")]
+    Namespace(#[source] crate::directory_worktree::projection::namespace::NamespaceError),
+    #[error("worktree namespace changes require durable FILE publication obligations")]
+    NamespacePublicationRequired,
     #[error("worktree ledger contains an invalid physical body name")]
     Name(#[source] platform_io::fs_safety::Error),
     #[error("worktree ledger differs from its independent identity or checkpoint")]

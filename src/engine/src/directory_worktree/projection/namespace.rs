@@ -1,19 +1,22 @@
 //! Logical namespace edits share the sparse projection used by reads and plans.
 //!
-//! The ledger does not persist these operations yet. File additions wait for an
+//! Durable ledger replay uses this same reducer. File additions wait for an
 //! independently admitted import result; this module cannot invent a container.
 use crate::directory_worktree::projection::SparseProjection;
 use crate::working_tree::snapshot::{
     SnapshotEntry, SnapshotEntryContent, SnapshotFile, SnapshotFileSource, SnapshotManifestError,
+    SnapshotReference,
 };
+use data_serialization::{Deserialize, Serialize};
 use name_policy::{LookupPath, PortablePath};
 
 // Bound per-request path rebasing and sorting independently from the snapshot
-// inventory bound. At most 32 new directories supplement the admitted source;
-// final admission enforces the snapshot's entry, path-byte and payload budgets.
+// inventory bound. A batch adds at most 32 directories; final admission enforces
+// the snapshot's entry, path-byte and payload budgets.
 const MAX_CHANGES: usize = 32;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum NamespaceChange {
     AddDirectory { path: PortablePath },
     RemoveSubtree { path: LookupPath },
@@ -22,6 +25,8 @@ pub(crate) enum NamespaceChange {
 
 #[derive(Debug, error_definition::Error)]
 pub(crate) enum NamespaceError {
+    #[error("worktree namespace belongs to a different original snapshot")]
+    Source,
     #[error("worktree namespace batch exceeds its operation budget")]
     Budget,
     #[error("worktree namespace source does not exist")]
@@ -42,9 +47,18 @@ pub(super) enum Content {
     File { original: usize, material: SnapshotFile, source: SnapshotFileSource },
 }
 
+#[derive(Clone)]
 pub(super) struct Entry {
     pub(super) path: PortablePath,
     pub(super) content: Content,
+}
+
+/// Derived namespace proof, rebuilt chronologically from the anchored ledger.
+/// Private entries retain source occurrence indexes, never inferred identities.
+#[derive(Clone)]
+pub(crate) struct NamespaceView {
+    source: SnapshotReference,
+    entries: Vec<Entry>,
 }
 
 impl<'a> SparseProjection<'a> {
@@ -58,6 +72,27 @@ impl<'a> SparseProjection<'a> {
         for change in changes {
             apply(&mut self.entries, change)?;
         }
+        self.admit_namespace_material()
+    }
+
+    pub(crate) fn into_namespace(self) -> NamespaceView {
+        NamespaceView { source: self.source.reference(), entries: self.entries }
+    }
+
+    /// Replacing edit material invalidates material admission, not the stable
+    /// original occurrence mapping. Recheck the current namespace only; old
+    /// batches were admitted with their then-current materials during replay.
+    pub(crate) fn with_namespace(mut self, namespace: &NamespaceView)
+        -> Result<Self, NamespaceError>
+    {
+        if namespace.source != self.source.reference() {
+            return Err(NamespaceError::Source);
+        }
+        self.entries = namespace.entries.clone();
+        self.admit_namespace_material()
+    }
+
+    fn admit_namespace_material(self) -> Result<Self, NamespaceError> {
         let material = self.entries.iter().map(|entry| SnapshotEntry {
             path: entry.path.clone(),
             content: match entry.content {

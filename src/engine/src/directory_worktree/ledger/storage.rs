@@ -317,8 +317,8 @@ impl<'a> HeldWorktreeLedger<'a> {
                 if matches!(publication.scope, PublicationScope::FilesOnly) => {
                     self.verify_edits(&self.state.edits, EditAccess::ReadOnly)?;
                 }
-            Event::Commit { .. } | Event::Delete { .. } | Event::Restored { .. }
-                | Event::Completed { .. } => {}
+            Event::Namespace { .. } | Event::Commit { .. } | Event::Delete { .. }
+                | Event::Restored { .. } | Event::Completed { .. } => {}
         }
         self.append = AppendState::Uncertain;
         write_frame(&self.directory, &bytes, checkpoint)?;
@@ -395,11 +395,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         self.state.dirty_edits()
     }
     pub(crate) fn projection(&self) -> Result<SparseProjection<'_>, LedgerError> {
-        let edits = self.state.edits.iter().map(super::record::EditRecord::file_edit)
-            .collect::<Result<Vec<_>, _>>()?;
-        SparseProjection::admit_with_results(
-            self.source.manifest(), edits, &self.state.file_results,
-        ).map_err(LedgerError::Projection)
+        self.state.projection(self.source.manifest())
     }
     pub(crate) fn edits(&self) -> &[super::record::EditRecord] {
         &self.state.edits

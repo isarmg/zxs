@@ -3238,7 +3238,7 @@
       ]
     },
     "directory-history-worktree": {
-      "reason": "Sparse worktree lifecycle and fixed source provenance; anchored transition ledger with sealed edits, exact per-file results and dirty baselines; inode-bound read views and bounded pages; one logical namespace shared by sparse reads, directory pages, transfer plans and publication checks; bounded directory creation, subtree rename and removal. Namespace ledger persistence, container admission and live SMB registration remain separate integration.",
+      "reason": "Sparse worktree lifecycle and fixed source provenance; anchored transition ledger with sealed edits, exact per-file results and dirty baselines; inode-bound read views and bounded pages; one logical namespace shared by sparse reads, directory pages, transfer plans and publication checks; bounded directory creation, subtree rename and removal. Chronological namespace event replay verifies exact anchored reopen, original occurrence and sealed body retention, and retry and rejected-write behavior before publication. Container admission, namespace publication and live SMB registration remain separate integration.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -3255,7 +3255,7 @@
             "directory_worktree::io::tests::",
             "disk::owned::worktree_move::tests::"
           ],
-          "max_tests": 96,
+          "max_tests": 104,
           "timeout_seconds": 900
         }
       ]

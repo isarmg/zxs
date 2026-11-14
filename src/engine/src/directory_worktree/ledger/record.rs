@@ -1,6 +1,7 @@
 use super::LedgerError;
 use crate::directory_worktree::lifecycle::{Mount, Publication, Revision, SnapshotSource};
 use crate::directory_worktree::projection::{FileEdit, FileResult, WorkingFile};
+use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::directory_worktree::store::SparseWorktreeBinding;
 use crate::working_tree::snapshot::SnapshotFile;
 use data_serialization::{Deserialize, Deserializer, Serialize};
@@ -15,6 +16,8 @@ use storage_contract::working_tree::{
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct EditRecord {
+    /// Exact original snapshot occurrence, not its current visible path. This
+    /// also anchors the physical leaf after logical rename or removal.
     pub(crate) path: PortablePath,
     pub(crate) material: SnapshotFile,
     pub(crate) leaf: LookupName,
@@ -39,6 +42,13 @@ pub(crate) enum Event {
     /// Explicit completed writes merged into the retained overlay. Omission
     /// never drops an earlier edit and an unfinished upload is not an event.
     Edits { operation: OperationId, expected: Revision, edits: Vec<EditRecord> },
+    /// Ordered atomic namespace intent. It never authorizes FILE publication,
+    /// physical body deletion, or a production SMB namespace mutation.
+    Namespace {
+        operation: OperationId,
+        expected: Revision,
+        changes: Vec<NamespaceChange>,
+    },
     Commit {
         operation: OperationId,
         expected: Revision,

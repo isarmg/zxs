@@ -2,6 +2,7 @@ use super::*;
 use crate::directory_worktree::ledger::{EditRecord, Event};
 use crate::directory_worktree::lifecycle::{Mount, Publication};
 use crate::directory_worktree::projection::FileResult;
+use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::disk::DiskRoot;
 use crate::persist::layout::worktree as layout;
 use crate::working_tree::records::local_entity;
@@ -273,4 +274,75 @@ fn another_writer_advancing_the_checkpoint_fences_an_already_open_read_view() {
     }, trusted).unwrap();
     assert!(matches!(view.open_file(&lookup("Root.txt")),
         Err(ViewError::Ledger(LedgerError::Chain))));
+}
+
+
+#[test]
+fn durable_namespace_reads_and_pages_reopen_the_exact_original_and_sparse_occurrences() {
+    let fixture = Fixture::new();
+    let mut ledger = fixture.ledger();
+    let edit = fixture.edit(&mut ledger);
+    let prior = ledger.checkpoint();
+    let cursor = HeldReadView::sparse(&fixture.source, &ledger).unwrap()
+        .directory(None, None, NonZeroU16::new(1).unwrap()).unwrap().next.unwrap();
+    let changes = vec![
+        NamespaceChange::Rename {
+            source: lookup("Folder"), target: PortablePath::parse("Moved").unwrap(),
+        },
+        NamespaceChange::Rename {
+            source: lookup("Root.txt"), target: PortablePath::parse("Moved/Edited.txt").unwrap(),
+        },
+        NamespaceChange::AddDirectory { path: PortablePath::parse("Moved/New").unwrap() },
+        NamespaceChange::RemoveSubtree { path: lookup("Empty") },
+        NamespaceChange::Rename {
+            source: lookup("Moved"), target: PortablePath::parse("moved").unwrap(),
+        },
+    ];
+    ledger.append(Event::Namespace {
+        operation: operation(11), expected: ledger.worktree().revision(), changes,
+    }, trusted).unwrap();
+    let binding = ledger.binding();
+    let checkpoint = ledger.checkpoint();
+    let state = ledger.worktree().clone();
+    drop(ledger);
+    assert!(HeldWorktreeLedger::reopen(&fixture.source, binding, prior, trusted).is_err());
+    let recovered = HeldWorktreeLedger::reopen(
+        &fixture.source, binding, checkpoint, trusted,
+    ).unwrap();
+    assert_eq!(recovered.worktree(), &state);
+    assert_eq!(recovered.edits(), [edit.clone()]);
+    let view = HeldReadView::sparse(&fixture.source, &recovered).unwrap();
+    assert_eq!(read(&view, "MOVED/edited.TXT"), b"edited");
+    assert_eq!(read(&view, "moved/FILE.txt"), b"nested");
+    for missing in ["Root.txt", "Folder/file.txt", "Empty"] {
+        assert!(matches!(view.open_file(&lookup(missing)), Err(ViewError::Missing)));
+    }
+    assert!(matches!(view.directory(None, Some(&cursor), NonZeroU16::new(10).unwrap()),
+        Err(ViewError::Cursor)));
+    let root = view.directory(None, None, NonZeroU16::new(10).unwrap()).unwrap();
+    assert_eq!(root.entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["moved"]);
+    let children = view.directory(Some(&lookup("moved")), None, NonZeroU16::new(10).unwrap())
+        .unwrap();
+    assert_eq!(children.entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
+        ["moved/Edited.txt", "moved/file.txt", "moved/New"]);
+    assert!(view.directory(Some(&lookup("moved/New")), None, NonZeroU16::new(10).unwrap())
+        .unwrap().entries.is_empty());
+    assert_eq!(fixture.instance.directory().root_entries().unwrap().count(), 1);
+    assert_eq!(fs::read(fixture.instance.directory().path().join(edit.leaf.as_str())).unwrap(),
+        b"edited");
+    let fresh = HeldSparseWorktree::prepare(
+        &fixture.source, WorktreeId::from_random([16; 16]), operation(16),
+    ).unwrap();
+    let fresh_ledger = HeldWorktreeLedger::prepare(
+        &fixture.source, fresh.binding(), SnapshotBranchId::from_random([7; 16]),
+        Mount {
+            parent: DirectoryId::from_random([9; 16]),
+            name: LookupName::parse("worktree-main-002").unwrap(),
+        },
+    ).unwrap();
+    let fresh_view = HeldReadView::sparse(&fixture.source, &fresh_ledger).unwrap();
+    assert_eq!(read(&fresh_view, "Root.txt"), b"root");
+    assert_eq!(read(&fresh_view, "Folder/file.txt"), b"nested");
+    assert!(matches!(fresh_view.open_file(&lookup("moved/Edited.txt")), Err(ViewError::Missing)));
+    assert_eq!(fresh.directory().root_entries().unwrap().count(), 0);
 }
