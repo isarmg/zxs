@@ -115,14 +115,7 @@ pub(crate) fn capture_projected_copy(
 }
 
 pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
-    let ProjectedRecords { records, .. } = validated_records(view, file, history)?;
-    let prepared = CapturedMaterial::from_validated_records(
-        records,
-        file.to_owned(),
-        history.to_owned(),
-        view.state().sequence,
-    )?
-    .encode()?;
+    let prepared = CapturedMaterial::from_projection(view, file, history)?.encode()?;
     Ok(Prepared {
         bytes: prepared.bytes,
     })
@@ -246,6 +239,16 @@ struct CapturedMaterial {
 }
 
 impl CapturedMaterial {
+    fn from_projection(view: StateProjection<'_>, file: &str, history: &str) -> Result<Self> {
+        let ProjectedRecords { records, .. } = validated_records(view, file, history)?;
+        Self::from_validated_records(
+            records,
+            file.to_owned(),
+            history.to_owned(),
+            view.state().sequence,
+        )
+    }
+
     fn capture(records: Vec<Record>, file: &str, history: &str, sequence: u64) -> Result<Self> {
         validate_records(&records, file, history, sequence)?;
         Self::from_validated_records(records, file.to_owned(), history.to_owned(), sequence)

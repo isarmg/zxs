@@ -1608,14 +1608,14 @@ fn prepare_names_inner(
             let database = if skip_shared {
                 None
             } else {
-                let database = file_database::install::PreparedFile::capture(
+                let database = file_database::install::CapturedFile::capture(
                     &held.root,
                     (&history, &history_id),
                     &current,
                     &file,
                     view,
-                    admission,
-                )?;
+                )?
+                .prepare(admission)?;
                 database_bytes += database.byte_len();
                 if database_bytes > file_database::MAX_TOTAL_BYTES {
                     return Err(Error::new(

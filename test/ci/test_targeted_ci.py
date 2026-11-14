@@ -2621,6 +2621,7 @@ class ContainerPathFactSelection(unittest.TestCase):
         ]
         required = ['container-lifecycle-engine', 'container-path-facts-engine']
         cases = [(path, required) for path in sources] + [
+            ('src/engine/src/container_storage/unpublished.rs', required),
             ('test/engine/unit/business/history_move_projection_tests.rs',
              ['container-path-facts-engine', 'container-tags-engine']),
             ('test/engine/unit/business/history_move_native_lifecycle_tests.rs', required),

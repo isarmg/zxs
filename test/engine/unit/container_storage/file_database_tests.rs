@@ -870,17 +870,10 @@ fn typed_copy_capture_preserves_record_hash_and_exact_lifecycle_without_json_rou
     let before = fixture.bytes();
     let frozen = {
         let projection = crate::state_projection::ProjectionSnapshot::new(fixture.engine.state());
-        let ProjectedRecords { records, .. } = validated_records(
+        CapturedMaterial::from_projection(
             projection.view(),
             &fixture.file.file_id,
             &fixture.repo.history_tree_id,
-        )
-        .unwrap();
-        CapturedMaterial::capture(
-            records,
-            &fixture.file.file_id,
-            &fixture.repo.history_tree_id,
-            fixture.engine.state().sequence,
         )
         .unwrap()
     };
@@ -1096,7 +1089,7 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
     }
     let fixture = Fixture::new();
     let state = fixture.engine.state();
-    let projection = ProjectionSnapshot::new(state);
+    let expected = fixture.bytes();
     for case in [
         Case::CompletedLeaves,
         Case::MissingIntent,
@@ -1154,14 +1147,73 @@ fn unmarked_file_database_capture_binds_interrupted_rename_before_verifying_body
                 }
             }
         }
-        let result = install::PreparedFile::capture(
-            &root, (&history, &fixture.repo.history_tree_id), &container,
-            &fixture.file.file_id, projection.view(), InstallAdmission::DecidedRecovery,
-        );
+        let mut captured_state = state.clone();
+        if matches!(case, Case::MissingIntent) {
+            captured_state.file_notes.insert(
+                fixture.file.file_id.clone(),
+                "x".repeat(projection::MAX_RECORD_BYTES + 1),
+            );
+        }
+        let result = {
+            let projection = ProjectionSnapshot::new(&captured_state);
+            if matches!(case, Case::MissingIntent) {
+                let logical_error = CapturedMaterial::from_projection(
+                    projection.view(),
+                    &fixture.file.file_id,
+                    &fixture.repo.history_tree_id,
+                )
+                .err()
+                .unwrap();
+                assert_eq!(logical_error.code(), ErrorCode::ResourceLimit);
+            }
+            install::CapturedFile::capture(
+                &root, (&history, &fixture.repo.history_tree_id), &container,
+                &fixture.file.file_id, projection.view(),
+            )
+        };
         match case {
-            Case::CompletedLeaves => assert!(result.is_ok(), "{case:?}"),
+            Case::CompletedLeaves => {
+                // A fresh capture now fails; preparation must consume the earlier rows.
+                captured_state.file_notes.insert(
+                    fixture.file.file_id.clone(),
+                    "x".repeat(projection::MAX_RECORD_BYTES + 1),
+                );
+                let changed = ProjectionSnapshot::new(&captured_state);
+                let error = CapturedMaterial::from_projection(
+                    changed.view(), &fixture.file.file_id, &fixture.repo.history_tree_id,
+                )
+                .err()
+                .unwrap();
+                assert_eq!(error.code(), ErrorCode::ResourceLimit);
+                let mut prepared = result
+                    .unwrap()
+                    .prepare(InstallAdmission::DecidedRecovery)
+                    .unwrap();
+                let installs = history.join(".zxs-layout/database-installs");
+                assert!(!installs.exists());
+                prepared
+                    .stage_unpublished(&root, &container, &mut |_| Ok(()))
+                    .unwrap();
+                let generations = std::fs::read_dir(&installs)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>();
+                assert_eq!(generations.len(), 1);
+                let attempts = std::fs::read_dir(&generations[0])
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>();
+                assert_eq!(attempts.len(), 1);
+                assert_eq!(std::fs::read(attempts[0].join("payload")).unwrap(), expected);
+                prepared.verify_unpublished(&root, &container).unwrap();
+            }
+            Case::MissingIntent => {
+                // Physical source failure still precedes the known row budget error.
+                assert_eq!(result.err().unwrap().code(), ErrorCode::ContainerLayoutInvalid);
+            }
             _ => assert!(result.is_err(), "{case:?}"),
         }
+        assert!(!container.join(NAME).exists());
         assert!(!container.join(".zxs-container-owner.json").exists());
     }
 }

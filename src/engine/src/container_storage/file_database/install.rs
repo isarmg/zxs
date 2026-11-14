@@ -1,6 +1,6 @@
 //! Source-bound file-container installation. The common installer owns all
 //! publication, retention and crash recovery; this adapter only proves scope.
-use super::{MAX_BYTES, invalid, prepare, verify_scope};
+use super::{CapturedMaterial, MAX_BYTES, invalid, verify_scope};
 use crate::{
     Result,
     database_install::{InstallAdmission, PreparedInstall, Scope},
@@ -10,35 +10,74 @@ use crate::{
 use platform_io::fs_safety::linux::FileIdentity;
 use std::path::Path;
 
-pub(in crate::container_storage) struct PreparedFile {
-    install: PreparedInstall,
+/// One retained entity and its complete logical FILE material. Capturing keeps
+/// physical admission ahead of row admission; preparation consumes the rows
+/// without consulting State or replacing the held entity binding. Neither
+/// phase authorizes publication or installation.
+pub(in crate::container_storage) struct CapturedFile<'a> {
+    root: &'a DiskRoot,
+    history: &'a Path,
+    container: &'a Path,
+    held: DiskRoot,
     inode: FileIdentity,
+    material: CapturedMaterial,
 }
-impl PreparedFile {
+
+impl<'a> CapturedFile<'a> {
     pub(in crate::container_storage) fn capture(
-        root: &DiskRoot,
-        history: (&Path, &str),
-        container: &Path,
+        root: &'a DiskRoot,
+        history: (&'a Path, &str),
+        container: &'a Path,
         file: &str,
         view: StateProjection<'_>,
-        admission: InstallAdmission,
     ) -> Result<Self> {
-        let (history_path, history_id) = history;
         let held = capture_entity(root, history, container, file, view)?;
         let inode = held.directory_identity(held.path())?;
-        let database = prepare(view, file, history_id)?;
+        let material = CapturedMaterial::from_projection(view, file, history.1)?;
+        Ok(Self {
+            root,
+            history: history.0,
+            container,
+            held,
+            inode,
+            material,
+        })
+    }
+
+    pub(in crate::container_storage) fn prepare(
+        self,
+        admission: InstallAdmission,
+    ) -> Result<PreparedFile> {
+        let Self {
+            root,
+            history,
+            container,
+            held: _held,
+            inode,
+            material,
+        } = self;
+        let database = material.encode()?;
+        let file = &database.file;
+        let history_id = &database.history;
         let install = PreparedInstall::capture(
             root,
-            history_path,
+            history,
             (container, inode),
             (Scope::file(history_id, file)?, admission),
             database.bytes,
             MAX_BYTES,
             |bytes| verify_scope(bytes, file, history_id),
         )?;
-        // `held` remains alive through matching capture, preventing inode reuse.
-        Ok(Self { install, inode })
+        // The original descriptor remains alive through matching capture.
+        Ok(PreparedFile { install, inode })
     }
+}
+
+pub(in crate::container_storage) struct PreparedFile {
+    install: PreparedInstall,
+    inode: FileIdentity,
+}
+impl PreparedFile {
     pub(in crate::container_storage) fn reservation(&self) -> (u64, usize) {
         self.install.reservation()
     }

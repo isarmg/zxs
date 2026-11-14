@@ -24,14 +24,14 @@ pub(crate) fn read_unpublished_file_databases(
         let container =
             container_at(root, &history, Some(history_id), file, &mut |_| observe())?
                 .ok_or_else(|| invalid("unpublished FILE scope has no retained container"))?;
-        let prepared = file_database::install::PreparedFile::capture(
+        let prepared = file_database::install::CapturedFile::capture(
             root,
             (&history, history_id),
             &container,
             file,
             view,
-            crate::database_install::InstallAdmission::NewOperation,
-        )?;
+        )?
+        .prepare(crate::database_install::InstallAdmission::NewOperation)?;
         bytes = bytes
             .checked_add(prepared.byte_len())
             .ok_or_else(|| invalid("unpublished FILE byte count overflow"))?;
