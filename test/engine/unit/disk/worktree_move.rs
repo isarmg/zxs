@@ -56,6 +56,21 @@ fn move_keeps_one_inode_at_destination_and_never_copies_body_back_to_worktree() 
 }
 
 #[test]
+fn recovery_with_source_still_present_moves_the_original_and_retries_same_receipt() {
+    let mut fixture = Fixture::new();
+    fixture.source = DiskRoot::open(fixture.source.path()).unwrap();
+    fixture.target = DiskRoot::open(fixture.target.path()).unwrap();
+    let receipt = fixture.resume().unwrap();
+    assert_eq!(receipt.identity.device, fixture.expected.entity.device());
+    assert_eq!(receipt.identity.inode, fixture.expected.entity.inode());
+    assert_eq!(receipt.blake3, fixture.expected.content_hash.digest());
+    assert!(fixture.source.open_optional_read_entry(&fixture.from).unwrap().is_none());
+    assert_eq!(fixture.target.read_entry_bytes(&fixture.to, 100).unwrap(), b"sealed edit");
+    assert_eq!(fixture.resume().unwrap(), receipt);
+    assert_eq!(fixture.target.root_entries().unwrap().count(), 1);
+}
+
+#[test]
 fn cold_recovery_of_an_already_renamed_inode_requires_the_original_exact_decision() {
     let fixture = Fixture::new();
     fs::rename(

@@ -84,12 +84,9 @@ impl DiskRoot {
         to: &EntryName,
         expected: FrozenFileMove,
     ) -> Result<Receipt, FileMoveError> {
-        let source = self.operation().map_err(FileMoveFault::Gate)
+        let (source, destination, location) = admit_move(self, from, target, to, expected)
             .map_err(FileMoveError::Rejected)?;
-        let destination = target.operation().map_err(FileMoveFault::Gate)
-            .map_err(FileMoveError::Rejected)?;
-        same_domain(self, target, &source, &destination).map_err(FileMoveError::Rejected)?;
-        match locate(&source, from, &destination, to, expected).map_err(FileMoveError::Rejected)? {
+        match location {
             Location::Source(held) => move_held(&source, from, &destination, to, expected, held),
             Location::Destination(_) => {
                 Err(FileMoveError::Rejected(FileMoveFault::ExistingDestination))
@@ -107,12 +104,9 @@ impl DiskRoot {
         to: &EntryName,
         expected: FrozenFileMove,
     ) -> Result<Receipt, FileMoveError> {
-        let source = self.operation().map_err(FileMoveFault::Gate)
+        let (source, destination, location) = admit_move(self, from, target, to, expected)
             .map_err(FileMoveError::Recovery)?;
-        let destination = target.operation().map_err(FileMoveFault::Gate)
-            .map_err(FileMoveError::Recovery)?;
-        same_domain(self, target, &source, &destination).map_err(FileMoveError::Recovery)?;
-        match locate(&source, from, &destination, to, expected).map_err(FileMoveError::Recovery)? {
+        match location {
             Location::Source(held) => move_held(&source, from, &destination, to, expected, held),
             Location::Destination(held) => {
                 held.file.sync_all().map_err(FileMoveFault::PayloadSync)
@@ -124,6 +118,20 @@ impl DiskRoot {
             }
         }
     }
+}
+
+fn admit_move<'a>(
+    source_root: &'a DiskRoot,
+    from: &EntryName,
+    destination_root: &'a DiskRoot,
+    to: &EntryName,
+    expected: FrozenFileMove,
+) -> Result<(RootOperation<'a>, RootOperation<'a>, Location), FileMoveFault> {
+    let source = source_root.operation().map_err(FileMoveFault::Gate)?;
+    let destination = destination_root.operation().map_err(FileMoveFault::Gate)?;
+    same_domain(source_root, destination_root, &source, &destination)?;
+    let location = locate(&source, from, &destination, to, expected)?;
+    Ok((source, destination, location))
 }
 
 fn same_domain(
