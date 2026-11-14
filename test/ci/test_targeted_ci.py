@@ -1206,7 +1206,8 @@ class TargetedSelection(unittest.TestCase):
         plan = assert_path_group_extension(self, self.policy, paths, [
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine',
+            'upload-occurrence-source'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
