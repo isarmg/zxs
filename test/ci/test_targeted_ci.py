@@ -2004,11 +2004,18 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'test/server/integration/http_engine.rs',
             'test/server/unit/smb_rpc/default_share_tests.rs',
         ]
+        new_only = {paths[0], paths[3]}
+        group = self.policy['groups'][name]
         for path in paths:
             with self.subTest(path=path):
-                assert_path_group_extension(self, self.policy, [path], None, [name])
+                if path in new_only:
+                    plan = CI.select_plan(self.policy, [path], shardable=True)
+                    self.assertEqual(plan['groups'], [name])
+                    self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+                else:
+                    assert_path_group_extension(self, self.policy, [path], None, [name])
         assert_path_group_extension(self, self.policy, paths, None, [name])
-        web, smb, *checks = self.policy['groups'][name]['rust_targets']
+        web, smb, *checks = group['rust_targets']
         self.assertEqual((web['name'], web['isolate']), ('http_engine', True))
         self.assertEqual((web['max_tests'], smb['max_tests']), (4, 6))
         self.assertEqual(len(web['exact']), 4)
