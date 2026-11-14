@@ -347,6 +347,30 @@ fn parent_rename_translates_child_locators_without_staging_the_child() {
 }
 
 #[test]
+fn preflight_rejects_unadmitted_future_file_id_without_layout_writes() {
+    let fixture = Fixture::new();
+    let anchor = fixture.anchor();
+    let record = directory_locator_path(&anchor, &fixture.root_id);
+    let original = fixture.root.read_bytes(&record, 64 * 1024).unwrap();
+    let batch = Batch {
+        databases: BTreeMap::new(),
+        directories: vec![fixture.root_change()],
+        files: Vec::new(),
+    };
+    let valid = FutureFile {
+        file_id: identifier("file", 'a'),
+        to: address(&fixture.root_id, "future"),
+    };
+    preflight(&anchor, &batch, std::slice::from_ref(&valid), &mut |_| Ok(())).unwrap();
+    let invalid = FutureFile { file_id: identifier("repo", 'a'), ..valid };
+    let error = preflight(&anchor, &batch, &[invalid], &mut |_| Ok(())).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::InvalidId);
+    assert_eq!(fixture.root.read_bytes(&record, 64 * 1024).unwrap(), original);
+    assert!(fixture.root.optional_metadata(&fixture.root_path().join("future"))
+        .unwrap().is_none());
+}
+
+#[test]
 fn unknown_empty_directory_and_symlink_targets_are_rejected_without_record_writes() {
     for linked in [false, true] {
         let fixture = Fixture::new();

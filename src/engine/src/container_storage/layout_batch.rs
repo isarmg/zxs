@@ -747,11 +747,13 @@ fn targets(
                 .map(|file| (file.file_id.as_str(), &file.to, false)),
         )
     {
-        storage_contract::validate_id(file_id, "file")?;
-        if !concrete && !file_ids.insert(file_id.to_owned()) {
-            return Err(invalid(
-                "future file repeats an existing or future file identity",
-            ));
+        if !concrete {
+            storage_contract::validate_id(file_id, "file")?;
+            if !file_ids.insert(file_id.to_owned()) {
+                return Err(invalid(
+                    "future file repeats an existing or future file identity",
+                ));
+            }
         }
         if let FileAddress::Directory { directory_id, .. } = to
             && changes
