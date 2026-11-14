@@ -9,6 +9,22 @@ fn changed() -> Error {
     Error::PathChange(PathChangeError::WorkspaceLocation)
 }
 
+/// Preserve the admitted occurrence across unlocked upload I/O. Current names
+/// are projected separately; an equal version alone cannot identify its owner.
+/// Workspace/context admission remains responsible for branch and selection fences.
+pub(super) fn same_source(left: Option<&Entry>, right: Option<&Entry>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left.kind == right.kind
+                && left.entry_id == right.entry_id
+                && left.file_id == right.file_id
+                && left.version_id == right.version_id
+        }
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 pub(crate) fn project<'a>(
     state: &State,
     view: Option<&CurrentNamespaces>,
@@ -64,10 +80,7 @@ pub(crate) fn project<'a>(
     let context = directory::context_at_key(state, &repository.repository_id, path.key())
         .ok_or_else(changed)?;
     if &context != selected
-        || current.kind != NamespaceEntryKind::File
-        || current.file_id != body.file_id
-        || current.entry_id != body.entry_id
-        || current.version_id != body.version_id
+        || !same_source(Some(current), Some(body))
         || current.size != body.size
     {
         return Err(changed());
@@ -87,3 +100,7 @@ pub(crate) fn project<'a>(
     namespace::sorted(&mut projected);
     Ok(Cow::Owned(projected))
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/business/workspace_file_location_tests.rs"]
+mod tests;

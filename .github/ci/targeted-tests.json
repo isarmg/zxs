@@ -3767,6 +3767,39 @@
           "features": []
         }
       ]
+    },
+    "upload-occurrence-source": {
+      "reason": "Retain exact admitted upload occurrence identity across unlocked I/O without changing workspace bytes or history; preserve name projection, same-body selection fences, staged generations and cold retry.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "prefixes": [
+            "business::workspace::file_location::tests::",
+            "business::workspace::upload_admission_tests::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
     }
   },
   "rules": [
@@ -10320,6 +10353,30 @@
       "path": "test/engine/unit/container_storage/layout_locator_tests.rs",
       "groups": [
         "directory-layout-probe"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "upload-occurrence-source"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/file_location.rs",
+      "groups": [
+        "upload-occurrence-source"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/upload_admission_tests.rs",
+      "groups": [
+        "upload-occurrence-source"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_file_location_tests.rs",
+      "groups": [
+        "upload-occurrence-source"
       ]
     }
   ],

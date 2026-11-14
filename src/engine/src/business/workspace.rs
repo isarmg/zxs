@@ -37,7 +37,7 @@ pub struct UploadPreparation {
     io: UploadIo,
     expected_content: Option<(u64, ContentHash)>,
     generation: u64,
-    base_version_id: Option<String>,
+    base_entry: Option<Entry>,
     directory: std::path::PathBuf,
     disk_resources: std::sync::Arc<DiskResources>,
     target: std::path::PathBuf,
@@ -751,7 +751,7 @@ impl Engine {
             io,
             expected_content,
             generation,
-            base_version_id: base_entry.map(|entry| entry.version_id),
+            base_entry,
             directory,
             disk_resources: std::sync::Arc::clone(&self.disk_resources),
             target,
@@ -781,7 +781,7 @@ impl Engine {
         )?;
         if canonical_json(&w)? != canonical_json(&plan.workspace)?
             || !std::sync::Arc::ptr_eq(&self.disk_resources, &plan.disk_resources)
-            || base_entry.map(|entry| entry.version_id) != plan.base_version_id
+            || !file_location::same_source(base_entry.as_ref(), plan.base_entry.as_ref())
             || self.config.max_file_bytes != plan.max_file_bytes
             || self.config.max_workspace_bytes != plan.max_workspace_bytes
             || self.config.checksum_chunk_bytes != plan.chunk_bytes
@@ -825,7 +825,7 @@ impl Engine {
             size: prepared.size,
             content_hash: prepared.hash,
             dirty_generation: plan.generation,
-            base_version_id: plan.base_version_id.clone(),
+            base_version_id: plan.base_entry.as_ref().map(|entry| entry.version_id.clone()),
         };
         w.files.insert(plan.item.clone(), staged.clone());
         self.persist_workspace(&w)?;

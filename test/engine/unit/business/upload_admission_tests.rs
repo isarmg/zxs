@@ -156,3 +156,169 @@ fn retry_verified_file_is_revoked_without_deleting_the_staged_generation() {
         staged.source_path
     );
 }
+
+fn existing_file_fixture() -> (tempfile::TempDir, Engine, Workspace, std::path::PathBuf, Entry) {
+    let (temporary, mut engine, initial, source) = fixture();
+    engine
+        .stage_bytes(&initial.workspace_id, "report.txt", b"original body")
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: initial.workspace_id,
+            operation_id: OperationId::generate().unwrap(),
+            principal: "admin".into(),
+            expected_head: initial.base_head,
+            fencing_token: initial.fencing_token,
+            message: "source occurrence fixture".into(),
+            request_digest: None,
+        })
+        .unwrap();
+    let entry = engine.list_tree(&initial.branch_id).unwrap().remove(0);
+    let workspace = engine.create_workspace(&initial.branch_id, "admin").unwrap();
+    (temporary, engine, workspace, source, entry)
+}
+
+#[test]
+fn prepared_upload_keeps_source_identity_through_case_rename_and_cold_retry() {
+    let (temporary, mut engine, workspace, source, original) = existing_file_fixture();
+    let prepared = engine
+        .prepare_upload(
+            &workspace.workspace_id,
+            &original.entry_id,
+            "report.txt",
+            &source,
+            1,
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    let repository = engine.repository_for_branch(&workspace.branch_id).unwrap().clone();
+    engine
+        .file_namespace(
+            &repository.repository_id,
+            NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::Rename,
+                "report.txt",
+                Some("REPORT.txt"),
+            )
+            .unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let current = engine.list_tree(&workspace.branch_id).unwrap().remove(0);
+    assert_eq!(current.entry_id, original.entry_id);
+    assert_eq!(current.file_id, original.file_id);
+    assert_eq!(current.version_id, original.version_id);
+    assert_eq!(current.path(), "REPORT.txt");
+    let published = canonical_json(engine.state()).unwrap();
+    let staged = engine.finish_upload(prepared).unwrap();
+    assert_eq!(staged.base_version_id.as_ref(), Some(&original.version_id));
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
+    assert_eq!(fs::read(&staged.source_path).unwrap(), b"verified upload bytes");
+    let manifest = canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap();
+    drop(engine);
+    let mut engine = Engine::open(&temporary.path().join("state")).unwrap();
+    let replay = engine
+        .stage_upload(
+            &workspace.workspace_id,
+            &original.entry_id,
+            "report.txt",
+            &source,
+            1,
+        )
+        .unwrap();
+    assert_eq!(canonical_json(&replay).unwrap(), canonical_json(&staged).unwrap());
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        manifest,
+    );
+    assert_eq!(engine.list_tree(&workspace.branch_id).unwrap(), vec![current]);
+    let mut historical = engine.open_content(&original.version_id).unwrap();
+    let mut bytes = Vec::new();
+    historical.file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original body");
+}
+
+#[test]
+fn prepared_upload_same_body_selection_change_preserves_staged_generation_after_reopen() {
+    let (temporary, mut engine, workspace, source, original) = existing_file_fixture();
+    let retained = engine
+        .stage_upload(
+            &workspace.workspace_id,
+            &original.entry_id,
+            "report.txt",
+            &source,
+            1,
+        )
+        .unwrap();
+    fs::write(&source, b"later pending bytes").unwrap();
+    let prepared = engine
+        .prepare_upload(
+            &workspace.workspace_id,
+            &original.entry_id,
+            "report.txt",
+            &source,
+            2,
+        )
+        .unwrap()
+        .execute()
+        .unwrap();
+    let selected = engine
+        .create_file_branch(
+            &original.file_id,
+            &original.version_id,
+            &storage_contract::BranchName::parse("same body selection").unwrap(),
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap()
+        .branch_id
+        .unwrap();
+    engine
+        .select_file_branch(
+            &original.file_id,
+            &selected,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let current = engine.list_tree(&workspace.branch_id).unwrap().remove(0);
+    assert_eq!(current.version_id, original.version_id);
+    let published = canonical_json(engine.state()).unwrap();
+    let manifest = canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap();
+    assert_eq!(
+        engine.finish_upload(prepared).unwrap_err().code(),
+        ErrorCode::FileBranchConflict,
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        manifest,
+    );
+    assert_eq!(fs::read(&retained.source_path).unwrap(), b"verified upload bytes");
+    assert_eq!(fs::read(&source).unwrap(), b"later pending bytes");
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("state")).unwrap();
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        manifest,
+    );
+    assert_eq!(
+        engine
+            .prepare_upload(
+                &workspace.workspace_id,
+                &original.entry_id,
+                "report.txt",
+                &source,
+                2,
+            )
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::FileBranchConflict,
+    );
+    assert_eq!(fs::read(&retained.source_path).unwrap(), b"verified upload bytes");
+}
