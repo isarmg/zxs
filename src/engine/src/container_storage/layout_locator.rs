@@ -564,6 +564,15 @@ fn probe_directory(
     relative: &HistoryRelative,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Option<EntityInode>> {
+    probe_directory_with_label(anchor, relative, observe, "layout candidate")
+}
+
+pub(super) fn probe_directory_with_label(
+    anchor: &HistoryAnchor<'_>,
+    relative: &HistoryRelative,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    label: &'static str,
+) -> Result<Option<EntityInode>> {
     let mut path = anchor.path.clone();
     let mut identity = None;
     for component in relative.as_path().components() {
@@ -574,7 +583,7 @@ fn probe_directory(
         };
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(invalid(format!(
-                "layout candidate is not a directory: {path:?}"
+                "{label} is not a directory: {path:?}"
             )));
         }
         identity = Some(EntityInode::capture(anchor.root, &path)?);

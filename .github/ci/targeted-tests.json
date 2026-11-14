@@ -3743,6 +3743,30 @@
           "features": []
         }
       ]
+    },
+    "directory-layout-probe": {
+      "reason": "Shared existing directory-component probe for container layout batches and locators: held mount, exact inode, missing/non-directory paths, cancellation, and existing replay fixtures. No new publication or backup behavior.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "container_storage::layout_batch::tests::",
+            "container_storage::layout_locator::tests::"
+          ],
+          "max_tests": 48,
+          "timeout_seconds": 300
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "kind": "lib",
+          "default_features": false,
+          "features": []
+        }
+      ]
     }
   },
   "rules": [
@@ -10272,6 +10296,30 @@
       "path": "test/engine/unit/engine/published_snapshot_tests.rs",
       "groups": [
         "published-snapshot-proof"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/layout_batch.rs",
+      "groups": [
+        "directory-layout-probe"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/layout_locator.rs",
+      "groups": [
+        "directory-layout-probe"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/layout_batch_tests.rs",
+      "groups": [
+        "directory-layout-probe"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/layout_locator_tests.rs",
+      "groups": [
+        "directory-layout-probe"
       ]
     }
   ],

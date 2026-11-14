@@ -4,11 +4,11 @@
 //! with the caller. A locator or a binding never grants permission to move an
 //! entity. New directories already exist in exclusive private preparation
 //! names; this executor neither creates nor adopts a user-visible directory.
-use super::layout_locator::{
+use crate::container_storage::layout_locator::{
     DirectoryId, DirectoryIntent, EntityInode, FileAddress, FileIntent, HistoryAnchor,
     HistoryRelative, StableRelative, directory_locator_path, file_locator_path, file_staging,
-    load_directory, load_file, locate_directory, locate_file, relocate_directory, store_directory,
-    store_file, sync_retry_tails,
+    load_directory, load_file, locate_directory, locate_file, probe_directory_with_label,
+    relocate_directory, store_directory, store_file, sync_retry_tails,
 };
 use crate::{Error, Result};
 use std::{
@@ -95,22 +95,7 @@ fn probe(
         return Ok(Some(EntityInode::capture(anchor.root(), path)?));
     }
     let address = relative(anchor, path)?;
-    let mut current = anchor.path().to_path_buf();
-    let mut inode = None;
-    for component in address.as_path().components() {
-        observe(0)?;
-        current.push(component);
-        let Some(metadata) = anchor.root().optional_metadata(&current)? else {
-            return Ok(None);
-        };
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid(format!(
-                "batch address is not a directory: {current:?}"
-            )));
-        }
-        inode = Some(EntityInode::capture(anchor.root(), &current)?);
-    }
-    Ok(inode)
+    probe_directory_with_label(anchor, &address, observe, "batch address")
 }
 
 fn record_present(
