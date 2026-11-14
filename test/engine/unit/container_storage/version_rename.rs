@@ -48,7 +48,7 @@ fn fixture() -> (tempfile::TempDir, DiskRoot, State, String, String, std::path::
 #[test]
 fn decided_version_rename_resumes_partial_leaves_and_keeps_bodies_ids_and_inodes() {
     for stop in ["version-names-intent", "version-name-renamed"] {
-        let (_temp, root, state, file, history, container) = fixture();
+        let (temp, root, state, file, history, container) = fixture();
         let state_before = storage_contract::canonical_json(&state).unwrap();
         let target_name = Name::parse("latest.bin").unwrap();
         let before = state.versions.values().map(|version| {
@@ -63,6 +63,8 @@ fn decided_version_rename_resumes_partial_leaves_and_keeps_bodies_ids_and_inodes
             if point == stop { Err(Error::VersionNames(VersionNameError::Intent)) }
             else { Ok(()) }
         }).is_err());
+        drop(root);
+        let root = DiskRoot::open(temp.path()).unwrap();
         for version in state.versions.values() {
             let path = interrupted_path(&root, &container, version).unwrap().unwrap();
             assert!(path.is_file());
@@ -248,5 +250,59 @@ fn read_locator_rejects_container_outside_both_intent_endpoints() {
     root.rename_noreplace_synced(&container, &unrelated).unwrap();
     for version in state.versions.values() {
         assert!(interrupted_path(&root, &unrelated, version).is_err());
+    }
+}
+
+#[test]
+fn resumed_version_rename_rejects_changed_metadata_at_source_and_completed_target() {
+    for stop in ["version-names-intent", "version-name-renamed"] {
+        let (temp, root, state, file, history, container) = fixture();
+        let name = Name::parse("latest.bin").unwrap();
+        let prepared = Prepared::capture(&root, &container, &state, &file, &history, &name)
+            .unwrap().unwrap();
+        assert!(prepared.apply(&root, &container, &mut |point| {
+            if point == stop {
+                Err(Error::VersionNames(VersionNameError::Intent))
+            } else {
+                Ok(())
+            }
+        }).is_err());
+        drop(root);
+        let root = DiskRoot::open(temp.path()).unwrap();
+        let recovered = Prepared::capture(&root, &container, &state, &file, &history, &name)
+            .unwrap().unwrap();
+        let retained = state.versions.values().map(|version| {
+            let path = interrupted_path(&root, &container, version).unwrap().unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            (version, path, metadata, bytes)
+        }).collect::<Vec<_>>();
+        let (version, path, before, _) = &retained[0];
+        assert_eq!(
+            path == &installed_version_path(&container, version).unwrap(),
+            stop == "version-names-intent",
+        );
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(before.mode() ^ 0o100),
+        ).unwrap();
+        let changed = std::fs::metadata(path).unwrap();
+        assert_eq!((changed.dev(), changed.ino()), (before.dev(), before.ino()));
+        assert_eq!(changed.len(), before.len());
+        assert_eq!(
+            (changed.mtime(), changed.mtime_nsec()),
+            (before.mtime(), before.mtime_nsec()),
+        );
+        assert_ne!(changed.mode(), before.mode());
+        assert!(matches!(
+            recovered.apply(&root, &container, &mut |_| Ok(())),
+            Err(Error::VersionNames(VersionNameError::Intent)),
+        ));
+        for (version, path, before, bytes) in retained {
+            assert_eq!(interrupted_path(&root, &container, version).unwrap(), Some(path.clone()));
+            let after = std::fs::metadata(&path).unwrap();
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
     }
 }

@@ -295,11 +295,13 @@ impl Prepared {
             }
             let (path, complete) = position(root, container, &self.intent, body)?;
             let (_, target) = paths(container, &self.intent, body)?;
+            // Completed recovery leaves retain a freshly captured stamp too;
+            // a prior rename does not authorize changes after that capture.
+            let before = crate::file_stamp::FileStamp::from_metadata(&held.file.metadata()?);
+            if before != held.stamp {
+                return Err(invalid());
+            }
             if !complete {
-                let before = crate::file_stamp::FileStamp::from_metadata(&held.file.metadata()?);
-                if before != held.stamp {
-                    return Err(invalid());
-                }
                 root.rename_noreplace_synced(&path, &target)?;
                 let after = crate::file_stamp::FileStamp::from_metadata(&held.file.metadata()?);
                 if !after.differs_only_by_rename(&before) {
