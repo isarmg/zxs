@@ -16,12 +16,18 @@ use storage_engine::PreparedOrdinaryDirectory;
 enum ConversionTarget<'a> {
     Fresh(&'a storage_contract::storage_directories::CandidateSelection),
     Retained(Option<&'a str>),
+    Registered(&'a storage_contract::storage_addition::AdditionPreview),
 }
 impl ConversionTarget<'_> {
     fn path(&self) -> Option<&str> {
         match self {
             Self::Fresh(selection) => Some(&selection.root_path),
             Self::Retained(path) => *path,
+            Self::Registered(target) => target
+                .request
+                .additions
+                .first()
+                .map(|addition| addition.selection.root_path.as_str()),
         }
     }
 }
@@ -471,15 +477,24 @@ impl ManagementBackend {
         }
         let source = match prepared {
             Some(source) => source,
-            None => self.inspect_conversion_source(
-                identity,
-                &record.status.preview.source,
-                Some(
-                    &record.status.preview.target.request.additions[0]
-                        .selection
-                        .root_path,
-                ),
-            )?,
+            None => {
+                let target = &record.status.preview.target;
+                if record.status.registration.as_ref().is_some_and(|status| {
+                    status.state == AdditionState::Completed && status.result.is_some()
+                }) {
+                    self.inspect_conversion_input(
+                        identity,
+                        &record.status.preview.source,
+                        ConversionTarget::Registered(target),
+                    )?
+                } else {
+                    self.inspect_conversion_source(
+                        identity,
+                        &record.status.preview.source,
+                        Some(&target.request.additions[0].selection.root_path),
+                    )?
+                }
+            }
         };
         if source_preview(&source) != record.status.preview.source_preview {
             return Err(ApiError::conflict(
@@ -537,9 +552,9 @@ impl ManagementBackend {
                     .into_storage_directory(),
                 )
             }
-            // Retained registration is checked against its exact original
-            // receipt by run_ordinary_conversion. Never reopen it as empty.
-            ConversionTarget::Retained(_) => None,
+            // A retained target is not an empty candidate. Its completed
+            // registration is resolved through the original Engine below.
+            ConversionTarget::Retained(_) | ConversionTarget::Registered(_) => None,
         };
         excluded.extend(target.path().map(PathBuf::from));
         let directory = crate::storage_directories::reopen_source(
@@ -548,15 +563,25 @@ impl ManagementBackend {
             &excluded,
             &stopped,
         )?;
-        let source = match target_directory {
-            Some(target) => PreparedOrdinaryDirectory::inspect_for_target(
+        let source = match target {
+            ConversionTarget::Registered(target) => backend.inspect_registered_conversion(
+                identity,
+                target,
                 directory,
                 Path::new(&source.path),
-                &target,
-            ),
-            None => PreparedOrdinaryDirectory::inspect(directory, Path::new(&source.path)),
-        }
-        .map_err(crate::engine_backend::error)?;
+            )?,
+            ConversionTarget::Fresh(_) | ConversionTarget::Retained(_) => {
+                match target_directory {
+                    Some(target) => PreparedOrdinaryDirectory::inspect_for_target(
+                        directory,
+                        Path::new(&source.path),
+                        &target,
+                    ),
+                    None => PreparedOrdinaryDirectory::inspect(directory, Path::new(&source.path)),
+                }
+                .map_err(crate::engine_backend::error)?
+            }
+        };
         Ok(PreparedOrdinaryConversion { backend, source })
     }
     fn preview_ordinary_conversion(

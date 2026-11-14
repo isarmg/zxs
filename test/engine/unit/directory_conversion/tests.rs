@@ -690,3 +690,100 @@ fn registered_import_budget_rejects_source_and_destination_parent_before_writes(
     assert_eq!(contents(&engine.config().disks[0].root), disk_before);
     assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
 }
+
+#[test]
+fn registered_target_preview_checks_raw_budget_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = make_source(temp.path());
+    let engine = engine(temp.path());
+    let target = engine.registered_disks().next().unwrap().identity();
+    let disk = &engine.config().disks[0].root;
+    assert_eq!(
+        rustix::fs::fstatvfs(&fs::File::open(disk).unwrap())
+            .unwrap()
+            .f_namemax,
+        255
+    );
+    let disk_before = contents(disk);
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    for suffix in ["", "x"] {
+        let name = format!("{}{suffix}", "界".repeat(80));
+        let relative = PathBuf::from("旅行").join(&name);
+        fs::write(source.join(&relative), b"retain source bytes").unwrap();
+        let source_before = contents(&source);
+        let captured = PreparedOrdinaryDirectory::capture_registered_target(&engine, &target)
+            .unwrap();
+        let result = captured.inspect(fs::File::open(&source).unwrap(), &source);
+        assert!(matches!(
+            result,
+            Err(Error::ConversionNameBudget(NameBudgetError::ComponentTooLong {
+                path, bytes, allowed: 239,
+            })) if path == relative && bytes == name.len()
+        ));
+        assert_eq!(contents(&source), source_before);
+        assert_eq!(contents(disk), disk_before);
+        assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+        fs::remove_file(source.join(relative)).unwrap();
+    }
+    let name = format!("{}ab", "界".repeat(79));
+    fs::write(source.join("旅行").join(name), b"239 UTF-8 bytes").unwrap();
+    let source_before = contents(&source);
+    let original = inspect(&source).preview().digest;
+    let captured = PreparedOrdinaryDirectory::capture_registered_target(&engine, &target).unwrap();
+    let prepared = captured
+        .inspect(fs::File::open(&source).unwrap(), &source)
+        .unwrap();
+    assert_eq!(prepared.preview().digest, original);
+    prepared
+        .prepare_new_disk_import(&engine, &target.slot_id)
+        .unwrap();
+    assert_eq!(contents(&source), source_before);
+    assert_eq!(contents(disk), disk_before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+}
+
+#[test]
+fn registered_target_inventory_cannot_bind_another_registration() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let source = make_source(temp.path());
+    let engine = Engine::initialize(
+        &temp.path().join("system"),
+        Config::development([temp.path().join("first"), temp.path().join("second")]).unwrap(),
+    )
+    .unwrap();
+    let identities = engine
+        .registered_disks()
+        .map(|disk| disk.identity())
+        .collect::<Vec<_>>();
+    let expected = &identities[0];
+    let before = contents(temp.path());
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    let mut changed = expected.clone();
+    changed.binding_generation += 1;
+    assert!(matches!(
+        PreparedOrdinaryDirectory::capture_registered_target(&engine, &changed),
+        Err(Error::ConversionNameBudget(
+            NameBudgetError::TargetRegistrationChanged
+        ))
+    ));
+    let captured = PreparedOrdinaryDirectory::capture_registered_target(&engine, expected).unwrap();
+    assert_eq!(contents(temp.path()), before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+    // Capturing planning evidence must not retain Engine ownership during source I/O.
+    drop(engine);
+    let engine = Engine::open(&temp.path().join("system")).unwrap();
+    let before = contents(temp.path());
+    let state_before = json_codec::to_vec(engine.state()).unwrap();
+    let prepared = captured
+        .inspect(fs::File::open(&source).unwrap(), &source)
+        .unwrap();
+    assert!(matches!(
+        prepared.prepare_new_disk_import(&engine, &identities[1].slot_id),
+        Err(Error::ConversionNameBudget(
+            NameBudgetError::TargetRegistrationChanged
+        ))
+    ));
+    assert_eq!(contents(temp.path()), before);
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state_before);
+}

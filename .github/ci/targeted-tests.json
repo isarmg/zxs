@@ -1498,7 +1498,7 @@
       ]
     },
     "ordinary-conversion-name-budget": {
-      "reason": "Fresh conversion previews reserve 16 UTF-8 bytes from the held target component limit; registered import binding and prewrite checks retain source names, exact operation recovery and all destination parent budgets.",
+      "reason": "Fresh and retained registered conversion scans reserve 16 UTF-8 bytes from the held target limit before fixed-path parsing; exact registration binding, final authorization, source preservation and receipt recovery remain enforced.",
       "python_tests": [],
       "rust_targets": [
         {
@@ -1520,7 +1520,7 @@
           "prefixes": [
             "management::ordinary_conversion::tests::"
           ],
-          "max_tests": 20,
+          "max_tests": 22,
           "timeout_seconds": 900
         },
         {
@@ -7633,6 +7633,12 @@
     },
     {
       "path": "src/server/src/management/ordinary_conversion.rs",
+      "groups": [
+        "ordinary-conversion-name-budget"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/ordinary_conversion.rs",
       "groups": [
         "ordinary-conversion-name-budget"
       ]

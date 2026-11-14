@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, error_definition::Error)]
 pub enum NameBudgetError {
+    #[error("conversion name budget belongs to another disk registration")]
+    TargetRegistrationChanged,
     #[error("target component maximum {maximum} cannot provide a 16-byte reserve")]
     UnusableMaximum { maximum: u64 },
     #[error("target component maximum {maximum} does not fit this host: {source}")]

@@ -24,6 +24,30 @@ pub struct OrdinaryDirectoryPreview {
 pub struct PreparedOrdinaryDirectory {
     preview: OrdinaryDirectoryPreview,
     source: Source,
+    registration: Option<DiskRegistrationIdentity>,
+}
+/// Opaque read-only planning evidence for one observed registered target.
+/// Consuming it never authorizes writes or substitutes for final disk admission.
+pub struct RegisteredConversionTarget {
+    registration: DiskRegistrationIdentity,
+    budget: NameBudget,
+}
+impl RegisteredConversionTarget {
+    /// Scan outside engine ownership; the inventory retains the observed binding.
+    pub fn inspect(self, source: File, source_path: &Path) -> Result<PreparedOrdinaryDirectory> {
+        let mut prepared = PreparedOrdinaryDirectory::inspect_source(
+            source,
+            source_path,
+            Limits {
+                entries: 100_000,
+                bytes: 1 << 40,
+                file_bytes: 1 << 40,
+            },
+            Some(self.budget),
+        )?;
+        prepared.registration = Some(self.registration);
+        Ok(prepared)
+    }
 }
 impl PreparedOrdinaryDirectory {
     /// Bounded preview before a target system exists: at most 100,000 entries,
@@ -53,6 +77,21 @@ impl PreparedOrdinaryDirectory {
             },
             Some(NameBudget::from_maximum(maximum)?),
         )
+    }
+    /// Capture planning evidence under the caller's engine lock. The returned
+    /// target owns no engine borrow, root descriptor or write grant.
+    pub fn capture_registered_target(
+        engine: &Engine,
+        expected: &DiskRegistrationIdentity,
+    ) -> Result<RegisteredConversionTarget> {
+        engine.require_write()?;
+        let registration = primary_identity(engine, &expected.slot_id)?;
+        require_registration(expected, &registration)?;
+        let budget = engine.conversion_name_budget(&registration.slot_id)?;
+        Ok(RegisteredConversionTarget {
+            registration,
+            budget,
+        })
     }
     fn inspect_with_limits(source: File, source_path: &Path, limits: Limits) -> Result<Self> {
         Self::inspect_source(source, source_path, limits, None)
@@ -86,7 +125,11 @@ impl PreparedOrdinaryDirectory {
             content_bytes: source.bytes(),
             temporary_bytes: source.bytes(),
         };
-        Ok(Self { preview, source })
+        Ok(Self {
+            preview,
+            source,
+            registration: None,
+        })
     }
     pub fn preview(&self) -> &OrdinaryDirectoryPreview {
         &self.preview
@@ -176,6 +219,9 @@ impl Engine {
         destination: Option<PortablePath>,
     ) -> Result<PreparedDirectoryImport> {
         self.require_write()?;
+        if let Some(expected) = &source.registration {
+            require_registration(expected, &registration)?;
+        }
         external_root(self, &source.preview.source)?;
         source.source.verify_named(&source.preview.source)?;
         source.source.verify_unchanged()?;
@@ -445,6 +491,17 @@ pub(super) fn target_path(
         Some(destination) => Ok(path.rebase(0, destination)?),
         None => Ok(path.clone()),
     }
+}
+fn require_registration(
+    expected: &DiskRegistrationIdentity,
+    current: &DiskRegistrationIdentity,
+) -> Result<()> {
+    if expected != current {
+        return Err(Error::ConversionNameBudget(
+            NameBudgetError::TargetRegistrationChanged,
+        ));
+    }
+    Ok(())
 }
 pub(super) fn primary_identity(engine: &Engine, slot: &str) -> Result<DiskRegistrationIdentity> {
     let registered = engine

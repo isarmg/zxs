@@ -1081,14 +1081,6 @@ fn registered_conversion_input(
     f: &Fixture,
     preview: &OrdinaryDiskConversionPreview,
 ) -> PreparedOrdinaryConversion {
-    let prepared = f
-        .backend
-        .inspect_conversion_source(
-            &f.identity,
-            &preview.source,
-            Some(&preview.target.request.additions[0].selection.root_path),
-        )
-        .unwrap();
     let registration = f
         .backend
         .commit_storage_addition(
@@ -1100,7 +1092,13 @@ fn registered_conversion_input(
         .unwrap();
     assert_eq!(registration.state, AdditionState::Completed);
     assert!(registration.result.is_some());
-    prepared
+    f.backend
+        .inspect_conversion_input(
+            &f.identity,
+            &preview.source,
+            ConversionTarget::Registered(&preview.target),
+        )
+        .unwrap()
 }
 
 fn conversion_import_snapshot(backend: &EngineBackend) -> (Vec<u8>, BTreeMap<PathBuf, Vec<u8>>) {
@@ -1268,49 +1266,215 @@ fn target_name_budget_rejects_preview_and_user_rename_requires_a_new_review() {
     assert_eq!(fs::read(parent.join(renamed)).unwrap(), b"retain these bytes");
 }
 
+fn conversion_tree_snapshot(root: &Path) -> BTreeMap<PathBuf, (u32, u64, Vec<u8>)> {
+    use std::os::unix::fs::MetadataExt;
+    let mut pending = vec![root.to_path_buf()];
+    let mut result = BTreeMap::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let kind = entry.file_type().unwrap();
+            assert!(kind.is_dir() || kind.is_file());
+            let metadata = entry.metadata().unwrap();
+            result.insert(
+                entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                (
+                    metadata.mode(),
+                    metadata.ino(),
+                    if kind.is_file() {
+                        fs::read(entry.path()).unwrap()
+                    } else {
+                        Vec::new()
+                    },
+                ),
+            );
+            assert!(result.len() <= 100_000);
+            if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    result
+}
+
 #[test]
-fn registered_legacy_review_rejects_over_budget_import_and_retains_registration() {
+fn registered_resume_checks_raw_budget_before_fixed_paths_without_mutation() {
+    for suffix in ["", "x"] {
+        let f = fixture();
+        let p = preview(&f);
+        let long = format!("{}{suffix}", "界".repeat(80));
+        let relative = PathBuf::from("empty").join(&long);
+        fs::write(f.discovery.join("ordinary").join(&relative), b"keep original").unwrap();
+        let registration = f
+            .backend
+            .commit_storage_addition(
+                &f.identity,
+                AdditionCommit {
+                    preview: p.target.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(registration.state, AdditionState::Completed);
+        let directory = PrivateDirectory::open_existing(f.data.join("management"))
+            .unwrap()
+            .create_child(&EntryName::new(DIRECTORY).unwrap())
+            .unwrap();
+        let mut record = pending_record(&f, &p);
+        record.status.registration = Some(registration.clone());
+        save(&directory, &record).unwrap();
+        let backend = f.backend.inner.backend().unwrap();
+        let before = conversion_import_snapshot(&backend);
+        let source_before = conversion_tree_snapshot(&f.discovery.join("ordinary"));
+        let target_before = conversion_tree_snapshot(&f.discovery.join("new-primary"));
+        let management_before = conversion_tree_snapshot(&f.data.join("management"));
+        let failure = f
+            .backend
+            .ordinary_conversion(
+                "ordinary_conversion_resume",
+                json_codec::json!({"operation_id": p.operation_id}),
+                &f.identity,
+            )
+            .unwrap_err();
+        assert_eq!(failure.code, ErrorCode::PlanInvalid);
+        assert!(matches!(
+            failure.source.as_deref(),
+            Some(crate::http_boundary::ApiErrorSource::Engine(
+                storage_engine::Error::ConversionNameBudget(
+                    storage_engine::NameBudgetError::ComponentTooLong {
+                        path, bytes, allowed: 239,
+                    }
+                )
+            )) if path == &relative && *bytes == long.len()
+        ));
+        assert_eq!(conversion_import_snapshot(&backend), before);
+        assert_eq!(
+            conversion_tree_snapshot(&f.discovery.join("ordinary")),
+            source_before
+        );
+        assert_eq!(
+            conversion_tree_snapshot(&f.discovery.join("new-primary")),
+            target_before
+        );
+        assert_eq!(
+            conversion_tree_snapshot(&f.data.join("management")),
+            management_before
+        );
+        let retained = read_record(&directory, p.operation_id).unwrap();
+        assert_eq!(retained.status.phase, record.status.phase);
+        assert_eq!(retained.status.registration, Some(registration));
+        assert!(retained.status.workspace_id.is_none());
+        assert!(retained.status.root_operation_id.is_none());
+        assert!(!retained.import_attempted);
+    }
+}
+
+#[test]
+fn registered_resume_accepts_239_utf8_bytes_after_cold_reopen() {
     let f = fixture();
-    let mut p = preview(&f);
-    let long = "界".repeat(80);
-    fs::write(f.discovery.join("ordinary/empty").join(&long), b"keep original").unwrap();
-    // Reconstruct a valid review issued before target budgeting existed using
-    // the unchanged source-only inventory and unchanged request digest format.
-    let prepared = f.backend.inspect_conversion_source(
-        &f.identity, &p.source, Some(&p.target.request.additions[0].selection.root_path),
-    ).unwrap();
-    p.source_preview = source_preview(&prepared);
-    p.preview_digest = digest(&p);
-    let registration = f.backend.commit_storage_addition(
-        &f.identity, AdditionCommit { preview: p.target.clone() },
-    ).unwrap();
-    assert_eq!(registration.state, AdditionState::Completed);
+    let name = format!("{}ab", "界".repeat(79));
+    let relative = PathBuf::from("empty").join(&name);
+    fs::write(f.discovery.join("ordinary").join(&relative), b"239-byte name").unwrap();
+    let p = preview(&f);
+    let registration = f
+        .backend
+        .commit_storage_addition(
+            &f.identity,
+            AdditionCommit {
+                preview: p.target.clone(),
+            },
+        )
+        .unwrap();
     let directory = PrivateDirectory::open_existing(f.data.join("management"))
         .unwrap()
         .create_child(&EntryName::new(DIRECTORY).unwrap())
         .unwrap();
     let mut record = pending_record(&f, &p);
-    record.status.registration = Some(registration.clone());
+    record.status.registration = Some(registration);
     save(&directory, &record).unwrap();
+    let source_before = conversion_tree_snapshot(&f.discovery.join("ordinary"));
+    reopen_engine(&f);
+    let status: OrdinaryDiskConversionStatus = json_codec::from_value(
+        f.backend
+            .ordinary_conversion(
+                "ordinary_conversion_resume",
+                json_codec::json!({"operation_id": p.operation_id}),
+                &f.identity,
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status.phase, OrdinaryDiskConversionPhase::Completed);
+    assert_eq!(status.preview.source_preview, p.source_preview);
+    assert_eq!(
+        conversion_tree_snapshot(&f.discovery.join("ordinary")),
+        source_before
+    );
     let backend = f.backend.inner.backend().unwrap();
+    backend.test_with_engine_locked(|engine| {
+        let repository = engine
+            .state()
+            .repositories
+            .values()
+            .find(|repository| {
+                repository.file_manager_root && repository.primary_slot_id == "D02"
+            })
+            .unwrap();
+        let entries = engine.list_tree(&repository.main_branch_id).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.path() == relative.to_str().unwrap())
+            .unwrap();
+        let mut opened = engine.open_content(&entry.version_id).unwrap();
+        let mut bytes = Vec::new();
+        opened.file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"239-byte name");
+    });
+}
+
+#[test]
+fn registered_conversion_rejects_another_addition_before_scan_and_import() {
+    let f = fixture();
+    let p = preview(&f);
+    let PreparedOrdinaryConversion { backend, source } = registered_conversion_input(&f, &p);
+    let mut changed = p.target.clone();
+    changed.request.operation_id = OperationId::generate().unwrap();
     let before = conversion_import_snapshot(&backend);
-    let failure = f.backend.ordinary_conversion(
-        "ordinary_conversion_resume",
-        json_codec::json!({"operation_id": p.operation_id}),
+    let source_before = conversion_tree_snapshot(&f.discovery.join("ordinary"));
+    let target_before = conversion_tree_snapshot(&f.discovery.join("new-primary"));
+    let failure = match f.backend.inspect_conversion_input(
         &f.identity,
-    ).unwrap_err();
-    assert_eq!(failure.code, ErrorCode::PlanInvalid);
+        &p.source,
+        ConversionTarget::Registered(&changed),
+    ) {
+        Ok(_) => panic!("another addition must not authorize a retained target scan"),
+        Err(failure) => failure,
+    };
+    assert_eq!(failure.code, ErrorCode::DiskIdentityMismatch);
+    let mut progressed = false;
+    let failure = backend
+        .run_ordinary_conversion(
+            &f.identity,
+            &changed,
+            source,
+            p.import_operation_id,
+            |_| {
+                progressed = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    assert!(failure.before_import());
+    assert_eq!(failure.into_api().code, ErrorCode::DiskIdentityMismatch);
+    assert!(!progressed);
     assert_eq!(conversion_import_snapshot(&backend), before);
     assert_eq!(
-        fs::read(f.discovery.join("ordinary/empty").join(long)).unwrap(),
-        b"keep original"
+        conversion_tree_snapshot(&f.discovery.join("ordinary")),
+        source_before
     );
-    let retained = read_record(&directory, p.operation_id).unwrap();
-    assert_eq!(retained.status.phase, OrdinaryDiskConversionPhase::RecoveryRequired);
-    assert_eq!(retained.status.registration, Some(registration));
-    assert!(retained.status.workspace_id.is_none());
-    assert!(retained.status.root_operation_id.is_none());
-    assert!(!retained.import_attempted);
+    assert_eq!(
+        conversion_tree_snapshot(&f.discovery.join("new-primary")),
+        target_before
+    );
 }
 
 #[test]

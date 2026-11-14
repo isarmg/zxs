@@ -102,6 +102,52 @@ impl EngineBackend {
         }
     }
 
+    fn ordinary_conversion_target(
+        engine: &storage_engine::Engine,
+        target: &AdditionPreview,
+    ) -> Result<storage_engine::DiskRegistrationIdentity, ApiError> {
+        let [addition] = target.request.additions.as_slice() else {
+            return Err(ApiError::invalid(
+                "ordinary conversion requires exactly one new primary",
+            ));
+        };
+        let expected = Self::ordinary_conversion_identity(target)?;
+        let disk = engine
+            .config()
+            .disks
+            .iter()
+            .find(|disk| disk.slot_id == addition.slot_id)
+            .ok_or_else(|| ApiError::invalid("converted primary registration is absent"))?;
+        if disk.disk_id != expected.disk_id
+            || disk.root != Path::new(&addition.selection.root_path)
+            || disk.binding_generation != 1
+            || disk.level != 1
+            || disk.upstream_slot_id.is_some()
+        {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::DiskIdentityMismatch,
+                "conversion target differs from the reviewed new primary",
+            ));
+        }
+        Ok(expected)
+    }
+
+    pub(crate) fn inspect_registered_conversion(
+        &self,
+        identity: &Identity,
+        target: &AdditionPreview,
+        source: std::fs::File,
+        source_path: &Path,
+    ) -> Result<storage_engine::PreparedOrdinaryDirectory, ApiError> {
+        let target = {
+            let (engine, _) = self.lock_current(identity)?;
+            let target = Self::ordinary_conversion_target(&engine, target)?;
+            storage_engine::PreparedOrdinaryDirectory::capture_registered_target(&engine, &target)
+                .map_err(error)?
+        };
+        target.inspect(source, source_path).map_err(error)
+    }
+
     pub(crate) fn run_ordinary_conversion(
         &self,
         identity: &Identity,
@@ -113,36 +159,10 @@ impl EngineBackend {
         let mut engine = crate::lock(&self.engine);
         let current = current_protected_identity(&engine, identity)
             .map_err(OrdinaryConversionFailure::Admission)?;
-        let [addition] = target.request.additions.as_slice() else {
-            return Err(OrdinaryConversionFailure::Admission(ApiError::invalid(
-                "ordinary conversion requires exactly one new primary",
-            )));
-        };
-        let expected = Self::ordinary_conversion_identity(target)
+        let target = Self::ordinary_conversion_target(&engine, target)
             .map_err(OrdinaryConversionFailure::Admission)?;
-        let disk = engine
-            .config()
-            .disks
-            .iter()
-            .find(|disk| disk.slot_id == addition.slot_id)
-            .ok_or_else(|| {
-                OrdinaryConversionFailure::Admission(ApiError::invalid(
-                    "converted primary registration is absent",
-                ))
-            })?;
-        if disk.disk_id != expected.disk_id
-            || disk.root != Path::new(&addition.selection.root_path)
-            || disk.binding_generation != 1
-            || disk.level != 1
-            || disk.upstream_slot_id.is_some()
-        {
-            return Err(OrdinaryConversionFailure::Admission(ApiError::conflict(
-                storage_contract::ErrorCode::DiskIdentityMismatch,
-                "conversion target differs from the reviewed new primary",
-            )));
-        }
         let prepared = source
-            .prepare_new_disk_import(&engine, &addition.slot_id)
+            .prepare_new_disk_import(&engine, &target.slot_id)
             .map_err(|source| OrdinaryConversionFailure::Admission(error(source)))?;
         let confirmation = storage_engine::DirectoryConversionConfirmation::contents_only(
             prepared.preview().digest,
