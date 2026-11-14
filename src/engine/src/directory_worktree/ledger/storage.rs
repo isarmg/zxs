@@ -338,10 +338,10 @@ impl<'a> HeldWorktreeLedger<'a> {
             .map_err(LedgerError::Instance)?;
         for edit in edits {
             let name = layout::edited_file(edit.material.version_id, &edit.path);
-            if name.as_os_str().to_str() != Some(edit.leaf.as_str()) {
+            if &name != edit.leaf.entry() {
                 return Err(LedgerError::Binding);
             }
-            let edit = edit.file_edit()?;
+            let edit = edit.file_edit();
             let file = instance.open_material(&edit.material)
                 .map_err(LedgerError::Instance)?;
             if matches!(access, EditAccess::Seal) {

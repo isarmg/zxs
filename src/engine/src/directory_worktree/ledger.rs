@@ -6,10 +6,12 @@
 //! Namespace frames currently authorize prepublication reads only. Commit and
 //! soft-delete remain fenced until durable FILE obligations cover renamed and
 //! removed occurrences; no production SMB namespace is registered here.
+mod leaf;
 mod record;
 mod state;
 mod storage;
 
+pub(crate) use leaf::EditLeaf;
 pub(crate) use record::{Checkpoint, EditRecord, Event};
 pub(crate) use storage::{
     Binding, HeldWorktreeLedger, LedgerPreparationError, PendingPublication, RecoveredLedger,
@@ -40,8 +42,6 @@ pub(crate) enum LedgerError {
     Namespace(#[source] crate::directory_worktree::projection::namespace::NamespaceError),
     #[error("worktree namespace changes require durable FILE publication obligations")]
     NamespacePublicationRequired,
-    #[error("worktree ledger contains an invalid physical body name")]
-    Name(#[source] platform_io::fs_safety::Error),
     #[error("worktree ledger differs from its independent identity or checkpoint")]
     Binding,
     #[error("worktree ledger instance reopening failed")]

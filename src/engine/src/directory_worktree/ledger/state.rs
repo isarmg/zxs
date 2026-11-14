@@ -206,7 +206,7 @@ impl State {
                     }
                 }
                 let edits = self.edits.iter().map(EditRecord::file_edit)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Vec<_>>();
                 SparseProjection::admit_with_results(source, edits, &results)
                     .map_err(LedgerError::Projection)?;
                 // Verify the exact per-file results as well as the overall
@@ -234,7 +234,7 @@ impl State {
         source: &'a AdmittedSnapshotManifest,
         edits: &[EditRecord],
     ) -> Result<SparseProjection<'a>, LedgerError> {
-        let edits = edits.iter().map(EditRecord::file_edit).collect::<Result<Vec<_>, _>>()?;
+        let edits = edits.iter().map(EditRecord::file_edit).collect::<Vec<_>>();
         let view = SparseProjection::admit_with_results(source, edits, &self.file_results)
             .map_err(LedgerError::Projection)?;
         match &self.namespace {
@@ -314,7 +314,7 @@ fn admit_edits(source: &AdmittedSnapshotManifest, edits: &[EditRecord]) -> Resul
             return Err(LedgerError::Binding);
         }
     }
-    let converted = edits.iter().map(EditRecord::file_edit).collect::<Result<Vec<_>, _>>()?;
+    let converted = edits.iter().map(EditRecord::file_edit).collect::<Vec<_>>();
     SparseProjection::admit(source, converted).map_err(LedgerError::Projection)?;
     Ok(())
 }

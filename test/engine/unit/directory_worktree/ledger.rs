@@ -107,7 +107,7 @@ impl Fixture {
             Expectation { bytes: 6, blake3: Some(blake3::hash(b"edited")) },
         ).unwrap();
         EditRecord {
-            path, material, leaf: LookupName::parse(leaf.as_os_str().to_str().unwrap()).unwrap(),
+            path, material, leaf: EditLeaf::parse(leaf.as_os_str().to_str().unwrap()).unwrap(),
             entity: local_entity(receipt.identity),
         }
     }
@@ -767,7 +767,7 @@ fn namespace_event(
 fn assert_working(ledger: &HeldWorktreeLedger<'_>, visible: &str, edit: &EditRecord) {
     let projection = ledger.projection().unwrap();
     assert_eq!(projection.route(&LookupPath::parse(visible).unwrap()),
-        Some(ReadRoute::Working { material: &edit.file_edit().unwrap().material }));
+        Some(ReadRoute::Working { material: &edit.file_edit().material }));
 }
 
 #[test]

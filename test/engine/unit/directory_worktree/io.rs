@@ -1,5 +1,5 @@
 use super::*;
-use crate::directory_worktree::ledger::{EditRecord, Event};
+use crate::directory_worktree::ledger::{EditLeaf, EditRecord, Event};
 use crate::directory_worktree::lifecycle::{Mount, Publication};
 use crate::directory_worktree::projection::FileResult;
 use crate::directory_worktree::projection::namespace::NamespaceChange;
@@ -92,7 +92,7 @@ impl Fixture {
         ).unwrap();
         let edit = EditRecord {
             path, material, entity: local_entity(receipt.identity),
-            leaf: LookupName::parse(leaf.as_os_str().to_str().unwrap()).unwrap(),
+            leaf: EditLeaf::parse(leaf.as_os_str().to_str().unwrap()).unwrap(),
         };
         ledger.append(Event::Edits {
             operation: operation(10), expected: ledger.worktree().revision(),

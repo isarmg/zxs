@@ -3263,10 +3263,11 @@
             "directory_worktree::projection::namespace::tests::",
             "directory_worktree::projection::obligations::tests::",
             "directory_worktree::ledger::tests::",
+            "directory_worktree::ledger::leaf::tests::",
             "directory_worktree::io::tests::",
             "disk::owned::worktree_move::tests::"
           ],
-          "max_tests": 107,
+          "max_tests": 111,
           "timeout_seconds": 900
         }
       ]

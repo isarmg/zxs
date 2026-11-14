@@ -1,12 +1,11 @@
-use super::LedgerError;
+use super::{EditLeaf, LedgerError};
 use crate::directory_worktree::lifecycle::{Mount, Publication, Revision, SnapshotSource};
 use crate::directory_worktree::projection::{FileEdit, FileResult, WorkingFile};
 use crate::directory_worktree::projection::namespace::NamespaceChange;
 use crate::directory_worktree::store::SparseWorktreeBinding;
 use crate::working_tree::snapshot::SnapshotFile;
 use data_serialization::{Deserialize, Deserializer, Serialize};
-use name_policy::{LookupName, PortablePath};
-use platform_io::fs_safety::EntryName;
+use name_policy::PortablePath;
 use storage_contract::{OperationId, Sequence};
 use storage_contract::working_tree::{
     LocalEntityIdentity, MaterialCommitment, SnapshotBranchId, SnapshotNodeId,
@@ -20,19 +19,19 @@ pub(crate) struct EditRecord {
     /// also anchors the physical leaf after logical rename or removal.
     pub(crate) path: PortablePath,
     pub(crate) material: SnapshotFile,
-    pub(crate) leaf: LookupName,
+    pub(crate) leaf: EditLeaf,
     pub(crate) entity: LocalEntityIdentity,
 }
 impl EditRecord {
-    pub(crate) fn file_edit(&self) -> Result<FileEdit, LedgerError> {
-        Ok(FileEdit {
+    pub(crate) fn file_edit(&self) -> FileEdit {
+        FileEdit {
             path: self.path.clone(),
             material: WorkingFile {
                 file: self.material,
-                leaf: EntryName::new(self.leaf.as_str()).map_err(LedgerError::Name)?,
+                leaf: self.leaf.entry().clone(),
                 entity: self.entity,
             },
-        })
+        }
     }
 }
 
