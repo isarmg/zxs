@@ -179,7 +179,7 @@ fn existing_file_fixture() -> (tempfile::TempDir, Engine, Workspace, std::path::
 }
 
 #[test]
-fn prepared_upload_keeps_source_identity_through_case_rename_and_cold_retry() {
+fn case_rename_fences_prepared_upload_and_new_workspace_retries_after_reopen() {
     let (temporary, mut engine, workspace, source, original) = existing_file_fixture();
     let prepared = engine
         .prepare_upload(
@@ -212,18 +212,36 @@ fn prepared_upload_keeps_source_identity_through_case_rename_and_cold_retry() {
     assert_eq!(current.version_id, original.version_id);
     assert_eq!(current.path(), "REPORT.txt");
     let published = canonical_json(engine.state()).unwrap();
-    let staged = engine.finish_upload(prepared).unwrap();
+    let prior = canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap();
+    assert_eq!(
+        engine.finish_upload(prepared).unwrap_err().code(),
+        ErrorCode::FileBranchConflict,
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        prior,
+    );
+
+    let fresh = engine.create_workspace(&workspace.branch_id, "admin").unwrap();
+    let staged = engine.stage_upload(
+        &fresh.workspace_id, &original.entry_id, "REPORT.txt", &source, 1,
+    ).unwrap();
     assert_eq!(staged.base_version_id.as_ref(), Some(&original.version_id));
     assert_eq!(canonical_json(engine.state()).unwrap(), published);
     assert_eq!(fs::read(&staged.source_path).unwrap(), b"verified upload bytes");
-    let manifest = canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap();
+    let manifest = canonical_json(&engine.workspace(&fresh.workspace_id).unwrap()).unwrap();
     drop(engine);
     let mut engine = Engine::open(&temporary.path().join("state")).unwrap();
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        prior,
+    );
     let replay = engine
         .stage_upload(
-            &workspace.workspace_id,
+            &fresh.workspace_id,
             &original.entry_id,
-            "report.txt",
+            "REPORT.txt",
             &source,
             1,
         )
@@ -231,7 +249,7 @@ fn prepared_upload_keeps_source_identity_through_case_rename_and_cold_retry() {
     assert_eq!(canonical_json(&replay).unwrap(), canonical_json(&staged).unwrap());
     assert_eq!(canonical_json(engine.state()).unwrap(), published);
     assert_eq!(
-        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        canonical_json(&engine.workspace(&fresh.workspace_id).unwrap()).unwrap(),
         manifest,
     );
     assert_eq!(engine.list_tree(&workspace.branch_id).unwrap(), vec![current]);
