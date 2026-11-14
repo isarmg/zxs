@@ -1,5 +1,31 @@
 {
   "groups": {
+    "workspace-version-construction": {
+      "reason": "Single version metadata construction for real upload/copy ingress; preserve allocation, resource and placement checks and verify engine product features separately.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::workspace::version_build::tests::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "fresh-root-name-budget": {
       "reason": "Use the held primary filesystem component budget before a first disk root or workspace is created by Web or default SMB RPC. Verify accepted names through cold reopen and keep product compile separate.",
       "python_tests": [],
@@ -3886,6 +3912,24 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "workspace-version-construction"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/version_build.rs",
+      "groups": [
+        "workspace-version-construction"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_version_build_tests.rs",
+      "groups": [
+        "workspace-version-construction"
+      ]
+    },
     {
       "path": "src/engine/src/business/repository.rs",
       "groups": [

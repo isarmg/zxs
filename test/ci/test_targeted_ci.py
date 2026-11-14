@@ -1242,7 +1242,7 @@ class TargetedSelection(unittest.TestCase):
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'upload-occurrence-source'])
+            'upload-occurrence-source', 'workspace-version-construction'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -1269,6 +1269,28 @@ class TargetedSelection(unittest.TestCase):
                        and target.get('mode') == 'check')
         self.assertFalse(product['default_features'])
         self.assertEqual(CI.cargo_command(product, '/build')[1], 'check')
+
+    def test_workspace_version_construction_keeps_overlap_and_both_product_checks(self):
+        name = 'workspace-version-construction'
+        group = self.policy['groups'][name]
+        paths = [
+            'src/engine/src/business/workspace.rs',
+            'src/engine/src/business/workspace/version_build.rs',
+            'test/engine/unit/business/workspace_version_build_tests.rs',
+        ]
+        assert_path_group_extension(self, self.policy, [paths[0]], None, [name])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        for path in paths[1:]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], [name])
+                self.assertCountEqual(origin_selections(plan, name), group['rust_targets'])
+        unit, default, lean = group['rust_targets']
+        self.assertEqual(unit['prefixes'], ['business::workspace::version_build::tests::'])
+        self.assertEqual((unit['max_tests'], unit['timeout_seconds']), (2, 900))
+        self.assertEqual((default['mode'], lean['mode']), ('check', 'check'))
+        self.assertTrue(default.get('default_features', True))
+        self.assertFalse(lean['default_features'])
 
     def test_typed_name_source_and_provenance_paths_are_admitted(self):
         paths = [

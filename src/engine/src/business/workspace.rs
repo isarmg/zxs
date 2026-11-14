@@ -1,5 +1,6 @@
 //! Full upload generations, working files and atomic content publication.
 pub(super) mod file_location;
+mod version_build;
 use super::*;
 use crate::{
     disk::*,
@@ -1239,64 +1240,24 @@ impl crate::engine::PlanningContext<'_> {
                 "copied content differs from the published source version",
             ));
         }
-        let version_id = storage_contract::VersionId::generate()?;
-        let storage_id =
-            crate::container_storage::allocate_version_storage_id(state, file_id, version_id)?;
-        let created_at = crate::container_storage::version_created_at()?;
-        let version = FileVersion {
-            history_tree_id: history.into(),
-            version_id: version_id.to_string(),
-            file_id: file_id.into(),
-            creation_primary_slot_id: primary.into(),
-            logical_size: size,
-            version_sequence: state.sequence,
-            content_hash,
-            checksum_chunk_bytes: self.config.checksum_chunk_bytes,
-            checksum_manifest_hash: blake3::hash(&manifest.encode()?).to_hex().to_string(),
-            creation_name: path.file_name().into(),
-            storage_id,
-            created_at,
-            source_version_ids: source_ids,
-            created_as_full_checkpoint: checkpoint,
-        };
-        let route = self.route(primary, copies)?;
-        if let Some(repository) = state
-            .histories
-            .get(history)
-            .map(|history| history.repository_id.clone())
-        {
-            let main_branch = &state.repositories[&repository].main_branch_id;
-            let current_entries = self.current_branch_entries(main_branch)?;
-            crate::protection::apply_backup_paths(
-                state,
-                current_entries,
-                &repository,
-                file_id,
-                path.as_str(),
-                &route,
-                self.current_namespaces.map(AsRef::as_ref),
-            )?;
-        }
-        let placement = Placement {
-            version_id: version.version_id.clone(),
-            primary_slot_id: primary.into(),
-            target_copies: copies,
-            route_slot_ids: route.clone(),
-            topology_generation: state.topology_generation,
-            binding_generations: route
-                .iter()
-                .map(|slot| Ok((slot.clone(), self.disk(slot)?.binding_generation)))
-                .collect::<Result<_>>()?,
-        };
-        state
-            .versions
-            .insert(version.version_id.clone(), version.clone());
-        state
-            .placements
-            .insert(version.version_id.clone(), placement.clone());
-        state
-            .content_states
-            .insert(version.version_id.clone(), ContentState::Available);
+        let (version, placement) = version_build::construct(
+            state,
+            version_build::Input {
+                history,
+                file: file_id,
+                path,
+                primary,
+                copies,
+                sources: source_ids,
+                checkpoint,
+            },
+            version_build::Content {
+                size,
+                hash: content_hash,
+                chunk_bytes: self.config.checksum_chunk_bytes,
+            },
+            &mut version_build::Live::new(self, &manifest),
+        )?;
         pending.push(Prepared {
             version: version.clone(),
             placement,
