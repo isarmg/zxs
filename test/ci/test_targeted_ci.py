@@ -1971,6 +1971,7 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
             'container-path-facts-http', 'container-lifecycle-http',
             'container-lifecycle-contract', 'container-lifecycle-web',
             'container-path-facts-schema',
+            'fresh-root-name-budget',
         ])
         self.assertEqual(len(plan['rust_targets']), 14)
         self.assertEqual(len(plan['python_tests']), 8)
@@ -1994,6 +1995,38 @@ class DirectoryRenameTargetedCi(unittest.TestCase):
         self.assertEqual(product['features'], ['core'])
         self.assertEqual(no_core['mode'], 'check')
         self.assertFalse(no_core['default_features'])
+
+    def test_fresh_root_name_budget_preserves_exact_ingress_and_product_checks(self):
+        name = 'fresh-root-name-budget'
+        paths = [
+            'src/engine/src/business/repository.rs',
+            'src/server/src/engine_backend/file_manager.rs',
+            'test/server/integration/http_engine.rs',
+            'test/server/unit/smb_rpc/default_share_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                assert_path_group_extension(self, self.policy, [path], None, [name])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        web, smb, *checks = self.policy['groups'][name]['rust_targets']
+        self.assertEqual((web['name'], web['isolate']), ('http_engine', True))
+        self.assertEqual((web['max_tests'], smb['max_tests']), (4, 6))
+        self.assertEqual(len(web['exact']), 4)
+        self.assertEqual(len(smb['exact']), 6)
+        self.assertIn('fresh_disk_paths_apply_target_name_budget_before_root_or_workspace_creation',
+                      web['exact'])
+        self.assertIn('smb_rpc::tests::default_share_tests::'
+                      'default_create_checks_every_new_component_before_allocating_a_disk_root',
+                      smb['exact'])
+        self.assertCountEqual(
+            [(target['package'], target['mode'],
+              target.get('default_features', True), target.get('features', []))
+             for target in checks],
+            [('storage-engine', 'check', True, []),
+             ('storage-engine', 'check', False, []),
+             ('storage-server', 'check', True, ['core']),
+             ('storage-server', 'check', False, [])],
+        )
 
 
 class TargetedShards(unittest.TestCase):
