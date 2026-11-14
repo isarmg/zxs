@@ -1212,12 +1212,24 @@ fn namespace_240_byte_new_basename_rejects_the_whole_batch_before_any_write() {
                 NamespaceChange::Rename { target, .. } => target.as_str(),
                 NamespaceChange::RemoveSubtree { .. } => panic!("new-name fixture"),
             }.to_owned();
-            assert!(matches!(
-                ledger.append(namespace_event(&ledger, 10, changes), trusted),
-                Err(LedgerError::NameBudget(crate::NameBudgetError::ComponentTooLong {
-                    path, bytes: 240, allowed: 239,
-                })) if path == std::path::PathBuf::from(expected_path)
-            ));
+            let result = ledger.append(namespace_event(&ledger, 10, changes), trusted);
+            if expected_path == destination {
+                // A file payload already reserves its generated leaf prefix.
+                // Keep that earlier manifest error distinct from the directory gate.
+                assert!(matches!(
+                    &result,
+                    Err(LedgerError::Namespace(NamespaceError::Material(
+                        crate::working_tree::snapshot::SnapshotManifestError::Filename,
+                    ))),
+                ), "{expected_path:?}: {result:?}");
+            } else {
+                assert!(matches!(
+                    &result,
+                    Err(LedgerError::NameBudget(crate::NameBudgetError::ComponentTooLong {
+                        path, bytes: 240, allowed: 239,
+                    })) if path.as_path() == std::path::Path::new(&expected_path)
+                ), "{expected_path:?}: {result:?}");
+            }
             assert_eq!(ledger.checkpoint(), checkpoint);
             assert_eq!(ledger.worktree().revision(), revision);
             assert_eq!(ledger_files(fixture._temp.path()), files);
