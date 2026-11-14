@@ -3266,7 +3266,7 @@
             "directory_worktree::io::tests::",
             "disk::owned::worktree_move::tests::"
           ],
-          "max_tests": 106,
+          "max_tests": 107,
           "timeout_seconds": 900
         }
       ]

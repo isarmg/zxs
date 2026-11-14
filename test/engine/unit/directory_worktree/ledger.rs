@@ -40,6 +40,14 @@ impl Fixture {
         Self::with_sibling(SnapshotFileSource::SnapshotOnly, 4, 5)
     }
     fn with_sibling(origin: SnapshotFileSource, file: u8, version: u8) -> Self {
+        Self::with_origins(origin, file, version, SnapshotFileSource::SnapshotOnly)
+    }
+    fn with_origins(
+        origin: SnapshotFileSource,
+        file: u8,
+        version: u8,
+        sibling: SnapshotFileSource,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("repository");
         PrivateDirectory::create_all(&path).unwrap();
@@ -65,7 +73,7 @@ impl Fixture {
                         version_id: VersionId::from_random([version; 16]),
                         size: 8, content_hash: ContentHash::from_digest(blake3::hash(b"original")),
                     },
-                    source: SnapshotFileSource::SnapshotOnly,
+                    source: sibling,
                 },
             }],
         ).unwrap();
@@ -567,6 +575,182 @@ fn cold_file_baseline_preserves_selected_branch_and_excludes_saved_siblings_from
     }).unwrap();
     assert!(recovered.dirty_edits().is_empty());
     assert_eq!(recovered.file_results().len(), 2);
+}
+
+#[test]
+fn cold_namespace_replay_preserves_complete_occurrence_obligations_and_rejects_unbound_material() {
+    use crate::directory_worktree::projection::obligations::{
+        FilePublicationRequirement, WorkingBodyDisposition,
+    };
+    use storage_contract::{BranchId, FileNodeId};
+
+    let pin = |branch, version| SnapshotFileSource::Container {
+        branch: BranchId::from_random([branch; 16]),
+        node: FileNodeId::Version(VersionId::from_random([version; 16])),
+    };
+    let original_source = pin(60, 5);
+    let alias_source = SnapshotFileSource::Container {
+        branch: BranchId::from_random([61; 16]),
+        node: FileNodeId::Metadata(storage_contract::Id::from_random([62; 16])),
+    };
+    let observations = |ledger: &HeldWorktreeLedger<'_>| {
+        let projection = ledger.projection().unwrap();
+        let obligations = projection.file_obligations();
+        obligations.files().map(|file| {
+            let original = file.original();
+            let (recorded, baseline) = match file.publication() {
+                FilePublicationRequirement::Pending { baseline } => (false, baseline),
+                FilePublicationRequirement::Recorded { result } => (true, result),
+            };
+            let visible = match file.body() {
+                WorkingBodyDisposition::Visible { path } => Some(path.clone()),
+                WorkingBodyDisposition::RetainedInWorktree => None,
+            };
+            (
+                original.snapshot(), original.path().clone(),
+                original.baseline().material(), original.baseline().source(),
+                file.material().file, file.material().entity,
+                file.material().leaf.as_os_str().to_str().unwrap().to_owned(),
+                visible, recorded, baseline.material(), baseline.source(),
+            )
+        }).collect::<Vec<_>>()
+    };
+
+    for rewrite_hidden in [false, true] {
+        for mutation in 0..4 {
+            let fixture = Fixture::with_origins(original_source, 4, 5, alias_source);
+            let mut ledger = fixture.ledger();
+            let first = fixture.edit();
+            let sibling = fixture.write("other.txt", 4, 9);
+            ledger.append(Event::Edits {
+                operation: operation(10), expected: ledger.worktree().revision(),
+                edits: vec![first.clone(), sibling.clone()],
+            }, trusted).unwrap();
+            ledger.append(delete_event(&ledger, 11), trusted).unwrap();
+            // This fixture admits local receipt references, not a production FILE publication.
+            let saved = vec![
+                FileResult {
+                    path: first.path.clone(), material: first.material, source: pin(70, 8),
+                },
+                FileResult {
+                    path: sibling.path.clone(), material: sibling.material, source: pin(71, 9),
+                },
+            ];
+            ledger.append(Event::Completed {
+                publication: completed(&ledger), files: saved.clone(),
+            }, trusted).unwrap();
+            ledger.append(Event::Restored {
+                operation: operation(12), mount: mount("worktree-main-002"),
+            }, trusted).unwrap();
+            let later = fixture.write("file.txt", 4, 20);
+            let hidden = if rewrite_hidden {
+                fixture.write("other.txt", 4, 21)
+            } else {
+                sibling.clone()
+            };
+            let mut edits = vec![later.clone()];
+            if rewrite_hidden {
+                edits.push(hidden.clone());
+            }
+            ledger.append(Event::Edits {
+                operation: operation(13), expected: ledger.worktree().revision(), edits,
+            }, trusted).unwrap();
+            ledger.append(namespace_event(&ledger, 14, vec![
+                NamespaceChange::RemoveSubtree { path: LookupPath::parse("other.txt").unwrap() },
+                rename("file.txt", "other.txt"),
+            ]), trusted).unwrap();
+            let binding = ledger.binding();
+            let checkpoint = ledger.checkpoint();
+            let revision = ledger.worktree().revision();
+            let source = fixture.source.manifest().reference();
+            let original = SnapshotFile {
+                file_id: FileId::from_random([4; 16]),
+                version_id: VersionId::from_random([5; 16]),
+                size: 8, content_hash: ContentHash::from_digest(blake3::hash(b"original")),
+            };
+            let expected = vec![
+                (
+                    source, first.path.clone(), original, original_source,
+                    later.material, later.entity, later.leaf.as_str().to_owned(),
+                    Some(sibling.path.clone()), false, first.material, pin(70, 8),
+                ),
+                (
+                    source, sibling.path.clone(), original, alias_source,
+                    hidden.material, hidden.entity, hidden.leaf.as_str().to_owned(),
+                    None, !rewrite_hidden, sibling.material, pin(71, 9),
+                ),
+            ];
+            drop(ledger);
+            let mut reopened = HeldWorktreeLedger::reopen(
+                &fixture.source, binding, checkpoint, trusted,
+            ).unwrap();
+            assert_eq!(observations(&reopened), expected);
+            assert_eq!(reopened.file_results(), saved);
+            assert_eq!(reopened.worktree().revision(), revision);
+            for event in [
+                Event::Commit {
+                    operation: operation(15), expected: revision,
+                    current_head: fixture.source.manifest().node_id(),
+                    fork_branch: SnapshotBranchId::from_random([80; 16]),
+                },
+                Event::Delete { operation: operation(16), expected: revision },
+            ] {
+                assert!(matches!(reopened.append(event, |_, _| {
+                    panic!("obligation observations cannot authorize namespace publication")
+                }), Err(LedgerError::NamespacePublicationRequired)));
+            }
+            assert_eq!(reopened.checkpoint(), checkpoint);
+            assert_eq!(reopened.worktree().revision(), revision);
+            drop(reopened);
+
+            let hidden_path = fixture.instance.directory().path().join(hidden.leaf.as_str());
+            let retained_path = hidden_path.with_extension("retained");
+            let next_frame = fixture.frame_path(checkpoint.sequence.next().unwrap().get());
+            assert!(!next_frame.exists());
+            match mutation {
+                0 => {}
+                1 => fs::write(&hidden_path, b"broken").unwrap(),
+                2 => {
+                    fs::rename(&hidden_path, &retained_path).unwrap();
+                    fs::write(&hidden_path, b"edited").unwrap();
+                }
+                // Even a canonical copy of an earlier frame is an unanchored tail.
+                3 => {
+                    fs::copy(fixture.frame_path(0), &next_frame).unwrap();
+                }
+                _ => panic!("bounded mutation fixture"),
+            }
+            let frames = (0..=checkpoint.sequence.get())
+                .map(|sequence| fs::read(fixture.frame_path(sequence)).unwrap())
+                .collect::<Vec<_>>();
+            let hidden_bytes = fs::read(&hidden_path).unwrap();
+            let tail_bytes = next_frame.exists().then(|| fs::read(&next_frame).unwrap());
+            let replayed = HeldWorktreeLedger::reopen(
+                &fixture.source, binding, checkpoint, trusted,
+            );
+            if mutation == 0 {
+                let replayed = replayed.unwrap();
+                assert_eq!(observations(&replayed), expected);
+                assert_eq!(replayed.checkpoint(), checkpoint);
+            } else {
+                assert!(replayed.is_err());
+            }
+            assert_eq!(
+                (0..=checkpoint.sequence.get())
+                    .map(|sequence| fs::read(fixture.frame_path(sequence)).unwrap())
+                    .collect::<Vec<_>>(),
+                frames,
+            );
+            assert_eq!(fs::read(&hidden_path).unwrap(), hidden_bytes);
+            assert_eq!(next_frame.exists().then(|| fs::read(&next_frame).unwrap()), tail_bytes);
+            assert_eq!(fs::read(
+                fixture.instance.directory().path().join(later.leaf.as_str()),
+            ).unwrap(), b"edited");
+            if mutation == 2 {
+                assert_eq!(fs::read(&retained_path).unwrap(), b"edited");
+            }
+        }
+    }
 }
 
 fn rename(source: &str, target: &str) -> NamespaceChange {
