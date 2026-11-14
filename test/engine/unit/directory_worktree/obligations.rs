@@ -77,7 +77,17 @@ fn saved(edit: &FileEdit, source: SnapshotFileSource) -> FileResult {
 
 #[test]
 fn aliases_keep_exact_original_pins_after_one_is_removed_and_its_path_is_reused() {
-    let source = source();
+    let mut entries = source().entries().to_vec();
+    // Edited occurrences have nonconsecutive source indexes, not edit positions.
+    entries.insert(1, SnapshotEntry {
+        path: path("A0-empty"),
+        content: SnapshotEntryContent::Directory {},
+    });
+    entries.insert(0, SnapshotEntry {
+        path: path("0-empty"),
+        content: SnapshotEntryContent::Directory {},
+    });
+    let source = manifest(2, entries);
     // Equal bodies do not collapse independent writes or occurrence baselines.
     let a = edit("A.txt", 11, b"same changed bytes");
     let b = edit("B.txt", 12, b"same changed bytes");
@@ -117,13 +127,15 @@ fn aliases_keep_exact_original_pins_after_one_is_removed_and_its_path_is_reused(
     }).unwrap();
     assert_eq!(located, [(disk(), a.material.file.file_id)]);
     assert_eq!(visible.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
-        ["B.txt", "Keep.txt"]);
-    assert!(matches!(visible[0].transfer, Transfer::MoveWorking {
+        ["0-empty", "A0-empty", "B.txt", "Keep.txt"]);
+    assert_eq!(visible[0].transfer, Transfer::Directory);
+    assert_eq!(visible[1].transfer, Transfer::Directory);
+    assert!(matches!(visible[2].transfer, Transfer::MoveWorking {
         material, container: ContainerPublication::Update { source_branch, source_node, .. },
     } if material == &a.material
         && source_branch == BranchId::from_random([70; 16])
         && source_node == FileNodeId::Version(VersionId::from_random([7; 16]))));
-    assert_eq!(visible[1].transfer, Transfer::CopyOriginal {
+    assert_eq!(visible[3].transfer, Transfer::CopyOriginal {
         file: material(8, 8, b"unchanged"),
     });
 }

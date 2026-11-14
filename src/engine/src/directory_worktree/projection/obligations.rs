@@ -88,18 +88,22 @@ impl SparseProjection<'_> {
     /// bodies. Only an exact saved version suppresses its next FILE obligation;
     /// neither namespace removal nor matching content suppresses an edit.
     pub(crate) fn file_obligations(&self) -> FileObligationPlan<'_> {
+        if self.edits.is_empty() {
+            return FileObligationPlan { files: BTreeMap::new() };
+        }
         let visible = self.entries.iter().filter_map(|entry| match entry.content {
             Content::Directory => None,
-            Content::File { original, .. } => Some((original, &entry.path)),
+            Content::File { original, .. } => self.edits.contains_key(&original)
+                .then_some((original, &entry.path)),
         }).collect::<BTreeMap<_, _>>();
-        // Admission binds every edit to one original file. Walk the complete
-        // source inventory, not the namespace projection that can hide files.
-        let files = self.source.entries().iter().enumerate().filter_map(|(index, entry)| {
+        // Admission binds ordered edit keys to exact source files, including
+        // originals hidden from the namespace projection.
+        let files = self.edits.iter().filter_map(|(&index, material)| {
+            let entry = &self.source.entries()[index];
             let (original_material, source) = match entry.content {
                 SnapshotEntryContent::Directory {} => return None,
                 SnapshotEntryContent::File { material, source } => (material, source),
             };
-            let material = self.edits.get(&index)?;
             let baseline = FileBaseline { material: original_material, source };
             let publication = match self.results.get(&index) {
                 Some(saved) => {
