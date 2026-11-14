@@ -352,7 +352,11 @@ fn replacing_a_held_ledger_parent_name_never_publishes_to_a_detached_directory()
     let retained = path.with_extension("retained");
     fs::rename(&path, &retained).unwrap();
     PrivateDirectory::create(&path).unwrap();
-    assert!(ledger.append(delete_event(&ledger, 10), trusted).is_err());
+    assert!(matches!(HeldWorktreeLedger::reopen(
+        &fixture.source, ledger.binding(), ledger.checkpoint(), trusted,
+    ), Err(LedgerError::Directory(crate::disk::DirectoryIoError::IdentityChanged(_)))));
+    assert!(matches!(ledger.append(delete_event(&ledger, 10), trusted),
+        Err(LedgerError::Directory(crate::disk::DirectoryIoError::IdentityChanged(_)))));
     assert!(!retained.join(layout::frame(storage_contract::Sequence::new(1)).as_path()).exists());
     assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
 }

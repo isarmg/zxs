@@ -196,15 +196,7 @@ impl<'a> HeldWorktreeLedger<'a> {
         {
             return Err(LedgerError::Binding);
         }
-        let parent = source.worktrees_directory();
-        if parent.held_identity().map_err(LedgerError::Directory)?
-            != file_identity(binding.parent_entity)
-        {
-            return Err(LedgerError::Binding);
-        }
-        let directory = parent.private_entry_matching(
-            &layout::ledger(binding.worktree), file_identity(binding.ledger_entity),
-        ).map_err(LedgerError::Directory)?;
+        let directory = open_bound_directory(source.worktrees_directory(), binding)?;
         verify_inventory(&directory, expected)?;
         let mut previous = None;
         let mut total = 0usize;
@@ -373,15 +365,8 @@ impl<'a> HeldWorktreeLedger<'a> {
         self.check_current_location()
     }
     fn check_current_location(&self) -> Result<(), LedgerError> {
-        let parent = self.source.worktrees_directory();
-        if parent.held_identity().map_err(LedgerError::Directory)?
-            != file_identity(self.binding.parent_entity)
-        {
-            return Err(LedgerError::Binding);
-        }
-        parent.private_entry_matching(
-            &layout::ledger(self.binding.worktree), file_identity(self.binding.ledger_entity),
-        ).map_err(LedgerError::Directory)?;
+        // Revalidate the name binding; inventory checks continue on the held directory.
+        open_bound_directory(self.source.worktrees_directory(), self.binding)?;
         verify_inventory(&self.directory, self.checkpoint)?;
         let bytes = self.directory.read_entry_bytes(
             &layout::frame(self.checkpoint.sequence), MAX_FRAME_BYTES,
@@ -419,6 +404,17 @@ impl<'a> HeldWorktreeLedger<'a> {
     pub(crate) fn edits(&self) -> &[super::record::EditRecord] {
         &self.state.edits
     }
+}
+
+fn open_bound_directory(parent: &DiskRoot, binding: Binding) -> Result<DiskRoot, LedgerError> {
+    if parent.held_identity().map_err(LedgerError::Directory)?
+        != file_identity(binding.parent_entity)
+    {
+        return Err(LedgerError::Binding);
+    }
+    parent.private_entry_matching(
+        &layout::ledger(binding.worktree), file_identity(binding.ledger_entity),
+    ).map_err(LedgerError::Directory)
 }
 
 fn bounded_total(before: usize, additional: usize) -> Result<usize, LedgerError> {
