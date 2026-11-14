@@ -2613,6 +2613,55 @@ class ContainerPathFactSelection(unittest.TestCase):
                         self.policy['groups'][group]['rust_targets'],
                     )
 
+    def test_file_material_move_consumers_keep_complete_existing_scopes(self):
+        sources = [
+            'src/engine/src/business/history_move/projection.rs',
+            'src/engine/src/engine/history_move_decision/materials.rs',
+            'src/engine/src/engine/history_move_target.rs',
+        ]
+        required = ['container-lifecycle-engine', 'container-path-facts-engine']
+        cases = [(path, required) for path in sources] + [
+            ('test/engine/unit/business/history_move_projection_tests.rs',
+             ['container-path-facts-engine', 'container-tags-engine']),
+            ('test/engine/unit/business/history_move_native_lifecycle_tests.rs', required),
+        ]
+        for path, groups in cases:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertEqual(plan['groups'], groups)
+                for group in groups:
+                    self.assertCountEqual(self.selections(plan, group),
+                                          self.policy['groups'][group]['rust_targets'])
+
+        # Dispatching against the pre-refactor base includes the seven Rust
+        # changes as well as this policy fix; none may drop an older group.
+        paths = sources + [
+            'src/engine/src/container_storage/file_database.rs',
+            'src/engine/src/container_storage/file_database/material.rs',
+            'src/engine/src/engine/history_move_decision/store.rs',
+            'test/engine/unit/container_storage/file_database_tests.rs',
+            CI.PLAN_PATH,
+            'test/ci/test_targeted_ci.py',
+        ]
+        plan = CI.select_plan(self.policy, paths, shardable=True)
+        self.assertEqual(plan['groups'], [
+            'ci-selection', 'container-lifecycle-engine', 'container-path-facts-engine',
+            'container-tags-storage', 'current-name-layout-consumers',
+            'engine-integer-errors', 'held-directory-layout',
+        ])
+        for group in plan['groups']:
+            self.assertCountEqual(self.selections(plan, group),
+                                  self.policy['groups'][group]['rust_targets'])
+        shards = CI.shard_tools().partition(plan)
+        self.assertLessEqual(len(shards), 16)
+        self.assertEqual([target for shard in shards for target in shard['rust_targets']],
+                         plan['rust_targets'])
+        self.assertEqual([module for shard in shards for module in shard['python_tests']],
+                         plan['python_tests'])
+        for shard in shards:
+            self.assertLessEqual(len(shard['rust_targets']), 16)
+            self.assertLessEqual(len(shard['python_tests']), 8)
+
     def test_path_batch_retains_every_shared_selection_and_budget_when_sharded(self):
         paths = [
             'src/contract/src/lib.rs', 'src/engine/src/business/workspace.rs',
@@ -2676,6 +2725,12 @@ class ContainerPathFactSelection(unittest.TestCase):
                          [80, 96, 1, 160, 128, 96])
         self.assertEqual(engine[6]['mode'], 'check')
         self.assertIs(engine[6]['default_features'], False)
+        self.assertEqual(engine[7]['prefixes'], [
+            'business::history_move::projection::tests::',
+            'business::history_move::projection::native::lifecycle_tests::',
+        ])
+        self.assertEqual(engine[7]['max_tests'], 18)
+        self.assertNotIn('whole', engine[7])
         http = self.policy['groups']['container-path-facts-http']['rust_targets'][0]
         self.assertEqual((http['name'], http['features'], http['max_tests']),
                          ('http_engine', ['core'], 32))

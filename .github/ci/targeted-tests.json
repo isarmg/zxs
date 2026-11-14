@@ -3040,6 +3040,16 @@
           "timeout_seconds": 900,
           "mode": "check",
           "default_features": false
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::history_move::projection::tests::",
+            "business::history_move::projection::native::lifecycle_tests::"
+          ],
+          "max_tests": 18,
+          "timeout_seconds": 900
         }
       ]
     },
@@ -8984,6 +8994,33 @@
       "groups": [
         "container-path-facts-engine",
         "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/history_move/projection.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_decision/materials.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/history_move_target.rs",
+      "groups": [
+        "container-path-facts-engine",
+        "container-lifecycle-engine"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/history_move_projection_tests.rs",
+      "groups": [
+        "container-path-facts-engine"
       ]
     },
     {
