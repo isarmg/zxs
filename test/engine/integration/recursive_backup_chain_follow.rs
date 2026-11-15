@@ -19,7 +19,10 @@ fn fixture() -> Fixture {
     let names = [
         "disk-0", "disk-1", "disk-2", "p-two", "b-two", "c-two", "spare",
     ];
-    let mut config = Config::development(names.iter().map(|name| temp.path().join(name))).unwrap();
+    let mut config = Config::development(names.iter().map(|name| {
+        (name_policy::Name::parse(name).unwrap(), temp.path().join(name))
+    }))
+    .unwrap();
     for (index, level, upstream) in [
         (3, 1, None),
         (4, 2, Some("D04")),

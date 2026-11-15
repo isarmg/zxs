@@ -26,7 +26,7 @@ pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<Stri
     Ok(version.to_owned())
 }
 
-fn retained_node_version<'a>(state: &'a State, file: &str, node: &str) -> Result<&'a str> {
+pub(super) fn retained_node_version<'a>(state: &'a State, file: &str, node: &str) -> Result<&'a str> {
     let version = state
         .versions
         .get(node)

@@ -6,7 +6,7 @@ fn historical_only_new_file_publishes_current_name_without_changing_main() {
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(
         &system,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -73,11 +73,13 @@ fn historical_only_new_file_publishes_current_name_without_changing_main() {
 #[test]
 fn historical_edits_materialize_only_written_files_without_changing_the_source_head() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        root.path().join("d1"),
-        root.path().join("d2"),
-        root.path().join("d3"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
@@ -203,11 +205,13 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
 #[test]
 fn historical_placeholders_need_no_old_payload_and_written_replacements_materialize() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        root.path().join("d1"),
-        root.path().join("d2"),
-        root.path().join("d3"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
@@ -331,7 +335,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine

@@ -36,7 +36,7 @@
     <section class="card" id="first-install">
       <h2>空目录首装：逐步准备，退出后交接启动</h2>
       <p>只填一次服务身份、完整目录批次和配置。按顺序复用现有原生安装、初始化与启动接口，每步先核对准确计划，再单独确认；不复制核心事务、不自动重试或清空失败材料。</p>
-      <p class="muted">先准备安装根；随后可按本次选择准备基础系统工具或 Samba 依赖，再安装内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先填写计划使用的 1–32 个目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 时，第 3–5 步可带入同一独立 Unix 账户到对应卡片创建；支持的 Samba 依赖可在<a href="#packages">系统包卡片</a>明确安装，SMB 凭据仍须单独确认。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
+      <p class="muted">先准备安装根；随后可按本次选择准备基础系统工具或 Samba 依赖，再安装内置程序。第 3 步若还没有非 root Unix 服务账户，可使用下方账户卡片明确创建，再回到同一首装步骤。先显式填写计划使用的 1–32 个磁盘名称与目录路径；首次管理员完成前 /zxs/data/disks 必须保持空。第 7 步的主按钮会先核对目录，缺失时明确确认创建，随后自动读取真实存储计划，再确认初始化；已有准确空目录则直接进入存储计划。账户创建是独立确认，不挂载或格式化。选择 SMB 时，第 3–5 步可带入同一独立 Unix 账户到对应卡片创建；支持的 Samba 依赖可在<a href="#packages">系统包卡片</a>明确安装，SMB 凭据仍须单独确认。同版模块可到<a href="#vfs-install">离线 VFS 卡片</a>另行核对并明确安装。</p>
       <form id="first-install-form">
         <div class="fields">
           <label>本机服务账户 <input id="first-install-user" required value="zxs" maxlength="32" autocomplete="off"></label>
@@ -44,7 +44,8 @@
           <label>服务监听地址 <input id="first-install-listen" required value="0.0.0.0:7400" maxlength="256" autocomplete="off"></label>
           <label>首次 ZXS 管理员 <input id="first-install-administrator" required value="admin" maxlength="256" autocomplete="off"></label>
         </div>
-        <label>全部首批空目录，一行一个 <textarea id="first-install-roots" required rows="3" spellcheck="false" placeholder="/zxs/data/disks/primary1"></textarea></label>
+        <label>全部首批磁盘名称与空目录，JSON 数组 <textarea id="first-install-roots" required rows="4" spellcheck="false" placeholder='[{"name":"资料盘","root_path":"/zxs/data/disks/primary1"}]'></textarea></label>
+        <p class="muted">name 是你选择的唯一盘名，不能省略；root_path 是准确目录。不会从挂载点、目录名或槽位补盘名。</p>
         <label class="ack"><input id="first-install-smb" type="checkbox"> 本次同时配置并启动独立 Samba（缺少依赖或凭据时明确停在启动前，不改成 HTTP-only 新请求）</label>
         <div class="fields">
           <label>独立 SMB Unix 账户 <input id="first-install-smb-account" value="zxs-smb" maxlength="32" autocomplete="off"></label>
@@ -53,7 +54,7 @@
         <label class="ack"><input id="first-install-autostart" type="checkbox"> 在最终交接前启用选定服务的开机启动，服务仍等 helper 退出后启动</label>
         <button type="submit">保留同一输入并开始逐步核对</button>
       </form>
-      <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。第 7 步尚未保留空目录请求时可更正目录，已保留的原操作不能清除或换输入重做。</p>
+      <p class="muted">本标签页会在每次写入前保留无密码原请求，刷新不自动重放。请导出原请求以便关闭标签页、换浏览器或 helper 地址改变后恢复。浏览器记录只用于定位原操作，不是当前磁盘或服务就绪证明；不能跳过服务器的重新准入。第 7 步尚未保留空目录请求时可更正盘名与目录，已保留的原操作不能清除或换输入重做。</p>
       <label>恢复已导出的原请求 <input id="first-install-import" type="file" accept="application/json,.json"></label>
       <button id="first-install-save" type="button" class="secondary">导出无密码原请求</button>
       <p id="first-install-progress" role="status"></p>
@@ -66,8 +67,8 @@
       <pre id="first-install-report"></pre>
       <div id="first-install-directory-note" hidden>
         <p>首次管理员已完成。点击“只读核对当前原步骤”：缺少原批次目录时，主按钮会变为“确认创建原批次空目录”；创建成功后会自动读取真实存储计划，仍须确认后才初始化。已有准确空目录直接读取存储计划，无需再执行目录准备。</p>
-        <p class="muted">目录名采用与存储相同的可移植命名规则，不能使用 CON、冒号、非规范 Unicode 或忽略大小写后重名的目录。预览拒绝且尚未保留空目录请求时，可在上方目录栏更正，再点下方按钮保存；之前已完成的安装步骤不变。</p>
-        <button id="first-install-roots-correct" type="button" class="secondary" hidden>保存尚未提交的目录更正</button>
+        <p class="muted">磁盘名称与物理目录各自遵守可移植命名规则，不能使用 CON、冒号或非规范 Unicode；盘名在全批次按名称查找规则唯一，不从物理目录推导。预览拒绝且尚未保留空目录请求时，可在上方输入栏更正，再点下方按钮保存；之前已完成的安装步骤不变。</p>
+        <button id="first-install-roots-correct" type="button" class="secondary" hidden>保存尚未提交的盘名与目录更正</button>
         <div id="first-install-directories-actions">
           <button id="first-install-directories-save" type="button" class="secondary">保存原空目录请求</button>
         </div>
@@ -213,10 +214,11 @@
     </section>
     <section class="card">
       <h2>首次存储：整批初始化现有空目录</h2>
-      <p>先完成管理员，再由你在工具外准备和挂载正确的持久存储目录。填写 <code>/zxs/data/disks</code> 下的全部直接子目录，一行一个；必须已有准确服务 UID/GID 与 0700。额外、缺失、外来、非空或不安全内容会拒绝，不格式化设备、不创建挂载点、不修改已有权限。每个选择成为独立一级盘，不按顺序建立备份链。</p>
+      <p>先完成管理员，再由你在工具外准备和挂载正确的持久存储目录。显式填写每个盘名及 <code>/zxs/data/disks</code> 下的全部直接子目录；必须已有准确服务 UID/GID 与 0700。额外、缺失、外来、非空或不安全内容会拒绝，不格式化设备、不创建挂载点、不修改已有权限。每个选择成为独立一级盘，不按顺序建立备份链。</p>
       <form id="first-storage-form">
         <label>已存在的本机服务账户 <input id="first-storage-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
-        <label>完整首批空目录，一行一个 <textarea id="first-storage-roots" rows="4" spellcheck="false" placeholder="/zxs/data/disks/primary1"></textarea></label>
+        <label>完整首批盘名与空目录，JSON 数组 <textarea id="first-storage-roots" required rows="4" spellcheck="false" placeholder='[{"name":"资料盘","root_path":"/zxs/data/disks/primary1"}]'></textarea></label>
+        <p class="muted">name 必须显式、规范且全批次唯一；不从 root_path 的末段、挂载点或槽位自动补名。</p>
         <button type="submit">核对整批空目录并预览</button>
         <label>中断恢复：原请求摘要 <input id="first-storage-digest" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <button id="first-storage-recover" type="button" class="secondary">读取原整批初始化计划</button>
@@ -236,7 +238,7 @@
       <p>只针对已初始化的 production 池与现有 <code>/zxs/data/{state,management,disks}</code> 布局。所有原盘和新目录必须在 <code>disks</code> 下，已有服务 UID/GID 与 0700；原盘和整批新目录须覆盖实际全部直接子目录。新目录必须为空，不接纳外来历史、不格式化设备，不修改原盘内容来冒充空盘。</p>
       <form id="disk-add-form">
         <label>现有服务账户 <input id="disk-add-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
-        <label>本批新目录 JSON 数组 <textarea id="disk-add-input" rows="7" spellcheck="false">[{"root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true}]</textarea></label>
+        <label>本批新目录 JSON 数组 <textarea id="disk-add-input" rows="7" spellcheck="false">[{"name":"","root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true}]</textarea></label>
         <p class="muted">高级备份关系必须同批设置完整低级链，不能填虚拟占位以后再补。这里仅添加真正空目录，绝不表示外来备份盘已经接纳。原有不可用/已注销盘不会被隐藏或自动重用。</p>
         <label class="ack"><input id="disk-add-writers" type="checkbox" required> 已停止 ZXS、Samba、旧二进制及其他写入者；预览会以服务账户打开既有 Engine，可能执行现有恢复/同步，不是任意盘的纯只读检查。</label>
         <button type="submit">预览准确空目录批次</button>
@@ -259,10 +261,11 @@
       <form id="foreign-chain-form">
         <label>现有服务账户 <input id="foreign-chain-user" required value="zxs" maxlength="32" autocomplete="off" spellcheck="false"></label>
         <label>外来盘真实目录 <input id="foreign-chain-source" required value="/zxs/data/disks/foreign-tertiary" autocomplete="off" spellcheck="false"></label>
+        <label>为外来盘选择的本池盘名 <input id="foreign-chain-name" required autocomplete="off" spellcheck="false"></label>
         <label>拟使用的高级槽位 <input id="foreign-chain-slot" required value="foreign-tertiary" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label>高级盘的完整低级链接口槽位 <input id="foreign-chain-upstream" required value="new-secondary" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label class="ack"><input id="foreign-chain-metadata" type="checkbox"> 拟将高级盘作为元数据成员（仅绑定意图，本次不授予投票权）</label>
-        <label>全部低级根目录，按一级至来源前一级连续升序列出 <textarea id="foreign-chain-lower" rows="7" spellcheck="false">[{"root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true},{"root_path":"/zxs/data/disks/new-secondary","slot_id":"new-secondary","level":2,"upstream_slot_id":"new-primary","metadata_member":true}]</textarea></label>
+        <label>全部低级根目录，按一级至来源前一级连续升序列出 <textarea id="foreign-chain-lower" rows="7" spellcheck="false">[{"name":"","root_path":"/zxs/data/disks/new-primary","slot_id":"new-primary","level":1,"upstream_slot_id":null,"metadata_member":true},{"name":"","root_path":"/zxs/data/disks/new-secondary","slot_id":"new-secondary","level":2,"upstream_slot_id":"new-primary","metadata_member":true}]</textarea></label>
         <label class="ack"><input id="foreign-chain-writers" type="checkbox" required> 已停止 ZXS、Samba、旧二进制及所有来源/目标写入者。预览以服务账户打开既有 Engine，可能进行原有恢复/同步；主机锁不能排除外部写入者。</label>
         <button type="submit">预览一次完整的低级链</button>
         <label>原操作 ID <input id="foreign-chain-operation" maxlength="35" autocomplete="off" spellcheck="false"></label>

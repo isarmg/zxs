@@ -84,7 +84,9 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
 fn initialize(root: &Path) -> Engine {
     Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap(),
+        Config::development(crate::test_disks(
+            [root.join("p"), root.join("b"), root.join("c")],
+        )).unwrap(),
     )
     .unwrap()
 }
@@ -293,7 +295,9 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
         for (name, copies, renamed) in [("expanded", 3, false), ("renamed", 2, true)] {
             let root = temp.path().join(name);
             let mut config =
-                Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
+                Config::development(crate::test_disks(
+                    [root.join("p"), root.join("b"), root.join("c")],
+                )).unwrap();
             if renamed {
                 config.disks[1].slot_id = "OTHER".into();
                 config.disks[2].upstream_slot_id = Some("OTHER".into());
@@ -362,7 +366,9 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             .unwrap();
         let root = temp.path().join("restored");
         let mut config =
-            Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
+            Config::development(crate::test_disks(
+                [root.join("p"), root.join("b"), root.join("c")],
+            )).unwrap();
         config.disks[1].slot_id = "C01".into();
         config.disks[2].slot_id = "B01".into();
         config.disks[2].upstream_slot_id = Some("C01".into());

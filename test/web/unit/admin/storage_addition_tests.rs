@@ -21,6 +21,7 @@ fn preview() -> AdditionPreview {
             operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
             additions: vec![DirectoryAddition {
                 selection,
+                name: name_policy::Name::parse("Archive").unwrap(),
                 slot_id: "N01".into(),
                 level: 1,
                 upstream_slot_id: None,
@@ -204,6 +205,7 @@ fn metadata_resume_mixed_preview_counts_only_explicit_voters() {
     let mut data = preview.request.additions[0].clone();
     data.metadata_member = false;
     data.slot_id = "N02".into();
+    data.name = name_policy::Name::parse("Documents").unwrap();
     data.selection = super::super::tests::candidate("/mnt/disk/data");
     preview.request.additions.push(data);
     preview.added_directories = 2;
@@ -228,6 +230,10 @@ fn metadata_resume_mixed_preview_counts_only_explicit_voters() {
         ..Default::default()
     };
     selected(&mut model);
+    for addition in &preview.request.additions {
+        model.addition.context.fields.get_mut(&addition.selection.selection_id)
+            .unwrap().name = addition.name.as_str().to_owned();
+    }
     model
         .addition
         .context
@@ -330,4 +336,33 @@ fn terminal_cancel_requires_a_current_observation_and_never_guesses_from_progres
     ] {
         assert!(validate_status(&status(AdditionState::RecoveryRequired, phase), None).is_err());
     }
+}
+
+#[test]
+fn disk_names_are_explicit_inputs_shared_by_activation_and_addition() {
+    let preview = preview();
+    let mut model = super::super::Model {
+        selections: vec![preview.request.additions[0].selection.clone()],
+        ..Default::default()
+    };
+    selected(&mut model);
+    let failure = named_selections(&model).unwrap_err();
+    assert!(matches!(failure.source.as_deref(), Some(api::ErrorSource::DiskNameInput(_))));
+    assert!(make_request(&model, preview.request.operation_id).is_err());
+    let id = model.selections[0].selection_id.clone();
+    model.addition.context.fields.get_mut(&id).unwrap().name = "Personal archive".into();
+    let named = named_selections(&model).unwrap();
+    let addition = make_request(&model, preview.request.operation_id).unwrap();
+    assert_eq!(named[0].name.as_str(), "Personal archive");
+    assert_eq!(named[0].name, addition.additions[0].name);
+    assert_eq!(named[0].selection, model.selections[0]);
+    assert_ne!(named[0].name.as_str(), addition.additions[0].slot_id);
+    let mut wire = json!(named[0]);
+    wire.as_object_mut().unwrap().remove("name");
+    assert!(json_codec::from_value::<
+        storage_contract::storage_directories::NamedStorageSelection,
+    >(wire).is_err());
+    model.addition.context.fields.get_mut(&id).unwrap().name = "bad/name".into();
+    assert!(named_selections(&model).is_err());
+    assert!(make_request(&model, preview.request.operation_id).is_err());
 }

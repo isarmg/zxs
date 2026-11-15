@@ -3,11 +3,13 @@ use super::*;
 #[test]
 fn public_validation_checks_paths_without_creating_them() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            root.path().join("p"),
+            root.path().join("b"),
+            root.path().join("c"),
+        ],
+    ))
     .unwrap();
     ValidatedConfig::try_from(config.clone()).unwrap();
     for path in ["relative", "/draft/../p"] {
@@ -20,7 +22,9 @@ fn public_validation_checks_paths_without_creating_them() {
 #[test]
 fn impossible_upstream_level_is_rejected_without_overflow() {
     let mut config =
-        Config::development(["/draft/p".into(), "/draft/b".into(), "/draft/c".into()]).unwrap();
+        Config::development(crate::test_disks(
+            ["/draft/p".into(), "/draft/b".into(), "/draft/c".into()],
+        )).unwrap();
     config.disks[0].level = 2;
     config.disks[0].upstream_slot_id = Some("B01".into());
     config.disks[1].level = u32::MAX;
@@ -33,7 +37,9 @@ fn one_disk_and_optional_backup_chains_are_valid_without_creating_paths() {
     let root = tempfile::tempdir().unwrap();
     for count in 1..=6 {
         let config =
-            Config::development((0..count).map(|i| root.path().join(format!("disk{i}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..count).map(|i| root.path().join(format!("disk{i}"))),
+            )).unwrap();
         ValidatedConfig::try_from(config.clone()).unwrap();
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
@@ -41,16 +47,18 @@ fn one_disk_and_optional_backup_chains_are_valid_without_creating_paths() {
 
 #[test]
 fn empty_membership_is_rejected_even_with_data_disks() {
-    let mut config = Config::development(Vec::new()).unwrap();
+    let mut config = Config::development(crate::test_disks(Vec::new())).unwrap();
     assert!(ValidatedConfig::try_from(config.clone()).is_err());
-    config = Config::development(["/draft/only".into()]).unwrap();
+    config = Config::development(crate::test_disks(["/draft/only".into()])).unwrap();
     config.disks[0].metadata_member = false;
     assert!(ValidatedConfig::try_from(config.clone()).is_err());
 }
 
 #[test]
 fn optional_backup_membership_does_not_require_three_voters() {
-    let mut config = Config::development(["/draft/p".into(), "/draft/b".into()]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        ["/draft/p".into(), "/draft/b".into()],
+    )).unwrap();
     config.disks[1].metadata_member = false;
     ValidatedConfig::try_from(config.clone()).unwrap();
     assert_eq!(config.metadata_quorum(), 1);
@@ -60,7 +68,7 @@ fn optional_backup_membership_does_not_require_three_voters() {
 
 #[test]
 fn retained_workspace_limits_default_for_legacy_configuration_and_reject_zero() {
-    let config = Config::development(["/draft/only".into()]).unwrap();
+    let config = Config::development(crate::test_disks(["/draft/only".into()])).unwrap();
     let mut value = json_codec::to_value(&config).unwrap();
     for field in [
         "max_retained_workspaces",
@@ -95,7 +103,9 @@ fn retained_workspace_limits_default_for_legacy_configuration_and_reject_zero() 
 
 #[test]
 fn validated_configuration_serialization_preserves_the_disk_contract() {
-    let config = Config::development(["/draft/p".into(), "/draft/b".into()]).unwrap();
+    let config = Config::development(crate::test_disks(
+        ["/draft/p".into(), "/draft/b".into()],
+    )).unwrap();
     let encoded = json_codec::to_vec(&config).unwrap();
     let validated: ValidatedConfig = decode_strict(&encoded).unwrap();
     assert_eq!(json_codec::to_vec(&validated).unwrap(), encoded);
@@ -110,7 +120,9 @@ fn validated_configuration_serialization_preserves_the_disk_contract() {
 
 #[test]
 fn validated_configuration_rejects_external_limits_and_identities() {
-    let config = Config::development(["/draft/p".into(), "/draft/b".into()]).unwrap();
+    let config = Config::development(crate::test_disks(
+        ["/draft/p".into(), "/draft/b".into()],
+    )).unwrap();
     let invalid: &[fn(&mut Config)] = &[
         |c| c.pool_id = "bad".into(),
         |c| c.max_file_bytes = 0,
@@ -146,7 +158,9 @@ fn validated_configuration_rejects_external_limits_and_identities() {
 
 #[test]
 fn root_rebinding_preserves_admitted_topology_and_only_replaces_roots() {
-    let config = Config::development(["/draft/p".into(), "/draft/b".into()]).unwrap();
+    let config = Config::development(crate::test_disks(
+        ["/draft/p".into(), "/draft/b".into()],
+    )).unwrap();
     let mut expected = config.clone();
     expected.disks[0].root = "/moved/p".into();
     expected.disks[1].root = "/moved/b".into();
@@ -163,7 +177,7 @@ fn root_rebinding_preserves_admitted_topology_and_only_replaces_roots() {
 #[test]
 fn root_rebinding_rejects_external_count_traversal_overlap_and_aliases() {
     let config = ValidatedConfig::try_from(
-        Config::development(["/draft/p".into(), "/draft/b".into()]).unwrap(),
+        Config::development(crate::test_disks(["/draft/p".into(), "/draft/b".into()])).unwrap(),
     )
     .unwrap();
     for roots in [
@@ -200,7 +214,7 @@ fn root_rebinding_rejects_external_count_traversal_overlap_and_aliases() {
 
 #[test]
 fn admitted_runtime_limits_survive_root_rebinding_but_are_not_persisted() {
-    let config = Config::development(["/draft/p".into()]).unwrap();
+    let config = Config::development(crate::test_disks(["/draft/p".into()])).unwrap();
     let encoded = json_codec::to_vec(&config).unwrap();
     let config = ValidatedConfig::try_from(config).unwrap();
     let baseline = super::super::RetainedWorkspaceLimits::from_config(&config);
@@ -229,7 +243,7 @@ fn admitted_runtime_limits_survive_root_rebinding_but_are_not_persisted() {
 fn restore_rebinds_moved_member_and_preserves_the_admitted_pool_baseline() {
     let temporary = tempfile::tempdir().unwrap();
     let original_root = temporary.path().join("disk");
-    let mut expected = Config::development([original_root.clone()]).unwrap();
+    let mut expected = Config::development(crate::test_disks([original_root.clone()])).unwrap();
     expected.max_workspaces = 7;
     drop(Engine::initialize(&temporary.path().join("system"), expected.clone()).unwrap());
     let moved = temporary.path().join("moved-disk");
@@ -253,7 +267,9 @@ fn restore_rejects_rebound_metadata_root_nested_in_an_unsupplied_data_root() {
     let temporary = tempfile::tempdir().unwrap();
     let primary = temporary.path().join("primary");
     let backup = temporary.path().join("backup");
-    let mut config = Config::development([primary.clone(), backup.clone()]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [primary.clone(), backup.clone()],
+    )).unwrap();
     config.disks[1].metadata_member = false;
     drop(Engine::initialize(&temporary.path().join("system"), config).unwrap());
     let moved = backup.join("moved-primary");
@@ -267,7 +283,9 @@ fn restore_rejects_rebound_metadata_root_nested_in_an_unsupplied_data_root() {
 #[test]
 fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_snapshot() {
     let mut draft =
-        Config::development((0..96).map(|i| PathBuf::from(format!("/draft/disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..96).map(|i| PathBuf::from(format!("/draft/disk-{i}"))),
+        )).unwrap();
     for disk in &mut draft.disks[1..] {
         disk.metadata_member = false;
     }
@@ -304,7 +322,9 @@ fn validated_config_shares_large_topology_and_rebinds_roots_without_changing_sna
 #[test]
 fn restart_limit_rebinding_keeps_the_previous_admitted_snapshot() {
     let original =
-        ValidatedConfig::try_from(Config::development(["/draft/p".into()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            ["/draft/p".into()],
+        )).unwrap()).unwrap();
     let baseline = original.effective_workspace_limits();
     let mut raised = baseline;
     raised.max_retained_workspaces += 1;
@@ -349,7 +369,9 @@ fn held_initialization_uses_selected_private_subdirectories_and_reopens() {
     private_dir(&system).unwrap();
     private_dir(&path).unwrap();
     let directory = std::fs::File::open(&path).unwrap();
-    let config = ValidatedConfig::try_from(Config::development([path.clone()]).unwrap()).unwrap();
+    let config = ValidatedConfig::try_from(Config::development(crate::test_disks(
+        [path.clone()],
+    )).unwrap()).unwrap();
     let engine = Engine::initialize_held(&system, config, vec![directory]).unwrap();
     assert_eq!(engine.config().disks[0].root, path);
     drop(engine);
@@ -364,7 +386,9 @@ fn held_initialization_rejects_replaced_named_directory_without_writes() {
     private_dir(&system).unwrap();
     private_dir(&path).unwrap();
     let directory = std::fs::File::open(&path).unwrap();
-    let config = ValidatedConfig::try_from(Config::development([path.clone()]).unwrap()).unwrap();
+    let config = ValidatedConfig::try_from(Config::development(crate::test_disks(
+        [path.clone()],
+    )).unwrap()).unwrap();
     let original = root.path().join("original");
     std::fs::rename(&path, &original).unwrap();
     private_dir(&path).unwrap();
@@ -385,7 +409,9 @@ fn held_initialization_rejects_nonempty_directory_before_any_disk_write() {
     }
     std::fs::write(second.join("keep"), b"existing data").unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([first.clone(), second.clone()]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [first.clone(), second.clone()],
+        )).unwrap())
             .unwrap();
     let directories = vec![
         std::fs::File::open(&first).unwrap(),
@@ -410,7 +436,7 @@ fn held_initialization_rejects_symlink_ancestor_without_touching_selected_root()
     std::os::unix::fs::symlink(root.path().join("actual"), root.path().join("alias")).unwrap();
     let directory = std::fs::File::open(&actual).unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([root.path().join("alias/storage")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("alias/storage")])).unwrap(),
     )
     .unwrap();
     assert!(Engine::initialize_held(&system, config, vec![directory]).is_err());
@@ -423,7 +449,7 @@ fn held_recovery_rejects_path_replacement_before_any_recovery_write() {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let path = root.path().join("storage");
-    let config = Config::development([path.clone()]).unwrap();
+    let config = Config::development(crate::test_disks([path.clone()])).unwrap();
     drop(Engine::initialize(&system, config).unwrap());
     let directory = std::fs::File::open(&path).unwrap();
     let original = root.path().join("original");
@@ -450,7 +476,9 @@ fn held_recovery_reads_original_identity_and_preserves_published_state() {
     let system = root.path().join("system");
     let path = root.path().join("storage");
     let mut engine =
-        Engine::initialize(&system, Config::development([path.clone()]).unwrap()).unwrap();
+        Engine::initialize(&system, Config::development(crate::test_disks(
+            [path.clone()],
+        )).unwrap()).unwrap();
     engine
         .persist_auth_state(
             json_codec::json!({"control":"retained"}),
@@ -472,7 +500,9 @@ fn held_recovery_reads_original_identity_and_preserves_published_state() {
 fn published_membership_fixture() -> (tempfile::TempDir, Engine, crate::journal::Candidate) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        Config::development([temporary.path().join("p"), temporary.path().join("b")]).unwrap();
+        Config::development(crate::test_disks(
+            [temporary.path().join("p"), temporary.path().join("b")],
+        )).unwrap();
     let mut engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
     engine
         .create_repository(
@@ -610,10 +640,12 @@ fn unchanged_membership_reopens_and_restores_after_system_loss() {
 fn empty_genesis_cannot_replace_membership_from_an_edited_system_config() {
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");
-    let config = Config::development([
-        temporary.path().join("primary"),
-        temporary.path().join("backup"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("primary"),
+            temporary.path().join("backup"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&system, config.clone()).unwrap();
     let journals = config
@@ -642,7 +674,9 @@ fn empty_genesis_cannot_replace_membership_from_an_edited_system_config() {
 fn empty_genesis_with_missing_anchor_is_not_silently_admitted_or_repaired() {
     let temporary = tempfile::tempdir().unwrap();
     let system = temporary.path().join("system");
-    let config = Config::development([temporary.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks(
+        [temporary.path().join("primary")],
+    )).unwrap();
     let engine = Engine::initialize(&system, config.clone()).unwrap();
     let anchor = config.disks[0]
         .root
@@ -662,7 +696,9 @@ fn membership_anchor_fault_is_isolated_when_original_quorum_remains() {
         let temporary = tempfile::tempdir().unwrap();
         let system = temporary.path().join("system");
         let config =
-            Config::development((0..3).map(|n| temporary.path().join(format!("disk-{n}"))))
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temporary.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         let mut engine = Engine::initialize(&system, config.clone()).unwrap();
         let operation = OperationId::generate().unwrap();

@@ -6,11 +6,13 @@ use std::os::unix::fs::PermissionsExt;
 #[test]
 fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_workspace_open() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("primary"),
+            temp.path().join("backup"),
+            temp.path().join("tertiary"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
@@ -246,7 +248,9 @@ fn workspace_scan_reads_the_admitted_private_base_after_path_replacement() {
 fn workspace_fixture(disks: usize) -> (tempfile::TempDir, Engine, Workspace) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..disks).map(|index| temp.path().join(format!("disk-{index}"))))
+        Config::development(crate::test_disks(
+            (0..disks).map(|index| temp.path().join(format!("disk-{index}"))),
+        ))
             .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine

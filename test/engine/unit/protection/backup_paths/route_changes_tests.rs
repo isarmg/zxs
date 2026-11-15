@@ -4,10 +4,13 @@ use super::*;
 mod descendant_routes_tests;
 
 fn initialize_routes(root: &Path) -> (Engine, Repository) {
-    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [root.join("p"), root.join("b"), root.join("c")],
+    )).unwrap();
     for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(DiskConfig {
             slot_id: slot.into(),
+            name: name_policy::Name::parse(&format!("Additional disk {slot}")).unwrap(),
             disk_id: new_id("disk").unwrap(),
             root: root.join(slot),
             level,

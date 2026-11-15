@@ -4,7 +4,9 @@ use std::sync::Arc;
 fn engine(root: &std::path::Path) -> Engine {
     let mut engine = Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("a"), root.join("b"), root.join("c")]).unwrap(),
+        Config::development(crate::test_disks(
+            [root.join("a"), root.join("b"), root.join("c")],
+        )).unwrap(),
     )
     .unwrap();
     engine

@@ -23,9 +23,9 @@ struct Live {
 impl Live {
     fn new(voters: usize, data_only: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let mut config = Config::development(
+        let mut config = Config::development(crate::test_disks(
             (0..voters + data_only).map(|n| temp.path().join(format!("disk-{n}"))),
-        )
+        ))
         .unwrap();
         for disk in config.disks.iter_mut().skip(voters) {
             disk.metadata_member = false;

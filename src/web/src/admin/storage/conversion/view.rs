@@ -17,6 +17,22 @@ pub(in super::super) fn form(state: RwSignal<State>) -> impl IntoView {
                         disabled=move ||state.with(|s|!s.admin_console.storage.editable())
                         on:click=move |_|edit(state,|model|model.target=Some(path.get_value()))>{path.get_value()}</button>}
                 }/>
+                <label class="zxs-form-field">
+                    <span>{t("新主盘名称（唯一）", "New primary name (unique)")}</span>
+                    <input
+                        class="zxs-input"
+                        type="text"
+                        autocomplete="off"
+                        data-conversion-name=""
+                        prop:value=move || state.with(|s| {
+                            s.admin_console.storage.conversion.name.clone()
+                        })
+                        disabled=move || state.with(|s| !s.admin_console.storage.editable())
+                        on:input=move |event| {
+                            edit(state, |model| model.name = event_target_value(&event))
+                        }
+                    />
+                </label>
                 <label class="zxs-form-field"><span>{t("新主盘槽位（唯一）", "New primary slot (unique)")}</span><input class="zxs-input" type="text" autocomplete="off" data-conversion-slot=""
                     prop:value=move ||state.with(|s|s.admin_console.storage.conversion.slot.clone()) disabled=move ||state.with(|s|!s.admin_console.storage.editable())
                     on:input=move |event|edit(state,|model|model.slot=event_target_value(&event))/></label>

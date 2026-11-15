@@ -28,7 +28,9 @@ fn fixture() -> (tempfile::TempDir, Engine, TestPlan) {
         .tempdir()
         .unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let plan = TestPlan {
         operation_id: OperationId::generate().unwrap(),

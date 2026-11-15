@@ -10,7 +10,9 @@ fn root() -> (tempfile::TempDir, DiskRoot) {
         .unwrap();
     let held = DiskRoot::open(temp.path()).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([held.path().to_owned()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [held.path().to_owned()],
+        )).unwrap()).unwrap();
     let mut seal = crate::disk::identity_at(
         &config,
         &config.disks[0],

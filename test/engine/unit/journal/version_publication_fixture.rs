@@ -16,11 +16,13 @@ impl Fixture {
     pub fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path();
-        let config = Config::development([
-            root.join("member-a"),
-            root.join("member-b"),
-            root.join("member-c"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                root.join("member-a"),
+                root.join("member-b"),
+                root.join("member-c"),
+            ],
+        ))
         .unwrap();
         let mut engine = Engine::initialize(&root.join("system"), config).unwrap();
         let repository = engine

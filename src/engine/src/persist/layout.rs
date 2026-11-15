@@ -1,5 +1,7 @@
 //! Stable entry names shared by runtime publication and recovery.
 pub(crate) mod worktree;
+pub(crate) mod container;
+pub(crate) mod namespace;
 use platform_io::fs_safety::{EntryName, RelativePath};
 use std::{
     path::{Path, PathBuf},
@@ -22,21 +24,29 @@ pub(crate) static ZXS_DATA_ROOT: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("zxs-data").expect("invariant: management data root is one canonical entry")
 });
 
+/// The sole persisted fixed-genesis configuration address in this layout.
+/// It is written after physical root capture and consumed by normal cold admission.
+pub(crate) static GENESIS_CONFIGURATION: LazyLock<RelativePath> = LazyLock::new(|| {
+    RelativePath::new("zxs-data/pool-membership/config.json")
+        .expect("invariant: genesis configuration has one canonical management address")
+});
+
 /// Only an admitted repository binding can classify this entry as management data.
 pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new(".zxs").expect("invariant: snapshot repository is one canonical entry")
 });
 
-/// The current publication adapter alone consumes these layout names. They do
-/// not establish locations for unified FILE containers or disk proof domains.
-pub(crate) static HISTORIES: LazyLock<EntryName> = LazyLock::new(|| {
-    EntryName::new("histories").expect("invariant: histories uses one canonical entry")
-});
-
-/// Address the current history area without opening or admitting its root.
-/// Callers retain their held-root and publication checks; this is not a format selector.
+/// Address ordinary current material in the one supported fresh layout.
+/// Root admission compares its physical binding before runtime resources open.
+/// This pure address helper never falls back to the retired histories tree.
 pub(crate) fn histories(root: &Path) -> PathBuf {
-    root.join(HISTORIES.as_path())
+    root.join(COMMON_DATA_ROOT.as_path())
+}
+
+/// Descriptor/checksum/publication metadata is never a user namespace entry.
+/// Every version_dir consumer has this one address; no old address is probed.
+pub(crate) fn version_metadata(root: &Path) -> PathBuf {
+    root.join(ZXS_DATA_ROOT.as_path())
 }
 
 pub(crate) static VERSIONS: LazyLock<EntryName> = LazyLock::new(|| {

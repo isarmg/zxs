@@ -263,11 +263,13 @@ fn fixture_with_members(
     metadata_members: [bool; 3],
 ) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
@@ -1435,7 +1437,9 @@ fn membership_activation_preserves_degraded_outcome_and_acknowledged_missing_pro
     assert!(!engine.blocked);
     let outcome = engine.state.operations[&operation].clone();
     let mut target = (*engine.config).clone();
-    let added = Config::development((0..4).map(|n| temp.path().join(format!("new-{n}"))))
+    let added = Config::development(crate::test_disks(
+        (0..4).map(|n| temp.path().join(format!("new-{n}"))),
+    ))
         .unwrap()
         .disks
         .pop()

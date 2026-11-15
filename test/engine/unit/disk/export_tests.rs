@@ -77,11 +77,13 @@ fn full_copy_size_failure_never_publishes_or_overwrites() {
 
 fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temporary.path().join("primary"),
-        temporary.path().join("backup"),
-        temporary.path().join("third"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("primary"),
+            temporary.path().join("backup"),
+            temporary.path().join("third"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
     let repository = engine
@@ -195,11 +197,13 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let root = temporary.path().join("source");
-    let config = Config::development([
-        root.join("primary"),
-        root.join("backup"),
-        root.join("third"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.join("primary"),
+            root.join("backup"),
+            root.join("third"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root.join("system"), config.clone()).unwrap();
     let repository = engine
@@ -364,11 +368,13 @@ fn restored_tombstones_need_no_source_payload_proofs() {
         drop(engine);
         fs::remove_dir_all(temporary.path().join("source")).unwrap();
         let root = temporary.path().join("restored");
-        let config = Config::development([
-            root.join("primary"),
-            root.join("backup"),
-            root.join("third"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                root.join("primary"),
+                root.join("backup"),
+                root.join("third"),
+            ],
+        ))
         .unwrap();
         let mut restored = Engine::initialize(&root.join("system"), config.clone()).unwrap();
         restored

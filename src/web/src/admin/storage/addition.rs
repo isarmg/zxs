@@ -5,6 +5,7 @@ use storage_contract::{OperationId, storage_addition::*};
 
 #[derive(Clone)]
 struct Fields {
+    name: String,
     slot: String,
     level: String,
     upstream: String,
@@ -117,6 +118,7 @@ pub(super) fn selected(model: &mut super::Model) {
             .fields
             .entry(selection.selection_id.clone())
             .or_insert_with(|| Fields {
+                name: String::new(),
                 slot: format!("N{:02}", index + 1),
                 level: "1".into(),
                 upstream: String::new(),
@@ -127,6 +129,19 @@ pub(super) fn selected(model: &mut super::Model) {
 fn input_error(message: String) -> api::Error {
     api::error(storage_contract::ErrorCode::ConfigInvalid, &message)
 }
+pub(super) fn named_selections(
+    model: &super::Model,
+) -> Result<Vec<storage_contract::storage_directories::NamedStorageSelection>, api::Error> {
+    model.selections.iter().map(|selection| {
+        let fields = model.addition.context.fields.get(&selection.selection_id)
+            .expect("invariant: staged selection has its editable input fields");
+        Ok(storage_contract::storage_directories::NamedStorageSelection {
+            selection: selection.clone(),
+            name: disk_name(&fields.name)?,
+        })
+    }).collect()
+}
+
 fn make_request(
     model: &super::Model,
     operation_id: OperationId,
@@ -152,6 +167,7 @@ fn make_request(
             }
             Ok(DirectoryAddition {
                 selection: selection.clone(),
+                name: disk_name(&fields.name)?,
                 slot_id: fields.slot.clone(),
                 level,
                 upstream_slot_id: (!fields.upstream.is_empty()).then(|| fields.upstream.clone()),
@@ -492,33 +508,72 @@ pub(super) fn load(state: RwSignal<State>) {
 pub(super) fn poll(state: RwSignal<State>) {
     registration_operation::poll::<AdditionStatus>(state);
 }
-fn edit(state: RwSignal<State>, id: &str, field: &'static str, value: String) {
+#[derive(Clone, Copy)]
+enum Field {
+    Name,
+    Slot,
+    Level,
+    Upstream,
+}
+impl Field {
+    fn value(self, fields: &Fields) -> &str {
+        match self {
+            Self::Name => &fields.name,
+            Self::Slot => &fields.slot,
+            Self::Level => &fields.level,
+            Self::Upstream => &fields.upstream,
+        }
+    }
+    fn set(self, fields: &mut Fields, value: String) {
+        match self {
+            Self::Name => fields.name = value,
+            Self::Slot => fields.slot = value,
+            Self::Level => fields.level = value,
+            Self::Upstream => fields.upstream = value,
+        }
+    }
+}
+fn edit(state: RwSignal<State>, id: &str, field: Field, value: String) {
     state.update(|s| {
         if !s.session_active() || !s.admin_console.storage.editable() {
             return;
         }
-        let model = &mut s.admin_console.storage.addition;
-        let fields = model
-            .context
-            .fields
-            .get_mut(id)
+        let storage = &mut s.admin_console.storage;
+        storage.confirmed = false;
+        let model = &mut storage.addition;
+        let fields = model.context.fields.get_mut(id)
             .expect("invariant: rendered selection has fields");
-        match field {
-            "slot" => fields.slot = value,
-            "level" => fields.level = value,
-            "upstream" => fields.upstream = value,
-            _ => unreachable!("invariant: addition field"),
-        }
+        field.set(fields, value);
         model.invalidate();
     });
 }
 fn field(
     state: RwSignal<State>,
     id: StoredValue<String>,
-    key: &'static str,
+    key: Field,
     label: String,
 ) -> impl IntoView {
-    view! {<label class="zxs-form-field"><span>{label}</span><input class="zxs-input" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:value=move ||state.with(|s|s.admin_console.storage.addition.context.fields.get(&id.get_value()).map(|fields|match key{"slot"=>fields.slot.clone(),"level"=>fields.level.clone(),"upstream"=>fields.upstream.clone(),_=>unreachable!("invariant: addition field")}).unwrap_or_default()) on:input=move |event|edit(state,&id.get_value(),key,event_target_value(&event))/></label>}
+    let value = move || state.with(|s| {
+        s.admin_console.storage.addition.context.fields.get(&id.get_value())
+            .map(|fields| key.value(fields).to_owned()).unwrap_or_default()
+    });
+    let edit = move |event| edit(state, &id.get_value(), key, event_target_value(&event));
+    view! {
+        <label class="zxs-form-field">
+            <span>{label}</span>
+            <input
+                class="zxs-input"
+                type="text"
+                autocomplete="off"
+                disabled=move || state.with(|s| !s.admin_console.storage.editable())
+                prop:value=value
+                on:input=edit
+            />
+        </label>
+    }
+}
+pub(super) fn name_field(state: RwSignal<State>, id: StoredValue<String>) -> impl IntoView {
+    field(state, id, Field::Name, t("磁盘名称（唯一）", "Disk name (unique)"))
 }
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     view! {
@@ -530,9 +585,15 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <For each=move ||state.with(|s|s.admin_console.storage.selections.clone()) key=|item|item.selection_id.clone() children=move |selection|{
                 let id = StoredValue::new(selection.selection_id);
                 view!{<section class="zxs-frame zxs-stack"><h3 class="zxs-row">{selection.root_path}</h3><div class="zxs-form-grid">
-                    {field(state,id,"slot",t("新槽位（唯一）", "New slot (unique)"))}
-                    {field(state,id,"level",t("层级（1 为主存储）", "Level (1 for primary storage)"))}
-                    {field(state,id,"upstream",t("上游槽位（备份层必填）", "Upstream slot (required for backup tiers)"))}
+                    {name_field(state,id)}
+                    {field(state,id,Field::Slot,t("新槽位（唯一）", "New slot (unique)"))}
+                    {field(state,id,Field::Level,t("层级（1 为主存储）", "Level (1 for primary storage)"))}
+                    {field(
+                        state,
+                        id,
+                        Field::Upstream,
+                        t("上游槽位（备份层必填）", "Upstream slot (required for backup tiers)"),
+                    )}
                 </div><label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.context.fields.get(&id.get_value()).is_some_and(|fields|fields.metadata)) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){let model=&mut s.admin_console.storage.addition;model.context.fields.get_mut(&id.get_value()).expect("invariant: selection fields").metadata=event_target_checked(&event);model.invalidate();}})/>{t("同时保存元数据（不勾选则仅存数据）", "Also store metadata (unchecked means data only)")}</label></section>}
             }/>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()||s.admin_console.storage.selections.is_empty()) on:click=move |_|preview(state)>{move ||state.with(|s|if terminal(&s.admin_console.storage){t("预览恢复元数据组", "Preview metadata group recovery")}else{t("预览在线添加", "Preview online addition")})}</button>

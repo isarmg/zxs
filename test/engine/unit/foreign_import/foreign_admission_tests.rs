@@ -40,24 +40,28 @@ fn save(engine: &mut Engine, name: &str, copies: u32) {
 }
 fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
-    let original = Config::development([
-        temp.path().join("source-primary"),
-        temp.path().join("source-backup"),
-    ])
+    let original = Config::development(crate::test_disks(
+        [
+            temp.path().join("source-primary"),
+            temp.path().join("source-backup"),
+        ],
+    ))
     .unwrap();
     let mut source = Engine::initialize(&temp.path().join("source-system"), original).unwrap();
     save(&mut source, "source-one", 2);
     save(&mut source, "source-two", 2);
     let mut current = Engine::initialize(
         &temp.path().join("current-system"),
-        Config::development([temp.path().join("current-disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("current-disk")])).unwrap(),
     )
     .unwrap();
     save(&mut current, "existing", 1);
-    let mut added = Config::development([
-        temp.path().join("new-primary"),
-        source.config().disks[1].root.clone(),
-    ])
+    let mut added = Config::development(crate::test_disks(
+        [
+            temp.path().join("new-primary"),
+            source.config().disks[1].root.clone(),
+        ],
+    ))
     .unwrap()
     .disks;
     added[0].slot_id = "P02".into();

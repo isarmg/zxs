@@ -16,7 +16,9 @@ impl Fixture {
     fn new(data_only: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development((0..=data_only).map(|n| temp.path().join(format!("disk-{n}"))))
+            Config::development(crate::test_disks(
+                (0..=data_only).map(|n| temp.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         for disk in config.disks.iter_mut().skip(1) {
             disk.metadata_member = false;
@@ -413,7 +415,9 @@ fn terminal_recovery_preserves_operation_across_stop_close_and_publish_failures(
 fn terminal_continues_prior_exit_authority_and_replayed_occurrence_history() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();
     let seed = OperationId::generate().unwrap();

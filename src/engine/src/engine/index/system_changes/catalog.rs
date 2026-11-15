@@ -24,6 +24,10 @@ struct RecordRef<'a> {
 /// durable discriminator and typed result. No field-name reflection or JSON
 /// filtering determines scope.
 macro_rules! catalog_get {
+    ($state:ident, file_containers, $id:ident) => {
+        $id.parse::<storage_contract::FileId>().ok()
+            .and_then(|key| $state.file_containers.get(&key))
+    };
     ($state:ident, container_tags, $id:ident) => {
         $id.parse::<storage_contract::FileId>().ok()
             .and_then(|key| $state.container_tags.get(&key))
@@ -119,6 +123,7 @@ macro_rules! changed_keys {
 }
 
 catalog_families! {
+    FileContainer => (40, file_containers, storage_contract::file_container::FileContainerRecord),
     Repository => (2, repositories, Repository),
     History => (3, histories, HistoryTree),
     Branch => (4, branches, Branch),

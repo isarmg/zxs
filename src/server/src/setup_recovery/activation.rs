@@ -33,9 +33,11 @@ pub fn management_initialization_record() -> Vec<u8> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct StorageActivationRequest {
-    pub selections: Vec<storage_contract::storage_directories::CandidateSelection>,
+    pub selections: Vec<NamedStorageSelection>,
     pub mode: Mode,
 }
+
+pub use storage_contract::storage_directories::NamedStorageSelection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serialization(rename_all = "snake_case")]
@@ -67,7 +69,7 @@ enum ActivationFormat {
 struct StorageActivationIntent {
     format: ActivationFormat,
     config: ValidatedConfig,
-    selections: Vec<storage_contract::storage_directories::CandidateSelection>,
+    selections: Vec<NamedStorageSelection>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -301,7 +303,8 @@ impl SetupRecovery {
         let discovery = self.discovery_root();
         let mut paths = Vec::with_capacity(request.selections.len());
         let mut directories = Vec::with_capacity(request.selections.len());
-        for selection in &request.selections {
+        for named in &request.selections {
+            let selection = &named.selection;
             let mut excluded = vec![self.data_root.clone(), self.management_root.clone()];
             excluded.extend(paths.iter().cloned());
             let held = crate::storage_directories::revalidate_within(
@@ -315,8 +318,9 @@ impl SetupRecovery {
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        let config =
-            Config::independent_roots(request.mode, paths).map_err(ApiError::contract_input)?;
+        let named = request.selections.iter().map(|disk| disk.name.clone()).zip(paths);
+        let config = Config::independent_roots(request.mode, named)
+            .map_err(ApiError::contract_input)?;
         crate::backend_storage_metadata::disk_directory_names(&config.disks)?;
         let config = ValidatedConfig::try_from(config)
             .and_then(|config| config.with_workspace_limits(self.retained_workspace_limits))
@@ -491,7 +495,8 @@ impl SetupRecovery {
         intent
             .selections
             .iter()
-            .map(|selection| {
+            .map(|named| {
+                let selection = &named.selection;
                 let root =
                     OpenAt2Root::open(Path::new(&selection.root_path), MountPolicy::SameMount)
                         .map_err(ApiError::invalid_source)?;
@@ -523,12 +528,14 @@ impl SetupRecovery {
             .selections
             .iter()
             .zip(&intent.config.disks)
-            .map(|(selection, disk)| {
+            .map(|(named, disk)| {
+                let selection = &named.selection;
                 let path = PathBuf::from(&selection.root_path);
                 // The mount ID is an observation in the creating namespace, not a
                 // durable identity. Recovery binds the stored directory identity
                 // and core seal; it never substitutes a newly inspected empty path.
-                if path != disk.root
+                if named.name != disk.name
+                    || path != disk.root
                     || checked_directory(&path)? != path
                     || directory_identity(&path)?
                         != (

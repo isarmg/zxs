@@ -22,7 +22,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let repository = engine
             .create_disk_root("P01", "admin", OperationId::generate().unwrap())
@@ -337,7 +339,9 @@ fn shared_worker_drop_cancels_before_joining_and_releasing_target_ownership() {
 fn backup_inspection_entrypoints_preserve_actor_and_preparation_order() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let operation = OperationId::generate().unwrap();
     type Inspect = fn(&mut Engine, OperationId, &str) -> Result<()>;

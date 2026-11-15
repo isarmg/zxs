@@ -120,8 +120,10 @@ zxs-helper --root /srv/zxs/new-system package restore /srv/private-helper/new-pa
 
 ```sh
 zxs-helper configuration template --production \
-  --disks /srv/zxs/disk1 /srv/zxs/disk2 /srv/zxs/disk3 --output /srv/private-layout/custom.json
-zxs-helper configuration register-disk --config /srv/private-layout/custom.json \
+  --disks '{"name":"Primary","root":"/srv/zxs/disk1"}' \
+    '{"name":"Near archive","root":"/srv/zxs/disk2"}' \
+    '{"name":"Far archive","root":"/srv/zxs/disk3"}' --output /srv/private-layout/custom.json
+zxs-helper configuration register-disk --config /srv/private-layout/custom.json --name "Additional primary" \
   --slot P02 --disk-id REVIEWED_DISK_ID --path /srv/zxs/disk4 --level 1
 ```
 
@@ -131,7 +133,7 @@ zxs-helper configuration register-disk --config /srv/private-layout/custom.json 
 
 ## 副本与发布约束
 
-除系统盘外最低只需一块存储盘，后续备份层均可不配置；单盘没有冗余或故障盘容错。`configuration template --disks /absolute/primary` 可生成单盘草稿，增加路径时按顺序形成备份链；草稿本身不访问或初始化设备，实际使用仍须校验拓扑和设备。
+除系统盘外最低只需一块存储盘，后续备份层均可不配置；单盘没有冗余或故障盘容错。`configuration template --disks '{"name":"Primary","root":"/absolute/primary"}'` 可生成单盘草稿，增加路径时按顺序形成备份链；草稿本身不访问或初始化设备，实际使用仍须校验拓扑和设备。
 
 正常元数据发布要求全部已配置元数据成员持久化成功；严格多数仅用于相应恢复/准入流程，不能自动把失联成员移出配置。`package restore` 默认一个副本；需要更多副本时显式设置 `--copies N` 并预置足够的备份链。
 

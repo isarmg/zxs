@@ -20,7 +20,9 @@ pub use admission::{
     DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount,
 };
 mod owned;
-pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{
+    DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot, InitializationDisks,
+};
 pub(crate) use owned::{
     FileMoveError, FileMoveFault, FileStamp, FrozenFileMove, HeldRegular, InstallExchange,
     NewEntryCopyError,
@@ -85,9 +87,9 @@ pub(crate) struct DiskSeal {
 /// The current identity contract binds a managed directory, not its hardware topology.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DiskSealFormat {
-    #[serialization(rename = "container-current-name-managed-directory")]
+    #[serialization(rename = "unified-working-tree-managed-directory-v1")]
     ManagedDirectory,
-    #[serialization(rename = "container-current-name-membership-generation")]
+    #[serialization(rename = "unified-working-tree-membership-generation-v1")]
     MembershipGeneration { authority_hash: String },
 }
 
@@ -1020,6 +1022,24 @@ impl<'a> VerifiedExisting<'a> {
             file,
         })
     }
+    /// Verify bytes through the caller's already admitted container occurrence.
+    /// Metadata and BODY have separate held domains; this proof grants neither
+    /// a directory location nor a publication and cannot search another root.
+    pub(crate) fn read_container(
+        metadata: &DiskRoot,
+        directory: &Path,
+        version: &'a FileVersion,
+        container: &DiskRoot,
+        name: &name_policy::LookupName,
+    ) -> Result<Self> {
+        let checks = read_authenticated_checksums_at(metadata, directory, version)?;
+        let manifest = decode_authenticated_checksums(&checks, version)?;
+        let path = crate::container_storage::ordinary_body_path(container.path(), version, name)?;
+        let file = container.open_read_regular(&path)?;
+        let file = verify_open_payload(file, manifest, version, usize::MAX, &mut |_| Ok(()))?;
+        Ok(Self { version, directory: directory.to_owned(), path, file })
+    }
+
     pub(crate) fn version(&self) -> &'a FileVersion {
         self.version
     }
@@ -1053,7 +1073,7 @@ impl<'a> VerifiedExisting<'a> {
 }
 
 pub(crate) fn version_dir(disk: &DiskConfig, history: &str, version: &str) -> PathBuf {
-    layout::histories(&disk.root)
+    layout::version_metadata(&disk.root)
         .join(history)
         .join("versions")
         .join(version)

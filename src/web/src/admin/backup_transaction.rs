@@ -17,11 +17,32 @@ enum Approval {
     Cancel,
 }
 
+#[derive(Clone)]
+struct SelectedTarget {
+    selection: storage_contract::storage_directories::CandidateSelection,
+    name: String,
+    disk_id: String,
+    slot_id: String,
+    upstream_slot_id: String,
+}
+
+impl SelectedTarget {
+    fn request(&self) -> Result<wire::Target, api::Error> {
+        Ok(wire::Target {
+            selection: self.selection.clone(),
+            name: super::storage::disk_name(&self.name)?,
+            disk_id: self.disk_id.clone(),
+            slot_id: self.slot_id.clone(),
+            upstream_slot_id: self.upstream_slot_id.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Model {
     context: Option<wire::Context>,
     source: String,
-    targets: Vec<wire::Target>,
+    targets: Vec<SelectedTarget>,
     operation_text: String,
     original_start: Option<wire::StartRequest>,
     retained_operation: Option<OperationId>,
@@ -101,7 +122,11 @@ impl Model {
             && self
                 .targets
                 .iter()
-                .all(|target| !target.slot_id.is_empty() && !target.upstream_slot_id.is_empty())
+                .all(|target| {
+                    !target.name.is_empty()
+                        && !target.slot_id.is_empty()
+                        && !target.upstream_slot_id.is_empty()
+                })
     }
     fn accepts_request(&self, request: &wire::OriginalRequest) -> bool {
         self.operation().is_none_or(|id| request.operation_id == id)
@@ -178,6 +203,7 @@ fn original_request(request: &wire::StartRequest) -> wire::OriginalRequest {
             .targets
             .iter()
             .map(|target| wire::OriginalTarget {
+                name: target.name.clone(),
                 root_path: target.selection.root_path.clone(),
                 disk_id: target.disk_id.clone(),
                 slot_id: target.slot_id.clone(),

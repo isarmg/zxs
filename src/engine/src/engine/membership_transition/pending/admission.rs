@@ -503,6 +503,7 @@ pub(in crate::engine::membership_transition) fn same_disk(
     let DiskConfig {
         slot_id,
         disk_id,
+        name,
         root,
         level,
         upstream_slot_id,
@@ -512,6 +513,7 @@ pub(in crate::engine::membership_transition) fn same_disk(
     } = old;
     slot_id == &new.slot_id
         && disk_id == &new.disk_id
+        && name == &new.name
         && root == &new.root
         && *level == new.level
         && upstream_slot_id == &new.upstream_slot_id
@@ -522,6 +524,7 @@ pub(in crate::engine::membership_transition) fn same_disk(
 pub(in crate::engine::membership_transition) fn same_settings(old: &Config, new: &Config) -> bool {
     let Config {
         pool_id,
+        storage_roots,
         mode,
         disks: _,
         checksum_chunk_bytes,
@@ -537,6 +540,7 @@ pub(in crate::engine::membership_transition) fn same_settings(old: &Config, new:
         workspace_ttl_seconds,
     } = old;
     pool_id == &new.pool_id
+        && storage_roots == &new.storage_roots
         && mode == &new.mode
         && *checksum_chunk_bytes == new.checksum_chunk_bytes
         && *max_file_bytes == new.max_file_bytes

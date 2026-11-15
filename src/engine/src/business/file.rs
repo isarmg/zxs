@@ -149,6 +149,20 @@ pub(crate) fn publish_selected_file_at_projected(
     operation: OperationId,
     view: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<String> {
+    publish_selected_file_at_projected_with_ids(
+        state, branch_id, path, principal, operation, view, &mut |prefix| Ok(new_id(prefix)?),
+    )
+}
+
+pub(super) fn publish_selected_file_at_projected_with_ids(
+    state: &mut State,
+    branch_id: &str,
+    path: Option<&name_policy::PortablePath>,
+    principal: &str,
+    operation: OperationId,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
     let branch = state.branches.get(branch_id).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::BranchNotFound,
@@ -172,13 +186,14 @@ pub(crate) fn publish_selected_file_at_projected(
                 "file branch content missing",
             )
         })?;
-    publish_selected_file_source(
+    publish_selected_file_source_with_ids(
         state,
         SelectedFile { branch, source },
         path,
         principal,
         operation,
         view,
+        ids,
     )
 }
 
@@ -264,6 +279,20 @@ fn publish_selected_file_source(
     principal: &str,
     operation: OperationId,
     view: Option<&crate::engine::CurrentNamespaces>,
+) -> Result<String> {
+    publish_selected_file_source_with_ids(
+        state, selected, path, principal, operation, view, &mut |prefix| Ok(new_id(prefix)?),
+    )
+}
+
+fn publish_selected_file_source_with_ids(
+    state: &mut State,
+    selected: SelectedFile,
+    path: Option<&name_policy::PortablePath>,
+    principal: &str,
+    operation: OperationId,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    ids: &mut impl FnMut(&str) -> Result<String>,
 ) -> Result<String> {
     let SelectedFile { branch, source } = selected;
     let branch_id = branch.branch_id.as_str();
@@ -357,7 +386,7 @@ fn publish_selected_file_source(
         .filter(|entry| entry.kind == NamespaceEntryKind::File)
         .map(|entry| entry.file_id.clone())
         .collect();
-    let id = new_id("commit")?;
+    let id = ids("commit")?;
     state.commits.insert(
         id.clone(),
         Commit {
@@ -366,7 +395,7 @@ fn publish_selected_file_source(
             history_tree_id: branch.history_tree_id,
             kind: "file_selection".into(),
             parent_commit_ids: vec![current.commit_id],
-            tree_id: new_id("tree")?,
+            tree_id: ids("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),
@@ -413,12 +442,13 @@ fn publish_selected_file_source(
             inherited_from: None,
         },
     );
-    super::directory::record_projected_directory_edits(
+    super::directory::record_projected_directory_edits_with_ids(
         state,
         &repository.repository_id,
         &[changed_path],
         None,
         view,
+        ids,
     )?;
     Ok(id)
 }

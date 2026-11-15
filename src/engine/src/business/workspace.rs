@@ -2,7 +2,7 @@
 pub(super) mod file_location;
 pub(super) mod input;
 use crate::business::workspace::input::WorkspaceInput;
-mod version_build;
+pub(super) mod version_build;
 use super::*;
 use crate::{
     disk::*,
@@ -998,6 +998,20 @@ impl Engine {
         wire: Option<crate::wire::WireCommit>,
     ) -> Result<OperationResult> {
         let plan = self.plan_workspace_commit_inner(request, wire)?;
+        self.publish_workspace_plan(plan)
+    }
+    pub(crate) fn commit_workspace_reserved_file(
+        &mut self,
+        request: CommitRequest,
+        reserved: &mut crate::snapshot_worktree::ReservedFileVersion,
+    ) -> Result<OperationResult> {
+        let workspace = self.workspace(&request.workspace_id)?;
+        let plan = self.planning_context().plan_workspace_commit_with_reserved(
+            workspace, request, None, None, Some(reserved),
+        )?;
+        self.publish_workspace_plan(plan)
+    }
+    fn publish_workspace_plan(&mut self, plan: WorkspaceMutation) -> Result<OperationResult> {
         self.persist_workspace_commit_request(&plan)?;
         let result = match plan.mutation {
             MutationPlan::Existing(result) => return Ok(result),
@@ -1179,6 +1193,17 @@ impl crate::engine::PlanningContext<'_> {
         input: VersionBuild<'_>,
         expected: Option<&FileVersion>,
     ) -> Result<FileVersion> {
+        self.build_version_with_reserved(state, pending, input, expected, None)
+    }
+
+    fn build_version_with_reserved(
+        &self,
+        state: &mut State,
+        pending: &mut Vec<Prepared>,
+        input: VersionBuild<'_>,
+        expected: Option<&FileVersion>,
+        mut reserved: Option<&mut crate::snapshot_worktree::ReservedFileVersion>,
+    ) -> Result<FileVersion> {
         let VersionBuild {
             history,
             file_id,
@@ -1249,6 +1274,13 @@ impl crate::engine::PlanningContext<'_> {
                 "copied content differs from the published source version",
             ));
         }
+        if let Some(reserved) = reserved.as_deref_mut() {
+            reserved.require_build(self, history, file_id, path, &source_ids, size, content_hash)?;
+        }
+        let mut effects = match reserved {
+            Some(reserved) => version_build::Live::for_reserved(self, &manifest, reserved),
+            None => version_build::Live::new(self, &manifest),
+        };
         let (version, placement) = version_build::construct(
             state,
             version_build::Input {
@@ -1265,7 +1297,7 @@ impl crate::engine::PlanningContext<'_> {
                 hash: content_hash,
                 chunk_bytes: self.config.checksum_chunk_bytes,
             },
-            &mut version_build::Live::new(self, &manifest),
+            &mut effects,
         )?;
         pending.push(Prepared {
             version: version.clone(),
@@ -1283,6 +1315,17 @@ impl crate::engine::PlanningContext<'_> {
         request: CommitRequest,
         wire: Option<crate::wire::WireCommit>,
         replay: Option<OperationResult>,
+    ) -> Result<WorkspaceMutation> {
+        self.plan_workspace_commit_with_reserved(workspace, request, wire, replay, None)
+    }
+
+    fn plan_workspace_commit_with_reserved(
+        &self,
+        workspace: Workspace,
+        request: CommitRequest,
+        wire: Option<crate::wire::WireCommit>,
+        replay: Option<OperationResult>,
+        mut reserved: Option<&mut crate::snapshot_worktree::ReservedFileVersion>,
     ) -> Result<WorkspaceMutation> {
         if let Some(result) = replay {
             let digest = native_commit_digest(&workspace, &request)?;
@@ -1365,6 +1408,9 @@ impl crate::engine::PlanningContext<'_> {
         }
 
         Engine::require_actor(&request.principal)?;
+        if let Some(reserved) = reserved.as_deref() {
+            reserved.require_request(self, &w, &request)?;
+        }
         let mutation = self.plan_new_mutation(
             "workspace.commit", &request.principal, request.operation_id, digest,
             |engine, state, pending| {
@@ -1483,8 +1529,13 @@ impl crate::engine::PlanningContext<'_> {
                         engine.new_file_placement_for_file(&repo.repository_id,Some(&file_id), path)?
                     };
                     let source = engine.staged_source(&w, file)?;
-                    let version = engine.build_version(
-                        state, pending, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path: location, source: &source, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
+                    let version = engine.build_version_with_reserved(
+                        state, pending, crate::business::VersionBuild {
+                            history: &branch.history_tree_id, file_id: &file_id,
+                            path: location, source: &source, primary: &primary, copies,
+                            source_ids: source_ids.clone(), checkpoint: pending_source.is_some(),
+                        },
+                        None, reserved.as_deref_mut(),
                     )?;
                     if version.logical_size != file.size || version.content_hash != file.content_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "workspace source changed after sealing"));
@@ -1549,6 +1600,9 @@ impl crate::engine::PlanningContext<'_> {
                 crate::persist::path_changes::attach(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id}), path_changes)
             },
         )?;
+        if let Some(reserved) = reserved {
+            reserved.require_consumed()?;
+        }
         Ok(WorkspaceMutation {
             mutation,
             workspace: w,

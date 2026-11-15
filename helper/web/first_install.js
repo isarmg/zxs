@@ -34,13 +34,30 @@
       throw new Error("首装原请求格式不符；未覆盖保存内容。");
     }
   }
+  function checkedDisks(disks) {
+    if (!Array.isArray(disks) || !disks.length || disks.length > 32) {
+      throw new Error("首装须显式填写 1–32 个磁盘名称与目录。");
+    }
+    for (const disk of disks) {
+      shape(disk, ["name", "root_path"]);
+      for (const text of [disk.name, disk.root_path]) {
+        if (typeof text !== "string" || !text.length || text.length > 4096) {
+          throw new Error("磁盘名称与根目录必须是有界非空文本；名称策略仍由原生接口核验。");
+        }
+      }
+    }
+    return disks;
+  }
+  function diskSummary(disks) {
+    return disks.map(disk => disk.name + "：" + disk.root_path).join("\n");
+  }
   function checked(value) {
     shape(value, ["format", "revision", "input", "steps"]);
-    if (value.format !== "zxs-helper-first-install-tab" || value.revision !== 1) {
+    if (value.format !== "zxs-helper-first-install-tab" || value.revision !== 2) {
       throw new Error("不支持这个首装原请求格式；没有转换或重置。");
     }
     const input = value.input;
-    shape(input, ["deployment", "administrator", "roots", "enable_on_boot"]);
+    shape(input, ["deployment", "administrator", "disks", "enable_on_boot"]);
     shape(input.deployment, ["service_user", "service_group", "listen", "smb"]);
     for (const text of [input.deployment.service_user, input.deployment.service_group,
       input.deployment.listen, input.administrator]) {
@@ -48,10 +65,9 @@
         throw new Error("首装账户或监听输入无效。");
       }
     }
-    if (typeof input.enable_on_boot !== "boolean" || !Array.isArray(input.roots)
-      || !input.roots.length || input.roots.length > 32
-      || input.roots.some(path => typeof path !== "string" || !path.length || path.length > 4096)) {
-      throw new Error("首装完整目录批次或开机启动选择无效。");
+    checkedDisks(input.disks);
+    if (typeof input.enable_on_boot !== "boolean") {
+      throw new Error("首装开机启动选择无效。");
     }
     if (input.deployment.smb !== null) {
       shape(input.deployment.smb, ["account", "peer_uid"]);
@@ -103,7 +119,7 @@
       case 2: case 3: return {service_user:input.deployment.service_user};
       case 4: return input.deployment;
       case 5: return {service_user:input.deployment.service_user, administrator:input.administrator};
-      case 6: return {service_user:input.deployment.service_user, roots:input.roots};
+      case 6: return {service_user:input.deployment.service_user, disks:input.disks};
       case 7: return {deployment:input.deployment, enable_on_boot:input.enable_on_boot};
       default: throw new Error("无效的首装界面步骤。");
     }
@@ -187,7 +203,7 @@
     for (const [name, value] of [
       ["user", deployment.service_user], ["group", deployment.service_group],
       ["listen", deployment.listen], ["administrator", input.administrator],
-      ["roots", input.roots.join("\n")], ["smb-account", deployment.smb?.account || ""],
+      ["roots", JSON.stringify(input.disks, null, 2)], ["smb-account", deployment.smb?.account || ""],
       ["peer-uid", String(deployment.smb?.peer_uid ?? 0)],
     ]) element(name).value = value;
     element("smb").checked = deployment.smb !== null;
@@ -263,11 +279,11 @@
       const smb = element("smb").checked ? {
         account:element("smb-account").value, peer_uid:Number(element("peer-uid").value),
       } : null;
-      persist({format:"zxs-helper-first-install-tab", revision:1, input:{
+      persist({format:"zxs-helper-first-install-tab", revision:2, input:{
         deployment:{service_user:element("user").value, service_group:element("group").value,
           listen:element("listen").value, smb},
         administrator:element("administrator").value,
-        roots:element("roots").value.split(/\r?\n/).filter(line => line.length > 0),
+        disks:checkedDisks(JSON.parse(element("roots").value)),
         enable_on_boot:element("autostart").checked,
       }, steps:[]});
       show({original_input:record.input, next:"只读核对第一步"});
@@ -313,13 +329,13 @@
         throw new Error("空目录原请求已经保留；只能查询和续作原批次，不能更换目录。");
       }
       const next = structuredClone(record);
-      next.input.roots = element("roots").value.split(/\r?\n/).filter(line => line.length > 0);
-      if (!window.confirm("修改尚未保留空目录请求的首批目录？\n" + next.input.roots.join("\n")
+      next.input.disks = checkedDisks(JSON.parse(element("roots").value));
+      if (!window.confirm("修改尚未保留空目录请求的首批盘名与目录？\n" + diskSummary(next.input.disks)
         + "\n保留此前全部安装步骤、账户与配置；下一次只读核对仍由原生接口决定能否接纳。")) return;
       persist(next);
       ++epoch; inspected = false; directoryInspected = false;
       element("ack").checked = false;
-      show({original_input:record.input, next:"目录已更正，明确点击只读核对；尚未发送系统操作。"});
+      show({original_input:record.input, next:"盘名与目录已更正，明确点击只读核对；尚未发送系统操作。"});
       error(""); render();
     } catch (failure) { error(failure.message); }
   });
@@ -355,7 +371,7 @@
       || element("password").value !== element("repeat-password").value)) {
       error("请输入两次相同的初始管理员密码；续作必须是原来的密码。"); return;
     }
-    const detail = step === 6 ? "\n全部原目录：\n" + record.input.roots.join("\n")
+    const detail = step === 6 ? "\n全部原盘名与目录：\n" + diskSummary(record.input.disks)
       : step === 7 ? "\n辅助工具退出后，交给 systemd 启动 ZXS" + (record.input.deployment.smb ? " 和独立 Samba" : "")
         + (record.input.enable_on_boot ? "；退出前启用开机启动，不提前启动服务。" : "；不改变开机启动设置。")
         + "此响应只确认交接受理，服务可用状态须在启动终端或 ZXS 页面核实。"
@@ -395,7 +411,7 @@
     if (!record || index() !== 6 || record.steps[6] !== undefined) {
       throw new Error("只在首存储计划尚未选择前准备原批次空目录。");
     }
-    return {service_user:record.input.deployment.service_user, roots:record.input.roots};
+    return {service_user:record.input.deployment.service_user, disks:record.input.disks};
   }
   function checkedDirectoryOriginal(value, input) {
     shape(value, ["input", "request_digest"]);
@@ -436,7 +452,7 @@
     if (busy || stopping || !csrf || blocked || !directoryOriginal || !directoryInspected) return;
     if (!element("ack").checked) { error("先确认已停止外部写者与其他主机管理操作。"); return; }
     const original = directoryOriginal;
-    if (!window.confirm("仅准备这批原空目录？\n" + original.input.roots.join("\n")
+    if (!window.confirm("仅准备这批原空目录（保留所选盘名）？\n" + diskSummary(original.input.disks)
       + "\n只创建缺少的直接子目录并交给原服务 UID/主 GID；不改已有权限、不删数据、不初始化池、不挂载/格式化。"
       + "\n原摘要：" + original.request_digest + "\n中断后只查询和续作同一批次。")) return;
     const token = ++epoch;

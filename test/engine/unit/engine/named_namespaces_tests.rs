@@ -22,7 +22,7 @@ impl Fixture {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
         let mut engine = Engine::initialize(
-            &root, Config::development([temporary.path().join("disk")]).unwrap(),
+            &root, Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
         ).unwrap();
         let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
         let workspace = engine.create_workspace(&repository.main_branch_id, "admin").unwrap();

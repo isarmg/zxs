@@ -3,6 +3,7 @@ use json_codec::json;
 
 fn lower(level: u32, slot: &str, upstream: Option<&str>) -> LowerDirectory {
     LowerDirectory {
+        name: name_policy::Name::parse(&format!("Selected {level}")).unwrap(),
         root_path: format!("/zxs/data/disks/{slot}"),
         slot_id: slot.into(),
         level,
@@ -47,11 +48,20 @@ fn engine_slot_policy_rejects_invalid_source_and_lower_names() {
 #[test]
 fn foreign_input_requires_explicit_complete_fields_and_rejects_authority_overrides() {
     let mut input = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
-        "source_root":"/zxs/data/disks/foreign","source_slot_id":"secondary",
+        "source_root":"/zxs/data/disks/foreign","source_name":"Imported","source_slot_id":"secondary",
         "source_upstream_slot_id":"primary","source_metadata_member":true,
-        "lower":[{"root_path":"/zxs/data/disks/primary","slot_id":"primary","level":1,
+        "lower":[{"name":"Local archive","root_path":"/zxs/data/disks/primary","slot_id":"primary","level":1,
             "upstream_slot_id":null,"metadata_member":true}],"external_writers_stopped":false});
     assert!(json_codec::from_value::<Input>(input.clone()).is_ok());
+    let mut missing = input.clone();
+    missing.as_object_mut().unwrap().remove("source_name");
+    assert!(json_codec::from_value::<Input>(missing).is_err());
+    let mut missing = input.clone();
+    missing["lower"][0].as_object_mut().unwrap().remove("name");
+    assert!(json_codec::from_value::<Input>(missing).is_err());
+    let mut invalid = input.clone();
+    invalid["lower"][0]["name"] = "".into();
+    assert!(json_codec::from_value::<Input>(invalid).is_err());
     assert!(
         preview(json_codec::from_value(input.clone()).unwrap())
             .unwrap_err()

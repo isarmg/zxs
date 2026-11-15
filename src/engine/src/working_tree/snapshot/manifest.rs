@@ -16,7 +16,7 @@ const MAX_VERSIONS: usize = 512;
 pub(crate) const MAX_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, error_definition::Error)]
-pub(crate) enum SnapshotManifestError {
+pub enum SnapshotManifestError {
     #[error("directory snapshot manifest exceeds its admission budget")]
     Budget,
     #[error("decoding directory snapshot manifest")]

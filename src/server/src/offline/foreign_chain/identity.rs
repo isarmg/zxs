@@ -6,6 +6,7 @@ use storage_engine::{Config, DiskConfig, ForeignOriginalStateReport, ValidatedCo
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Target {
+    name: name_policy::Name,
     root_path: String,
     physical: Physical,
     registration: DiskRegistrationIdentity,
@@ -62,6 +63,7 @@ impl Proposal {
             )?);
         }
         let source = LowerDirectory {
+            name: plan.binding.source_name.clone(),
             root_path: plan.binding.source.root_path.clone(),
             slot_id: plan.binding.source_slot_id.clone(),
             level: plan.binding.source.level,
@@ -123,6 +125,7 @@ fn append_target(
         binding_generation: 1,
     };
     proposed.disks.push(DiskConfig {
+        name: item.name.clone(),
         slot_id: registration.slot_id.clone(),
         disk_id: registration.disk_id.clone(),
         root: item.root_path.clone().into(),
@@ -133,6 +136,7 @@ fn append_target(
         capacity_bytes: None,
     });
     Ok(Target {
+        name: item.name.clone(),
         root_path: item.root_path.clone(),
         physical,
         registration,

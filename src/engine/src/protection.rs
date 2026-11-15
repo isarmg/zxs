@@ -3,6 +3,12 @@ use crate::*;
 use json_codec::json;
 mod backup_paths;
 mod placement_configuration;
+pub(crate) use backup_paths::initial::Configuration as InitialBackupConfiguration;
+pub(crate) use backup_paths::automatic::{
+    invalid as invalid_automatic_backup,
+    verify_candidate as verify_automatic_backup_candidate,
+    verify_prepared as verify_automatic_backup_prepared,
+};
 pub(crate) use backup_paths::directory_namespaces::{
     BATCH_FOLLOW_KIND, BATCH_ROUTE_KIND, DirectoryFollowChange, DirectoryFollowPlan,
     DirectoryNamespace, FILE_FOLLOW_KIND, FILE_ROUTE_KIND, captured_directory_namespace,
@@ -11,6 +17,7 @@ pub(crate) use backup_paths::directory_namespaces::{
     published_directories_at, repair_current as repair_current_backup_directories,
 };
 pub use backup_paths::{
+    AutomaticBackupConfigurationRequest, AutomaticBackupError,
     BackupConfigurationRequest, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };

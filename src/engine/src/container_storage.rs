@@ -5,6 +5,11 @@ pub(crate) mod backup_entities;
 pub(crate) mod backup_ordinary;
 pub(crate) mod backup_original_objects;
 mod changes;
+mod ordinary_preparation;
+pub(crate) use ordinary_preparation::{
+    PreparedContainerEntities, open_published_backup_parent, open_published_container,
+    ordinary_body_path,
+};
 mod version_names;
 mod version_rename;
 pub use version_names::VersionNameError;
@@ -22,9 +27,11 @@ pub use object_database::{
     reconstruct_object_database_material,
 };
 pub(crate) mod file_database;
+pub(crate) use file_database::changes::affected as affected_file_material;
 mod layout_batch;
 mod layout_goals;
 mod layout_locator;
+pub(crate) mod namespace_host;
 mod shared_layout;
 pub use shared_layout::DirectoryLayoutReceipt;
 mod projection;
@@ -647,6 +654,25 @@ pub(crate) fn install_version_content_at(
     directory: &Path,
     content: PreparedContent<'_>,
 ) -> Result<PathBuf> {
+    install_version_content_target(root, directory, content, None)
+}
+
+pub(crate) fn install_version_content_in(
+    root: &DiskRoot,
+    directory: &Path,
+    content: PreparedContent<'_>,
+    container: &DiskRoot,
+    name: &name_policy::LookupName,
+) -> Result<PathBuf> {
+    install_version_content_target(root, directory, content, Some((container, name)))
+}
+
+fn install_version_content_target(
+    root: &DiskRoot,
+    directory: &Path,
+    content: PreparedContent<'_>,
+    container: Option<(&DiskRoot, &name_policy::LookupName)>,
+) -> Result<PathBuf> {
     let (version, copied, verified) = match content {
         PreparedContent::Verified(verified) => (verified.version(), None, Some(verified)),
         PreparedContent::Copied(copied) => {
@@ -666,36 +692,45 @@ pub(crate) fn install_version_content_at(
     let history = history_root(directory)?;
     root.directory_identity(history)?;
     let stable = history.join("file-containers").join(&version.file_id);
-    root.private_dir(&stable)?;
-    let named = match container_at(
-        root,
-        history,
-        Some(&version.history_tree_id),
-        &version.file_id,
-        &mut |_| Ok(()),
-    )? {
-        Some(named) => named,
-        None => {
-            let named = stable.join(&version.creation_name);
-            root.private_dir(&named)?;
-            root.sync_dir(&stable)?;
-            named
-        }
+    if container.is_none() {
+        root.private_dir(&stable)?;
+    }
+    let named = match container {
+        Some((held, _)) => held.path().to_owned(),
+        None => match container_at(
+            root,
+            history,
+            Some(&version.history_tree_id),
+            &version.file_id,
+            &mut |_| Ok(()),
+        )? {
+            Some(named) => named,
+            None => {
+                let named = stable.join(&version.creation_name);
+                root.private_dir(&named)?;
+                root.sync_dir(&stable)?;
+                named
+            }
+        },
     };
+    let target_root = container.map_or(root, |(root, _)| root);
     let versions = named.join("versions");
-    root.private_dir(&versions)?;
-    let target = installed_version_path(&named, version)?;
+    target_root.private_dir(&versions)?;
+    let target = match container {
+        Some((_, name)) => ordinary_body_path(&named, version, name)?,
+        None => installed_version_path(&named, version)?,
+    };
     let leaf = platform_io::fs_safety::EntryName::new(
         target.file_name().expect("invariant: installed version path has a leaf"),
     )?;
-    version_names::check_target_name(root, &leaf)?;
-    if file_exists_at(root, &target)? {
+    version_names::check_target_name(target_root, &leaf)?;
+    if file_exists_at(target_root, &target)? {
         if let Some(verified) = &verified
             && verified.path() == target
         {
-            verified.sync_at(root, directory, &target)?;
+            verified.sync_at(target_root, directory, &target)?;
         } else {
-            verify_body(root, &target, version)?;
+            verify_body(target_root, &target, version)?;
         }
         let source_parent = source.parent().expect("invariant: source has a parent");
         if path_directory_exists_at(root, history, source_parent)? && file_exists_at(root, &source)?
@@ -720,9 +755,11 @@ pub(crate) fn install_version_content_at(
         if path_directory_exists_at(root, history, source_parent)? {
             root.sync_dir(source_parent)?;
         }
-        root.sync_dir(&versions)?;
-        root.sync_dir(&named)?;
-        root.sync_dir(&stable)?;
+        target_root.sync_dir(&versions)?;
+        target_root.sync_dir(&named)?;
+        if container.is_none() {
+            root.sync_dir(&stable)?;
+        }
         return Ok(target);
     }
     let _source = match copied {
@@ -736,8 +773,12 @@ pub(crate) fn install_version_content_at(
             }
         }
     };
-    root.rename_noreplace_synced(&source, &target)?;
-    root.sync_dir(&named)?;
+    if let Some((container, _)) = container {
+        root.rename_to_held_synced(&source, container, &target)?;
+    } else {
+        root.rename_noreplace_synced(&source, &target)?;
+    }
+    target_root.sync_dir(&named)?;
     Ok(target)
 }
 
@@ -994,6 +1035,9 @@ fn collect_empty_directories(
 /// Fully encoded, bounded projections. Preparation never changes published names
 /// or caches. Signed version evidence remains separate from this inspection cache.
 pub(crate) struct PreparedNames {
+    containers: Option<Arc<PreparedContainerEntities>>,
+    layout_config: ValidatedConfig,
+    layout_resources: Arc<DiskResources>,
     cache: Option<PreparedNameCache>,
     layouts: shared_layout::PreparedLayouts,
     database_scopes: BTreeSet<(String, String, String)>,
@@ -1007,6 +1051,8 @@ struct PreparedNameCache {
     file: fs::File,
 }
 struct PreparedName {
+    container: Option<Arc<DiskRoot>>,
+    published_path: Option<PathBuf>,
     disk: Arc<DiskHandle>,
     history: PathBuf,
     history_id: String,
@@ -1040,6 +1086,25 @@ impl AppliedPayloadRenames {
     }
 }
 
+impl PreparedName {
+    fn root(&self) -> Result<&DiskRoot> {
+        match &self.container {
+            Some(_) => Ok(&self.disk.root),
+            None => self.disk.content_root(),
+        }
+    }
+    fn current(&self) -> Result<PathBuf> {
+        match &self.container {
+            Some(_) => self.published_path.clone()
+                .ok_or_else(|| invalid("ordinary prepared name lost its publication target")),
+            None => container_at(
+                self.disk.content_root()?, &self.history, Some(&self.history_id),
+                &self.file, &mut |_| Ok(()),
+            )?.ok_or_else(|| invalid("prepared FILE container disappeared")),
+        }
+    }
+}
+
 impl PreparedNames {
     /// Exact FILE write set from the candidate's projection, before probing
     /// container existence. Retained read-only history is not a database write.
@@ -1056,15 +1121,12 @@ impl PreparedNames {
                 let Some(database) = &item.database else {
                     continue;
                 };
-                let root = &item.disk.root;
-                let current = container_at(
-                    root,
-                    &item.history,
-                    Some(&item.history_id),
-                    &item.file,
-                    &mut |_| Ok(()),
-                )?
-                .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+                let root = if item.container.is_some() {
+                &item.disk.root
+            } else {
+                item.disk.content_root()?
+            };
+                let current = item.current()?;
                 let identity = database.unpublished_identity(root, &current)?;
                 let scope = (
                     item.disk.seal.slot_id.clone(),
@@ -1131,18 +1193,15 @@ impl PreparedNames {
         };
         let mut count = 0;
         for item in &mut cache.items {
+            let current = item.current()?;
             let Some(database) = &mut item.database else {
                 continue;
             };
-            let root = &item.disk.root;
-            let current = container_at(
-                root,
-                &item.history,
-                Some(&item.history_id),
-                &item.file,
-                &mut |_| Ok(()),
-            )?
-            .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+            let root = if item.container.is_some() {
+                &item.disk.root
+            } else {
+                item.disk.content_root()?
+            };
             database.stage_unpublished(root, &current, observe)?;
             count += 1;
         }
@@ -1156,15 +1215,12 @@ impl PreparedNames {
                 let Some(database) = &item.database else {
                     continue;
                 };
-                let root = &item.disk.root;
-                let current = container_at(
-                    root,
-                    &item.history,
-                    Some(&item.history_id),
-                    &item.file,
-                    &mut |_| Ok(()),
-                )?
-                .ok_or_else(|| invalid("unpublished FILE container disappeared"))?;
+                let root = if item.container.is_some() {
+                &item.disk.root
+            } else {
+                item.disk.content_root()?
+            };
+                let current = item.current()?;
                 database.verify_unpublished(root, &current)?;
             }
         }
@@ -1186,45 +1242,48 @@ impl PreparedNames {
         mut self,
         observe: &mut impl FnMut(&'static str) -> Result<()>,
     ) -> Result<(DirectoryLayoutReceipt, AppliedPayloadRenames)> {
+        crate::engine::fresh_layout::verify_available(
+            &self.layout_config, &self.layout_resources,
+        )?;
+        if let Some(containers) = &self.containers {
+            containers.install_decided()?;
+        }
         let mut renamed = AppliedPayloadRenames::default();
         if let Some(cache) = &mut self.cache {
             for item in &mut cache.items {
                 if let Some(names) = item.version_names.take() {
-                    let current = container_at(
-                        &item.disk.root, &item.history, Some(&item.history_id),
-                        &item.file, &mut |_| Ok(()),
-                    )?.ok_or(Error::VersionNames(VersionNameError::Intent))?;
+                    let current = item.current()?;
                     let slot = name_policy::SlotId::parse(&item.disk.seal.slot_id)?;
                     renamed.entries.entry(slot).or_default()
-                        .extend(names.apply(&item.disk.root, &current, observe)?);
+                        .extend(names.apply(item.root()?, &current, observe)?);
                 }
             }
         }
         let receipt = self.layouts.apply(observe)?;
         let Some(mut cache) = self.cache else {
+            if let Some(containers) = &self.containers {
+                containers.verify()?;
+            }
+            crate::engine::fresh_layout::verify_available(
+                &self.layout_config, &self.layout_resources,
+            )?;
             return Ok((receipt, renamed));
         };
         for item in cache.items {
-            let root = &item.disk.root;
-            if !path_directory_exists_at(root, root.path(), &item.history)? {
+            let root = if item.container.is_some() {
+                &item.disk.root
+            } else {
+                item.disk.content_root()?
+            };
+            if item.container.is_none()
+                && !path_directory_exists_at(root, root.path(), &item.history)?
+            {
                 if item.database.is_some() {
                     return Err(invalid("prepared file database history disappeared"));
                 }
                 continue;
             }
-            let Some(current) = container_at(
-                root,
-                &item.history,
-                Some(&item.history_id),
-                &item.file,
-                &mut |_| Ok(()),
-            )?
-            else {
-                if item.database.is_some() {
-                    return Err(invalid("prepared file database container disappeared"));
-                }
-                continue;
-            };
+            let current = item.current()?;
             if let Some(database) = &item.database {
                 database.check_entity(root, &current)?;
             }
@@ -1233,8 +1292,9 @@ impl PreparedNames {
                 .history
                 .join(".zxs-layout/files")
                 .join(format!("{}.json", item.file));
-            let relocated = path_exists_at(root, &item.history, &locator)?;
-            let named = if relocated {
+            let ordinary = item.container.is_some();
+            let relocated = !ordinary && path_exists_at(root, &item.history, &locator)?;
+            let named = if ordinary || relocated {
                 // The bulk executor already placed this whole closure. Applying
                 // the legacy per-file projection would undo its shared address.
                 current
@@ -1251,26 +1311,52 @@ impl PreparedNames {
             // A shared/Backup locator can put the actual whole container
             // outside the old per-file parent. Seal its real parent; probing
             // an absent legacy directory would strand the next Publication.
-            let parent = if relocated {
+            let parent = if ordinary {
+                &item.history
+            } else if relocated {
                 named
                     .parent()
                     .expect("invariant: admitted container has a parent")
             } else {
                 &stable
             };
-            root.sync_dir(parent)?;
+            if ordinary {
+                item.disk.management_root()?.sync_dir(parent)?;
+            } else {
+                root.sync_dir(parent)?;
+            }
             cache.file.seek(std::io::SeekFrom::Start(item.offset))?;
             let mut bytes = vec![0; item.length];
             cache.file.read_exact(&mut bytes)?;
-            root.write_atomic(&named.join("container.json"), &bytes, true)?;
-            root.sync_dir(&named)?;
+            let (cache_root, cache_path) = match &item.container {
+                Some(container) => (container.as_ref(), container.path()),
+                None => (root, named.as_path()),
+            };
+            if ordinary && !marker_matches_at(
+                cache_root, &cache_path.join(OWNER_MARKER), &item.file, &mut |_| Ok(()),
+            )? {
+                cache_root.write_json(&cache_path.join(OWNER_MARKER), &item.file, false)?;
+            }
+            cache_root.write_atomic(&cache_path.join("container.json"), &bytes, true)?;
+            cache_root.sync_dir(cache_path)?;
             if let Some(database) = item.database {
-                database.apply(root, &named, observe)?;
+                match &item.container {
+                    Some(container) => database.apply_container(
+                        item.disk.management_root()?, container, observe,
+                    )?,
+                    None => database.apply(root, &named, observe)?,
+                }
             }
             if let Some(expected) = &item.finish_version_names {
                 version_rename::finish(root, &named, expected)?;
             }
         }
+        if let Some(containers) = &self.containers {
+            containers.verify()?;
+        }
+        crate::engine::fresh_layout::verify_available(
+            &self.layout_config, &self.layout_resources,
+        )?;
         Ok((receipt, renamed))
     }
 }
@@ -1303,6 +1389,7 @@ pub(crate) fn repair_historical_names(
         MAX_METADATA,
         NamePreparation::HistoricalPrefix,
         shared_layout::PreparedLayouts::default(),
+        None,
     )?
     .apply()
 }
@@ -1313,6 +1400,9 @@ pub(crate) fn prepare_names(
     projection: &ProjectionTransition<'_>,
     maximum: usize,
 ) -> Result<PreparedNames> {
+    crate::engine::fresh_layout::containers::verify_available(
+        config, resources, projection.previous().state(),
+    )?;
     prepare_names_with_admission(
         config,
         resources,
@@ -1322,12 +1412,53 @@ pub(crate) fn prepare_names(
     )
 }
 
+pub(crate) fn prepare_ordinary_names(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    projection: &ProjectionTransition<'_>,
+    maximum: usize,
+    containers: Arc<PreparedContainerEntities>,
+) -> Result<PreparedNames> {
+    containers.verify()?;
+    let layouts = shared_layout::prepare(
+        config, resources, projection.previous().state(), projection.next().state(),
+        None, false, crate::database_install::InstallAdmission::NewOperation,
+    )?;
+    prepare_names_inner(
+        config, resources, projection, maximum,
+        NamePreparation::Candidate(crate::database_install::InstallAdmission::NewOperation),
+        layouts, Some(containers),
+    )
+}
+
+pub(crate) fn prepare_recovered_ordinary_names(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    projection: &ProjectionTransition<'_>,
+    maximum: usize,
+    containers: Arc<PreparedContainerEntities>,
+) -> Result<PreparedNames> {
+    containers.verify()?;
+    let layouts = shared_layout::prepare(
+        config, resources, projection.previous().state(), projection.next().state(),
+        None, false, crate::database_install::InstallAdmission::DecidedRecovery,
+    )?;
+    prepare_names_inner(
+        config, resources, projection, maximum,
+        NamePreparation::Candidate(crate::database_install::InstallAdmission::DecidedRecovery),
+        layouts, Some(containers),
+    )
+}
+
 pub(crate) fn prepare_recovered_names(
     config: &ValidatedConfig,
     resources: &Arc<DiskResources>,
     projection: &ProjectionTransition<'_>,
     maximum: usize,
 ) -> Result<PreparedNames> {
+    crate::engine::fresh_layout::containers::verify_available(
+        config, resources, projection.next().state(),
+    )?;
     prepare_names_with_admission(
         config,
         resources,
@@ -1360,6 +1491,7 @@ fn prepare_names_with_admission(
         maximum,
         NamePreparation::Candidate(admission),
         layouts,
+        None,
     )
 }
 
@@ -1372,6 +1504,8 @@ pub(crate) fn prepare_layout_repair(
     explicit: Option<&BTreeSet<String>>,
     admission: crate::database_install::InstallAdmission,
 ) -> Result<PreparedNames> {
+    crate::engine::fresh_layout::containers::verify_available(config, resources, state)?;
+    let containers = Arc::new(PreparedContainerEntities::published(config, resources, state)?);
     let layouts =
         shared_layout::prepare(config, resources, state, state, explicit, true, admission)?;
     let empty = State::default();
@@ -1383,6 +1517,7 @@ pub(crate) fn prepare_layout_repair(
         MAX_METADATA,
         NamePreparation::CurrentStateRepair(admission),
         layouts,
+        Some(containers),
     )
 }
 
@@ -1467,6 +1602,7 @@ fn prepare_names_inner(
     maximum: usize,
     mode: NamePreparation,
     layouts: shared_layout::PreparedLayouts,
+    containers: Option<Arc<PreparedContainerEntities>>,
 ) -> Result<PreparedNames> {
     let (historical, skip_shared, admission) = match mode {
         NamePreparation::Candidate(admission) => (false, false, admission),
@@ -1518,10 +1654,21 @@ fn prepare_names_inner(
                 None if historical => continue,
                 None => resources.get(disk)?,
             };
+            crate::engine::fresh_layout::verify_root(config, disk, &held.root)?;
+            let container = containers.as_ref().map(|scope| {
+                scope.share_target(file.parse()?, held.seal.disk_id.parse()?)
+            }).transpose()?;
+            let root = if container.is_some() { &held.root } else { held.content_root()? };
             if !skip_shared {
                 database_scopes.insert((slot.clone(), history_id.clone(), file.clone()));
             }
-            let history = crate::persist::layout::histories(&disk.root).join(&history_id);
+            let history = if container.is_some() {
+                let history = held.management_root()?.path().join(&history_id);
+                held.management_root()?.private_dir(&history)?;
+                history
+            } else {
+                crate::persist::layout::histories(&disk.root).join(&history_id)
+            };
             let projected = layouts.projection(&slot, &history_id, &file);
             let (legacy_location, legacy_name) = projection_path(next, &file, &slot);
             let physical_location = projected
@@ -1536,27 +1683,34 @@ fn prepare_names_inner(
                 validate_new_projection_path(physical_location)?;
             }
             // Metadata-only references and tombstones never synthesize bodies.
-            if !path_directory_exists_at(&held.root, held.root.path(), &history)? {
+            if container.is_none() && !path_directory_exists_at(root, root.path(), &history)? {
                 continue;
             }
             let locator = history
                 .join(".zxs-layout/files")
                 .join(format!("{file}.json"));
-            if skip_shared && path_exists_at(&held.root, &history, &locator)? {
+            if skip_shared && path_exists_at(root, &history, &locator)? {
                 continue;
             }
-            let Some(current) =
-                container_at(&held.root, &history, Some(&history_id), &file, &mut |_| {
-                    Ok(())
-                })?
-            else {
-                continue;
+            let current = match &container {
+                Some(container) => container.path().to_owned(),
+                None => match container_at(
+                    root, &history, Some(&history_id), &file, &mut |_| Ok(()),
+                )? {
+                    Some(current) => current,
+                    None => continue,
+                },
             };
             let current_name = current
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| invalid("container directory name is not UTF-8"))?;
-            let name = physical_name.unwrap_or(current_name);
+            let name = match &container {
+                Some(_) => next.file_containers.get(&file.parse::<storage_contract::FileId>()?)
+                    .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?
+                    .namespace.name.as_str(),
+                None => physical_name.unwrap_or(current_name),
+            };
             name_policy::validate_name(name)?;
             let description =
                 description.get_or_insert_with(|| projection::FileDescription::new(view, &file));
@@ -1610,23 +1764,36 @@ fn prepare_names_inner(
                 None
             } else {
                 let database = match &prepared_copies {
-                    Some(copies) => copies.prepare(
-                        &held.root, (&history, &history_id), &current, admission,
-                    )?,
+                    Some(copies) => match &container {
+                        Some(container) => copies.prepare_container(
+                            root, (&history, &history_id), container, admission,
+                        )?,
+                        None => copies.prepare(
+                            root, (&history, &history_id), &current, admission,
+                        )?,
+                    },
                     None => {
-                        let (copies, database) =
-                            file_database::install::PreparedFileCopies::capture(
-                                &held.root,
-                                (&history, &history_id),
-                                &current,
-                                &file,
-                                view,
-                                admission,
-                            )?;
+                        let (copies, database) = match &container {
+                            Some(container) => {
+                                file_database::install::PreparedFileCopies::capture_container(
+                                    root, (&history, &history_id), container, &file, view, admission,
+                                )?
+                            }
+                            None => file_database::install::PreparedFileCopies::capture(
+                                root, (&history, &history_id), &current, &file, view, admission,
+                            )?,
+                        };
                         prepared_copies = Some(copies);
                         database
                     }
                 };
+                let disk_id = held.seal.disk_id.parse::<storage_contract::DiskId>()?;
+                let entity = next.file_containers
+                    .get(&file.parse::<storage_contract::FileId>()?)
+                    .and_then(|record| record.replicas.get(&disk_id))
+                    .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?
+                    .entity;
+                database.require_entity(entity)?;
                 database_bytes += database.byte_len();
                 if database_bytes > file_database::MAX_TOTAL_BYTES {
                     return Err(Error::new(
@@ -1646,18 +1813,24 @@ fn prepare_names_inner(
             };
             let offset = staged.file.stream_position()?;
             staged.file.write_all(&bytes)?;
-            let version_names = if skip_shared {
+            let version_names = if skip_shared || container.is_some() {
                 None
             } else {
                 version_rename::Prepared::capture(
-                    &held.root, &current, next, &file, &history_id,
+                    root, &current, next, &file, &history_id,
                     &name_policy::Name::parse(name)?,
                 )?
             };
             if let Some(names) = &version_names {
                 reservations.add(held, &history, names.reservation()?)?;
             }
+            let ordinary = container.is_some();
+            let published_path = containers.as_ref().map(|scope| {
+                scope.published_path(file.parse()?, held.seal.disk_id.parse()?)
+            }).transpose()?;
             staged.items.push(PreparedName {
+                container,
+                published_path,
                 disk: Arc::clone(held),
                 history,
                 history_id: history_id.clone(),
@@ -1668,7 +1841,7 @@ fn prepare_names_inner(
                 length: bytes.len(),
                 database,
                 version_names,
-                finish_version_names: if skip_shared {
+                finish_version_names: if skip_shared || ordinary {
                     None
                 } else {
                     Some(version_rename::CompletionBinding {
@@ -1688,6 +1861,9 @@ fn prepare_names_inner(
         staged.file.sync_data()?;
     }
     Ok(PreparedNames {
+        containers,
+        layout_config: config.clone(),
+        layout_resources: Arc::clone(resources),
         cache,
         layouts,
         database_scopes,

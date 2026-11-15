@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 pub use storage_contract::offline_maintenance;
 mod error;
+pub use business::file_draft::DraftError;
 pub use error::{
     ContainerTagsError, FileMetadataError, PathChangeError,
     CheckpointError, Error, PublishedRecoveryReconciliation, PublishedWorkspaceReconciliation,
@@ -32,6 +33,7 @@ pub use container_storage::{
 mod directory_contents;
 mod directory_layout;
 mod directory_worktree;
+mod snapshot_worktree;
 pub use directory_layout::LayoutError as DirectoryLayoutError;
 mod degraded_recovery;
 mod directory_conversion;
@@ -45,6 +47,7 @@ pub use directory_conversion::{
 };
 mod disk;
 mod disk_names;
+pub use disk_names::configuration::ConfiguredDiskNameError;
 pub use disk_names::{
     DiskNameObservation, DiskNameObservationSource, DiskNamePreviewBlocker,
     DiskNamePreviewExecution, DiskNamePreviewPhase, DiskSourceIdentity, DiskSourceNameError,
@@ -222,12 +225,18 @@ pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_h
 /// This validates only a name, never a disk identity or permission to admit it.
 pub use name_policy::validate_slot;
 pub use protection::{
+    AutomaticBackupConfigurationRequest, AutomaticBackupError,
     BackupConfigurationRequest, PlacementConfigurationRequest, PlacementRuleUpdate,
     ProtectionPolicyUpdate, PublishedBackupDirectory, RecursiveBackupCapture,
     RecursiveBackupConfigurationRequest, ScopedBackupConfigurationRequest,
 };
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
+#[cfg(test)]
+#[path = "../../../test/engine/support/configured_disks.rs"]
+mod test_config;
+#[cfg(test)]
+pub(crate) use test_config::disks as test_disks;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/r29_local_publication.rs"]
 mod r29_local_publication;
@@ -243,3 +252,5 @@ mod tests;
 mod directory_git_fixture;
 
 pub use business::namespace::container_name::RenameError as ContainerNameError;
+
+pub use snapshot_worktree::SnapshotWorktreeError;

@@ -15,7 +15,9 @@ impl Fixture {
     fn prepared(action: MembershipExitAction, copies: u32) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine
             .create_repository(
@@ -265,7 +267,7 @@ fn disk_exit_source_generation_and_complete_mask_are_verified_before_stop() {
 #[test]
 fn disk_exit_unpublished_terminal_and_redundant_offline_fail_before_new_fence() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("only")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("only")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let before = files(temp.path());
     assert_eq!(
@@ -436,7 +438,7 @@ fn prepare_following_add(
     let mut target = engine.config().clone();
     // The original primary has left the registry. Add an independent primary,
     // rather than extending a backup chain whose ancestor is no longer enabled.
-    let mut added = Config::development([root.join("next-primary")])
+    let mut added = Config::development(crate::test_disks([root.join("next-primary")]))
         .unwrap()
         .disks
         .pop()

@@ -11,7 +11,12 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Engine) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disk = directory.path().join("disk");
-    let engine = Engine::initialize(&root, Config::development([disk]).unwrap()).unwrap();
+    let config = Config::development([(
+        name_policy::Name::parse("Scrub fixture").unwrap(),
+        disk,
+    )])
+    .unwrap();
+    let engine = Engine::initialize(&root, config).unwrap();
     (directory, root, engine)
 }
 

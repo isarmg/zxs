@@ -130,6 +130,14 @@ impl<'a> PlanningContext<'a> {
         self.repository_for_history(&b.history_tree_id)
     }
     pub(crate) fn used_bytes(&self, slot: &str) -> u64 {
+        // A still-current dirty body is live material until the deciding write
+        // replaces or commits it; reserve the new bytes in addition to it.
+        let drafts = self.state.file_containers.values().filter(|record| {
+            record.replicas.keys().any(|id| self.config.disks.iter().any(|disk| {
+                disk.slot_id == slot && disk.disk_id == id.to_string()
+            }))
+        }).filter_map(|record| record.working.draft().map(|(_, payload)| payload.logical_size()))
+            .fold(0u64, |sum, bytes| sum.saturating_add(bytes));
         self.state
             .placements
             .values()
@@ -146,7 +154,7 @@ impl<'a> PlanningContext<'a> {
                     .get(&p.version_id)
                     .expect("invariant: every placement references an existing version")
             })
-            .fold(0u64, |sum, v| sum.saturating_add(v.logical_size))
+            .fold(drafts, |sum, v| sum.saturating_add(v.logical_size))
     }
     pub(crate) fn require_write(&self) -> Result<()> {
         match self.admission {

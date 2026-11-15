@@ -39,6 +39,27 @@ impl<'a> CapturedTarget<'a> {
         })
     }
 
+    fn capture_container(
+        root: &'a DiskRoot,
+        history: (&'a Path, &str),
+        container: &'a DiskRoot,
+        file: &str,
+        view: StateProjection<'_>,
+    ) -> Result<Self> {
+        validate_owner(view, file, history.1)?;
+        let record = view.state().file_containers.get(&file.parse::<storage_contract::FileId>()?)
+            .ok_or(crate::engine::fresh_layout::FreshLayoutError::ContainerShape)?;
+        let inode = container.directory_identity(container.path())?;
+        if !record.replicas.values().any(|replica| {
+            replica.entity.device() == inode.device && replica.entity.inode() == inode.inode
+        }) {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+        }
+        let held = root.private_child_matching(container.path(), inode)?;
+        verify_entity_contents(&held, file, view, false, Some(&record.namespace.name))?;
+        Ok(Self { root, history: history.0, container: container.path(), held, inode })
+    }
+
     fn prepare(
         self,
         database: &PreparedFileMaterial,
@@ -122,6 +143,32 @@ impl<'a> PreparedFileCopies<'a> {
         Ok((Self { view, database }, prepared))
     }
 
+    pub(in crate::container_storage) fn capture_container(
+        root: &DiskRoot,
+        history: (&Path, &str),
+        container: &DiskRoot,
+        file: &str,
+        view: StateProjection<'a>,
+        admission: InstallAdmission,
+    ) -> Result<(Self, PreparedFile)> {
+        let target = CapturedTarget::capture_container(root, history, container, file, view)?;
+        let database = CapturedMaterial::from_projection(view, file, history.1)?.encode()?;
+        let prepared = target.prepare(&database, admission)?;
+        Ok((Self { view, database }, prepared))
+    }
+
+    pub(in crate::container_storage) fn prepare_container(
+        &self,
+        root: &DiskRoot,
+        history: (&Path, &str),
+        container: &DiskRoot,
+        admission: InstallAdmission,
+    ) -> Result<PreparedFile> {
+        CapturedTarget::capture_container(
+            root, history, container, &self.database.file, self.view,
+        )?.prepare(&self.database, admission)
+    }
+
     pub(in crate::container_storage) fn prepare(
         &self,
         root: &DiskRoot,
@@ -143,6 +190,16 @@ pub(in crate::container_storage) struct PreparedFile {
     inode: FileIdentity,
 }
 impl PreparedFile {
+    pub(in crate::container_storage) fn require_entity(
+        &self,
+        expected: storage_contract::file_container::ContainerEntity,
+    ) -> Result<()> {
+        if self.inode.device != expected.device() || self.inode.inode != expected.inode() {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+        }
+        Ok(())
+    }
+
     pub(in crate::container_storage) fn reservation(&self) -> (u64, usize) {
         self.install.reservation()
     }
@@ -187,6 +244,25 @@ impl PreparedFile {
         self.check_entity(root, path)?;
         Ok(identity)
     }
+    pub(in crate::container_storage) fn apply_container(
+        self,
+        management: &DiskRoot,
+        container: &DiskRoot,
+        observe: &mut impl FnMut(&'static str) -> Result<()>,
+    ) -> Result<()> {
+        let inode = self.inode;
+        if container.directory_identity(container.path())? != inode {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+        }
+        // PreparedInstall owns the exact FILE entity FD. Only its retention
+        // hierarchy uses the independently held management root supplied here.
+        self.install.apply(management, observe)?;
+        if container.directory_identity(container.path())? != inode {
+            return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+        }
+        Ok(())
+    }
+
     pub(in crate::container_storage) fn apply(
         self,
         root: &DiskRoot,
@@ -213,8 +289,7 @@ fn capture_entity(
     view: StateProjection<'_>,
 ) -> Result<DiskRoot> {
     use super::super::{
-        OWNER_MARKER, layout_locator, marker_matches_at, path_exists_at,
-        reject_unsupported_container, verify_body,
+        layout_locator, path_exists_at,
     };
     let locator = history
         .join(".zxs-layout/files")
@@ -234,6 +309,18 @@ fn capture_entity(
         }
         root.private_child(current)?
     };
+    verify_entity_contents(&held, file, view, indexed, None)?;
+    Ok(held)
+}
+
+fn verify_entity_contents(
+    held: &DiskRoot,
+    file: &str,
+    view: StateProjection<'_>,
+    indexed: bool,
+    name: Option<&name_policy::LookupName>,
+) -> Result<()> {
+    use super::super::{OWNER_MARKER, marker_matches_at, reject_unsupported_container, verify_body};
     reject_unsupported_container(&held, held.path())?;
     let versions = held.path().join("versions");
     held.private_child(&versions)?;
@@ -258,7 +345,12 @@ fn capture_entity(
                 &held, held.path(), version,
             )? {
                 Some(body) => body,
-                None => crate::container_storage::installed_version_path(held.path(), version)?,
+                None => match name {
+                    Some(name) => crate::container_storage::ordinary_body_path(
+                        held.path(), version, name,
+                    )?,
+                    None => crate::container_storage::installed_version_path(held.path(), version)?,
+                },
             };
             if held.optional_metadata(&body)?.is_some() {
                 verify_body(&held, &body, version)?;
@@ -272,7 +364,7 @@ fn capture_entity(
             ));
         }
     }
-    Ok(held)
+    Ok(())
 }
 
 #[cfg(test)]

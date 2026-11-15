@@ -28,7 +28,9 @@ impl JournalIo {
 fn fixture() -> (tempfile::TempDir, ValidatedConfig, DiskHandle) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temp.path().join("disk")]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [temp.path().join("disk")],
+        )).unwrap())
             .unwrap();
     private_dir(log_path(&config.disks[0]).parent().unwrap()).unwrap();
     let handle = DiskHandle::open(&config, &config.disks[0], false).unwrap();
@@ -328,7 +330,7 @@ fn unverified_authority_can_read_but_cannot_append_through_a_shared_gate() {
     let path = log_path(disk);
     let bytes = fs::read(&path).unwrap();
     let mut changed = (*config).clone();
-    let mut extra = Config::development([disk.root.with_file_name("extra")])
+    let mut extra = Config::development(crate::test_disks([disk.root.with_file_name("extra")]))
         .unwrap()
         .disks
         .remove(0);

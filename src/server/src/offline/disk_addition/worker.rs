@@ -58,6 +58,7 @@ pub(super) fn execute(request: WorkerRequest) -> Result<Output> {
                 excluded.push(PathBuf::from(&item.root_path));
                 selected.push(DirectoryAddition {
                     selection,
+                    name: item.name,
                     slot_id: item.slot_id,
                     level: item.level,
                     upstream_slot_id: item.upstream_slot_id,

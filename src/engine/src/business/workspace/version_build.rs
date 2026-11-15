@@ -5,26 +5,27 @@ use crate::{
 use std::borrow::Cow;
 
 /// Logical constructor input, not a source handle or a placement authorization.
-pub(super) struct Input<'a> {
-    pub(super) history: &'a str,
-    pub(super) file: &'a str,
-    pub(super) path: &'a name_policy::PortablePath,
-    pub(super) primary: &'a str,
-    pub(super) copies: u32,
-    pub(super) sources: Vec<String>,
-    pub(super) checkpoint: bool,
+pub(in crate::business) struct Input<'a> {
+    pub(in crate::business) history: &'a str,
+    pub(in crate::business) file: &'a str,
+    pub(in crate::business) path: &'a name_policy::PortablePath,
+    pub(in crate::business) primary: &'a str,
+    pub(in crate::business) copies: u32,
+    pub(in crate::business) sources: Vec<String>,
+    pub(in crate::business) checkpoint: bool,
 }
 
 /// Sealed data facts. The caller remains responsible for the actual BODY proof.
-pub(super) struct Content {
-    pub(super) size: u64,
-    pub(super) hash: ContentHash,
-    pub(super) chunk_bytes: u32,
+pub(in crate::business) struct Content {
+    pub(in crate::business) size: u64,
+    pub(in crate::business) hash: ContentHash,
+    pub(in crate::business) chunk_bytes: u32,
 }
 
 /// Calls remain lazy so rejected I/O, allocation, policy and route boundaries
-/// retain their original order. Implementations are internal to workspace planning.
-pub(super) trait Effects {
+/// retain their original order. Workspace planning and the full draft-commit
+/// replay supply these effects; neither gets a general storage capability.
+pub(in crate::business) trait Effects {
     fn version_id(&mut self) -> Result<storage_contract::VersionId>;
     fn created_at(&mut self) -> Result<String>;
     fn manifest_hash(&self) -> Result<String>;
@@ -37,6 +38,7 @@ pub(super) trait Effects {
 pub(super) struct Live<'a, 'context> {
     context: &'a crate::engine::PlanningContext<'context>,
     manifest: &'a ChecksumManifest,
+    reserved: Option<&'a mut crate::snapshot_worktree::ReservedFileVersion>,
 }
 
 impl<'a, 'context> Live<'a, 'context> {
@@ -44,13 +46,24 @@ impl<'a, 'context> Live<'a, 'context> {
         context: &'a crate::engine::PlanningContext<'context>,
         manifest: &'a ChecksumManifest,
     ) -> Self {
-        Self { context, manifest }
+        Self { context, manifest, reserved: None }
+    }
+
+    pub(super) fn for_reserved(
+        context: &'a crate::engine::PlanningContext<'context>,
+        manifest: &'a ChecksumManifest,
+        reserved: &'a mut crate::snapshot_worktree::ReservedFileVersion,
+    ) -> Self {
+        Self { context, manifest, reserved: Some(reserved) }
     }
 }
 
 impl Effects for Live<'_, '_> {
     fn version_id(&mut self) -> Result<storage_contract::VersionId> {
-        Ok(storage_contract::VersionId::generate()?)
+        match &mut self.reserved {
+            Some(reserved) => reserved.consume_version(),
+            None => Ok(storage_contract::VersionId::generate()?),
+        }
     }
 
     fn created_at(&mut self) -> Result<String> {
@@ -78,7 +91,7 @@ impl Effects for Live<'_, '_> {
     }
 }
 
-pub(super) fn construct(
+pub(in crate::business) fn construct(
     state: &mut State,
     input: Input<'_>,
     content: Content,

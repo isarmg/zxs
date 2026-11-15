@@ -14,6 +14,28 @@ pub(crate) struct VerifiedReplicaSource {
     version: FileVersion,
 }
 impl VerifiedReplicaSource {
+    /// Re-protection may reuse only a fully read original managed version from
+    /// its actual prior route and this planning occurrence's same held disk.
+    pub(crate) fn require_backup_source(
+        &self,
+        context: &super::PlanningContext<'_>,
+        version: &FileVersion,
+    ) -> Result<()> {
+        let invalid = crate::protection::invalid_automatic_backup;
+        let placement = context.state.placements.get(&version.version_id)
+            .ok_or_else(invalid)?;
+        let disk = context.disk(&self.owner.seal.slot_id)?;
+        if &self.version != version
+            || context.state.versions.get(&version.version_id) != Some(version)
+            || !placement.route_slot_ids.contains(&disk.slot_id)
+            || placement.binding_generations.get(&disk.slot_id) != Some(&disk.binding_generation)
+            || !Arc::ptr_eq(context.disk_resources.get(disk)?, &self.owner)
+        {
+            return Err(invalid());
+        }
+        self.owner.root_for(&self.path)?.admit_io()?.check_running()
+    }
+
     pub(super) fn owner(&self) -> &Arc<DiskHandle> {
         &self.owner
     }
@@ -43,14 +65,9 @@ impl Engine {
     }
 
     fn validated_replica_source(&self, version_id: &str) -> Result<VerifiedReplicaSource> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            verify_read_payload(disk, directory, version, lease)?;
-            let content = crate::container_storage::content_path_at(
-                &disk.root,
-                directory,
-                version,
-                &mut |_| lease.check_running(),
-            )?;
+        self.with_replica(version_id, |disk, directory, container, version, lease| {
+            verify_read_payload(disk, directory, container, version, lease)?;
+            let content = crate::container_storage::installed_version_path(container.path(), version)?;
             Ok(VerifiedReplicaSource {
                 owner: Arc::clone(disk),
                 path: content,
@@ -59,8 +76,8 @@ impl Engine {
         })
     }
     fn verified_replica(&self, version_id: &str) -> Result<(DiskFile, FileVersion, PathBuf)> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            let mut file = verify_read_payload(disk, directory, version, lease)?;
+        self.with_replica(version_id, |disk, directory, container, version, lease| {
+            let mut file = verify_read_payload(disk, directory, container, version, lease)?;
             use std::io::{Seek, SeekFrom};
             file.seek(SeekFrom::Start(0))?;
             Ok((file, version.clone(), directory.to_path_buf()))
@@ -70,7 +87,9 @@ impl Engine {
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(&Arc<DiskHandle>, &Path, &FileVersion, &DiskIoLease) -> Result<T>,
+        mut read: impl FnMut(
+            &Arc<DiskHandle>, &Path, &DiskRoot, &FileVersion, &DiskIoLease,
+        ) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -108,14 +127,30 @@ impl Engine {
                     d.metadata_member
                         .then_some(self.metadata_integrity.as_ref()),
                 );
-                crate::journal::verify_local_publication_at(
-                    &disk.root,
+                crate::journal::verify_local_publication_on_disk(
+                    disk,
                     &dir,
                     version,
                     &mut |_| lease.check_running(),
                     Some(&metadata),
                 )?;
-                read(disk, &dir, version, &lease)
+                let container = super::fresh_layout::containers::verify_replica(
+                    &self.config, &self.disk_resources, &self.state,
+                    version.file_id.parse()?, d,
+                )?;
+                let result = read(disk, &dir, &container, version, &lease)?;
+                let rechecked = super::fresh_layout::containers::verify_replica(
+                    &self.config, &self.disk_resources, &self.state,
+                    version.file_id.parse()?, d,
+                )?;
+                if container.directory_identity(container.path())?
+                    != rechecked.directory_identity(rechecked.path())?
+                {
+                    return Err(super::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+                }
+                disk.content_root()?;
+                disk.management_root()?;
+                Ok(result)
             })();
             match candidate {
                 Ok(replica) => return Ok(replica),
@@ -206,15 +241,15 @@ impl Engine {
             .open()
     }
     pub fn read_checksums(&self, version: &str) -> Result<Vec<u8>> {
-        self.with_replica(version, |disk, directory, version, lease| {
-            let (file, checks, manifest) = open_read_payload(disk, directory, version, lease)?;
+        self.with_replica(version, |disk, directory, container, version, lease| {
+            let (file, checks, manifest) = open_read_payload(disk, directory, container, version, lease)?;
             verify_read_file(file, manifest, version)?;
             Ok(checks)
         })
     }
     pub fn export_version(&self, version_id: &str, destination: &Path) -> Result<()> {
-        self.with_replica(version_id, |disk, directory, version, lease| {
-            let (file, _, _) = open_read_payload(disk, directory, version, lease)?;
+        self.with_replica(version_id, |disk, directory, container, version, lease| {
+            let (file, _, _) = open_read_payload(disk, directory, container, version, lease)?;
             match verified_full_copy(file, destination, version, version.logical_size) {
                 Ok(_) => Ok(Ok(())),
                 Err(CopyFailure::Source(error)) => Err(error),
@@ -267,8 +302,7 @@ fn read_checksums_leased(
     version: &FileVersion,
 ) -> Result<Vec<u8>> {
     let length = checksum_manifest_length(version)?;
-    let mut file = disk
-        .root
+    let mut file = disk.management_root()?
         .open_leased_regular(&directory.join("checksums.bin"))?;
     if file.metadata()?.len() != length as u64 {
         return Err(Error::new(
@@ -292,16 +326,15 @@ fn read_checksums_leased(
 }
 
 fn open_read_payload_file(
-    disk: &DiskHandle,
-    directory: &Path,
+    _disk: &DiskHandle,
+    _directory: &Path,
+    container: &DiskRoot,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<DiskFile> {
-    let path =
-        crate::container_storage::content_path_at(&disk.root, directory, version, &mut |_| {
-            lease.check_running()
-        })?;
-    let file = disk.root.open_leased_regular(&path)?;
+    lease.check_running()?;
+    let path = crate::container_storage::installed_version_path(container.path(), version)?;
+    let file = container.open_leased_regular(&path)?;
     if file.metadata()?.len() != version.logical_size {
         return Err(Error::new(
             ErrorCode::ChecksumMismatch,
@@ -314,6 +347,7 @@ fn open_read_payload_file(
 fn open_read_payload(
     disk: &DiskHandle,
     directory: &Path,
+    container: &DiskRoot,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<(DiskFile, Vec<u8>, ChecksumManifest)> {
@@ -327,17 +361,18 @@ fn open_read_payload(
             "checksum header differs from version",
         ));
     }
-    let file = open_read_payload_file(disk, directory, version, lease)?;
+    let file = open_read_payload_file(disk, directory, container, version, lease)?;
     Ok((file, checks, manifest))
 }
 
 fn verify_read_payload(
     disk: &DiskHandle,
     directory: &Path,
+    container: &DiskRoot,
     version: &FileVersion,
     lease: &DiskIoLease,
 ) -> Result<DiskFile> {
-    let (file, _, manifest) = open_read_payload(disk, directory, version, lease)?;
+    let (file, _, manifest) = open_read_payload(disk, directory, container, version, lease)?;
     verify_read_file(file, manifest, version)
 }
 
@@ -382,6 +417,7 @@ fn verify_read_file(
 /// The lease is acquired before releasing that lock, so purge cannot remove the
 /// selected version while publication evidence and payload handles are opened.
 pub struct ContentReadPlan {
+    state: Arc<State>,
     config: ValidatedConfig,
     disk_resources: Arc<DiskResources>,
     disks: Vec<DiskConfig>,
@@ -440,6 +476,7 @@ impl Engine {
             .expect("invariant: read lease lock poisoned")
             .acquire(version_id.into())?;
         Ok(ContentReadPlan {
+            state: Arc::clone(&self.state),
             metadata_integrity: Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
             disk_resources: Arc::clone(&self.disk_resources),
@@ -487,8 +524,9 @@ impl ContentReadPlan {
         lease.check_running()?;
         // Named identity observation must not turn later proof/body reads into
         // raw pathname opens. Both verifiers retain the same managed binding.
-        let (handle, directory, proof_lease) = self.authenticate_replica(disk)?;
-        drop(handle.verify_payload(&directory, &self.version)?);
+        let (handle, directory, container, proof_lease) = self.authenticate_replica(disk)?;
+        drop(verify_read_payload(handle, &directory, &container, &self.version, &proof_lease)?);
+        self.recheck_replica(disk, handle, &container)?;
         proof_lease.check_running()?;
         lease.check_running()
     }
@@ -502,7 +540,7 @@ impl ContentReadPlan {
     fn authenticate_replica(
         &self,
         disk: &DiskConfig,
-    ) -> Result<(&DiskHandle, PathBuf, DiskIoLease)> {
+    ) -> Result<(&DiskHandle, PathBuf, DiskRoot, DiskIoLease)> {
         let handle = self.disk_resources.get(disk)?;
         let lease = handle.root.admit_io()?;
         let dir = version_dir(
@@ -516,14 +554,32 @@ impl ContentReadPlan {
             disk.metadata_member
                 .then_some(self.metadata_integrity.as_ref()),
         );
-        crate::journal::verify_local_publication_at(
-            &handle.root,
+        crate::journal::verify_local_publication_on_disk(
+            handle,
             &dir,
             &self.version,
             &mut |_| lease.check_running(),
             Some(&metadata),
         )?;
-        Ok((handle, dir, lease))
+        let container = super::fresh_layout::containers::verify_replica(
+            &self.config, &self.disk_resources, &self.state, self.version.file_id.parse()?, disk,
+        )?;
+        Ok((handle, dir, container, lease))
+    }
+
+    fn recheck_replica(
+        &self, disk: &DiskConfig, handle: &DiskHandle, container: &DiskRoot,
+    ) -> Result<()> {
+        handle.management_root()?;
+        let current = super::fresh_layout::containers::verify_replica(
+            &self.config, &self.disk_resources, &self.state, self.version.file_id.parse()?, disk,
+        )?;
+        if current.directory_identity(current.path())?
+            != container.directory_identity(container.path())?
+        {
+            return Err(super::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+        }
+        Ok(())
     }
 
     /// One decoded proof for all exact-version replicas; each member's local
@@ -535,17 +591,19 @@ impl ContentReadPlan {
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                let (handle, dir, lease) = self.authenticate_replica(disk)?;
+                let (handle, dir, container, lease) = self.authenticate_replica(disk)?;
                 if selected.is_some() {
                     // Digest equality binds these bytes to the same descriptor;
                     // decoding the identical hash array again adds no proof.
                     drop(read_checksums_leased(handle, &dir, &self.version)?);
-                    let file = open_read_payload_file(handle, &dir, &self.version, &lease)?;
+                    let file = open_read_payload_file(handle, &dir, &container, &self.version, &lease)?;
+                    self.recheck_replica(disk, handle, &container)?;
                     fallback_files.push(file);
                 } else {
                     let (file, checks, manifest) =
-                        open_read_payload(handle, &dir, &self.version, &lease)?;
+                        open_read_payload(handle, &dir, &container, &self.version, &lease)?;
                     drop(checks);
+                    self.recheck_replica(disk, handle, &container)?;
                     selected = Some((file, manifest));
                 }
                 Ok(())
@@ -581,8 +639,10 @@ impl ContentReadPlan {
         for disk in &self.disks {
             match self
                 .authenticate_replica(disk)
-                .and_then(|(handle, dir, lease)| {
-                    open_read_payload(handle, &dir, &self.version, &lease)
+                .and_then(|(handle, dir, container, lease)| {
+                    let payload = open_read_payload(handle, &dir, &container, &self.version, &lease)?;
+                    self.recheck_replica(disk, handle, &container)?;
+                    Ok(payload)
                 }) {
                 Ok((_, checks, _)) => return Ok(checks),
                 Err(error) => {

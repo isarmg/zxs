@@ -5,7 +5,7 @@ fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        crate::Config::development([temp.path().join("disk")]).unwrap(),
+        crate::Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = engine

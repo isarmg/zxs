@@ -3,7 +3,7 @@ use std::fs;
 
 fn fixture() -> (tempfile::TempDir, Engine, Workspace, std::path::PathBuf) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("disk")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("disk")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repository = engine
         .create_repository(

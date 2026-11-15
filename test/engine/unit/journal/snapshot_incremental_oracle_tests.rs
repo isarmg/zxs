@@ -194,7 +194,9 @@ fn populated_state() -> State {
 }
 
 fn config(root: &Path) -> Config {
-    Config::development([root.join("a"), root.join("b"), root.join("c")]).unwrap()
+    Config::development(crate::test_disks(
+        [root.join("a"), root.join("b"), root.join("c")],
+    )).unwrap()
 }
 
 fn raw_hash(kind: &str, bytes: &[u8]) -> String {

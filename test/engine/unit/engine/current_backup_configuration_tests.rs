@@ -81,7 +81,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let mut config =
-            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..count).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         for disk in config.disks.iter_mut().skip(3) {
             disk.level = 1;
             disk.upstream_slot_id = None;

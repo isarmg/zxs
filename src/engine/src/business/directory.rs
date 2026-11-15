@@ -1173,8 +1173,21 @@ pub(crate) fn record_projected_directory_edits(
     exclude: Option<&str>,
     view: Option<&crate::engine::CurrentNamespaces>,
 ) -> Result<Vec<String>> {
+    record_projected_directory_edits_with_ids(
+        state, repository, changed_paths, exclude, view, &mut |prefix| Ok(new_id(prefix)?),
+    )
+}
+
+pub(super) fn record_projected_directory_edits_with_ids(
+    state: &mut State,
+    repository: &str,
+    changed_paths: &[String],
+    exclude: Option<&str>,
+    view: Option<&crate::engine::CurrentNamespaces>,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<Vec<String>> {
     let Some(view) = view else {
-        return record_directory_edits(state, repository, changed_paths, exclude);
+        return record_directory_edits_with_ids(state, repository, changed_paths, exclude, ids);
     };
     let repo = required(
         state.repositories.get(repository),
@@ -1185,7 +1198,7 @@ pub(crate) fn record_projected_directory_edits(
         .cloned()
         .chain(view.removed_paths(&repo.main_branch_id).map(str::to_owned))
         .collect::<Vec<_>>();
-    record_directory_edits(state, repository, &paths, exclude)
+    record_directory_edits_with_ids(state, repository, &paths, exclude, ids)
 }
 
 pub(crate) fn record_directory_edits(

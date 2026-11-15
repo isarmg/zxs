@@ -1,7 +1,16 @@
 use super::*;
 
+pub(super) fn named_roots(root: &Path) -> [(name_policy::Name, PathBuf); 3] {
+    [
+        (name_policy::Name::parse("Primary").unwrap(), root.join("p")),
+        (name_policy::Name::parse("Near archive").unwrap(), root.join("b")),
+        (name_policy::Name::parse("Far archive").unwrap(), root.join("c")),
+    ]
+}
+
 fn registration(root: &Path, config: std::path::PathBuf) -> Command {
     Command::RegisterDisk {
+        name: name_policy::Name::parse("Additional primary").unwrap(),
         config,
         slot: "D01".into(),
         disk_id: storage_engine::new_id("disk").unwrap(),
@@ -14,12 +23,7 @@ fn registration(root: &Path, config: std::path::PathBuf) -> Command {
 #[test]
 fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() {
     let root = tempfile::tempdir().unwrap();
-    let draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let draft = Config::development(named_roots(root.path())).unwrap();
     let path = root.path().join("config.json");
     let original = json_codec::to_vec(&draft).unwrap();
     private_io::write_new(&path, &original).unwrap();
@@ -27,6 +31,7 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
     let saved: Config = storage_engine::decode_strict(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved.disks.len(), 4);
     assert_eq!(saved.disks.last().unwrap().slot_id, "D01");
+    assert_eq!(saved.disks.last().unwrap().name.as_str(), "Additional primary");
     assert_eq!(
         std::fs::read(path.with_extension("json.before-registration")).unwrap(),
         original
@@ -35,12 +40,7 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
 #[test]
 fn different_configuration_extensions_keep_independent_registration_backups() {
     let root = tempfile::tempdir().unwrap();
-    let draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let draft = Config::development(named_roots(root.path())).unwrap();
     let first = root.path().join("config.json");
     let second = root.path().join("config.draft");
     let original = json_codec::to_vec(&draft).unwrap();
@@ -84,12 +84,7 @@ fn registration_backup_preserves_the_complete_native_file_name() {
 #[test]
 fn oversized_backup_name_fails_without_changing_the_draft() {
     let root = tempfile::tempdir().unwrap();
-    let draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let draft = Config::development(named_roots(root.path())).unwrap();
     let path = root.path().join("c".repeat(250));
     let original = json_codec::to_vec(&draft).unwrap();
     private_io::write_new(&path, &original).unwrap();
@@ -103,12 +98,7 @@ fn oversized_backup_name_fails_without_changing_the_draft() {
 fn non_utf8_registration_path_is_rejected_before_any_write() {
     use std::os::unix::ffi::OsStringExt;
     let root = tempfile::tempdir().unwrap();
-    let draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let draft = Config::development(named_roots(root.path())).unwrap();
     let path = root
         .path()
         .join(std::ffi::OsString::from_vec(b"config-\xff.json".to_vec()));
@@ -123,18 +113,14 @@ fn non_utf8_registration_path_is_rejected_before_any_write() {
 #[test]
 fn repeated_registration_keeps_the_immediately_previous_draft() {
     let root = tempfile::tempdir().unwrap();
-    let draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let draft = Config::development(named_roots(root.path())).unwrap();
     let path = root.path().join("config.json");
     private_io::write_new(&path, &json_codec::to_vec(&draft).unwrap()).unwrap();
     run(registration(root.path(), path.clone())).unwrap();
     let previous = std::fs::read(&path).unwrap();
     let mut args = registration(root.path(), path.clone());
-    if let Command::RegisterDisk { slot, path, .. } = &mut args {
+    if let Command::RegisterDisk { slot, path, name, .. } = &mut args {
+        *name = name_policy::Name::parse("Fifth archive").unwrap();
         *slot = "D02".into();
         *path = root.path().join("fifth");
     }
@@ -148,12 +134,7 @@ fn repeated_registration_keeps_the_immediately_previous_draft() {
 #[test]
 fn invalid_upstream_level_is_an_error_and_never_modifies_the_draft() {
     let root = tempfile::tempdir().unwrap();
-    let mut draft = Config::development([
-        root.path().join("p"),
-        root.path().join("b"),
-        root.path().join("c"),
-    ])
-    .unwrap();
+    let mut draft = Config::development(named_roots(root.path())).unwrap();
     draft.disks[0].level = u32::MAX;
     let path = root.path().join("config.json");
     let original = json_codec::to_vec(&draft).unwrap();
@@ -171,7 +152,10 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
         run(Command::Template {
             production: false,
             disks: (0..count)
-                .map(|i| root.path().join(format!("disk{i}")))
+                .map(|i| NamedDisk {
+                    name: name_policy::Name::parse(&format!("Archive {i}")).unwrap(),
+                    root: root.path().join(format!("disk{i}")),
+                })
                 .collect(),
             output: Some(output.clone()),
         })
@@ -186,6 +170,17 @@ fn templates_accept_one_or_many_disks_without_initializing_them() {
 
 #[test]
 fn invalid_templates_do_not_write_an_output() {
+    for missing in [
+        r#"{"root":"/selected"}"#,
+        r#"{"name":"","root":"/selected"}"#,
+        r#"{"name":"Archive","root":"/selected","fallback":true}"#,
+        "/selected",
+    ] {
+        assert!(named_disk(missing).is_err());
+    }
+    let explicit = named_disk(r#"{"name":"Chosen = Archive","root":"/unrelated"}"#).unwrap();
+    assert_eq!(explicit.name.as_str(), "Chosen = Archive");
+    assert_eq!(explicit.root, PathBuf::from("/unrelated"));
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("draft.json");
     for disks in [
@@ -198,7 +193,10 @@ fn invalid_templates_do_not_write_an_output() {
         assert!(
             run(Command::Template {
                 production: false,
-                disks,
+                disks: disks.into_iter().enumerate().map(|(i, root)| NamedDisk {
+                    name: name_policy::Name::parse(&format!("Archive {i}")).unwrap(),
+                    root,
+                }).collect(),
                 output: Some(output.clone())
             })
             .is_err()

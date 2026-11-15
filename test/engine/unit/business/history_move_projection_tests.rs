@@ -40,7 +40,9 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut config =
-            Config::development([temp.path().join("source"), temp.path().join("target")]).unwrap();
+            Config::development(crate::test_disks(
+                [temp.path().join("source"), temp.path().join("target")],
+            )).unwrap();
         config.disks[1].level = 1;
         config.disks[1].upstream_slot_id = None;
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();

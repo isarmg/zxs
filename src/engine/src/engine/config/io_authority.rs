@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RegisteredDisk {
     slot_id: String,
+    name: name_policy::Name,
     level: u32,
     upstream_slot_id: Option<String>,
     metadata_member: bool,
@@ -25,6 +26,7 @@ pub(super) struct GenesisIoAuthority {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GenesisControlContext {
     pool_id: String,
+    storage_roots: BTreeMap<storage_contract::DiskId, storage_contract::working_tree::RootBinding>,
     mode: Mode,
     disks: BTreeMap<String, RegisteredDisk>,
     checksum_chunk_bytes: u32,
@@ -39,9 +41,10 @@ struct GenesisControlContext {
 impl GenesisIoAuthority {
     pub(super) fn from_config(config: &Config) -> Self {
         // Exhaustive destructuring makes a new persisted field require an
-        // explicit decision here. No serialization or persistent hash changes.
+        // explicit decision here, including the fresh physical root bindings.
         let Config {
             pool_id,
+            storage_roots,
             mode,
             disks,
             checksum_chunk_bytes,
@@ -62,6 +65,7 @@ impl GenesisIoAuthority {
                 let DiskConfig {
                     disk_id,
                     slot_id,
+                    name,
                     root: _,
                     level,
                     upstream_slot_id,
@@ -73,6 +77,7 @@ impl GenesisIoAuthority {
                     disk_id.clone(),
                     RegisteredDisk {
                         slot_id: slot_id.clone(),
+                        name: name.clone(),
                         level: *level,
                         upstream_slot_id: upstream_slot_id.clone(),
                         metadata_member: *metadata_member,
@@ -85,6 +90,7 @@ impl GenesisIoAuthority {
         Self {
             control: GenesisControlContext {
                 pool_id: pool_id.clone(),
+                storage_roots: storage_roots.clone(),
                 mode: mode.clone(),
                 disks,
                 checksum_chunk_bytes: *checksum_chunk_bytes,

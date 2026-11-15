@@ -1,0 +1,232 @@
+//! One container's working state, separate from immutable content versions.
+//!
+//! These are durable logical records. Decoding them does not admit a container,
+//! select a branch or authorize access to the referenced draft body.
+use crate::{BranchId, ContentHash, FileNodeId, Generation, GenerationExhausted, Id, VersionId};
+use data_serialization::{Deserialize, Serialize};
+use std::fmt;
+
+/// A selected occurrence, not a FileId-only or global-default lookup.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DraftLocation {
+    pub repository: crate::RepositoryId,
+    pub path: name_policy::PortablePath,
+    pub entry: crate::EntryId,
+    pub file: crate::FileId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DraftCommand {
+    SetMode {
+        target: DraftLocation,
+        expected: WorkingRevision,
+        mode: CommitMode,
+    },
+    Write {
+        target: DraftLocation,
+        expected: WorkingRevision,
+        base: DraftBase,
+        content_hash: ContentHash,
+        #[serialization(with = "crate::u64_string")]
+        logical_size: u64,
+    },
+    Discard {
+        target: DraftLocation,
+        expected: WorkingRevision,
+    },
+    Commit {
+        target: DraftLocation,
+        expected: WorkingRevision,
+        base: DraftBase,
+        message: String,
+    },
+}
+
+impl DraftCommand {
+    pub const fn target(&self) -> &DraftLocation {
+        match self {
+            Self::SetMode { target, .. } | Self::Write { target, .. }
+            | Self::Discard { target, .. } | Self::Commit { target, .. } => target,
+        }
+    }
+
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::SetMode { .. } => "file.working.mode",
+            Self::Write { .. } => "file.draft.write",
+            Self::Discard { .. } => "file.draft.discard",
+            Self::Commit { .. } => "file.draft.commit",
+        }
+    }
+}
+
+pub mod kind {
+    pub enum DraftPayload {}
+
+    impl crate::IdKind for DraftPayload {
+        const PREFIX: &'static str = "draft";
+    }
+}
+
+/// A mutable working body's identity is never an immutable VersionId.
+pub type DraftPayloadId = Id<kind::DraftPayload>;
+
+/// Fences every change of commit mode or of the shared working body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serialization(transparent)]
+pub struct WorkingRevision(Generation);
+
+impl WorkingRevision {
+    pub const fn new(value: Generation) -> Self {
+        Self(value)
+    }
+
+    pub const fn generation(self) -> Generation {
+        self.0
+    }
+
+    pub fn next(self) -> Result<Self, GenerationExhausted> {
+        self.0.next().map(Self)
+    }
+}
+
+impl fmt::Display for WorkingRevision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, formatter)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum CommitMode {
+    Automatic,
+    Manual,
+}
+
+/// The selection captured by the first write to a clean shared draft.
+/// Later writes retain this record instead of selecting today's branch HEAD.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DraftBase {
+    branch_id: BranchId,
+    node_id: FileNodeId,
+    version_id: VersionId,
+    selection_generation: Generation,
+}
+
+impl DraftBase {
+    pub const fn new(
+        branch_id: BranchId,
+        node_id: FileNodeId,
+        version_id: VersionId,
+        selection_generation: Generation,
+    ) -> Self {
+        Self {
+            branch_id,
+            node_id,
+            version_id,
+            selection_generation,
+        }
+    }
+
+    pub const fn branch_id(self) -> BranchId {
+        self.branch_id
+    }
+
+    pub const fn node_id(self) -> FileNodeId {
+        self.node_id
+    }
+
+    pub const fn version_id(self) -> VersionId {
+        self.version_id
+    }
+
+    pub const fn selection_generation(self) -> Generation {
+        self.selection_generation
+    }
+}
+
+/// Complete material of the current shared draft. No path, open file, upload
+/// workspace or lease is part of its durable identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DraftPayload {
+    payload_id: DraftPayloadId,
+    content_hash: ContentHash,
+    #[serialization(with = "crate::u64_string")]
+    logical_size: u64,
+}
+
+impl DraftPayload {
+    pub const fn new(
+        payload_id: DraftPayloadId,
+        content_hash: ContentHash,
+        logical_size: u64,
+    ) -> Self {
+        Self {
+            payload_id,
+            content_hash,
+            logical_size,
+        }
+    }
+
+    pub const fn payload_id(self) -> DraftPayloadId {
+        self.payload_id
+    }
+
+    pub const fn content_hash(self) -> ContentHash {
+        self.content_hash
+    }
+
+    pub const fn logical_size(self) -> u64 {
+        self.logical_size
+    }
+}
+
+/// This mandatory record belongs inside the authoritative container record.
+/// There is no default that could turn absent draft metadata into clean state.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FileWorkingState {
+    Automatic {
+        revision: WorkingRevision,
+    },
+    ManualClean {
+        revision: WorkingRevision,
+    },
+    ManualDirty {
+        revision: WorkingRevision,
+        base: DraftBase,
+        payload: DraftPayload,
+    },
+}
+
+impl FileWorkingState {
+    pub const fn revision(&self) -> WorkingRevision {
+        match self {
+            Self::Automatic { revision }
+            | Self::ManualClean { revision }
+            | Self::ManualDirty { revision, .. } => *revision,
+        }
+    }
+
+    pub const fn mode(&self) -> CommitMode {
+        match self {
+            Self::Automatic { .. } => CommitMode::Automatic,
+            Self::ManualClean { .. } | Self::ManualDirty { .. } => CommitMode::Manual,
+        }
+    }
+
+    pub const fn draft(&self) -> Option<(&DraftBase, &DraftPayload)> {
+        match self {
+            Self::Automatic { .. } | Self::ManualClean { .. } => None,
+            Self::ManualDirty { base, payload, .. } => Some((base, payload)),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../test/contract/unit/file_draft.rs"]
+mod tests;

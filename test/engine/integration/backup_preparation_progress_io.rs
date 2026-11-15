@@ -94,7 +94,13 @@ fn status_query_does_not_wait_for_a_blocked_system_progress_write() {
 #[ignore = "isolated child only; the named parent launches this with a scoped shim"]
 fn progress_gate_child() {
     let root = PathBuf::from(std::env::var_os(ROOT).expect("parent supplied private root"));
-    let config = Config::development((0..3).map(|n| root.join(format!("disk-{n}")))).unwrap();
+    let config = Config::development((0..3).map(|n| {
+        (
+            name_policy::Name::parse(&format!("disk-{n}")).unwrap(),
+            root.join(format!("disk-{n}")),
+        )
+    }))
+    .unwrap();
     let mut engine = Engine::initialize(&root.join("system"), config).unwrap();
     let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
     save(

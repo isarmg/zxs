@@ -24,7 +24,9 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("disk");
         private_dir(&path).unwrap();
-        let config = ValidatedConfig::try_from(Config::development([path]).unwrap()).unwrap();
+        let config = ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [path],
+        )).unwrap()).unwrap();
         let resources = Arc::new(DiskResources::open(&config, false).unwrap());
         Self {
             temp,

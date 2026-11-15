@@ -4,7 +4,7 @@
 
 ## 用户入口与范围
 
-独立 Web 新增 `POST /api/initialization/storage-preview`、`storage-create` 和 `storage-recover-preview`。输入已有本机非 root 服务账户与 `/zxs/data/disks` 下的全部直接子目录，明确确认 `initialize-first-storage-batch`。每个已有空目录初始化为生产模式的独立一级盘，不按顺序推断备份链。已有外来或非空根不能走此入口；这也不是二级以上完整链的正式外来准入。
+独立 Web 新增 `POST /api/initialization/storage-preview`、`storage-create` 和 `storage-recover-preview`。输入已有本机非 root 服务账户及 `disks: [{name, root_path}]`，逐项显式提供盘名与 `/zxs/data/disks` 下的全部直接子目录，明确确认 `initialize-first-storage-batch`。每个已有空目录初始化为生产模式的独立一级盘，不按顺序推断备份链。已有外来或非空根不能走此入口；这也不是二级以上完整链的正式外来准入。
 
 根/账户布局、已存在的管理意图与管理权威必须符合当前协议。所有直接子项必须在本批选择中，目录必须真实存在且归准确服务 UID/GID、0700；额外、缺失、链接、未知、权限不安全或不合格文件系统均拒绝，不通过跳过条目伪造干净目录。内核文件系统、挂载观察、目录身份与空盘准入继续使用通用 storage_directories；核心生产 Config 校验仍生效，不回退 development。
 
@@ -12,9 +12,13 @@
 
 ## 空目录准备的名称准入
 
+新 fresh 候选的盘名是必需的 `name_policy::Name`，与物理目录名分开。无默认盘名，不从槽位、挂载点或 `root_path` 尾段推导；旧的仅 `roots` 输入、缺少 name 的计划与未命名选择拒绝，不自动迁移。目录准备与存储预览共享同一 `{service_user, disks}` 输入。前者先保留原 root 身份要求与物理路径语法门，再用实际 `Config::independent_roots`／`ValidatedConfig` 检查全批盘名，之后才保存目录原计划。该临时配置只检查请求，不持有根，也不是最终 genesis。真正空盘和持有根仍由后续 worker／SetupRecovery 重新准入。
+
+服务 worker 将每个显式 name 与同次目录观察组成 `NamedStorageSelection`，由原计划摘要绑定并原样交给 activation。完成回调同时比对准确目录和盘名后才进行原凭据／派生库步骤；恢复不能只保留路径却换盘名。原 64 KiB 预算、UID/GID、生命周期锁与失败材料均保持。集成向导原请求版本变为 2，旧标签页记录拒绝且原文保留，不代填或重置。
+
 首批目录预览／准备在写入固定原计划之前，复用存储激活的同一 portable-name 规则，返回受约束名称。除准确直接子目录和 1–32 个上限外，CON、冒号、非 NFC 拼写及大小写折叠后冲突的完整批次均拒绝；不能先留下永远无法激活的固定目录计划。普通首存储预览只在 inventory 边界解析一次，同次目录清单消费已解析名称；磁盘读回、进程交接和实际使用点的身份检查保持。
 
-向导第 7 步尚未保留空目录请求或存储计划时，允许用户明确更正根目录输入，保留此前六步、服务账户、管理员和配置。更正只保存浏览器输入，不发系统写入；下一次预览仍由原生计划决定准入。一旦空目录预览已保存，刷新也不解锁；已发送或未知结果不得换批次，现存原计划和磁盘材料不清理。Node 处理器回归使用 DOM／transport doubles，不是实际浏览器或完整 root／systemd 首装验收。
+向导第 7 步尚未保留空目录请求或存储计划时，允许用户明确更正显式盘名与根目录输入，保留此前六步、服务账户、管理员和配置。更正只保存浏览器输入，不发系统写入；下一次预览仍由原生计划决定准入。一旦空目录预览已保存，刷新也不解锁；已发送或未知结果不得换批次，现存原计划和磁盘材料不清理。Node 处理器回归使用 DOM／transport doubles，不是实际浏览器或完整 root／systemd 首装验收。
 
 ## 权限与生命周期
 
@@ -30,11 +34,11 @@ root 计划阶段与 service UID 工作阶段各自取得 `/zxs` 实际 OS 生�
 
 ## 原计划、初始化与派生材料
 
-预览绑定固定 host/data/state/management/discovery inode、准确本机账户来源、当前管理凭据代数/会话指纹、所有准确目录和挂载选择，不保存密码。确认后先以 0700/0600 将完整原计划保存在 `/zxs/.zxs-helper-first-storage-<摘要>/plan.json`，再交工作进程。未知 pending、不同正文、错误身份或后来的凭据/会话变化均不替换旧计划。
+预览绑定固定 host/data/state/management/discovery inode、准确本机账户来源、当前管理凭据代数/会话指纹、所有显式盘名、准确目录和挂载选择，不保存密码。确认后先以 0700/0600 将完整原计划保存在 `/zxs/.zxs-helper-first-storage-<摘要>/plan.json`，再交工作进程。未知 pending、不同正文、错误身份或后来的凭据/会话变化均不替换旧计划。
 
 工作进程重用 `SetupRecovery::activate`：保留当前原生 Config/genesis、成员与事务协议，写 activation intent，消费 held 空目录，初始化 Engine。完成回调执行以下真实步骤：
 
-1. 只接纳最初 genesis 或唯一 `auth.control-state` 后的原始池；只接受相同独立一级根集合，不允许把后来已用过的池当首次初始化重做。
+1. 只接纳最初 genesis 或唯一 `auth.control-state` 后的原始池；只接受相同独立一级根与显式盘名集合，不允许把后来已用过的池当首次初始化重做。
 2. 将现有唯一管理员的当前快照发布到 Engine 原生灾备控制材料，去掉会话；只在没有快照的 genesis 写入，已有不同快照拒绝，不覆盖更晚权威。
 3. 通过现有 writer 显式构建每个首批盘的 current 与 history SQLite，再由现有观察 API 核对当下来源与历史覆盖。
 4. 核对系统 SQLite 的当前 State 记录与 index 状态。首批尚无用户对象，不能据此声称已为未来对象提前创建第三份实体数据库。

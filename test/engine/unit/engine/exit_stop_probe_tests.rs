@@ -32,7 +32,9 @@ fn prepared_exit_stop_probes_neither_old_nor_partial_stops_at_any_real_barrier()
             .tempdir()
             .unwrap();
         let config =
-            Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..4).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let system = temp.path().join("system");
         let mut engine = Engine::initialize(&system, config.clone()).unwrap();
         engine
@@ -117,7 +119,9 @@ impl ReadmittedFixture {
             .tempdir()
             .unwrap();
         let original =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let system = temp.path().join("system");
         let mut engine = Engine::initialize(&system, original.clone()).unwrap();
         engine

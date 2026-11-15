@@ -11,7 +11,9 @@ fn target() -> (tempfile::TempDir, DiskRoot, ValidatedConfig, PreparedSeal) {
         .unwrap();
     let root = DiskRoot::open(temp.path()).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([root.path().to_owned()]).unwrap()).unwrap();
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [root.path().to_owned()],
+        )).unwrap()).unwrap();
     let mut seal = crate::disk::identity_at(
         &config,
         &config.disks[0],

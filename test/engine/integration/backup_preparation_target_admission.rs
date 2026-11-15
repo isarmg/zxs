@@ -57,8 +57,13 @@ impl Prepared {
             .tempdir()
             .unwrap();
         let count = if current { 4 } else { 3 };
-        let mut config =
-            Config::development((0..count).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        let mut config = Config::development((0..count).map(|n| {
+            (
+                name_policy::Name::parse(&format!("disk-{n}")).unwrap(),
+                temp.path().join(format!("disk-{n}")),
+            )
+        }))
+        .unwrap();
         if current {
             config.disks[3].level = 1;
             config.disks[3].upstream_slot_id = None;

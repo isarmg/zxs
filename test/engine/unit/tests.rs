@@ -15,11 +15,13 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");
-        let config = Config::development([
-            temp.path().join("primary"),
-            temp.path().join("backup"),
-            temp.path().join("tertiary"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                temp.path().join("primary"),
+                temp.path().join("backup"),
+                temp.path().join("tertiary"),
+            ],
+        ))
         .unwrap();
         Self { temp, root, config }
     }
@@ -1812,6 +1814,7 @@ fn conditional_directory_policies_change_only_future_placements() {
     let mut f = Fixture::new();
     f.config.disks.push(DiskConfig {
         slot_id: "P02".into(),
+        name: name_policy::Name::parse("Secondary primary").unwrap(),
         disk_id: new_id("disk").unwrap(),
         root: f.temp.path().join("second-primary"),
         level: 1,

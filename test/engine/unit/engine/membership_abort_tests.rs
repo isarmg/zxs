@@ -21,7 +21,9 @@ impl Fixture {
     fn new(old: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..old).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..old).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         engine
             .create_repository(
@@ -34,7 +36,9 @@ impl Fixture {
             .unwrap();
         let mut target = original.clone();
         let additional =
-            Config::development((0..=old).map(|n| temp.path().join(format!("new-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..=old).map(|n| temp.path().join(format!("new-{n}"))),
+            )).unwrap();
         let disk = additional.disks.into_iter().last().unwrap();
         private_dir(&disk.root).unwrap();
         target.disks.push(disk);
@@ -747,7 +751,9 @@ fn membership_abort_rejects_membership_removal_and_exit_effect_archives() {
     for effect in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let operation = OperationId::generate().unwrap();
         if effect {
@@ -801,7 +807,9 @@ fn membership_abort_successor_binds_authenticated_predecessor_and_original_confi
     fixture.engine.activate_pending_membership().unwrap();
     let predecessor = fixture.engine.config.generation_hash().unwrap().to_owned();
     fixture.original = fixture.target.clone();
-    let extra = Config::development((0..5).map(|n| fixture.temp.path().join(format!("later-{n}"))))
+    let extra = Config::development(crate::test_disks(
+        (0..5).map(|n| fixture.temp.path().join(format!("later-{n}"))),
+    ))
         .unwrap();
     let added = extra.disks.into_iter().last().unwrap();
     private_dir(&added.root).unwrap();

@@ -35,11 +35,13 @@ fn assert_local_publication_encoding(local: &LocalPublication) -> Vec<u8> {
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine

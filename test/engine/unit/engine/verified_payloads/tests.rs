@@ -41,11 +41,13 @@ fn fixture_with_payload_and_members(
     metadata_members: [bool; 3],
 ) -> (tempfile::TempDir, Engine, Candidate) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("t"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("t"),
+        ],
+    ))
     .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
@@ -416,13 +418,14 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
     let mut entries = Vec::new();
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let entry = verify_replica(config, &engine.disk_resources, &evidence.version, slot)?;
+            let entry = verify_replica(config, &engine.disk_resources, &evidence.version, slot, None)?;
             if !full_revalidation {
                 entries.push(entry);
             }
         }
     }
     let proof = VerifiedPayloadSet {
+        containers: None,
         metadata_integrity: preparation.metadata_integrity,
         entries,
         _reservation: reservation,

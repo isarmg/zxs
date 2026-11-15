@@ -3,6 +3,24 @@ use crate::*;
 pub(crate) fn routes() -> Router<AppState> {
     let routes = Router::new()
         .route(
+            "/api/file-manager/files/{file}/working",
+            get(http_file_draft::status).post(http_file_draft::change),
+        )
+        .route(
+            "/api/file-manager/files/{file}/draft",
+            get(http_file_draft::content).put(http_file_draft::write),
+        )
+        .route(
+            "/api/repositories/{repository}/snapshot-root-context",
+            get(http_snapshot_worktree::context),
+        )
+        .route("/api/directory-snapshots", post(http_snapshot_worktree::initialize))
+        .route("/api/directory-worktrees", post(http_snapshot_worktree::create))
+        .route(
+            "/api/directory-worktrees/{worktree}",
+            get(http_snapshot_worktree::status),
+        )
+        .route(
             "/api/file-manager/directory-snapshot-source",
             get(http_directory_snapshot_source::read),
         )

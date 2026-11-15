@@ -9,7 +9,9 @@ fn recovery_rejects_lost_published_journals_before_rewriting_projection() {
             let root = temp.path().join("system");
             let mut engine = Engine::initialize(
                 &root,
-                Config::development((0..disks).map(|i| temp.path().join(format!("disk-{i}"))))
+                Config::development(crate::test_disks(
+                    (0..disks).map(|i| temp.path().join(format!("disk-{i}"))),
+                ))
                     .unwrap(),
             )
             .unwrap();
@@ -92,7 +94,7 @@ fn recovery_allows_new_empty_pools_and_unpublished_preparation_artifacts() {
         let root = temp.path().join("system");
         let mut engine = Engine::initialize(
             &root,
-            Config::development([temp.path().join("primary")]).unwrap(),
+            Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
         )
         .unwrap();
         if let Some(fault) = fault {
@@ -138,7 +140,7 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
         let root = temp.path().join("system");
         let mut engine = Engine::initialize(
             &root,
-            Config::development([temp.path().join("primary")]).unwrap(),
+            Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
         )
         .unwrap();
         let operation = storage_contract::OperationId::generate().unwrap();
@@ -188,11 +190,13 @@ fn recovery_repairs_exact_candidate_and_publication_replicas() {
             for missing in [false, true] {
                 let temp = tempfile::tempdir().unwrap();
                 let root = temp.path().join("system");
-                let config = Config::development([
-                    temp.path().join("a"),
-                    temp.path().join("b"),
-                    temp.path().join("c"),
-                ])
+                let config = Config::development(crate::test_disks(
+                    [
+                        temp.path().join("a"),
+                        temp.path().join("b"),
+                        temp.path().join("c"),
+                    ],
+                ))
                 .unwrap();
                 let mut engine = Engine::initialize(&root, config).unwrap();
                 if interrupted {
@@ -246,11 +250,13 @@ fn pending_candidate_recovers_from_healthy_exact_replica() {
         for missing in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("system");
-            let config = Config::development([
-                temp.path().join("a"),
-                temp.path().join("b"),
-                temp.path().join("c"),
-            ])
+            let config = Config::development(crate::test_disks(
+                [
+                    temp.path().join("a"),
+                    temp.path().join("b"),
+                    temp.path().join("c"),
+                ],
+            ))
             .unwrap();
             let mut engine = Engine::initialize(&root, config).unwrap();
             engine.inject_fault_once(fault);
@@ -300,11 +306,13 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
     for kind in ["candidate", "publication"] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let config = Config::development([
-            temp.path().join("a"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                temp.path().join("a"),
+                temp.path().join("b"),
+                temp.path().join("c"),
+            ],
+        ))
         .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         engine
@@ -364,11 +372,13 @@ fn recovery_rejects_all_digest_mismatched_object_replicas_without_rewriting_them
 fn recovery_rejects_flat_objects_without_repair_or_deletion() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
@@ -413,11 +423,13 @@ fn object_repair_does_not_replace_symlink_or_hardlink() {
     use std::os::unix::fs::symlink;
     for hardlink in [false, true] {
         let temp = tempfile::tempdir().unwrap();
-        let config = Config::development([
-            temp.path().join("a"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                temp.path().join("a"),
+                temp.path().join("b"),
+                temp.path().join("c"),
+            ],
+        ))
         .unwrap();
         let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let members = engine.members();
@@ -444,11 +456,13 @@ fn object_repair_does_not_replace_symlink_or_hardlink() {
 #[test]
 fn bound_snapshot_repair_preserves_alternate_page_partition() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let members = engine.members();
@@ -524,11 +538,13 @@ fn repair_cache_is_bounded_and_overflow_remains_uncached() {
 #[test]
 fn failed_replica_repair_does_not_cache_page_success() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let members = engine.members();
@@ -575,11 +591,13 @@ fn failed_replica_repair_does_not_cache_page_success() {
 fn shared_pages_are_repaired_once_per_recovery_and_rechecked_next_time() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development([
-        temp.path().join("a"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("a"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
@@ -690,7 +708,7 @@ fn single_storage_disk_publishes_reopens_rebuilds_index_and_restores_system() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let disk = temp.path().join("only-storage");
-    let config = Config::development([disk.clone()]).unwrap();
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
@@ -763,7 +781,9 @@ fn configured_metadata_majority_does_not_shrink_when_disks_disappear() {
             .map(|n| temp.path().join(format!("disk-{n}")))
             .collect();
         let mut engine =
-            Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
+            Engine::initialize(&root, Config::development(crate::test_disks(
+                disks.clone(),
+            )).unwrap()).unwrap();
         engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("majority").unwrap(),
@@ -818,7 +838,7 @@ fn publication_proofs_require_exact_nonempty_unique_membership() {
         let disks = (0..count).map(|n| temp.path().join(format!("disk-{n}")));
         let mut engine = Engine::initialize(
             &temp.path().join("system"),
-            Config::development(disks).unwrap(),
+            Config::development(crate::test_disks(disks)).unwrap(),
         )
         .unwrap();
         engine
@@ -868,7 +888,7 @@ fn single_storage_disk_completes_pending_accept_but_never_invents_lost_metadata(
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let operation = storage_contract::OperationId::generate().unwrap();
@@ -908,7 +928,9 @@ fn single_storage_disk_completes_pending_accept_but_never_invents_lost_metadata(
 fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     // Build an internally consistent proof that claims the same pool and first
     // disk, but omits two configured members. Hash consistency is not authority.
@@ -969,7 +991,9 @@ fn self_consistent_one_member_seal_cannot_downgrade_configured_three_members() {
 fn nonmetadata_payload_disk_offline_proofs_require_saved_membership() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..4).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     config.disks[3].metadata_member = false;
     let payload_disk = config.disks[3].clone();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
@@ -1065,7 +1089,9 @@ fn empty_replacement_metadata_roots_fail_closed_without_writes() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
         let repo = engine
             .create_repository(
@@ -1122,7 +1148,9 @@ fn unavailable_root_classification_rejects_unsafe_or_conflicting_roots() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         drop(Engine::initialize(&root, config.clone()).unwrap());
         let disk = &config.disks[2];
         match fault {
@@ -1160,7 +1188,9 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("system");
             let mut config =
-                Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+                Config::development(crate::test_disks(
+                    (0..4).map(|n| temp.path().join(format!("disk-{n}"))),
+                )).unwrap();
             config.disks[3].metadata_member = false;
             let mut engine = Engine::initialize(&root, config.clone()).unwrap();
             let repo = engine
@@ -1279,7 +1309,7 @@ fn missing_payload_only_replica_preserves_history_but_not_new_copy_admission() {
 #[test]
 fn replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint() {
     let temp = tempfile::tempdir().unwrap();
-    let disk = Config::development([temp.path().join("disk")])
+    let disk = Config::development(crate::test_disks([temp.path().join("disk")]))
         .unwrap()
         .disks
         .remove(0);
@@ -1334,7 +1364,9 @@ fn transient_seal_read_failure_requires_reopening_missing_journal_admission() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let config =
-        Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|i| temp.path().join(format!("disk-{i}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
         .create_repository(
@@ -1378,7 +1410,9 @@ fn preservation_mode_keeps_partially_written_publication_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let config =
-        Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|i| temp.path().join(format!("disk-{i}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     engine
         .create_repository(

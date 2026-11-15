@@ -17,7 +17,7 @@ use storage_engine::{Config, Engine, Mode, RetainedWorkspaceLimits, ValidatedCon
 mod activation;
 mod discovery;
 pub use activation::{
-    StorageActivationRequest, StorageActivationState, StorageActivationStatus,
+    NamedStorageSelection, StorageActivationRequest, StorageActivationState, StorageActivationStatus,
     management_initialization_record,
 };
 mod http;
@@ -60,10 +60,17 @@ pub struct SetupStatus {
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct SetupRequest {
-    pub disk_ids: Vec<String>,
+    pub disks: Vec<NamedSetupDisk>,
     pub mode: Mode,
     pub username: String,
     pub password: String,
+}
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct NamedSetupDisk {
+    pub disk_id: String,
+    pub name: name_policy::Name,
 }
 
 #[derive(Deserialize)]
@@ -481,23 +488,25 @@ impl SetupRecovery {
                 "only a verified empty installation can be initialized",
             ));
         }
-        if request.disk_ids.is_empty() || request.disk_ids.len() > 32 {
+        if request.disks.is_empty() || request.disks.len() > 32 {
             return Err(ApiError::invalid(
                 "select between one and 32 authorized storage disks",
             ));
         }
-        let paths = self.selected(&request.disk_ids)?;
+        let disk_ids = request.disks.iter().map(|disk| disk.disk_id.clone()).collect::<Vec<_>>();
+        let paths = self.selected(&disk_ids)?;
         self.require_empty_disks(&paths)?;
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        let config =
-            Config::independent_roots(request.mode, paths).map_err(ApiError::contract_input)?;
+        let named = request.disks.into_iter().map(|disk| disk.name).zip(paths);
+        let config = Config::independent_roots(request.mode, named)
+            .map_err(ApiError::contract_input)?;
         let config = ValidatedConfig::try_from(config).map_err(engine_error)?;
         self.initialize_config(
             permit,
             config,
-            request.disk_ids.to_vec(),
+            disk_ids,
             &request.username,
             &request.password,
             install,

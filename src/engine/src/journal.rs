@@ -1411,6 +1411,7 @@ pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Resul
 mod version_publication;
 pub(crate) use version_publication::{
     verify_local_publication, verify_local_publication_at, verify_local_publication_in_context,
+    verify_local_publication_on_disk,
     verify_local_publication_observed, verify_retained_version_publication_at,
     verify_tombstone_content_at, verify_tombstone_content_in_context,
 };

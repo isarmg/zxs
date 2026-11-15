@@ -70,6 +70,21 @@ fn start_has_no_client_principal_and_sequence_is_exact_decimal_text() {
     });
     let decoded: StartRequest = json_codec::from_value(request.clone()).unwrap();
     assert_eq!(decoded.expected_sequence, u64::MAX);
+    let target = OriginalTarget {
+        name: name_policy::Name::parse("Named archive").unwrap(),
+        root_path: "/fresh/unrelated-mount".into(),
+        disk_id: "disk_11111111111111111111111111111111".into(),
+        slot_id: "B01".into(),
+        upstream_slot_id: "P01".into(),
+    };
+    let mut encoded = json_codec::to_value(&target).unwrap();
+    assert_eq!(json_codec::from_value::<OriginalTarget>(encoded.clone()).unwrap(), target);
+    encoded.as_object_mut().unwrap().remove("name");
+    assert!(json_codec::from_value::<OriginalTarget>(encoded.clone()).is_err());
+    for invalid in ["", "has/slash", "..", "trailing."] {
+        encoded["name"] = json!(invalid);
+        assert!(json_codec::from_value::<OriginalTarget>(encoded.clone()).is_err());
+    }
     request["principal"] = json!("other");
     assert!(json_codec::from_value::<StartRequest>(request.clone()).is_err());
     request.as_object_mut().unwrap().remove("principal");

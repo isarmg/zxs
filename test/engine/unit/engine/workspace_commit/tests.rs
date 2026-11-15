@@ -7,7 +7,9 @@ fn detached_commit_keeps_exact_writer_ownership_after_engine_drop() {
         let root = temp.path().join("state");
         let primary = temp.path().join("primary");
         let mut engine =
-            Engine::initialize(&root, Config::development([primary.clone()]).unwrap()).unwrap();
+            Engine::initialize(&root, Config::development(crate::test_disks(
+                [primary.clone()],
+            )).unwrap()).unwrap();
         let repo = engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("detached fence").unwrap(),
@@ -79,7 +81,7 @@ fn detached_commit_keeps_exact_writer_ownership_after_engine_drop() {
 fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let mut config = Config::development([temp.path().join("primary")]).unwrap();
+    let mut config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let limits = RetainedWorkspaceLimits {
@@ -210,7 +212,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -339,7 +341,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -476,7 +478,7 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -521,7 +523,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -557,7 +559,7 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
     let root = temp.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let mut request = CommitRequest {
@@ -629,7 +631,7 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &root.path().join("system"),
-            Config::development([root.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
         )
         .unwrap();
         let repo = engine

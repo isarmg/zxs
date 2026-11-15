@@ -10,7 +10,7 @@ fn target() -> (tempfile::TempDir, Target, DiskRegistrationIdentity) {
         .tempdir()
         .unwrap();
     let root = DiskRoot::open(temp.path()).unwrap();
-    let config = Config::development([root.path().to_owned()]).unwrap();
+    let config = Config::development(crate::test_disks([root.path().to_owned()])).unwrap();
     let disk = &config.disks[0];
     let identity = DiskRegistrationIdentity {
         pool_id: config.pool_id.clone(),

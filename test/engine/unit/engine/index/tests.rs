@@ -40,11 +40,13 @@ fn version(id: &str, file: &str, sequence: u64) -> FileVersion {
 fn engine(temp: &tempfile::TempDir) -> Engine {
     Engine::initialize(
         &temp.path().join("state"),
-        Config::development([
-            temp.path().join("p"),
-            temp.path().join("b"),
-            temp.path().join("t"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temp.path().join("p"),
+                temp.path().join("b"),
+                temp.path().join("t"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap()
@@ -824,11 +826,13 @@ fn publication_survives_disabled_marker_view_and_reopen_recovers() {
 fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("primary"),
+            temp.path().join("backup"),
+            temp.path().join("tertiary"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine

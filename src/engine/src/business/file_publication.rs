@@ -33,6 +33,26 @@ pub(super) fn advance_branch_node_with_ids(
     operation: OperationId,
     ids: &mut impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
+    advance_branch_with_ids(
+        state, branch, node, materialize, principal, operation, NodeCommit::Metadata, ids,
+    )
+}
+
+pub(super) enum NodeCommit<'a> {
+    Metadata,
+    Content(&'a str),
+}
+
+pub(super) fn advance_branch_with_ids(
+    state: &mut State,
+    branch: &str,
+    node: &str,
+    materialize: bool,
+    principal: &str,
+    operation: OperationId,
+    mode: NodeCommit<'_>,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
     let previous = state.branches.get(branch).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileBranchNotFound,
@@ -75,6 +95,13 @@ pub(super) fn advance_branch_node_with_ids(
     } else {
         previous.pending_file_versions.clone()
     };
+    let (kind, message, provenance, selected_node) = match mode {
+        NodeCommit::Metadata => (
+            "file_metadata", "Advance file metadata node", Some(node.to_owned()),
+            Some(node.to_owned()),
+        ),
+        NodeCommit::Content(message) => ("file_content", message, None, None),
+    };
     let id = ids("commit")?;
     state.commits.insert(
         id.clone(),
@@ -82,21 +109,21 @@ pub(super) fn advance_branch_node_with_ids(
             namespace_deletions: None,
             commit_id: id.clone(),
             history_tree_id: previous.history_tree_id,
-            kind: "file_metadata".into(),
+            kind: kind.into(),
             parent_commit_ids: vec![current.commit_id.clone()],
             tree_id: ids("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),
-            message: "Advance file metadata node".into(),
+            message: message.into(),
             entries,
             pending_file_versions: pending.clone(),
-            provenance: Some(node.into()),
+            provenance,
         },
     );
     let target = state.branches.get_mut(branch).expect("checked file branch");
     target.head_commit_id = id;
-    target.file_node_id = Some(node.into());
+    target.file_node_id = selected_node;
     target.pending_file_versions = pending;
     target.generation = target.generation.checked_add(1).ok_or_else(|| {
         Error::new(

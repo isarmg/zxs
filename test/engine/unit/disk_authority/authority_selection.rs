@@ -63,7 +63,7 @@ fn legacy_never_claims_independent_data_or_system_at_any_initialization_boundary
         assert!(
             crate::Engine::initialize(
                 &temp.path().join("legacy-system"),
-                crate::Config::development([disk.clone()]).unwrap(),
+                crate::Config::development(crate::test_disks([disk.clone()])).unwrap(),
             )
             .is_err()
         );
@@ -72,7 +72,7 @@ fn legacy_never_claims_independent_data_or_system_at_any_initialization_boundary
         assert!(
             crate::Engine::initialize(
                 &disk,
-                crate::Config::development([new_data.clone()]).unwrap(),
+                crate::Config::development(crate::test_disks([new_data.clone()])).unwrap(),
             )
             .is_err()
         );
@@ -95,7 +95,7 @@ fn all_legacy_data_roots_are_admitted_before_any_writer_sidecar() {
     assert!(
         crate::Engine::initialize(
             &temp.path().join("system"),
-            crate::Config::development([first.clone(), second.clone()]).unwrap(),
+            crate::Config::development(crate::test_disks([first.clone(), second.clone()])).unwrap(),
         )
         .is_err()
     );
@@ -123,7 +123,9 @@ fn legacy_system_never_ignores_retained_independent_authority_markers() {
         let before = files(&system);
         let data = temp.path().join("data");
         assert!(
-            crate::Engine::initialize(&system, crate::Config::development([data.clone()]).unwrap())
+            crate::Engine::initialize(&system, crate::Config::development(crate::test_disks(
+                [data.clone()],
+            )).unwrap())
                 .is_err()
         );
         assert!(crate::TerminalManagement::open(&system).is_err());
@@ -138,7 +140,9 @@ fn independent_initializer_preserves_existing_legacy_system_and_data() {
     let system = temp.path().join("system");
     let data = temp.path().join("data");
     let engine =
-        crate::Engine::initialize(&system, crate::Config::development([data.clone()]).unwrap())
+        crate::Engine::initialize(&system, crate::Config::development(crate::test_disks(
+            [data.clone()],
+        )).unwrap())
             .unwrap();
     for root in [&system, &data] {
         let before = files(root);
@@ -164,7 +168,7 @@ fn both_authorities_obey_the_same_directory_lock_without_creating_sidecars() {
     assert!(
         crate::Engine::initialize(
             &temp.path().join("system"),
-            crate::Config::development([data.clone()]).unwrap()
+            crate::Config::development(crate::test_disks([data.clone()])).unwrap()
         )
         .is_err()
     );
@@ -193,7 +197,9 @@ fn concurrent_initializers_select_one_authority_for_data_or_system_roles() {
                         (shared.clone(), temp.path().join("data"))
                     };
                     barrier.wait();
-                    crate::Engine::initialize(&system, crate::Config::development([data]).unwrap())
+                    crate::Engine::initialize(&system, crate::Config::development(crate::test_disks(
+                        [data],
+                    )).unwrap())
                 });
                 barrier.wait();
                 let independent = independent.join().unwrap();

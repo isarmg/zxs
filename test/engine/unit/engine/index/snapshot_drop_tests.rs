@@ -5,11 +5,13 @@ fn poisoned_scope_snapshot_closes_connection_during_unwind() {
     let temp = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([
-            temp.path().join("p"),
-            temp.path().join("b"),
-            temp.path().join("t"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temp.path().join("p"),
+                temp.path().join("b"),
+                temp.path().join("t"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();

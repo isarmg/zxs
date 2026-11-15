@@ -279,8 +279,13 @@ fn multi_primary_retained_copy_stays_outside_preparation_without_losing_audit() 
         .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .tempdir()
         .unwrap();
-    let mut config =
-        Config::development((0..4).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    let mut config = Config::development((0..4).map(|n| {
+        (
+            name_policy::Name::parse(&format!("disk-{n}")).unwrap(),
+            temp.path().join(format!("disk-{n}")),
+        )
+    }))
+    .unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;

@@ -28,7 +28,9 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &temp.path().join("system"),
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development([(
+                name_policy::Name::parse("Primary").unwrap(), temp.path().join("disk"),
+            )]).unwrap(),
         )
         .unwrap();
         let repo = engine.create_disk_root("P01", "admin", op()).unwrap();

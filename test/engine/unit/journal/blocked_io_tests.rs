@@ -82,7 +82,9 @@ impl Drop for SyscallGate {
 fn fixture() -> (tempfile::TempDir, ValidatedConfig, DiskHandle) {
     let temp = tempfile::tempdir().unwrap();
     let config = ValidatedConfig::try_from(
-        Config::development([temp.path().join("zxs-journal-syscall-tail")]).unwrap(),
+        Config::development(crate::test_disks(
+            [temp.path().join("zxs-journal-syscall-tail")],
+        )).unwrap(),
     )
     .unwrap();
     private_dir(log_path(&config.disks[0]).parent().unwrap()).unwrap();

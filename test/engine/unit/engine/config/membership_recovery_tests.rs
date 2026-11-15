@@ -4,7 +4,9 @@ use std::{collections::BTreeMap, fs};
 fn fixture(count: usize) -> (tempfile::TempDir, Config, Engine) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..count).map(|n| temporary.path().join(format!("disk-{n}"))))
+        Config::development(crate::test_disks(
+            (0..count).map(|n| temporary.path().join(format!("disk-{n}"))),
+        ))
             .unwrap();
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
     engine

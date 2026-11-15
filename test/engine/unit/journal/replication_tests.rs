@@ -18,11 +18,13 @@ impl<T: Serialize> Serialize for CountedValue<T> {
 #[test]
 fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("primary"),
+            temp.path().join("backup"),
+            temp.path().join("tertiary"),
+        ],
+    ))
     .unwrap();
     let value = CountedValue {
         value: json_codec::json!({"z": "18446744073709551615", "名字": [true, null, "data"], "a": 1}),
@@ -38,11 +40,13 @@ fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization()
         );
     }
     let original_serializations = value.serializations.replace(0);
-    let config = Config::development([
-        temp.path().join("new-primary"),
-        temp.path().join("new-backup"),
-        temp.path().join("new-tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("new-primary"),
+            temp.path().join("new-backup"),
+            temp.path().join("new-tertiary"),
+        ],
+    ))
     .unwrap();
     let hash =
         store_object_replicas_bounded(&config.disks, "state-page", &value, MAX_METADATA).unwrap();
@@ -77,11 +81,13 @@ fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization()
 #[test]
 fn prepared_metadata_serializes_only_at_preflight_and_reuses_exact_bytes() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let value = CountedValue {
         value: json_codec::json!({"retained": ["history", "events", "idempotency"]}),
@@ -115,11 +121,13 @@ fn prepared_metadata_serializes_only_at_preflight_and_reuses_exact_bytes() {
 #[test]
 fn prepared_publication_objects_encode_once_across_individual_held_member_stores() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     for kind in ["candidate", "finalize", "publication"] {
@@ -166,11 +174,13 @@ fn prepared_publication_objects_encode_once_across_individual_held_member_stores
 #[test]
 fn prepared_generation_object_uses_held_root_and_preserves_immutable_collision() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let value = CountedValue {
@@ -202,11 +212,13 @@ fn prepared_generation_object_uses_held_root_and_preserves_immutable_collision()
 #[test]
 fn replicated_metadata_rejects_oversize_before_creating_any_object() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("primary"),
+            temp.path().join("backup"),
+            temp.path().join("tertiary"),
+        ],
+    ))
     .unwrap();
     let value = json_codec::json!({"content": "bounded"});
     let bytes = canonical_json(&value).unwrap();
@@ -220,7 +232,9 @@ fn replicated_metadata_rejects_oversize_before_creating_any_object() {
 fn prepared_finalize_preserves_all_accepts_with_one_encoding() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let operation = storage_contract::OperationId::generate().unwrap();
     engine

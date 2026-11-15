@@ -19,7 +19,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("state"),
-        Config::development([temporary.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repository = create_repository(&mut engine, "retained");

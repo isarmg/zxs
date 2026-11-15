@@ -23,6 +23,7 @@ mod directory_selection;
 mod disk_monitor;
 mod error_registry;
 mod file_deletion;
+mod file_draft;
 mod file_history_move;
 mod file_manager;
 mod foreign_identity;
@@ -35,6 +36,7 @@ mod operations;
 mod ordinary_conversion;
 mod read_projection;
 mod storage_addition;
+mod snapshot_worktree;
 pub(crate) mod storage_lifecycle;
 pub(crate) mod storage_readmission;
 mod wire;
@@ -638,6 +640,55 @@ impl Backend for EngineBackend {
         let (engine, _) = self.lock_current(identity)?;
         repository(&engine, id)?;
         Ok(())
+    }
+    fn file_working(
+        &self, identity: &Identity, target: storage_contract::file_draft::DraftLocation,
+    ) -> Result<crate::FileWorkingSnapshot, ApiError> {
+        file_draft::status(self, identity, target)
+    }
+    fn authorize_file_draft_write(
+        &self, identity: &Identity, target: &storage_contract::file_draft::DraftLocation,
+        logical_size: u64,
+    ) -> Result<(), ApiError> {
+        file_draft::authorize_write(self, identity, target, logical_size)
+    }
+    fn change_file_working(
+        &self, identity: &Identity, request: crate::ChangeFileWorking,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        file_draft::change(self, identity, request)
+    }
+    fn write_file_draft(
+        &self, identity: &Identity, request: crate::ChangeFileWorking, source: &crate::UploadSource,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        file_draft::write(self, identity, request, source)
+    }
+    fn file_draft_content(
+        &self, identity: &Identity, request: crate::ReadFileDraft,
+    ) -> Result<Content, ApiError> {
+        file_draft::content(self, identity, request)
+    }
+    fn snapshot_root_context(
+        &self, identity: &Identity, repository: storage_contract::RepositoryId,
+    ) -> Result<storage_contract::snapshot_worktree::SnapshotRootContext, ApiError> {
+        snapshot_worktree::context(self, identity, repository)
+    }
+    fn initialize_directory_snapshot(
+        &self, identity: &Identity,
+        request: storage_contract::snapshot_worktree::InitializeSnapshot,
+    ) -> Result<storage_contract::snapshot_worktree::SnapshotHandle, ApiError> {
+        snapshot_worktree::initialize(self, identity, request)
+    }
+    fn create_directory_worktree(
+        &self, identity: &Identity,
+        request: storage_contract::snapshot_worktree::CreateWorktree,
+    ) -> Result<storage_contract::snapshot_worktree::WorktreeHandle, ApiError> {
+        snapshot_worktree::create(self, identity, request)
+    }
+    fn directory_worktree_status(
+        &self, identity: &Identity,
+        target: storage_contract::snapshot_worktree::WorktreeHandle,
+    ) -> Result<storage_contract::snapshot_worktree::WorktreeStatus, ApiError> {
+        snapshot_worktree::status(self, identity, target)
     }
     fn capabilities(&self) -> Result<crate::Capabilities, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
@@ -1948,6 +1999,7 @@ impl Backend for EngineBackend {
                 let storage_contract::DiskConfig {
                     slot_id,
                     disk_id,
+                    name: _,
                     root: _,
                     level,
                     upstream_slot_id,

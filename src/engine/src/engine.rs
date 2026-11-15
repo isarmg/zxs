@@ -44,6 +44,10 @@ pub use membership_transition::{
     BackupRegistryDecisionHash,
 };
 mod config;
+pub(crate) mod file_draft;
+pub(crate) mod fresh_layout;
+pub use fresh_layout::FreshLayoutError;
+pub(crate) use fresh_layout::namespace::RegisteredNamespaceRoot;
 pub use config::ValidatedConfig;
 mod disk_registry;
 pub(crate) use disk_registry::current::{
@@ -558,7 +562,7 @@ impl Engine {
             roots.push(path);
         }
         let config = config.with_disk_roots(roots)?;
-        let disk_resources = Arc::new(DiskResources::open(&config, false)?);
+        let disk_resources = InitializationDisks::open(&config)?;
         Self::initialize_resources(root, config, disk_resources, selection)
     }
 
@@ -593,16 +597,17 @@ impl Engine {
                 "storage and system directories must not overlap",
             ));
         }
-        let disk_resources = Arc::new(DiskResources::initialize_held(&config, directories)?);
+        let disk_resources = InitializationDisks::held(&config, directories)?;
         Self::initialize_resources(root, config, disk_resources, selection)
     }
 
     fn initialize_resources(
         root: PathBuf,
         config: ValidatedConfig,
-        disk_resources: Arc<DiskResources>,
+        initialization: InitializationDisks,
         selection: crate::authority_selection::SelectionGuard,
     ) -> Result<Self> {
+        let disk_resources = initialization.resources();
         // Hold the same directory-before-writer lock order as online preparation
         // through all initialization writes and index construction. A losing
         // preparation must not install a reservation into this initializer's root.
@@ -611,7 +616,7 @@ impl Engine {
                 &disk_resources,
             )?;
         // The same directory lock arbitrates independent-format creation.
-        // Admit every root before creating even a legacy writer sidecar, so a
+        // Admit every root before creating even a writer sidecar, so a
         // different SYSTEM cannot claim an existing independent disk or SYSTEM.
         for disk in disk_resources.handles() {
             if disk
@@ -627,18 +632,32 @@ impl Engine {
                 ));
             }
         }
-        let locks = config::acquire_locks_selected(&root, &disk_resources, selection)?;
+        let unbound_locks = config::acquire_initialization_locks(&root, disk_resources, selection)?;
         // Recheck after locking: an earlier empty-root observation can be stale.
         for disk in disk_resources.handles() {
             membership_transition::pending::reservation::reject_reserved_initialization(
                 &disk.root,
             )?;
         }
+        let created = fresh_layout::CreatedRoots::create(&config, disk_resources)?;
+        let config = config.with_created_layout(&created)?;
+        let disk_resources = Arc::new(initialization.bind(&config)?);
+        let locks = unbound_locks.bind(&disk_resources)?;
         for d in &config.disks {
             let disk = disk_resources.get(d)?;
             disk.root
                 .write_json(&d.root.join(layout::DISK_IDENTITY.as_path()), &disk.seal, false)?;
-            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
+            disk.root.write_atomic(
+                &d.root.join("README.txt"),
+                concat!(
+                    "ZXS fresh unified layout candidate v1. ",
+                    "Ordinary full files are stored below common-data/. ",
+                    "Use zxs-helper offline-check/offline-export before recovery. ",
+                    "Filesystem choice and physical failure-domain independence ",
+                    "are the operator responsibility.\n",
+                ).as_bytes(),
+                false,
+            )?;
             disk.root.private_dir(&layout::histories(&d.root))?;
             for p in [
                 "metadata/application-log",
@@ -652,11 +671,8 @@ impl Engine {
         }
         // Every payload disk retains the fixed membership anchor for offline proofs.
         for d in &config.disks {
-            disk_resources.get(d)?.root.write_json(
-                &d.root.join("metadata/pool-membership/config.json"),
-                &config,
-                false,
-            )?;
+            let address = d.root.join(layout::GENESIS_CONFIGURATION.as_path());
+            disk_resources.get(d)?.root_for(&address)?.write_json(&address, &config, false)?;
         }
         disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
         write_json(&root.join("config.json"), &config, false)?;

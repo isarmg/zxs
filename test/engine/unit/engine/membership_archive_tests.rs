@@ -4,7 +4,9 @@ use std::fs;
 fn fixture() -> (tempfile::TempDir, Config, Engine) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     for name in ["first", "second"] {
         engine
@@ -188,7 +190,9 @@ fn membership_archive_inspection_rejects_changed_journal_and_partial_fence() {
     drop(temp);
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let mut target = config;
     target.disks[2].metadata_member = false;

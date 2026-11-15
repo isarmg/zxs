@@ -2,7 +2,7 @@ use super::*;
 
 fn setup() -> (tempfile::TempDir, DiskConfig, DiskRoot, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
-    let disk = Config::development([temp.path().join("disk")])
+    let disk = Config::development(crate::test_disks([temp.path().join("disk")]))
         .unwrap()
         .disks
         .remove(0);

@@ -10,7 +10,7 @@ pub(in crate::engine::membership_transition) fn sync_retained_genesis_anchor(
     disk: &DiskConfig,
     original: &ValidatedConfig,
 ) -> Result<()> {
-    let anchor = disk.root.join("metadata/pool-membership/config.json");
+    let anchor = disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path());
     let bytes = root.read_bytes(&anchor, MAX_METADATA)?;
     let saved: ValidatedConfig = decode_strict(&bytes)?;
     if !saved.permits_genesis_recovery_projection(original) {
@@ -689,7 +689,7 @@ impl Engine {
                 // Only an actual addition in the authenticated transition may
                 // create this anchor. Absence on a retained root never does.
                 handle.root.write_json(
-                    &disk.root.join("metadata/pool-membership/config.json"),
+                    &disk.root.join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
                     &generation.original,
                     false,
                 )?;

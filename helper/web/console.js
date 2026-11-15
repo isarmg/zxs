@@ -750,9 +750,12 @@ for (const id of ["first-storage-user","first-storage-roots","first-storage-dige
 byId("first-storage-form").addEventListener("submit", async event => {
   event.preventDefault(); if (busy || stopping) return;
   const service_user = byId("first-storage-user").value;
-  const roots = byId("first-storage-roots").value.split(/\r?\n/).filter(line => line.length > 0);
   resetFirstStoragePlan(); error(""); setBusy(true);
-  try { showFirstStoragePlan(service_user, await (await post("/api/initialization/storage-preview", {service_user,roots})).json()); }
+  try {
+    const disks = JSON.parse(byId("first-storage-roots").value);
+    showFirstStoragePlan(service_user,
+      await (await post("/api/initialization/storage-preview", {service_user,disks})).json());
+  }
   catch (failure) { error(failure.message); } finally { setBusy(false); }
 });
 byId("first-storage-recover").addEventListener("click", async () => {
@@ -770,8 +773,8 @@ byId("first-storage-save").addEventListener("click", () => {
 });
 byId("first-storage-commit-form").addEventListener("submit", async event => {
   event.preventDefault(); if (busy || stopping || !firstStoragePreview) return;
-  const roots = firstStoragePreview.plan.selections.map(selection => selection.root_path);
-  if (!window.confirm(`确认把以下全部现有空目录初始化为新的生产池独立一级盘？\n${roots.join("\n")}\n不格式化、不启动服务；失败后保留证据并只续作原请求。`)) return;
+  const disks = firstStoragePreview.plan.selections.map(item => item.name + "：" + item.selection.root_path);
+  if (!window.confirm(`确认按所示盘名把以下全部现有空目录初始化为新的生产池独立一级盘？\n${disks.join("\n")}\n不格式化、不启动服务；失败后保留证据并只续作原请求。`)) return;
   const body = {...firstStoragePreview,confirmation:"initialize-first-storage-batch",external_writers_stopped:byId("first-storage-writers").checked};
   error(""); setBusy(true);
   try {
@@ -975,7 +978,7 @@ function showForeignChain(service_user, preview) {
   byId("foreign-chain-prepare-form").hidden = preview.batch_material_prepared;
   byId("foreign-chain-databases-preview").hidden = !preview.batch_material_prepared;
 }
-for (const id of ["foreign-chain-user","foreign-chain-source","foreign-chain-slot","foreign-chain-upstream","foreign-chain-metadata","foreign-chain-lower","foreign-chain-writers","foreign-chain-operation","foreign-chain-digest"]) byId(id).addEventListener("input",resetForeignChain);
+for (const id of ["foreign-chain-user","foreign-chain-source","foreign-chain-name","foreign-chain-slot","foreign-chain-upstream","foreign-chain-metadata","foreign-chain-lower","foreign-chain-writers","foreign-chain-operation","foreign-chain-digest"]) byId(id).addEventListener("input",resetForeignChain);
 byId("foreign-chain-form").addEventListener("submit", async event => {
   event.preventDefault(); if (busy || stopping) return;
   if (byId("foreign-chain-digest").value && !confirm("已有原操作选择器。若曾开始准备，应核对原批次，不要新建。确定这里只预览另一个未开始的批次？")) return;
@@ -985,7 +988,7 @@ byId("foreign-chain-form").addEventListener("submit", async event => {
   catch { error("低级链必须是按层级列出全部真实目录的 JSON 数组。"); return; }
   const service_user = byId("foreign-chain-user").value;
   const operation_id = "op_" + Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
-  const input = {service_user,operation_id,source_root:byId("foreign-chain-source").value,source_slot_id:byId("foreign-chain-slot").value,source_upstream_slot_id:byId("foreign-chain-upstream").value,source_metadata_member:byId("foreign-chain-metadata").checked,lower,external_writers_stopped:byId("foreign-chain-writers").checked};
+  const input = {service_user,operation_id,source_root:byId("foreign-chain-source").value,source_name:byId("foreign-chain-name").value,source_slot_id:byId("foreign-chain-slot").value,source_upstream_slot_id:byId("foreign-chain-upstream").value,source_metadata_member:byId("foreign-chain-metadata").checked,lower,external_writers_stopped:byId("foreign-chain-writers").checked};
   setBusy(true);
   try { showForeignChain(service_user, await (await post("/api/disks/foreign-chain-preview",input)).json()); }
   catch (e) { error(e.message); } finally { setBusy(false); }

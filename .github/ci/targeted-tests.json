@@ -1,5 +1,141 @@
 {
   "groups": {
+    "fresh-managed-core": {
+      "reason": "Fresh managed-pool format: real held initialization, ordinary file branches and saves, verifiable two- and three-tier BODY/retained backfill, worktree and Draft publish/reopen, authenticated HTTP controls, and explicit first-init inputs. Keep original overlapping scopes. No claims of live SMB, full distribution, or old-pool migration.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": []
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": true,
+          "features": [
+            "core"
+          ]
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "features": []
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "mode": "check",
+          "kind": "bin",
+          "name": "zxs-helper",
+          "features": [],
+          "default_features": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "workspace_commit_replay",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "fresh_pool::empty_held_pool_stages_reopens_commits_and_selects_real_file_history",
+            "fresh_pool::fresh_container_preparation_survives_exact_decision_cuts_without_adopting_names",
+            "fresh_pool::fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparation",
+            "automatic_backfill::automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold_open"
+          ],
+          "max_tests": 4,
+          "default_features": true
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "snapshot_worktree::tests::actual_empty_roots_publish_reopen_and_never_adopt_an_uncompleted_node",
+            "engine::publication::cache_budget_tests::cache_encoder_rejects_before_accept_and_reopens_cleanly",
+            "engine::publication::cache_budget_tests::payload_cache_rejection_preserves_names_and_retries_installed_payloads"
+          ],
+          "max_tests": 3,
+          "default_features": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "phase1_save_tags",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "fresh_working::fresh_authenticated_draft_and_worktree_survive_cold_exact_retries"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "default_features": false,
+          "exact": [
+            "http_file_tags::tests::replacement_body_retains_typed_context_generation_and_exact_labels",
+            "http_file_tags::tests::replacement_body_rejects_node_targets_and_invalid_tag_sets"
+          ],
+          "max_tests": 2,
+          "features": []
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "bin",
+          "name": "zxs",
+          "default_features": true,
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "offline::initialization::storage::tests::first_storage_names_are_exact_distinct_direct_children",
+            "offline::initialization::storage::tests::first_storage_confirmation_and_exact_digest_precede_system_access",
+            "offline::initialization::storage::tests::first_storage_dto_cannot_override_uid_mode_or_start_services",
+            "offline::initialization::storage::directories::entries::tests::empty_root_batch_preserves_existing_directory_and_retries_original_inodes",
+            "offline::initialization::storage::directories::entries::tests::interrupted_root_publication_resumes_the_bound_pending_inode",
+            "offline::initialization::storage::directories::entries::tests::published_root_replacement_and_nonempty_original_are_preserved",
+            "offline::initialization::storage::directories::entries::tests::first_root_capture_refuses_symlinks_and_unselected_material"
+          ],
+          "max_tests": 7
+        },
+        {
+          "package": "storage-helper",
+          "manifest": "helper/Cargo.toml",
+          "kind": "test",
+          "name": "helper_startup",
+          "exact": [
+            "configuration_commands_edit_only_an_uninitialized_draft",
+            "template_cli_accepts_one_disk_and_rejects_no_disks"
+          ],
+          "max_tests": 2,
+          "default_features": true,
+          "features": []
+        }
+      ]
+    },
     "publication-physical-phase": {
       "reason": "Verify unchanged publication bytes and exact budget refusal before physical preparation in the ordinary pipeline. Existing held-layout and payload-proof selections remain separate.",
       "python_tests": [],
@@ -4255,6 +4391,1488 @@
     }
   },
   "rules": [
+    {
+      "path": ".github/scripts/check-debian13-single-binary.py",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "Cargo.lock",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "helper/Cargo.toml",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "helper/src/configuration.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "helper/web/console.js",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "helper/web/first_install.js",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "helper/web/index.html",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_container.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/snapshot_worktree.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/storage_addition.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/storage_conversion.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/contract/src/storage_directories.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/allocations.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/content.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/publication.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_draft/selection.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_publication.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/namespace_host.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/namespace_host/preparation.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/namespace_host/preparation/snapshot.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/ordinary_preparation/prefix.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/disk_names/configuration.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/backup_preparation/native_control/databases/scoped/cutover/topology.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/config/io_authority.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/containers/prefixes.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/draft_source.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/fresh_layout/namespace/backup.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/integrity_scrub/metadata.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/local.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/publication.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/reads.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/source.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/journal/snapshot_reuse.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/automatic_backup.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/container.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/layout/namespace.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/namespace_root.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/snapshot_worktree.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/automatic.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/protection/backup_paths/initial.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/publication_evidence.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/commit/version.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/edit.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/initialize.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/instance.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/prepare.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/public.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/publication.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/commits.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/registry/edits.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/reopen.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/engine/src/snapshot_worktree/source.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/backend_storage_metadata.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/engine_backend/snapshot_worktree.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/http_file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/http_snapshot_worktree.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/management/storage_addition.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_addition.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/disk_addition/worker.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/foreign_chain/identity.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/foreign_chain/worker.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/initialization/storage.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/initialization/storage/directories.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/offline/initialization/storage/worker.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/setup_recovery/activation.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/server/src/transfer.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/backup_transaction/view.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/addition.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/conversion.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/conversion/view.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "src/web/src/admin/storage/wizard.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/ci/test_release_helper_preparation.py",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/contract/unit/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/contract/unit/file_draft.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/contract/unit/model/config_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_preparation_progress_io.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_preparation_snapshot.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/backup_preparation_target_admission.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_chain_follow.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_empty_directories.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_empty_follow.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_commit_replay.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_commit_replay/automatic_backfill.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_commit_replay/fresh_pool.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/support/configured_disks.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_native_metadata_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_preparation_status_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/backup_target_locator_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/directory_corruption_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/directory_preview_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/directory_staging_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file/writable_namespace.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file_draft_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/file_history_merge_limits.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/history/replay_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/history_move_native_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/history_move_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/repository/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_published_selection_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_selection_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/cold_workspace_records.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/backup_layout_goals_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/io_tail_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/projection_path_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/degraded_recovery/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/admission_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/directory_entries_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/discovery_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/export_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/fencing_resources_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/io_admission_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk/upload_resources_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_authority/authority_selection.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_names/backup_source_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/disk_names/configuration_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/activation_plan_store_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/bootstrap_locator_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/bootstrap_root_extension_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/config/io_authority_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/config/membership_recovery_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/config/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_file_branch_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_merge_link_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_plan_cancellation_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_smb_binding_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_catalog_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_exit_publication_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/disk_registry_publication_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/exit_stop_probe_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/exit_stop_publication_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_copy_admission.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_move_choice_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_window_indexed_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/history_window_retention_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/index/snapshot_drop_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/integrity_scrub/metadata_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/integrity_scrub/schedule_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/integrity_scrub_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_abort_recovery_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_abort_runtime_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_abort_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_archive_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_control_probe_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_data_addition_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_decision_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_exit_joint_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_joint_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_missing_exit_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_reservation_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_retained_exit_adversarial_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_root_extension_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/membership_transition_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/namespace_snapshot_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/operations/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/payload_measurement.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/cache_budget_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/history_baseline_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/omission_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/readmission_core_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/reads/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/diagnostics_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/snapshot_proof_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/lifecycle_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/membership_io_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/recovery_checkpoint/scope_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/restricted_generation_discovery_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_head_rotation_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_management_adversarial_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_management_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_readmission_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_resume_mixed_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_resume_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_retirement_decision_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/terminal_stop_publication_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_budget_helpers.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_commit/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_inventory_fencing_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/workspace_storage_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/entropy_failure_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/file_deletion_batch_undo_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/intent_location_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/intent_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/foreign_import/migration_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/directory_git_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/prepared_dedup_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/blocked_io_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/event_append_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/object_storage/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/pending_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/proof_decoding_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/replication_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/resource_ownership_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/scanner_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/snapshot_reuse_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/writer_lifecycle_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/journal/writer_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/maintenance/cleanup_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/maintenance_corruption_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/metadata_budget/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/node_retirement_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/protection/backup_paths/retained_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/protection/backup_paths/route_changes_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/protection/placement_configuration.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/publication_evidence_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/repair/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/engine/unit/snapshot_worktree_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/first_install_roots.mjs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/startup.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/unit/configuration/registration_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/unit/configuration/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/unit/private_io/publication-io.sh",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/helper/unit/scrub/tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/integration/phase1_save_tags/fresh_working.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/disk_addition_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/foreign_chain_identity_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/initialization/storage_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/protocol_request_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/server/unit/offline/terminal_removal_inspection.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/backup_transaction.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/storage_addition_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
+    {
+      "path": "test/web/unit/admin/storage_conversion_tests.rs",
+      "groups": [
+        "fresh-managed-core"
+      ]
+    },
     {
       "path": "src/engine/src/journal/candidate.rs",
       "groups": [

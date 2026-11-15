@@ -35,7 +35,7 @@ fn save_version(engine: &mut Engine, branch: &str, body: &[u8]) -> Entry {
 #[test]
 fn version_metadata_borrows_exact_record_and_preserves_sparse_disposition() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -77,7 +77,7 @@ fn version_metadata_borrows_exact_record_and_preserves_sparse_disposition() {
 fn version_metadata_keeps_both_publications_after_cold_open() {
     let temp = tempfile::tempdir().unwrap();
     let system = temp.path().join("system");
-    let config = Config::development([temp.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     let repo = engine
         .create_repository(
@@ -106,7 +106,7 @@ fn version_metadata_keeps_both_publications_after_cold_open() {
 fn published_counters_follow_repository_creation_replay_and_reopen() {
     let temp = tempfile::tempdir().unwrap();
     let system = temp.path().join("system");
-    let config = Config::development([temp.path().join("primary")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("primary")])).unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     assert_eq!(counters(&engine.read()), (0, 1));
 
@@ -135,7 +135,7 @@ fn terminal_counters_follow_the_terminal_publication_and_cold_reopen() {
     let temp = tempfile::tempdir().unwrap();
     let system = temp.path().join("system");
     let disk = temp.path().join("primary");
-    let config = Config::development([disk.clone()]).unwrap();
+    let config = Config::development(crate::test_disks([disk.clone()])).unwrap();
     let disk_id = config.disks[0].disk_id.clone();
     let mut engine = Engine::initialize(&system, config).unwrap();
     engine

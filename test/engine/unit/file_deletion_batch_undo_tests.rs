@@ -27,7 +27,9 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
         let config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
         let workspace = engine

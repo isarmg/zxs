@@ -340,6 +340,14 @@ fn finish_load(model: &mut Model, snapshot: Result<Snapshot, api::Error>) -> boo
     }
 }
 
+pub(super) fn disk_name(input: &str) -> Result<name_policy::Name, api::Error> {
+    name_policy::Name::parse(input).map_err(|source| {
+        let mut error = api::error(storage_contract::ErrorCode::ConfigInvalid, source.to_string());
+        error.source = Some(Arc::new(api::ErrorSource::DiskNameInput(source)));
+        error
+    })
+}
+
 fn activate(state: RwSignal<State>, completing: bool) {
     let captured = state
         .try_update(|s| {
@@ -354,7 +362,17 @@ fn activate(state: RwSignal<State>, completing: bool) {
             let body = if completing {
                 json!({})
             } else {
-                json!({"selections":model.selections,"mode":if model.development {"development"} else {"production"}})
+                let selections = match addition::named_selections(model) {
+                    Ok(selections) => selections,
+                    Err(error) => {
+                        s.admin_console.storage.activation_error = Some(error);
+                        return None;
+                    }
+                };
+                json!({
+                    "selections": selections,
+                    "mode": if model.development { "development" } else { "production" },
+                })
             };
             let (epoch, generation) = begin(s, true)?;
             s.admin_console.storage.confirmed = false;

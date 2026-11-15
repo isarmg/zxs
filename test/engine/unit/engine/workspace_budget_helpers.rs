@@ -63,7 +63,7 @@ fn lifecycle_reservation_cannot_mask_the_durable_manifest_boundary() {
         checked_metadata_charge(limit + 1, 1).unwrap_err().code(),
         storage_contract::ErrorCode::ResourceLimit
     );
-    let config = Config::development(["/draft/only".into()]).unwrap();
+    let config = Config::development(crate::test_disks(["/draft/only".into()])).unwrap();
     assert!(config.max_retained_workspace_metadata_bytes_per_principal >= limit as u64);
     assert!(
         config.max_retained_workspace_metadata_bytes
@@ -96,7 +96,7 @@ fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine

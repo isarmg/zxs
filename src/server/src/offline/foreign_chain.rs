@@ -18,6 +18,7 @@ const CAPSULE: &str = "foreign-chain-material";
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct LowerDirectory {
+    name: name_policy::Name,
     root_path: String,
     slot_id: String,
     level: u32,
@@ -30,6 +31,7 @@ pub(crate) struct Input {
     service_user: String,
     operation_id: OperationId,
     source_root: String,
+    source_name: name_policy::Name,
     source_slot_id: String,
     source_upstream_slot_id: String,
     source_metadata_member: bool,
@@ -97,6 +99,7 @@ struct Binding {
     registered_roots: Vec<String>,
     operation_id: OperationId,
     source: Source,
+    source_name: name_policy::Name,
     source_slot_id: String,
     source_upstream_slot_id: String,
     source_metadata_member: bool,
@@ -233,6 +236,7 @@ enum Action {
     Preview {
         operation_id: OperationId,
         source_root: String,
+        source_name: name_policy::Name,
         source_slot_id: String,
         source_upstream_slot_id: String,
         source_metadata_member: bool,
@@ -370,6 +374,7 @@ pub(crate) fn preview(input: Input) -> Result<json_codec::Value> {
         action: Action::Preview {
             operation_id: input.operation_id,
             source_root: input.source_root,
+            source_name: input.source_name,
             source_slot_id: input.source_slot_id,
             source_upstream_slot_id: input.source_upstream_slot_id,
             source_metadata_member: input.source_metadata_member,

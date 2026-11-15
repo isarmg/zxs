@@ -602,6 +602,7 @@ impl ManagementBackend {
                 operation_id: OperationId::generate().map_err(ApiError::contract_input)?,
                 additions: vec![DirectoryAddition {
                     selection: request.target,
+                    name: request.name,
                     slot_id: request.slot_id,
                     level: 1,
                     upstream_slot_id: None,

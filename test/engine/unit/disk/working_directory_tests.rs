@@ -36,7 +36,7 @@ impl Fixture {
         fs::create_dir_all(root).unwrap();
         fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
         let config = ValidatedConfig::try_from(
-            Config::development([root.to_path_buf()]).unwrap(),
+            Config::development(crate::test_disks([root.to_path_buf()])).unwrap(),
         ).unwrap();
         let disk = DiskHandle::open(&config, &config.disks[0], false).unwrap();
         let roots = ThreeRootBinding {

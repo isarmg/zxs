@@ -40,6 +40,9 @@ pub(crate) enum ApiErrorSource {
     DirectorySnapshotSource(#[from] storage_engine::DirectorySnapshotSourceError),
     #[cfg(feature = "core")]
     #[error("{0}")]
+    SnapshotWorktree(#[from] storage_engine::SnapshotWorktreeError),
+    #[cfg(feature = "core")]
+    #[error("{0}")]
     IndependentSource(#[from] storage_engine::disk_authority::Error),
     #[cfg(feature = "core")]
     #[error("{0}")]

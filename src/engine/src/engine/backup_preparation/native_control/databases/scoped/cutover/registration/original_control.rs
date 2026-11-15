@@ -167,7 +167,7 @@ impl Plan {
         let physical = PhysicalBinding::of(root)?;
         let seal = root.read_entry_bytes(&layout::DISK_IDENTITY, MAX_METADATA)?;
         let anchor = root.read_bytes(
-            &root.path().join("metadata/pool-membership/config.json"),
+            &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             MAX_METADATA,
         )?;
         self.candidate

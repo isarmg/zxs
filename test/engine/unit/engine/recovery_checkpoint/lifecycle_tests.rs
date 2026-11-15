@@ -65,11 +65,13 @@ impl LifecycleFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let mut config = Config::development([
-            temp.path().join("a"),
-            temp.path().join("b"),
-            temp.path().join("c"),
-        ])
+        let mut config = Config::development(crate::test_disks(
+            [
+                temp.path().join("a"),
+                temp.path().join("b"),
+                temp.path().join("c"),
+            ],
+        ))
         .unwrap();
         config.max_retained_workspaces = 1;
         config.max_retained_workspaces_per_principal = 1;

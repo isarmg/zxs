@@ -41,11 +41,13 @@ fn save(engine: &mut Engine, repository: &Repository, files: &[(&str, &[u8])]) {
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, DirectoryBranch) {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temporary.path().join("state"), config).unwrap();
     let repository = engine

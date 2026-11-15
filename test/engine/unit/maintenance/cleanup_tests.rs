@@ -47,11 +47,13 @@ fn fixture_with_members(
     String,
 ) {
     let temporary = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ],
+    ))
     .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;

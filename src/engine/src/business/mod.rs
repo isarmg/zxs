@@ -11,6 +11,8 @@ pub use directory_git::DirectoryGitStatusRead;
 pub use directory_preview::{DirectoryBranchPreview, DirectoryDefaultSelection};
 pub use directory_staging::DirectoryCommitRequest;
 mod file;
+pub(crate) mod file_draft;
+pub(crate) use file::ensure_shared_file_branch;
 pub(crate) mod file_relocation;
 pub(crate) mod history_copy;
 pub(crate) mod object_move;

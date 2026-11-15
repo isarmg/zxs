@@ -143,9 +143,9 @@ fn copied_restored_provenance_survives_cold_open_without_inventing_source_operat
     let package = temporary.path().join("package");
     source.export_history_package(&repo.history_tree_id, &package).unwrap();
     let root = temporary.path().join("target");
-    let mut config = Config::development(
+    let mut config = Config::development(crate::test_disks(
         (0..4).map(|index| root.join(format!("disk-{index}"))),
-    ).unwrap();
+    )).unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;

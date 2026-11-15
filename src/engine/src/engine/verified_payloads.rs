@@ -119,6 +119,7 @@ struct HeldSeal {
     seal: HeldFile,
 }
 pub(super) struct VerifiedPayloadSet {
+    containers: Option<Arc<crate::container_storage::PreparedContainerEntities>>,
     metadata_integrity: Arc<MetadataIntegrity>,
     entries: Vec<VerifiedPayload>,
     // Struct fields drop in declaration order: all per-replica FDs close first.
@@ -166,6 +167,7 @@ impl<'a> PayloadPreparation<'a> {
                 let seal = HeldFile::open(&handle.root, &path)?;
                 let stored = decode_seal(&handle.root.read_bytes(&path, MAX_METADATA)?)?;
                 validate_stored_seal(&stored, &handle.seal)?;
+                crate::engine::fresh_layout::verify_root(config, disk, &handle.root)?;
                 Ok(HeldSeal {
                     metadata_member: disk.metadata_member,
                     disk: Arc::clone(handle),
@@ -189,6 +191,20 @@ impl<'a> PayloadPreparation<'a> {
     pub(super) fn verify(
         self,
         config: &ValidatedConfig,
+    ) -> Result<VerifiedPayloadSet> {
+        self.verify_inner(config, None)
+    }
+    pub(super) fn verify_with_containers(
+        self,
+        config: &ValidatedConfig,
+        containers: Arc<crate::container_storage::PreparedContainerEntities>,
+    ) -> Result<VerifiedPayloadSet> {
+        self.verify_inner(config, Some(containers))
+    }
+    fn verify_inner(
+        self,
+        config: &ValidatedConfig,
+        containers: Option<Arc<crate::container_storage::PreparedContainerEntities>>,
     ) -> Result<VerifiedPayloadSet> {
         let versions = self.versions;
         let replicas = versions
@@ -222,6 +238,7 @@ impl<'a> PayloadPreparation<'a> {
                         &self.resources,
                         &evidence.version,
                         slot,
+                        containers.as_deref(),
                     )?);
                 }
             }
@@ -230,6 +247,7 @@ impl<'a> PayloadPreparation<'a> {
         // already hashes every byte with held-inode checks; a preceding pass
         // would only hash and immediately discard the same proof.
         let proof = VerifiedPayloadSet {
+            containers,
             metadata_integrity: self.metadata_integrity,
             entries,
             _reservation: reservation,
@@ -247,6 +265,7 @@ fn verify_replica(
     resources: &DiskResources,
     version: &FileVersion,
     slot: &str,
+    containers: Option<&crate::container_storage::PreparedContainerEntities>,
 ) -> Result<VerifiedPayload> {
     #[cfg(test)]
     VERIFICATION_COST.with(|cost| {
@@ -264,14 +283,14 @@ fn verify_replica(
             )
         })?;
     let handle = resources.get(disk)?;
+    let root = handle.management_root()?;
     let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
     let mut metadata = Vec::new();
     for name in ["version.json", "checksums.bin", "payload.json"] {
         let path = directory.join(name);
-        metadata.push((path.clone(), HeldFile::open(&handle.root, &path)?));
+        metadata.push((path.clone(), HeldFile::open(root, &path)?));
     }
-    let recorded: FileVersion = handle
-        .root
+    let recorded: FileVersion = root
         .read_json_observed(&directory.join("version.json"), &mut |_| Ok(()))?;
     let version_hash = object_hash("version", version)?;
     if object_hash("version", &recorded)? != version_hash {
@@ -280,8 +299,7 @@ fn verify_replica(
             "prepared version metadata differs",
         ));
     }
-    let checks = handle
-        .root
+    let checks = root
         .read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
     if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
         return Err(Error::new(
@@ -298,11 +316,17 @@ fn verify_replica(
             "checksum header differs from version",
         ));
     }
-    let path =
-        crate::container_storage::content_path_at(&handle.root, &directory, version, &mut |_| {
-            Ok(())
-        })?;
-    let mut body = HeldFile::open(&handle.root, &path)?;
+    let (body_root, path) = match containers {
+        Some(scope) => {
+            let file = version.file_id.parse()?;
+            let disk = disk.disk_id.parse()?;
+            (scope.target(file, disk)?, scope.body_path(file, disk, version)?)
+        }
+        None => (root, crate::container_storage::content_path_at(
+            root, &directory, version, &mut |_| Ok(()),
+        )?),
+    };
+    let mut body = HeldFile::open(body_root, &path)?;
     if body.stamp.size != version.logical_size {
         return Err(Error::new(
             storage_contract::ErrorCode::ChecksumMismatch,
@@ -335,9 +359,9 @@ fn verify_replica(
             "complete payload hash differs",
         ));
     }
-    body.validate(&handle.root, &path)?;
+    body.validate(body_root, &path)?;
     for (path, held) in &metadata {
-        held.validate(&handle.root, path)?;
+        held.validate(root, path)?;
     }
     Ok(VerifiedPayload {
         disk: Arc::clone(handle),
@@ -376,12 +400,28 @@ impl VerifiedPayloadSet {
         self.validate_versions(config, &candidate.versions)
     }
 
+    pub(super) fn retains_draft_on(&self, disk: storage_contract::DiskId) -> bool {
+        self.containers.as_ref().is_some_and(|scope| scope.retains_draft_on(disk))
+    }
+
+    /// FILE-only publications have no payload cursor entries. Their exact
+    /// container occurrences still cross the decision boundary, and must not
+    /// become an unchecked empty-vector success after physical preparation.
+    pub(super) fn validate_containers(&self) -> Result<()> {
+        if let Some(containers) = &self.containers {
+            containers.verify()?;
+        }
+        Ok(())
+    }
+
     fn validate_versions(
         &self,
         config: &ValidatedConfig,
         versions: &[VersionEvidence],
     ) -> Result<()> {
         self.validate_disks()?;
+        crate::engine::fresh_layout::verify_available(config, &self.resources)?;
+        self.validate_containers()?;
         let mut cursor = self.cursor();
         for evidence in versions {
             for slot in &evidence.placement.route_slot_ids {
@@ -397,7 +437,9 @@ impl VerifiedPayloadSet {
         });
         // Root identity is held; mutable seal bytes must still survive the
         // complete verification interval, including the final replica read.
-        self.validate_disks()
+        self.validate_disks()?;
+        crate::engine::fresh_layout::verify_available(config, &self.resources)?;
+        self.validate_containers()
     }
     pub(super) fn cursor(&self) -> PayloadProofCursor<'_> {
         assert_eq!(
@@ -463,7 +505,9 @@ impl PayloadProofCursor<'_> {
             // Large candidates keep only disk identities pinned. Re-read every
             // byte with the same metadata and held-inode checks, one replica at
             // a time, rather than exhausting process-wide file descriptors.
-            verify_replica(config, &self.proof.resources, version, slot)?;
+            verify_replica(
+                config, &self.proof.resources, version, slot, self.proof.containers.as_deref(),
+            )?;
             return Ok(());
         }
         #[cfg(test)]
@@ -496,12 +540,16 @@ impl PayloadProofCursor<'_> {
                 "payload proof identity differs",
             ));
         }
-        let path = crate::container_storage::content_path_at(
-            &entry.disk.root,
-            &entry.directory,
-            version,
-            &mut |_| Ok(()),
-        )?;
+        let (body_root, path) = match &self.proof.containers {
+            Some(scope) => {
+                let file = version.file_id.parse()?;
+                let disk = disk.disk_id.parse()?;
+                (scope.target(file, disk)?, scope.body_path(file, disk, version)?)
+            }
+            None => (entry.disk.content_root()?, crate::container_storage::content_path_at(
+                entry.disk.content_root()?, &entry.directory, version, &mut |_| Ok(()),
+            )?),
+        };
         let current = FileStamp::from_metadata(&entry.body.file.metadata()?);
         let version_id = version.version_id.parse()?;
         let renamed_payload = match renamed {
@@ -515,7 +563,7 @@ impl PayloadProofCursor<'_> {
             // Its exact before/after stamps are retained in process. Re-read
             // every byte, then bind both the reopened path and original FD to
             // that exact post-syscall stamp, rejecting replacement or mutation.
-            entry.body.validate_stamp(&entry.disk.root, &path, &current)?;
+            entry.body.validate_stamp(body_root, &path, &current)?;
             // Reuse the budgeted descriptor and positional reads. Retaining a
             // second replica proof here would bypass PayloadProofBudget.
             let mut full = blake3::Hasher::new();
@@ -530,12 +578,12 @@ impl PayloadProofCursor<'_> {
             if ContentHash::from_digest(full.finalize()) != version.content_hash {
                 return Err(Error::Payload(platform_io::payload::Error::Digest));
             }
-            entry.body.validate_stamp(&entry.disk.root, &path, &current)?;
+            entry.body.validate_stamp(body_root, &path, &current)?;
         } else {
-            entry.body.validate(&entry.disk.root, &path)?;
+            entry.body.validate(body_root, &path)?;
         }
         for (path, held) in &entry.metadata {
-            held.validate(&entry.disk.root, path)?;
+            held.validate(entry.disk.management_root()?, path)?;
         }
         Ok(())
     }

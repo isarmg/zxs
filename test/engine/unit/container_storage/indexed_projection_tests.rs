@@ -242,11 +242,13 @@ impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let config = ValidatedConfig::try_from(
-            Config::development([
-                temporary.path().join("p"),
-                temporary.path().join("b"),
-                temporary.path().join("c"),
-            ])
+            Config::development(crate::test_disks(
+                [
+                    temporary.path().join("p"),
+                    temporary.path().join("b"),
+                    temporary.path().join("c"),
+                ],
+            ))
             .unwrap(),
         )
         .unwrap();

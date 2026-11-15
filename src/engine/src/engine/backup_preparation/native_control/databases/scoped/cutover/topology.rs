@@ -148,7 +148,9 @@ impl Topology {
                 .checked_add(depth)
                 .ok_or_else(|| invalid("prospective topology level overflows"))?;
             prefix.extend(source_prefix.iter().cloned());
-            let index = selected[target.slot_id.as_str()];
+            // This older cutover lane still validates its physical prefix spelling.
+            // It is not the explicit configured name retained in the request.
+            name(paths[selected[target.slot_id.as_str()]])?;
             nodes.push(BackupPreparedTopologyNode {
                 identity: DiskRegistrationIdentity {
                     pool_id: config.pool_id.clone(),
@@ -158,10 +160,16 @@ impl Topology {
                 },
                 upstream_slot_id: target.upstream_slot_id.clone(),
                 level,
-                name: name(paths[index])?,
+                name: target.name.clone(),
                 source_prefix: prefix,
             });
         }
+        crate::disk_names::configuration::ConfiguredDiskNames::new(config)
+            .map_err(Error::ConfiguredDiskName)?
+            .require_new_names(
+                targets.iter().map(|target| (target.disk_id.as_str(), &target.name)),
+            )
+            .map_err(Error::ConfiguredDiskName)?;
         Ok(Self {
             source: identity(config, source),
             replaced: identity(config, old[0]),

@@ -5,7 +5,10 @@ use storage_engine::{ForeignDatabaseStatus, ForeignOriginalDatabasesReport, Mode
 fn fixture() -> (Config, Plan, databases::Observation) {
     let configuration = Config::independent_roots(
         Mode::Development,
-        [std::path::PathBuf::from("/zxs/data/disks/current")],
+        [(
+            name_policy::Name::parse("Current").unwrap(),
+            std::path::PathBuf::from("/zxs/data/disks/current"),
+        )],
     )
     .unwrap();
     let id = json!({"device":"1","inode":"2"});
@@ -26,6 +29,7 @@ fn fixture() -> (Config, Plan, databases::Observation) {
             "ctime_seconds":"0","ctime_nanoseconds":0});
             SelectedLower {
                 directory: LowerDirectory {
+                    name: name_policy::Name::parse(&format!("Lower archive {level}")).unwrap(),
                     root_path: root.clone(),
                     slot_id: format!("new_{level}"),
                     level,
@@ -64,6 +68,7 @@ fn fixture() -> (Config, Plan, databases::Observation) {
                 histories: 1,
                 temporarily_unavailable_versions: 0,
             },
+            source_name: name_policy::Name::parse("Imported archive").unwrap(),
             source_slot_id: "new_3".into(),
             source_upstream_slot_id: "new_2".into(),
             source_metadata_member: true,
@@ -122,6 +127,9 @@ fn entire_chain_has_distinct_stable_target_identities_without_reusing_original_s
     let (again, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     assert_eq!(digest(&proposal).unwrap(), digest(&again).unwrap());
     assert_eq!(proposal.targets.len(), 3);
+    assert_eq!(proposal.targets[0].name, plan.binding.lower[0].directory.name);
+    assert_eq!(proposal.targets[1].name, plan.binding.lower[1].directory.name);
+    assert_eq!(proposal.targets[2].name, plan.binding.source_name);
     assert_eq!(
         digest(&proposed).unwrap(),
         proposal.proposed_configuration_digest
@@ -138,6 +146,7 @@ fn entire_chain_has_distinct_stable_target_identities_without_reusing_original_s
         .iter()
         .zip(&proposal.targets)
     {
+        assert_eq!(disk.name, target.name);
         assert_eq!(disk.disk_id, target.registration.disk_id);
         assert_eq!(disk.slot_id, target.registration.slot_id);
         assert_eq!(
@@ -224,6 +233,13 @@ fn original_full_state_must_bind_the_exact_foreign_source_registration() {
 fn proposal_digest_binds_every_selected_physical_root_and_the_original_operation() {
     let (configuration, mut plan, observation) = fixture();
     let (first, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
+    let mut renamed = plan.clone();
+    renamed.binding.lower[0].directory.name = name_policy::Name::parse("Other archive").unwrap();
+    assert_ne!(digest(&renamed.binding).unwrap(), digest(&plan.binding).unwrap());
+    assert_ne!(digest(&renamed).unwrap(), first.request_digest);
+    let mut renamed = plan.clone();
+    renamed.binding.source_name = name_policy::Name::parse("Other source").unwrap();
+    assert_ne!(digest(&renamed.binding).unwrap(), digest(&plan.binding).unwrap());
     plan.binding.lower[0].selection.root_identity.inode += 1;
     let (second, _) = Proposal::capture(&configuration, &plan, &observation).unwrap();
     assert_ne!(digest(&first).unwrap(), digest(&second).unwrap());

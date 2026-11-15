@@ -209,6 +209,7 @@ fn core_request(request: &wire::StartRequest, principal: &str) -> BackupTransact
             .targets
             .iter()
             .map(|target| BackupTopologyTarget {
+                name: target.name.clone(),
                 disk_id: target.disk_id.clone(),
                 slot_id: target.slot_id.clone(),
                 upstream_slot_id: target.upstream_slot_id.clone(),
@@ -426,6 +427,7 @@ fn original_wire(original: BackupTransactionRequest) -> Result<wire::OriginalReq
                 .ok_or_else(|| ApiError::invalid("backup target is not UTF-8"))?
                 .to_owned();
             Ok(wire::OriginalTarget {
+                name: target.name,
                 root_path,
                 disk_id: target.disk_id,
                 slot_id: target.slot_id,

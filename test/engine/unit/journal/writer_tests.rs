@@ -5,7 +5,7 @@ use std::sync::Mutex;
 fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([temp.path().join("disk")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("disk")])).unwrap();
     let disk = config.disks[0].clone();
     let engine = Mutex::new(Engine::initialize(&root, config).unwrap());
     assert_eq!(
@@ -49,7 +49,7 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
 fn detached_preparation_retains_writer_ownership_without_appending() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([temp.path().join("disk")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("disk")])).unwrap();
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine

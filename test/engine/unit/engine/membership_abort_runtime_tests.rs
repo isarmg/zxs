@@ -155,10 +155,12 @@ fn production_abort_can_start_and_publish_a_fresh_addition() {
         .unwrap();
     let abort_hash = fixture.engine.config.generation_hash().unwrap().to_owned();
     let mut target = fixture.original.clone();
-    let spare = Config::development([
-        fixture.temp.path().join("spare-unused"),
-        fixture.temp.path().join("next-add"),
-    ])
+    let spare = Config::development(crate::test_disks(
+        [
+            fixture.temp.path().join("spare-unused"),
+            fixture.temp.path().join("next-add"),
+        ],
+    ))
     .unwrap();
     let disk = spare.disks.last().unwrap().clone();
     private_dir(&disk.root).unwrap();

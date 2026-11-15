@@ -29,7 +29,9 @@ impl Fixture {
     ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut original =
-            Config::development((0..voters).map(|n| temp.path().join(format!("disk-{n}"))))
+            Config::development(crate::test_disks(
+                (0..voters).map(|n| temp.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         original.disks[0].metadata_member = metadata_member;
         let system = temp.path().join("system");

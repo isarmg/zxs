@@ -37,7 +37,9 @@ fn save(engine: &mut Engine, name: &str, slot: &str, copies: u32) {
 pub(super) fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+        )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     config.disks[2].level = 2;
@@ -234,7 +236,9 @@ fn mappings_bind_each_origin_and_refuse_collisions_unknown_groups_and_backup_tar
     let preview = inspect(&f.source).unwrap();
     let target = tempfile::tempdir().unwrap();
     let config =
-        Config::development([target.path().join("primary"), target.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [target.path().join("primary"), target.path().join("backup")],
+        )).unwrap();
     let engine = Engine::initialize(&target.path().join("system"), config).unwrap();
     let names = preview
         .histories()
@@ -447,7 +451,9 @@ fn mappings_require_an_empty_existing_parent_and_bind_the_target_checkpoint() {
     let preview = inspect(&f.source).unwrap();
     let target = tempfile::tempdir().unwrap();
     let config =
-        Config::independent_roots(Mode::Development, [target.path().join("primary")]).unwrap();
+        Config::independent_roots(Mode::Development, crate::test_disks(
+            [target.path().join("primary")],
+        )).unwrap();
     let mut engine = Engine::initialize(&target.path().join("system"), config).unwrap();
     let repository = engine
         .create_disk_root("D01", "admin", OperationId::generate().unwrap())

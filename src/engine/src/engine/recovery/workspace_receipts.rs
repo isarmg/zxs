@@ -387,6 +387,12 @@ impl Engine {
         candidate: &Candidate,
         next: &State,
     ) -> Result<()> {
+        let containers = super::super::fresh_layout::containers::verify_transition(
+            &self.config, &self.state, next, candidate,
+        )?;
+        crate::protection::verify_automatic_backup_candidate(
+            &self.planning_context(), next, candidate, &containers,
+        )?;
         if let Some(view) = self.admitted_current_namespaces()? {
             verify_current_candidate_transition(view, &self.state, next, candidate)?;
         } else {

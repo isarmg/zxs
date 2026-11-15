@@ -12,7 +12,9 @@ fn disk() -> (tempfile::TempDir, ValidatedConfig, Arc<DiskHandle>) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([directory.path().to_path_buf()]).unwrap())
+        ValidatedConfig::try_from(Config::development(crate::test_disks(
+            [directory.path().to_path_buf()],
+        )).unwrap())
             .unwrap();
     let handle = Arc::new(DiskHandle::open(&config, &config.disks[0], false).unwrap());
     (directory, config, handle)
@@ -21,7 +23,9 @@ fn disk() -> (tempfile::TempDir, ValidatedConfig, Arc<DiskHandle>) {
 fn genesis_with_data_disks() -> (tempfile::TempDir, ValidatedConfig, Arc<DiskHandle>) {
     let directory = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development(["primary", "data", "backup"].map(|name| directory.path().join(name)))
+        Config::development(crate::test_disks(
+            ["primary", "data", "backup"].map(|name| directory.path().join(name)),
+        ))
             .unwrap();
     config.disks[1].metadata_member = false;
     config.disks[1].level = 1;
@@ -161,7 +165,7 @@ fn opening_an_unverified_configuration_cannot_replace_existing_control_authority
     let (_directory, config, old) = disk();
     let extra_directory = tempfile::tempdir().unwrap();
     let mut unverified = (*config).clone();
-    let mut extra = Config::development([extra_directory.path().to_path_buf()])
+    let mut extra = Config::development(crate::test_disks([extra_directory.path().to_path_buf()]))
         .unwrap()
         .disks
         .remove(0);

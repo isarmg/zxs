@@ -4,7 +4,9 @@ use std::fs;
 fn fixture() -> (tempfile::TempDir, Config, Engine, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     for name in ["first", "second"] {
         engine
@@ -451,7 +453,9 @@ fn membership_control_archive_manifest_uses_bounded_metadata_pages() {
 fn membership_control_archive_empty_genesis_and_nontrivial_metadata_prefix() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
@@ -501,7 +505,9 @@ fn membership_control_archive_empty_genesis_and_nontrivial_metadata_prefix() {
 fn membership_control_archive_preserves_reprotect_plan_and_original_snapshot() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();
     let repo = engine
@@ -783,7 +789,9 @@ fn membership_control_archive_cannot_replace_admitted_fence_with_its_own_summary
 fn retained_exit_archive() -> (tempfile::TempDir, Config, Engine, MembershipControlArchive) {
     let temp = tempfile::tempdir().unwrap();
     let original =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, original.clone()).unwrap();
     engine

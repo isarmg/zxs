@@ -194,6 +194,9 @@ impl Engine {
                 if let Some(current) = current {
                     current.require_branch_write(&self.state, &repo.main_branch_id)?;
                 }
+                self.namespace_host_root(
+                    repo.repository_id.parse()?, repo.main_branch_id.parse()?,
+                )?;
                 return Ok(repo.clone());
             }
         }
@@ -243,17 +246,26 @@ impl Engine {
                     },
                     RepositoryIds::random()?,
                 )?;
+                let origin = if file_manager_root {
+                    Some(engine.prepare_namespace_root_origin(state, &repository, operation)?)
+                } else {
+                    None
+                };
                 let repo_id = &repository.repository_id;
                 let history_id = &repository.history_tree_id;
                 let branch_id = &repository.main_branch_id;
                 let commit_id = &state.histories[history_id].root_commit_id;
-                Ok(json!({
+                let mut result = json!({
                     "repository_id": repo_id,
                     "history_tree_id": history_id,
                     "branch_id": branch_id,
                     "commit_id": commit_id,
                     "created_repository": repository
-                }))
+                });
+                if let Some(origin) = origin {
+                    crate::persist::namespace_root::attach(&mut result, &origin)?;
+                }
+                Ok(result)
             },
         )?;
         // Later SMB binding changes do not change a creation response. Do not

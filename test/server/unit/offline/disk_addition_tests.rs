@@ -38,13 +38,15 @@ fn confirmation_and_stopped_acknowledgment_precede_disk_access() {
 fn native_input_cannot_override_owner_or_claim_foreign_import() {
     let mut body = json!({"service_user":"zxs","operation_id":"op_11111111111111111111111111111111",
         "external_writers_stopped":true,"additions":[{"root_path":"/zxs/data/disks/new",
-        "slot_id":"new","level":1,"upstream_slot_id":null,"metadata_member":true}]});
+        "name":"Additional archive","slot_id":"new","level":1,
+        "upstream_slot_id":null,"metadata_member":true}]});
     assert!(json_codec::from_value::<Input>(body.clone()).is_ok());
     body["uid"] = 0.into();
     assert!(json_codec::from_value::<Input>(body).is_err());
     assert!(
         json_codec::from_value::<NewDirectory>(json!({"root_path":"/zxs/data/disks/new",
-        "slot_id":"new","level":2,"upstream_slot_id":null,"metadata_member":true,
+        "name":"Additional archive","slot_id":"new","level":2,
+        "upstream_slot_id":null,"metadata_member":true,
         "allow_missing_lower_chain":true}))
         .is_err()
     );

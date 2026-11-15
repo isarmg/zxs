@@ -112,7 +112,7 @@ macro_rules! history_coverage {
                     sequence: _, business_generation: _, topology_generation: _,
                     control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
                     content_states: _,
-                    histories: _, container_tags, repositories, $($field,)*
+                    histories: _, file_containers: _, container_tags, repositories, $($field,)*
                 } = state;
                 if self.container_tags.iter().ne(container_tags.keys()) {
                     return Err(invalid("container tags contain unowned records"));
@@ -225,5 +225,6 @@ pub(crate) fn validate(state: &State) -> Result<()> {
         covered.include(&manifest)?;
     }
     covered.finish(state)?;
-    crate::node_retirement_engine::admit_current(state)
+    crate::node_retirement_engine::admit_current(state)?;
+    crate::engine::fresh_layout::containers::validate_state(state)
 }

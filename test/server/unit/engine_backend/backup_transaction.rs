@@ -16,8 +16,8 @@ fn request() -> wire::StartRequest {
         "source_slot_id":"P01", "expected_sequence":"17",
         "confirmation":"prepare_independent_complete_copies",
         "targets":[
-            {"selection":selection("/fresh/a"),"disk_id":"disk_a","slot_id":"B01","upstream_slot_id":"P01"},
-            {"selection":selection("/fresh/b"),"disk_id":"disk_b","slot_id":"B02","upstream_slot_id":"B01"}
+            {"name":"Near archive","selection":selection("/fresh/a"),"disk_id":"disk_a","slot_id":"B01","upstream_slot_id":"P01"},
+            {"name":"Far archive","selection":selection("/fresh/b"),"disk_id":"disk_b","slot_id":"B02","upstream_slot_id":"B01"}
         ]
     })).unwrap()
 }
@@ -33,6 +33,8 @@ fn adapter_binds_current_principal_and_exact_target_order() {
         vec![PathBuf::from("/fresh/a"), PathBuf::from("/fresh/b")]
     );
     assert_eq!(core.targets[1].upstream_slot_id, "B01");
+    assert_eq!(core.targets[0].name, request.targets[0].name);
+    assert_eq!(core.targets[1].name, request.targets[1].name);
     assert_eq!(core.preparation.expected_sequence, 17);
 }
 
@@ -43,6 +45,11 @@ fn readback_preserves_targets_but_does_not_disclose_core_principal() {
     assert_eq!(original.operation_id, request.operation_id);
     assert_eq!(original.targets[0].root_path, "/fresh/a");
     assert_eq!(original.targets[1].root_path, "/fresh/b");
+    assert_eq!(original.targets[0].name, request.targets[0].name);
+    assert_eq!(original.targets[1].name, request.targets[1].name);
+    let mut missing = json_codec::to_value(&request).unwrap();
+    missing["targets"][0].as_object_mut().unwrap().remove("name");
+    assert!(json_codec::from_value::<wire::StartRequest>(missing).is_err());
     let encoded = json_codec::to_value(original).unwrap();
     assert!(encoded.get("principal").is_none());
 }

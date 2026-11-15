@@ -79,6 +79,7 @@ fn a_stray_primary_manifest_cannot_replace_the_authoritative_copy_for_cold_admis
     let other = f.temp.path().join("other-primary");
     f.config.disks.push(DiskConfig {
         slot_id: "P02".into(),
+        name: name_policy::Name::parse("Secondary primary").unwrap(),
         disk_id: new_id("disk").unwrap(),
         root: other.clone(),
         level: 1,

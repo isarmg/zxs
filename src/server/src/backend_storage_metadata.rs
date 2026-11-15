@@ -34,7 +34,17 @@ impl TopologySlot {
 pub(crate) fn disk_directory_names(
     disks: &[storage_contract::DiskConfig],
 ) -> Result<Vec<name_policy::PortablePath>, crate::ApiError> {
-    portable_root_names(disks.iter().map(|disk| disk.root.as_path()))
+    let mut keys = std::collections::BTreeSet::new();
+    disks.iter().map(|disk| {
+        if !keys.insert(disk.name.key()) {
+            return Err(crate::ApiError::conflict(
+                storage_contract::ErrorCode::NameConflict,
+                "configured disk names collide under the portable name policy",
+            ));
+        }
+        name_policy::PortablePath::parse(disk.name.as_str())
+            .map_err(crate::ApiError::invalid_source)
+    }).collect()
 }
 
 /// Parse root basenames in input order for the shared storage namespace.

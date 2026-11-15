@@ -18,7 +18,9 @@ fn fork(state: &State) -> State {
 #[test]
 fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("a"), temp.path().join("b")]).unwrap();
+    let config = Config::development(crate::test_disks(
+        [temp.path().join("a"), temp.path().join("b")],
+    )).unwrap();
     for disk in &config.disks {
         private_dir(&disk.root).unwrap();
     }
@@ -240,11 +242,13 @@ fn independent_fields_are_ignored_and_unknown_lineage_falls_back() {
 #[test]
 fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
@@ -325,11 +329,13 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
 #[test]
 fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_roots() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
@@ -589,11 +595,13 @@ fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
 fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_root() {
     for missing_old_root in [false, true] {
         let temp = tempfile::tempdir().unwrap();
-        let config = Config::development([
-            temp.path().join("one"),
-            temp.path().join("two"),
-            temp.path().join("three"),
-        ])
+        let config = Config::development(crate::test_disks(
+            [
+                temp.path().join("one"),
+                temp.path().join("two"),
+                temp.path().join("three"),
+            ],
+        ))
         .unwrap();
         let before = fixture();
         let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
@@ -672,11 +680,13 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
 #[test]
 fn unknown_branch_mutation_and_cold_state_retain_complete_manifest_admission() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("one"),
-        temp.path().join("two"),
-        temp.path().join("three"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("one"),
+            temp.path().join("two"),
+            temp.path().join("three"),
+        ],
+    ))
     .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();

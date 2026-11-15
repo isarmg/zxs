@@ -7,11 +7,13 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([
-            root.path().join("p"),
-            root.path().join("b"),
-            root.path().join("c"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                root.path().join("p"),
+                root.path().join("b"),
+                root.path().join("c"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();

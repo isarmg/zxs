@@ -17,7 +17,7 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &temp.path().join("system"),
-            Config::development([temp.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
         ).unwrap();
         let repository = engine.create_repository(
             &RepositoryName::parse("snapshot sources").unwrap(),
@@ -469,7 +469,7 @@ fn directory_snapshot_global_slots_stop_at_two_distinct_engines() {
     let temp = tempfile::tempdir().unwrap();
     let mut second = Engine::initialize(
         &temp.path().join("second-system"),
-        Config::development([temp.path().join("second-disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("second-disk")])).unwrap(),
     ).unwrap();
     let second_repo = second.create_repository(
         &RepositoryName::parse("second").unwrap(), "P01", 1,
@@ -477,7 +477,7 @@ fn directory_snapshot_global_slots_stop_at_two_distinct_engines() {
     ).unwrap();
     let mut third = Engine::initialize(
         &temp.path().join("third-system"),
-        Config::development([temp.path().join("third-disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("third-disk")])).unwrap(),
     ).unwrap();
     let third_repo = third.create_repository(
         &RepositoryName::parse("third").unwrap(), "P01", 1,

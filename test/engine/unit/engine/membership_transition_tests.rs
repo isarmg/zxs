@@ -4,7 +4,9 @@ use std::{fs, path::Path};
 fn fixture() -> (tempfile::TempDir, Config, Config, Engine) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temporary.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temporary.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
@@ -316,7 +318,9 @@ fn membership_fence_survives_system_directory_loss_and_genesis() {
     drop(restored);
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     let mut empty = Engine::initialize(&temp.path().join("system"), config).unwrap();

@@ -17,7 +17,9 @@ impl Fixture {
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         let config =
-            Config::development((0..3).map(|n| temporary.path().join(format!("root-{n}"))))
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temporary.path().join(format!("root-{n}"))),
+            ))
                 .unwrap();
         for disk in &config.disks {
             fs::create_dir(&disk.root).unwrap();

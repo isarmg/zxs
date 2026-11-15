@@ -8,6 +8,7 @@ fn original() -> wire::StartRequest {
         "operation_id":operation(),"source_slot_id":"P01","expected_sequence":"17",
         "confirmation":"prepare_independent_complete_copies",
         "targets":[{
+            "name":"Near archive",
             "selection":{
                 "selection_id":"observed","discovery_root":"/fresh",
                 "discovery_identity":{"device":"1","inode":"1","ctime_seconds":"0","ctime_nanoseconds":0},
@@ -49,6 +50,12 @@ fn retained_operation_and_original_input_cannot_be_rebound() {
     let record = retain(None, operation(), Some(&request)).unwrap();
     let other = "op_22222222222222222222222222222222".parse().unwrap();
     assert!(retain(Some(record.clone()), other, None).is_err());
+    let mut renamed = request.clone();
+    renamed.targets[0].name = name_policy::Name::parse("Other archive").unwrap();
+    assert!(retain(Some(record.clone()), operation(), Some(&renamed)).is_err());
+    let mut missing = json_codec::to_value(&record).unwrap();
+    missing["original_start"]["targets"][0].as_object_mut().unwrap().remove("name");
+    assert!(decode_record(&json_codec::to_string(&missing).unwrap()).is_err());
     let mut changed = request;
     changed.targets[0].selection.root_path = "/fresh/replacement".into();
     assert!(retain(Some(record.clone()), operation(), Some(&changed)).is_err());

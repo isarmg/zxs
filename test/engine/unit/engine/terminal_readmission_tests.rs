@@ -136,7 +136,7 @@ fn single_disabled_metadata_returns_with_identity_history_data_and_real_receipt(
 #[test]
 fn retained_readmission_never_reopens_a_closed_old_handle_or_epoch() {
     let temp = tempfile::tempdir().unwrap();
-    let original = Config::development([temp.path().join("retained")]).unwrap();
+    let original = Config::development(crate::test_disks([temp.path().join("retained")])).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, original.clone()).unwrap();
     let disk = original.disks[0].clone();
@@ -434,7 +434,9 @@ fn repeated_terminal_readmission_keeps_every_stop_receipt_and_creates_distinct_e
 fn earlier_disabled_metadata_can_resume_after_another_final_voter_is_detached() {
     let temp = tempfile::tempdir().unwrap();
     let original =
-        Config::development((0..2).map(|n| temp.path().join(format!("root-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..2).map(|n| temp.path().join(format!("root-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, original.clone()).unwrap();
     let retained = &original.disks[0];

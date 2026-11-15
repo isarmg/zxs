@@ -24,14 +24,28 @@ impl std::error::Error for BackupFailure {
     }
 }
 
+/// One explicit CLI disk input. JSON keeps all valid name and path spellings
+/// representable without separate, positionally zipped name/path arguments.
+#[derive(Clone, Debug, data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct NamedDisk {
+    name: name_policy::Name,
+    root: PathBuf,
+}
+
+fn named_disk(input: &str) -> Result<NamedDisk> {
+    Ok(storage_engine::decode_strict(input.as_bytes())?)
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Produce an uninitialized draft; does not access or initialize devices.
     Template {
         #[arg(long)]
         production: bool,
-        #[arg(long, num_args = 1.., required = true)]
-        disks: Vec<PathBuf>,
+        /// Each argument is JSON: {"name":"Archive","root":"/absolute/disk"}.
+        #[arg(long, num_args = 1.., required = true, value_parser = named_disk)]
+        disks: Vec<NamedDisk>,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -43,6 +57,8 @@ pub(crate) enum Command {
         slot: String,
         #[arg(long)]
         disk_id: String,
+        #[arg(long)]
+        name: name_policy::Name,
         #[arg(long)]
         path: PathBuf,
         #[arg(long)]
@@ -60,7 +76,9 @@ pub(crate) fn run(command: Command) -> Result<()> {
             disks,
             output,
         } => {
-            let mut config = Config::development(disks)?;
+            let mut config = Config::development(
+                disks.into_iter().map(|disk| (disk.name, disk.root)),
+            )?;
             if production {
                 config.mode = storage_engine::Mode::Production;
             }
@@ -79,6 +97,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
             config,
             slot,
             disk_id,
+            name,
             path,
             level,
             upstream,
@@ -94,6 +113,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
                 &transaction,
                 &config,
                 storage_engine::DiskConfig {
+                    name,
                     slot_id: slot.clone(),
                     disk_id,
                     root: path,

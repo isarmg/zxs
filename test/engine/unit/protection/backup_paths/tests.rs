@@ -8,7 +8,9 @@ mod retained_tests;
 mod route_changes_tests;
 
 fn initialize(root: &Path, copies: u32, capacity: Option<u64>) -> (Engine, Repository) {
-    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [root.join("p"), root.join("b"), root.join("c")],
+    )).unwrap();
     for disk in &mut config.disks {
         disk.capacity_bytes = capacity;
     }
@@ -402,14 +404,17 @@ fn backup_projection_recovers_without_copying_or_renaming_primary() {
 #[test]
 fn arbitrary_fixed_route_copy_count_and_independent_prefixes_are_supported() {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     config.disks.push(DiskConfig {
         slot_id: "D01".into(),
+        name: name_policy::Name::parse("Fourth-level archive").unwrap(),
         disk_id: new_id("disk").unwrap(),
         root: temp.path().join("d"),
         level: 4,
@@ -475,15 +480,18 @@ fn empty_extensions_use_sparse_current_state_and_policy_encoding() {
 #[test]
 fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixes() {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(DiskConfig {
             slot_id: slot.into(),
+            name: name_policy::Name::parse(&format!("Additional disk {slot}")).unwrap(),
             disk_id: new_id("disk").unwrap(),
             root: temp.path().join(slot),
             level,

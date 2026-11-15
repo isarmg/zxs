@@ -32,6 +32,8 @@ pub(crate) enum SnapshotStoreError {
     Entries,
     #[error("publishing directory snapshot complete payload copy")]
     Copy(#[source] NewEntryCopyError),
+    #[error("moving the independently decided worktree payload")]
+    Move(#[source] crate::disk::FileMoveError),
     #[error("directory snapshot does not contain the requested version")]
     Version,
 }
@@ -67,6 +69,10 @@ impl SnapshotNodeBinding {
     pub(crate) fn reference(self) -> SnapshotReference {
         self.reference
     }
+    pub(crate) fn same_repository(self, source: Self) -> bool {
+        self.reference.repository == source.reference.repository
+            && self.repository_entity == source.repository_entity
+    }
 }
 
 pub(crate) struct HeldSnapshotNode {
@@ -84,6 +90,40 @@ impl HeldSnapshotNode {
         repository: &DiskRoot,
         manifest: AdmittedSnapshotManifest,
         mut source: impl FnMut(&SnapshotFile) -> Result<R, SnapshotStoreError>,
+    ) -> Result<Self, SnapshotPreparationError> {
+        Self::prepare_material(repository, manifest, |target, file, name| {
+            target.copy_new_entry_verified_synced(name, &mut source(file)?,
+                platform_io::payload::Expectation {
+                    bytes: file.size, blake3: Some(file.content_hash.digest()),
+                },
+            ).map_err(SnapshotStoreError::Copy)?;
+            Ok(())
+        })
+    }
+
+    /// The actual directory publisher supplies its successful reserve and
+    /// FILE result. Same-path existing nodes are never a preparation outcome.
+    pub(crate) fn prepare_worktree_commit(
+        host: &DiskRoot,
+        manifest: AdmittedSnapshotManifest,
+        transfer: &crate::snapshot_worktree::ReservedDirectoryTransfer<'_>,
+    ) -> Result<Self, SnapshotPreparationError> {
+        transfer.require_manifest(&manifest).map_err(SnapshotPreparationError::Rejected)?;
+        let expected = transfer.original().binding();
+        let repository = host.private_entry_matching(
+            &crate::persist::layout::SNAPSHOT_REPOSITORY,
+            file_identity(expected.repository_entity),
+        ).map_err(SnapshotStoreError::Directory).map_err(SnapshotPreparationError::Rejected)?;
+        Self::prepare_material(&repository, manifest, |target, file, name| {
+            transfer.transfer(target, file, name)
+        })
+    }
+
+    fn prepare_material(
+        repository: &DiskRoot,
+        manifest: AdmittedSnapshotManifest,
+        mut transfer: impl FnMut(&DiskRoot, &SnapshotFile, &EntryName)
+            -> Result<(), SnapshotStoreError>,
     ) -> Result<Self, SnapshotPreparationError> {
         let _activity = repository.retain_io_activity()
             .map_err(SnapshotStoreError::Disk)
@@ -111,30 +151,24 @@ impl HeldSnapshotNode {
             }
         };
         Self::prepare_contents(
-            repository, repository_entity, node, node_entity, manifest, &mut source,
+            repository, repository_entity, node, node_entity, manifest, &mut transfer,
         ).map_err(|source| incomplete(reference, Some(node_entity), source))
     }
 
-    fn prepare_contents<R: Read>(
+    fn prepare_contents(
         repository: &DiskRoot,
         repository_entity: LocalEntityIdentity,
         node: DiskRoot,
         node_entity: FileIdentity,
         manifest: AdmittedSnapshotManifest,
-        source: &mut impl FnMut(&SnapshotFile) -> Result<R, SnapshotStoreError>,
+        transfer: &mut impl FnMut(&DiskRoot, &SnapshotFile, &EntryName)
+            -> Result<(), SnapshotStoreError>,
     ) -> Result<Self, SnapshotStoreError> {
         let (files, files_entity) = create_child(&node, &layout::FILES)?;
         let (worktrees, worktrees_entity) = create_child(&node, &layout::WORKTREES)?;
         for (version, payload) in manifest.payloads() {
             let file = &manifest.files()[version];
-            files.copy_new_entry_verified_synced(
-                &layout::file(payload),
-                &mut source(file)?,
-                platform_io::payload::Expectation {
-                    bytes: file.size,
-                    blake3: Some(file.content_hash.digest()),
-                },
-            ).map_err(SnapshotStoreError::Copy)?;
+            transfer(&files, file, &layout::file(payload))?;
         }
         // Only a complete manifest after every full body can be accepted by recovery.
         node.write_relative_atomic(&layout::MANIFEST.as_relative(), manifest.bytes(), false)
@@ -159,6 +193,22 @@ impl HeldSnapshotNode {
 
     /// Recovery is exact, read-only and fail-closed. The binding comes from the
     /// independently admitted decision, never directory scanning or this node.
+    pub(crate) fn reopen_at_host(
+        host: &DiskRoot,
+        expected: SnapshotNodeBinding,
+    ) -> Result<Self, SnapshotStoreError> {
+        let repository = host.private_entry_matching(
+            &crate::persist::layout::SNAPSHOT_REPOSITORY,
+            file_identity(expected.repository_entity),
+        ).map_err(SnapshotStoreError::Directory)?;
+        let node = Self::reopen(&repository, expected)?;
+        host.private_entry_matching(
+            &crate::persist::layout::SNAPSHOT_REPOSITORY,
+            file_identity(expected.repository_entity),
+        ).map_err(SnapshotStoreError::Directory)?;
+        Ok(node)
+    }
+
     pub(crate) fn reopen(
         repository: &DiskRoot,
         expected: SnapshotNodeBinding,

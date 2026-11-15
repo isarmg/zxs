@@ -849,7 +849,7 @@ fn content_precondition(headers: &HeaderMap, etag: &[u8]) -> Result<Option<Statu
     Ok(None)
 }
 
-fn content_response_with_limits(
+pub(crate) fn content_response_with_limits(
     mut content: Content,
     method: Method,
     headers: HeaderMap,

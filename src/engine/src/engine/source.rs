@@ -17,6 +17,10 @@ use std::{
 pub(crate) enum ReadSource {
     External(PathBuf),
     VerifiedReplica(Arc<super::reads::VerifiedReplicaSource>),
+    VerifiedDraft {
+        source: Arc<super::fresh_layout::draft_source::PublishedDraftSource>,
+        path: PathBuf,
+    },
     Disk {
         owner: Arc<DiskHandle>,
         path: PathBuf,
@@ -46,18 +50,22 @@ impl ReadSource {
     pub(crate) fn open_leased(&self) -> Result<ReadFile> {
         match self {
             Self::External(path) => open_regular(path).map(ReadFile::from),
+            Self::VerifiedDraft { source, path } => source.open(path),
             Self::VerifiedReplica(source) => source
                 .owner()
-                .root
+                .root_for(source.path())?
                 .open_leased_regular(source.path())
                 .map(ReadFile::from),
-            Self::Disk { owner, path } => owner.root.open_leased_regular(path).map(ReadFile::from),
+            Self::Disk { owner, path } => {
+                owner.root_for(path)?.open_leased_regular(path).map(ReadFile::from)
+            }
         }
     }
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Self::External(path) | Self::Disk { path, .. } => path,
+            Self::External(path) | Self::Disk { path, .. }
+            | Self::VerifiedDraft { path, .. } => path,
             Self::VerifiedReplica(source) => source.path(),
         }
     }
@@ -66,6 +74,11 @@ impl ReadSource {
         let path = self.path().join(child);
         match self {
             Self::External(_) => Self::External(path),
+            // Joining is not authority over another draft or a child path.
+            // The retained source's exact-path gate rejects it on open.
+            Self::VerifiedDraft { source, .. } => Self::VerifiedDraft {
+                source: Arc::clone(source), path,
+            },
             // Joining a child is not the original fully verified body path.
             Self::VerifiedReplica(source) => Self::on_disk(source.owner(), path),
             Self::Disk { owner, .. } => Self::on_disk(owner, path),

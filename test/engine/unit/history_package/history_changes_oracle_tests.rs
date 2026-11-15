@@ -414,11 +414,13 @@ fn assert_full_encoder_oracle(
         object.store(members).unwrap();
     }
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let oracle = &config.disks[..1];
     for object in full {
@@ -441,11 +443,13 @@ fn assert_full_encoder_oracle(
 #[test]
 fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let first = engine
@@ -560,11 +564,13 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     let mut after = before.clone();
     after.begin_tracking();
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let history = before.histories.keys().next().unwrap();

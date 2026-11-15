@@ -10,11 +10,13 @@ mod io_tail_tests;
 fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([
-        temp.path().join("p"),
-        temp.path().join("b"),
-        temp.path().join("c"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("p"),
+            temp.path().join("b"),
+            temp.path().join("c"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     let repo = engine

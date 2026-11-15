@@ -13,7 +13,9 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let mut original =
-            Config::development((0..2).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..2).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         for (n, disk) in original.disks.iter_mut().enumerate() {
             disk.disk_id = format!("disk_{:032x}", n + 1);
         }
@@ -31,7 +33,9 @@ impl Fixture {
         }
         let mut target = original.clone();
         let additional =
-            Config::development((0..4).map(|n| temp.path().join(format!("new-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..4).map(|n| temp.path().join(format!("new-{n}"))),
+            )).unwrap();
         for (n, mut disk) in additional.disks.into_iter().skip(2).enumerate() {
             disk.disk_id = format!("disk_{:032x}", n + 3);
             private_dir(&disk.root).unwrap();
@@ -73,7 +77,7 @@ impl Fixture {
         let spare = tempfile::tempdir().unwrap();
         let placeholder = Engine::initialize(
             &spare.path().join("system"),
-            Config::development([spare.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([spare.path().join("disk")])).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(&mut self.engine, placeholder));
@@ -163,7 +167,7 @@ fn membership_pending_each_target_has_own_control_receipt_and_preserves_old_byte
             assert!(
                 Engine::initialize(
                     &f.temp.path().join(format!("reinit-{n}")),
-                    Config::development([disk.root.clone()]).unwrap()
+                    Config::development(crate::test_disks([disk.root.clone()])).unwrap()
                 )
                 .is_err()
             );
@@ -686,13 +690,15 @@ fn membership_pending_partial_control_object_is_preserved_and_never_receipted() 
 #[ignore = "explicit cross-build evidence fixture persists temporary directories"]
 fn membership_pending_export_cross_build_fixture() {
     let temp = tempfile::tempdir().unwrap();
-    let original = Config::development([temp.path().join("old-primary")]).unwrap();
+    let original = Config::development(crate::test_disks(
+        [temp.path().join("old-primary")],
+    )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("old-system"), original.clone()).unwrap();
     let probe = temp.path().join("probe");
     let pending_root = probe.join("primary");
     private_dir(&pending_root).unwrap();
     let mut target = original;
-    let mut added = Config::development([pending_root.clone()])
+    let mut added = Config::development(crate::test_disks([pending_root.clone()]))
         .unwrap()
         .disks
         .remove(0);

@@ -327,9 +327,9 @@ fn abort_unmarked_staging_namespace_can_resume_but_does_not_count_as_current() {
 
 fn addition_target(config: &Config, temp: &Path, label: &str) -> Config {
     let mut target = config.clone();
-    let extra = Config::development(
+    let extra = Config::development(crate::test_disks(
         (0..=config.disks.len()).map(|index| temp.join(format!("{label}-{index}"))),
-    )
+    ))
     .unwrap()
     .disks
     .pop()
@@ -385,7 +385,9 @@ fn publish_cancellation(
 fn add_then_abort_mixed_predecessor_markers_select_abort_before_old_fence_hints() {
     let temp = tempfile::tempdir().unwrap();
     let original =
-        Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, original.clone()).unwrap();
     let effective = addition_target(&original, temp.path(), "added");
@@ -441,7 +443,9 @@ fn add_then_abort_mixed_predecessor_markers_select_abort_before_old_fence_hints(
 fn successor_add_head_filters_rejected_fence_using_its_complete_abort_lineage() {
     let temp = tempfile::tempdir().unwrap();
     let original =
-        Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+        )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
     let genesis_seal = fs::read(original.disks[0].root.join("disk.json")).unwrap();
     let rejected = addition_target(&original, temp.path(), "cancelled");

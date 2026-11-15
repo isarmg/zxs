@@ -25,7 +25,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("primary")])).unwrap(),
     ).unwrap();
     let repository = engine.create_repository(
         &RepositoryName::parse("logical workspace").unwrap(),

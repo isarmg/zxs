@@ -192,7 +192,9 @@ impl Fixture {
     fn new(copies: u32) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         let repository = engine.create_disk_root("P01", "admin", op()).unwrap();
         if copies != 1 {

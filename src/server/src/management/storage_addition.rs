@@ -907,6 +907,7 @@ fn prepare_target(
         target.disks.push(DiskConfig {
             slot_id: addition.slot_id.clone(),
             disk_id,
+            name: addition.name.clone(),
             root,
             level: addition.level,
             upstream_slot_id: addition.upstream_slot_id.clone(),

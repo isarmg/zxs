@@ -7,7 +7,8 @@ use storage_contract::{MapChanges, SequenceChanges};
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
-            container_tags,repositories,histories,branches,commits,versions,placements,merge_links,
+            file_containers,container_tags,repositories,histories,branches,commits,
+            versions,placements,merge_links,
             history_boundaries,content_states,operations,plans,placement_rules,
             protection_policies,operation_principals,file_selections,directory_branches,
             directory_git_repositories,
@@ -160,6 +161,24 @@ fn prepare_inner(
         }};
     }
     macro_rules! field {
+        (file_containers) => {{
+            let prior = previous.map(|(before, basis)| {
+                Ok::<_, Error>((
+                    state.file_containers.changes_since(&before.file_containers),
+                    basis.fields.get("file_containers")
+                        .ok_or(crate::engine::FreshLayoutError::ContainerShape)?.files()?,
+                ))
+            }).transpose()?;
+            let root = builder.map(
+                "file_containers",
+                state.file_containers.iter(),
+                prior,
+                |key| state.file_containers.get(key),
+                |value| encode_value("file_containers", value),
+                &|key: &storage_contract::FileId| Cow::Owned(key.to_string()),
+            )?;
+            builder.fields.insert("file_containers".into(), FieldRoot::Files(root));
+        }};
         (container_tags) => {{
             let prior = previous.map(|(before, basis)| {
                 Ok::<_, Error>((

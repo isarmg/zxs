@@ -23,7 +23,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let original =
-            Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine
             .create_repository(
@@ -86,7 +88,9 @@ impl Fixture {
         let mut target = engine.config().clone();
         let count = target.disks.len();
         let additions =
-            Config::development((0..count + added).map(|n| temp.path().join(format!("new-{n}"))))
+            Config::development(crate::test_disks(
+                (0..count + added).map(|n| temp.path().join(format!("new-{n}"))),
+            ))
                 .unwrap();
         let mut directories = Vec::new();
         for mut disk in additions.disks.into_iter().skip(count) {

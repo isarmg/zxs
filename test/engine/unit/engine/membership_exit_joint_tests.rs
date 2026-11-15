@@ -14,7 +14,9 @@ impl ExitFixture {
     fn new(voters: usize, action: MembershipExitAction) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let original =
-            Config::development((0..voters).map(|n| temp.path().join(format!("disk-{n}"))))
+            Config::development(crate::test_disks(
+                (0..voters).map(|n| temp.path().join(format!("disk-{n}"))),
+            ))
                 .unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         let repository = engine
@@ -455,7 +457,7 @@ fn membership_joint_exit_target_preserves_exact_topology_and_requires_typed_effe
 #[test]
 fn membership_joint_exit_terminal_without_published_source_does_not_write_a_fence() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("data")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("data")])).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let before = files(temp.path());
     let error = engine
@@ -477,7 +479,9 @@ fn membership_joint_exit_terminal_without_published_source_does_not_write_a_fenc
 fn membership_joint_exit_partial_first_fence_cold_resume_preserves_exact_intent() {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..3).map(|n| temp.path().join(format!("data-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("data-{n}"))),
+        )).unwrap();
     let system = temp.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();
     let operation = OperationId::generate().unwrap();
@@ -525,7 +529,9 @@ fn membership_joint_exit_partial_first_fence_cold_resume_preserves_exact_intent(
 fn membership_joint_exit_nonvoter_effect_keeps_votes_and_registration() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development((0..3).map(|n| temp.path().join(format!("data-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("data-{n}"))),
+        )).unwrap();
     config.disks[0].metadata_member = false;
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let operation = OperationId::generate().unwrap();

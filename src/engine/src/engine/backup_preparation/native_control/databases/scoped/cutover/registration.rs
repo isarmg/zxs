@@ -145,6 +145,7 @@ impl BackupRegistryProjection {
                 ));
             }
             config.disks.push(DiskConfig {
+                name: target.node.name.clone(),
                 slot_id: identity.slot_id.clone(),
                 disk_id: identity.disk_id.clone(),
                 root: target.root.clone(),

@@ -4,17 +4,44 @@ use super::*;
 fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("system");
-    let mut config = Config::development([
-        temporary.path().join("primary"),
-        temporary.path().join("other-primary"),
-    ])
+    let mut config = Config::development(crate::test_disks(
+        [
+            temporary.path().join("primary"),
+            temporary.path().join("other-primary"),
+        ],
+    ))
     .unwrap();
     config.disks[1].slot_id = "P02".into();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&root, config).unwrap();
     let operation = storage_contract::OperationId::generate().unwrap();
+    // A fresh genesis binding is not permission to adopt unexplained contents
+    // as the empty file-manager namespace. No metadata decision is made.
+    let common = engine.config().disks[0].root.join("common-data");
+    let occupied = common.join("unregistered-user-directory");
+    std::fs::create_dir(&occupied).unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    assert_eq!(
+        engine.create_disk_root("p01", "admin", operation).unwrap_err().code(),
+        ErrorCode::PublicationInvalid,
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(occupied.is_dir());
+    std::fs::remove_dir(&occupied).unwrap();
     let original = engine.create_disk_root("p01", "admin", operation).unwrap();
+    let original_id = original.repository_id.parse().unwrap();
+    let original_main = original.main_branch_id.parse().unwrap();
+    let origin = engine.operation(operation).unwrap().result["file_manager_root_origin"].clone();
+    let binding = engine.config().storage_roots[
+        &engine.config().disks[0].disk_id.parse::<storage_contract::DiskId>().unwrap()
+    ].clone();
+    {
+        let source = engine.namespace_host_root(original_id, original_main).unwrap();
+        assert_eq!(source.binding(), &binding);
+        assert_eq!(source.common().unwrap().path(), common);
+        assert_eq!(source.disk().disk_id, binding.registration.disk_id);
+    }
     let other = engine
         .create_disk_root(
             "P02",
@@ -39,6 +66,11 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
             engine = Engine::open(&root).unwrap();
         }
         let before = canonical_json(engine.state()).unwrap();
+        let source = engine.namespace_host_root(original_id, original_main).unwrap();
+        assert_eq!(source.binding(), &binding);
+        assert_eq!(source.common().unwrap().path(), common);
+        assert_eq!(engine.operation(operation).unwrap().result["file_manager_root_origin"], origin);
+        drop(source);
         assert_eq!(
             engine.create_disk_root("P01", "admin", operation).unwrap(),
             original
@@ -105,7 +137,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let operation = storage_contract::OperationId::generate().unwrap();
@@ -118,6 +150,14 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             operation,
         )
         .unwrap();
+    // Ordinary repositories have no implicit physical host, even when their
+    // primary's genesis common root exists and their namespace is empty.
+    assert_eq!(
+        engine.namespace_host_root(
+            original.repository_id.parse().unwrap(), original.main_branch_id.parse().unwrap(),
+        ).err().unwrap().code(),
+        ErrorCode::UnsupportedOperation,
+    );
     let source = engine.state().histories[&original.history_tree_id]
         .root_commit_id
         .clone();
@@ -202,11 +242,13 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
     for disks in [1, 2, 3] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
-        let mut config = Config::development([
-            temporary.path().join("primary"),
-            temporary.path().join("backup"),
-            temporary.path().join("tertiary"),
-        ])
+        let mut config = Config::development(crate::test_disks(
+            [
+                temporary.path().join("primary"),
+                temporary.path().join("backup"),
+                temporary.path().join("tertiary"),
+            ],
+        ))
         .unwrap();
         config.disks.truncate(disks);
         let mut engine = Engine::initialize(&root, config).unwrap();
@@ -285,11 +327,13 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
     let root = temporary.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([
-            temporary.path().join("primary"),
-            temporary.path().join("backup"),
-            temporary.path().join("tertiary"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                temporary.path().join("primary"),
+                temporary.path().join("backup"),
+                temporary.path().join("tertiary"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -340,4 +384,46 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
         engine.state().repositories[&repo.repository_id].smb_binding_generation,
         4
     );
+}
+
+#[test]
+#[cfg(feature = "fault-injection")]
+fn file_manager_root_authority_follows_actual_publication_and_cold_readback() {
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let disk = temporary.path().join("primary");
+    let mut engine = Engine::initialize(
+        &system, Config::development(crate::test_disks([disk.clone()])).unwrap(),
+    ).unwrap();
+    let operation = OperationId::generate().unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    let roots = engine.config().storage_roots.clone();
+    engine.inject_fault_once("after_local_publications");
+    let error = engine.create_disk_root("P01", "admin", operation).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InDoubt);
+    let Error::Context { source, .. } = error else {
+        panic!("publication failure must retain the actual injected cause");
+    };
+    assert_eq!(source.code(), ErrorCode::InjectedFailure);
+    assert!(source.message().contains("after_local_publications"));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert!(!engine.state().operations.contains_key(&operation));
+    assert!(engine.state().repositories.is_empty());
+    assert_eq!(std::fs::read_dir(disk.join("common-data")).unwrap().count(), 0);
+    drop(engine);
+
+    let mut engine = Engine::open(&system).unwrap();
+    let receipt = engine.operation(operation).unwrap();
+    assert_eq!(receipt.commit_state, storage_contract::CommitState::Published);
+    let repository = engine.create_disk_root("P01", "admin", operation).unwrap();
+    let source = engine.namespace_host_root(
+        repository.repository_id.parse().unwrap(), repository.main_branch_id.parse().unwrap(),
+    ).unwrap();
+    let disk_id = source.disk().disk_id.parse::<storage_contract::DiskId>().unwrap();
+    assert_eq!(source.binding(), &roots[&disk_id]);
+    assert_eq!(source.common().unwrap().path(), disk.join("common-data"));
+    drop(source);
+    let original = canonical_json(engine.state()).unwrap();
+    assert_eq!(engine.create_disk_root("P01", "admin", operation).unwrap(), repository);
+    assert_eq!(canonical_json(engine.state()).unwrap(), original);
 }

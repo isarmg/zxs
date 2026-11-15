@@ -23,11 +23,13 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace, u64) {
     }
     file.sync_all().unwrap();
     drop(file);
-    let config = Config::development([
-        temp.path().join("primary"),
-        temp.path().join("backup"),
-        temp.path().join("tertiary"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            temp.path().join("primary"),
+            temp.path().join("backup"),
+            temp.path().join("tertiary"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine

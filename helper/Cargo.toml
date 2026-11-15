@@ -17,6 +17,7 @@ rustix.workspace = true
 command-line.workspace = true
 data-serialization.workspace = true
 json-codec.workspace = true
+name-policy.workspace = true
 storage-engine.workspace = true
 tokio.workspace = true
 sha2 = { version = "0.11.0", path = "../src/foundation/cryptography/sha2" }

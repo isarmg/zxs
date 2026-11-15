@@ -69,7 +69,9 @@ impl Fixture {
             .tempdir()
             .unwrap();
         let original =
-            Config::development((0..3).map(|n| temp.path().join(format!("old-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("old-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), original.clone()).unwrap();
         engine
             .create_repository(
@@ -82,7 +84,9 @@ impl Fixture {
             .unwrap();
         let mut target = original.clone();
         let additions =
-            Config::development((0..4).map(|n| temp.path().join(format!("new-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..4).map(|n| temp.path().join(format!("new-{n}"))),
+            )).unwrap();
         let added = additions.disks.into_iter().nth(3).unwrap();
         private_dir(&added.root).unwrap();
         target.disks.push(added);
@@ -472,7 +476,9 @@ impl StartupFixture {
         let temp = tempfile::tempdir().unwrap();
         let system = temp.path().join("system");
         let config =
-            Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+            Config::development(crate::test_disks(
+                (0..3).map(|index| temp.path().join(format!("disk-{index}"))),
+            ))
                 .unwrap();
         let engine = Engine::initialize(&system, config).unwrap();
         let config = engine.config.clone();

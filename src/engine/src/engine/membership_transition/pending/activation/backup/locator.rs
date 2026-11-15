@@ -52,7 +52,7 @@ impl BackupWriterIoConfig {
         let portable = canonical_json(&generation.portable)?;
         let mut files = BTreeMap::from([
             (
-                PathBuf::from("metadata/pool-membership/config.json"),
+                crate::persist::layout::GENESIS_CONFIGURATION.as_path().to_path_buf(),
                 canonical_json(&generation.original)?,
             ),
             (PathBuf::from(GENERATION_FILE), portable.clone()),
@@ -106,7 +106,7 @@ impl PreparedBackupTargetLocator {
     pub(in crate::engine) fn original_files(&self) -> impl Iterator<Item = (PathBuf, &[u8])> {
         self.files().filter(|(path, _)| {
             path != Path::new(GENERATION_FILE)
-                && path != Path::new("metadata/pool-membership/config.json")
+                && path != crate::persist::layout::GENESIS_CONFIGURATION.as_path()
         })
     }
 
@@ -169,7 +169,7 @@ impl PreparedBackupTargetLocator {
             &identity_at(original, disk, &root.directory(root.path())?)?,
         )?;
         let saved: ValidatedConfig = decode_strict(&root.read_bytes(
-            &root.path().join("metadata/pool-membership/config.json"),
+            &root.path().join(crate::persist::layout::GENESIS_CONFIGURATION.as_path()),
             MAX_METADATA,
         )?)?;
         original.verify_saved_metadata_membership(&saved)?;

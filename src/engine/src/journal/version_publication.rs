@@ -1,10 +1,12 @@
 //! Original publication validation, separate from the current physical layout.
 //!
-//! LocalPublication includes the complete operation result, which can contain
-//! exterior paths. A future unified layout must keep it and member authority in
-//! the disk proof domain, not the pathless FILE database. This private protocol
-//! does not grant a new-layout constructor or a FILE body-read capability.
-use crate::disk::{DiskRoot, DiskSeal, MAX_METADATA, absolute_path, decode_seal, read_bytes};
+//! LocalPublication includes the complete operation result and stays separate
+//! from pathless FILE rows. The ordinary reader routes these proof reads through
+//! its actual retained data/management roots; their common verification kernel
+//! does not infer a source from the payload path or mint a publication.
+use crate::disk::{
+    DiskHandle, DiskRoot, DiskSeal, MAX_METADATA, absolute_path, decode_seal, read_bytes,
+};
 use crate::engine::provenance::MetadataReadContext;
 use crate::journal::{
     Candidate, CommitProof, ContentTombstone, LocalPublication, PublicationSeal, decode_proof,
@@ -34,9 +36,8 @@ trait VersionPublicationRead {
     ) -> Result<()>;
 }
 
-/// This is the sole constructor used by the still-active layout. It proves
-/// location identity, not publication or current body availability. There is no
-/// arbitrary-path constructor for the unified DISK proof domain.
+/// One supported address shape. It proves location identity only; the complete
+/// proof and actual retained DISK domains are still verified by the reader.
 struct CurrentVersionProofLocation<'a> {
     directory: &'a Path,
     root: &'a Path,
@@ -54,7 +55,7 @@ impl<'a> CurrentVersionProofLocation<'a> {
                 .and_then(|s| s.to_str())
                 != Some(version.history_tree_id.as_str())
             || directory.ancestors().nth(3).and_then(Path::file_name)
-                != Some(layout::HISTORIES.as_os_str())
+                != Some(layout::ZXS_DATA_ROOT.as_os_str())
         {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
@@ -146,6 +147,33 @@ pub(crate) fn verify_local_publication_observed(
     })?;
     let root = DiskRoot::open(root)?;
     verify_local_publication_at(&root, &directory, version, observe, metadata)
+}
+
+pub(crate) fn verify_local_publication_on_disk(
+    disk: &DiskHandle,
+    directory: &Path,
+    version: &FileVersion,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&MetadataReadContext<'_>>,
+) -> Result<()> {
+    let location = CurrentVersionProofLocation::admit(directory, version)?;
+    if location.root != disk.root.path() {
+        return Err(crate::engine::FreshLayoutError::PublicationLocation.into());
+    }
+    let tombstone = location.tombstone();
+    let mut source = CurrentVersionProofReader {
+        location,
+        read: |path: &Path| disk.root_for(path)?.read_bytes_observed(path, MAX_METADATA, observe),
+    };
+    verify_local_publication_with(
+        version,
+        &mut source,
+        &mut || disk.management_root()?.open_optional_read_regular(&tombstone)
+            .map(|file| file.is_some()),
+        metadata,
+    )?;
+    disk.management_root()?;
+    Ok(())
 }
 
 pub(crate) fn verify_local_publication_at(

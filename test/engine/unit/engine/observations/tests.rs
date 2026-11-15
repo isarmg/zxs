@@ -4,11 +4,13 @@ use super::*;
 fn missing_member_with_empty_mountpoint_never_reports_host_capacity() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        root.path().join("d1"),
-        root.path().join("d2"),
-        root.path().join("d3"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let plan = engine.prepare_disk_observation();
@@ -31,11 +33,13 @@ fn missing_member_with_empty_mountpoint_never_reports_host_capacity() {
 #[test]
 fn observation_owns_snapshot_and_probes_without_engine() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        root.path().join("d1"),
-        root.path().join("d2"),
-        root.path().join("d3"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ],
+    ))
     .unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let plan = engine.prepare_disk_observation();
@@ -67,11 +71,13 @@ fn observation_owns_snapshot_and_probes_without_engine() {
 #[test]
 fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
-        root.path().join("d1"),
-        root.path().join("d2"),
-        root.path().join("d3"),
-    ])
+    let config = Config::development(crate::test_disks(
+        [
+            root.path().join("d1"),
+            root.path().join("d2"),
+            root.path().join("d3"),
+        ],
+    ))
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
@@ -139,7 +145,7 @@ fn accounting_snapshot_preserves_slot_keys_and_saturating_totals() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("member")])).unwrap(),
     )
     .unwrap();
     // This accounting-only fixture deliberately exercises keys and routes that
@@ -224,11 +230,13 @@ fn observation_exposes_dangling_internal_placement() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([
-            root.path().join("d1"),
-            root.path().join("d2"),
-            root.path().join("d3"),
-        ])
+        Config::development(crate::test_disks(
+            [
+                root.path().join("d1"),
+                root.path().join("d2"),
+                root.path().join("d3"),
+            ],
+        ))
         .unwrap(),
     )
     .unwrap();
@@ -268,7 +276,7 @@ fn observation_exposes_dangling_internal_placement() {
 #[test]
 fn metadata_probe_observes_current_identity_without_engine_or_capacity_accounting() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([root.path().join("member")])).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let probe = engine.prepare_metadata_member_probe();
     drop(engine);
@@ -301,7 +309,9 @@ fn metadata_probe_observes_current_identity_without_engine_or_capacity_accountin
 fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
     let root = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development([root.path().join("member"), root.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [root.path().join("member"), root.path().join("backup")],
+        )).unwrap();
     config.disks[1].metadata_member = false;
     let mut engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     // Deliberately dangling internal sentinels: observing identity must not touch
@@ -330,7 +340,7 @@ fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
 #[test]
 fn corrupt_seal_retains_decode_source_and_revokes_epoch() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([root.path().join("member")])).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let epoch = engine.metadata_integrity.capture();
     let plan = engine.prepare_disk_observation();
@@ -353,7 +363,7 @@ fn zero_capacity_is_a_successful_sample_not_an_unavailable_status() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("member")])).unwrap(),
     )
     .unwrap();
     let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
@@ -377,7 +387,7 @@ fn capacity_syscall_failure_preserves_source_without_revoking_metadata_epoch() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("member")])).unwrap(),
     )
     .unwrap();
     let epoch = engine.metadata_integrity.capture();
@@ -406,7 +416,7 @@ fn capacity_syscall_failure_preserves_source_without_revoking_metadata_epoch() {
 #[ignore = "run alone with observations/read_error.c compiled as LD_PRELOAD"]
 fn seal_permission_failure_preserves_source_and_revokes_epoch() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]).unwrap();
+    let config = Config::development(crate::test_disks([root.path().join("member")])).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let epoch = engine.metadata_integrity.capture();
     std::fs::write(config.disks[0].root.join("observation-read-error"), b"").unwrap();
@@ -431,7 +441,7 @@ fn capacity_failure_conversion_retains_stage_and_source_not_zero() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("member")])).unwrap(),
     )
     .unwrap();
     let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
@@ -457,7 +467,7 @@ fn disk_observation_directory_retains_verified_object_after_name_replacement() {
     let disk_root = root.path().join("disk");
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([disk_root.clone()]).unwrap(),
+        Config::development(crate::test_disks([disk_root.clone()])).unwrap(),
     )
     .unwrap();
     let observed = engine.open_disk_observation_directory("p01").unwrap();
@@ -479,7 +489,7 @@ fn disk_observation_directory_rejects_reused_seal_and_missing_seal_without_fenci
     let disk_root = root.path().join("disk");
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([disk_root.clone()]).unwrap(),
+        Config::development(crate::test_disks([disk_root.clone()])).unwrap(),
     )
     .unwrap();
     let seal = std::fs::read(disk_root.join("disk.json")).unwrap();
@@ -505,7 +515,7 @@ fn observation_fixture() -> (tempfile::TempDir, Engine) {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     (root, engine)
@@ -687,7 +697,9 @@ fn published_exit_observations_use_current_rows_and_voters_without_reopening_tar
     ] {
         let root = tempfile::tempdir().unwrap();
         let config =
-            Config::development((0..3).map(|n| root.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| root.path().join(format!("disk-{n}"))),
+            )).unwrap();
         let mut engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
         engine
             .create_repository(

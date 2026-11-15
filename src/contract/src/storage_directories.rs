@@ -59,6 +59,15 @@ pub struct CandidateSelection {
     pub root_identity: DirectoryIdentity,
 }
 
+/// An explicit user name attached to the exact observed initialization target.
+/// The name is not derived from any path in the selection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct NamedStorageSelection {
+    pub selection: CandidateSelection,
+    pub name: name_policy::Name,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
 pub enum DirectoryProblem {

@@ -5,7 +5,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("primary")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -123,11 +123,13 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &root.path().join("system"),
-            Config::development([
-                root.path().join("p"),
-                root.path().join("b"),
-                root.path().join("c"),
-            ])
+            Config::development(crate::test_disks(
+                [
+                    root.path().join("p"),
+                    root.path().join("b"),
+                    root.path().join("c"),
+                ],
+            ))
             .unwrap(),
         )
         .unwrap();
