@@ -273,6 +273,8 @@ fn membership_registry_workspace_overlap_recovery_rejects_duplicate_and_reused_b
 fn membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_restart() {
     let mut fixture = Fixture::new(true);
     let target = fixture.engine.config.disks[0].clone();
+    let retained = fixture.retained.clone();
+    let system = fixture._temp.path().join("system");
     let operation = op();
     fixture
         .engine
@@ -292,28 +294,74 @@ fn membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_res
         .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
         .unwrap();
     let joint = fixture.engine.resume_membership_joint_decision().unwrap();
+    assert_eq!((joint.original_members, joint.original_quorum), (3, 2));
+    assert_eq!((joint.target_members, joint.target_quorum), (2, 2));
     assert!(joint.joint_quorum_accepted());
     assert!(joint.certificate_hash.is_some());
     assert_eq!(joint.certificate_members.len(), joint.union_members);
-    fixture.engine.activate_pending_disk_exit().unwrap();
+    let exit = fixture.engine.activate_pending_disk_exit().unwrap();
+    assert_eq!(exit.operation_id, operation);
+    let registry = fixture.engine.current_namespaces.as_ref().unwrap().registry().clone();
     let detached = fixture._temp.path().join("untouched-detached");
     std::fs::rename(&target.root, &detached).unwrap();
     std::fs::write(&target.root, b"excluded root must not be probed").unwrap();
+
+    // This first reopen must restore actual D3 before admitting a new workspace.
+    // No workspace created on the original live engine supplies its authority.
+    drop(fixture.engine);
+    fixture.engine = Engine::open(&system).unwrap();
+    assert!(!fixture.engine.is_read_only());
+    assert_eq!(fixture.engine.operation(operation).unwrap(), exit);
+    assert_eq!(fixture.engine.current_namespaces.as_ref().unwrap().registry(), &registry);
+    assert_eq!(entry(&fixture, "dir/b"), retained);
+    assert_eq!(bytes(&fixture.engine, &retained.version_id), b"retained");
+    let before_admission = fixture.engine.state.operations.clone();
     let workspace = fixture
         .engine
         .create_workspace(&fixture.repo.main_branch_id, "admin")
         .unwrap();
+    let admissions: Vec<_> = fixture.engine.state.operations.iter()
+        .filter(|(id, _)| !before_admission.contains_key(*id))
+        .map(|(_, result)| result.clone())
+        .collect();
+    assert_eq!(admissions.len(), 1);
+    let admission = &admissions[0];
+    assert_eq!(admission.kind, "workspace.namespace.admit");
+    assert_eq!(admission.commit_state, CommitState::Published);
+    assert!(admission.sequence > exit.sequence);
+    assert_eq!(
+        admission.result["namespace_admission"]["workspace_id"].as_str(),
+        Some(workspace.workspace_id.as_str()),
+    );
     fixture
         .engine
         .stage_bytes(&workspace.workspace_id, "dir/b", b"after actual D3")
         .unwrap();
     stage_rename(&mut fixture, &workspace, "dir", "after-exit");
     let request = request(&workspace);
+
+    // Keep staged bytes and ordered edits across restart. The permanent receipt,
+    // not an in-memory baseline, must restore admission before this first commit.
+    drop(fixture.engine);
+    fixture.engine = Engine::open(&system).unwrap();
+    assert!(!fixture.engine.is_read_only());
+    assert_eq!(fixture.engine.operation(admission.operation_id).unwrap(), *admission);
+    assert!(fixture.engine.workspace_namespace_baselines.contains_key(&workspace.workspace_id));
+    assert_eq!(fixture.engine.current_namespaces.as_ref().unwrap().registry(), &registry);
     let result = fixture.engine.commit_workspace(request.clone()).unwrap();
+    assert_eq!(result.commit_state, CommitState::Published);
     let moved = entry(&fixture, "after-exit/b");
-    let system = fixture._temp.path().join("system");
+    assert_eq!(moved.file_id, retained.file_id);
+    assert_eq!(moved.entry_id, retained.entry_id);
+    assert_ne!(moved.version_id, retained.version_id);
+    assert_eq!(bytes(&fixture.engine, &moved.version_id), b"after actual D3");
+    assert_eq!(bytes(&fixture.engine, &retained.version_id), b"retained");
     drop(fixture.engine);
     let mut engine = Engine::open(&system).unwrap();
+    assert!(!engine.is_read_only());
+    assert_eq!(engine.operation(operation).unwrap(), exit);
+    assert_eq!(engine.operation(admission.operation_id).unwrap(), *admission);
+    assert_eq!(engine.current_namespaces.as_ref().unwrap().registry(), &registry);
     assert_eq!(
         engine
             .namespace_tree(&fixture.repo.main_branch_id)
@@ -322,7 +370,16 @@ fn membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_res
         Some(&moved)
     );
     assert_eq!(bytes(&engine, &moved.version_id), b"after actual D3");
+    assert_eq!(bytes(&engine, &retained.version_id), b"retained");
+    let state = Arc::clone(&engine.state);
+    let current = Arc::clone(engine.current_namespaces.as_ref().unwrap());
+    let next_slot = engine.next_slot;
+    let snapshot = engine.snapshot.clone();
     assert_eq!(engine.commit_workspace(request).unwrap(), result);
+    assert!(Arc::ptr_eq(&engine.state, &state));
+    assert!(Arc::ptr_eq(engine.current_namespaces.as_ref().unwrap(), &current));
+    assert_eq!(engine.next_slot, next_slot);
+    assert_eq!(engine.snapshot, snapshot);
     assert_eq!(
         std::fs::read(&target.root).unwrap(),
         b"excluded root must not be probed"
