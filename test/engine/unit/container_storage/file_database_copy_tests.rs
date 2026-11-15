@@ -12,20 +12,25 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_copies(3, true)
+    }
+
+    fn with_copies(copies: u32, primary_metadata: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = Config::development([
+        let mut config = Config::development([
             temp.path().join("primary"),
             temp.path().join("backup"),
             temp.path().join("third"),
         ])
         .unwrap();
+        config.disks[0].metadata_member = primary_metadata;
         let mut engine =
             Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
         let repository = engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("copy image").unwrap(),
                 "P01",
-                3,
+                copies,
                 "admin",
                 OperationId::generate().unwrap(),
             )
@@ -328,8 +333,31 @@ fn shared_image_keeps_its_view_and_rechecks_each_target_before_staging() {
 
 #[test]
 fn skipped_recovery_roots_do_not_capture_or_encode_file_material() {
-    let fixture = Fixture::new();
-    let original = fixture.database_bytes();
+    // Leave both metadata voters online, but make this FILE's only data root
+    // genuinely unavailable at cold admission. Final-state repair may skip it;
+    // a candidate (even decided recovery) still requires its selected root.
+    let mut fixture = Fixture::with_copies(1, false);
+    let primary = &fixture.config.disks[0];
+    let database = fixture
+        .container(primary)
+        .join(crate::container_storage::file_database::NAME);
+    let relative_database = database.strip_prefix(&primary.root).unwrap().to_path_buf();
+    let original = std::fs::read(&database).unwrap();
+    let identity = std::fs::metadata(&database).unwrap();
+    let previous = fixture.engine.state().clone();
+    let system = fixture.temp.path().join("system");
+    let parked = fixture.temp.path().join("parked-primary");
+    drop(fixture.engine);
+    std::fs::rename(&primary.root, &parked).unwrap();
+    fixture.engine = Engine::open(&system).unwrap();
+    assert!(!fixture.engine.is_read_only());
+    assert_eq!(fixture.engine.state(), &previous);
+    assert!(fixture.engine.disk_resources.available(primary).is_none());
+    for disk in fixture.config.disks.iter().filter(|disk| disk.metadata_member) {
+        assert!(fixture.engine.disk_resources.available(disk).is_some());
+    }
+
+    // This sentinel would fail canonical capture. It is not published.
     let mut next = fixture.engine.state().clone();
     next.file_notes.insert(
         fixture.entry.file_id.clone(),
@@ -352,31 +380,41 @@ fn skipped_recovery_roots_do_not_capture_or_encode_file_material() {
         .code(),
         ErrorCode::ResourceLimit,
     );
-    let excluded = fixture
-        .config
-        .disks
-        .iter()
-        .map(|disk| disk.disk_id.clone())
-        .collect();
-    let missing = Arc::new(fixture.engine.disk_resources.excluding(&excluded));
-    let recovered = crate::container_storage::prepare_recovered_names(
-        &fixture.engine.config,
-        &missing,
-        &projection,
-        crate::disk::MAX_METADATA,
-    )
-    .unwrap();
-    assert!(recovered.cache.is_none());
-    assert!(recovered.database_scopes.is_empty());
-    let missing_code = missing.get(&fixture.config.disks[0]).err().unwrap().code();
     let ordinary = crate::container_storage::prepare_names(
         &fixture.engine.config,
-        &missing,
+        &fixture.engine.disk_resources,
         &projection,
         crate::disk::MAX_METADATA,
     )
     .err()
     .unwrap();
-    assert_eq!(ordinary.code(), missing_code);
-    assert_eq!(fixture.database_bytes(), original);
+    assert_eq!(ordinary.code(), ErrorCode::DiskUnavailable);
+    let candidate = crate::container_storage::prepare_recovered_names(
+        &fixture.engine.config,
+        &fixture.engine.disk_resources,
+        &projection,
+        crate::disk::MAX_METADATA,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(candidate.code(), ErrorCode::DiskUnavailable);
+
+    let repaired = crate::container_storage::prepare_layout_repair(
+        &fixture.engine.config,
+        &fixture.engine.disk_resources,
+        &next,
+        None,
+        crate::database_install::InstallAdmission::DecidedRecovery,
+    )
+    .unwrap();
+    assert!(repaired.cache.is_none());
+    assert!(repaired.database_scopes.is_empty());
+    assert!(!primary.root.exists());
+    let retained_database = parked.join(relative_database);
+    let retained_identity = std::fs::metadata(&retained_database).unwrap();
+    assert_eq!(
+        (retained_identity.dev(), retained_identity.ino()),
+        (identity.dev(), identity.ino()),
+    );
+    assert_eq!(std::fs::read(retained_database).unwrap(), original);
 }

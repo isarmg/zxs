@@ -2596,7 +2596,7 @@ class ContainerTagsSelection(unittest.TestCase):
                 plan = CI.select_plan(self.policy, [path])
                 self.assertIn('file-material-copy-reuse', plan['groups'])
                 self.assertCountEqual(
-                    self.selections(plan, 'file-material-copy-reuse'),
+                    origin_selections(plan, 'file-material-copy-reuse'),
                     self.policy['groups']['file-material-copy-reuse']['rust_targets'],
                 )
         targets = self.policy['groups']['file-material-copy-reuse']['rust_targets']
