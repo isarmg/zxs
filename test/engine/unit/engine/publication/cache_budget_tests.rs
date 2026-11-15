@@ -38,18 +38,39 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         })
         .unwrap();
     let before = canonical_json(engine.state()).unwrap();
-    let mut next = engine.state().clone();
-    next.sequence = engine.next_slot;
-    let file = next.versions.values().next().unwrap().file_id.clone();
-    // Valid metadata must reach the deliberately tiny cache budget; an invalid
-    // oversized note would fail history validation before exercising the encoder.
-    let note = "n".repeat(storage_contract::MAX_NOTE_BYTES);
-    storage_contract::validate_note(&note).unwrap();
-    next.file_notes.insert(file, note);
-    let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = storage_contract::OperationId::generate().unwrap();
-    result.sequence = next.sequence;
-    next.operations.insert(result.operation_id, result.clone());
+    let file = engine.state().versions.values().next().unwrap().file_id.clone();
+    // Use the actual metadata planner, including its permanent request, actor,
+    // event and whole-State proof. Cloning an arbitrary old receipt can select
+    // workspace.commit without its new operation principal and fail path-audit
+    // admission before reaching the cache encoder.
+    let note = storage_contract::Note::parse(
+        "n".repeat(storage_contract::MAX_NOTE_BYTES),
+    ).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    let plan = engine.plan_mutation_digest(
+        "file.metadata",
+        "alice",
+        operation,
+        crate::persist::file_metadata::note_input(&file, None, &note),
+        None,
+        |engine, next, _| {
+            let request = crate::business::file_metadata::Request::Note {
+                file: file.parse()?, version: None, note: &note,
+            };
+            let replacement = crate::business::file_metadata::plan(
+                engine.state(), engine.current_namespaces.as_deref(), request,
+            )?;
+            replacement.apply(next);
+            Ok(crate::persist::file_metadata::outcome(&replacement))
+        },
+    ).unwrap();
+    let crate::engine::MutationPlan::Prepared { next, prepared, result } = plan else {
+        panic!("fresh metadata operation must produce an unpublished plan");
+    };
+    assert!(prepared.is_empty());
+    assert_eq!(next.file_notes.get(&file).map(String::as_str), Some(note.as_str()));
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    let next = *next;
     let logs: Vec<_> = engine
         .members()
         .iter()
@@ -60,7 +81,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .prepare_publication_bounded(next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128)
         .err()
         .unwrap();
-    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit, "{error:?}");
     assert!(!engine.blocked);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert_eq!(
