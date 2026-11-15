@@ -9,14 +9,14 @@ fn operation() -> OperationId {
     OperationId::generate().unwrap()
 }
 
-struct Fixture {
-    _temp: tempfile::TempDir,
+pub(super) struct Fixture {
+    pub(super) _temp: tempfile::TempDir,
     _engine: Engine,
-    target: PathBuf,
+    pub(super) target: PathBuf,
 }
 
 impl Fixture {
-    fn prepared() -> Self {
+    pub(super) fn prepared() -> Self {
         let temp = tempfile::Builder::new()
             .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .tempdir()
@@ -103,7 +103,7 @@ fn owned<T: DeserializeOwned + Serialize>(
     Ok(parsed)
 }
 
-fn error_signature(error: &Error) -> (ErrorCode, Vec<String>) {
+pub(super) fn error_signature(error: &Error) -> (ErrorCode, Vec<String>) {
     let mut chain = Vec::new();
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(source) = current {
@@ -925,7 +925,7 @@ fn encoded_reference_verify_payloads(
     Ok(())
 }
 
-fn fixture_file_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn fixture_file_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn visit(root: &Path, path: &Path, output: &mut BTreeMap<PathBuf, Vec<u8>>) {
         for entry in fs::read_dir(path).unwrap() {
             let path = entry.unwrap().path();

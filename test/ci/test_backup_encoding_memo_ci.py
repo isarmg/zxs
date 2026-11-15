@@ -94,7 +94,7 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertEqual(len(plan['rust_targets']), 3)
         self.assertEqual(len(plan['python_tests']), 8)
         group = self.policy['groups']['backup-scoped-encoding-memo']
-        unit, product, transaction = group['rust_targets']
+        unit, product, transaction, trace = group['rust_targets']
         self.assertIn('engine::index::preparation::tests::', unit['prefixes'])
         self.assertIn('journal::retained_encoding::tests::', unit['prefixes'])
         self.assertIn('engine::disk_catalog::history::preparation::encoding_tests::',
@@ -139,7 +139,7 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertIn('container-tags-format', plan['groups'])
         self.assertIn('held-directory-layout', plan['groups'])
         group = self.policy['groups']['backup-scoped-encoding-memo']
-        unit, product, transaction = group['rust_targets']
+        unit, product, transaction, trace = group['rust_targets']
         self.assertIn(prefix, unit['prefixes'])
         self.assertEqual(unit['max_tests'], 96)
         self.assertEqual(unit['timeout_seconds'], 900)
@@ -151,6 +151,49 @@ class BackupEncodingMemoSelection(unittest.TestCase):
         self.assertEqual(transaction['exact'], [
             'backup_preparation::transaction_serving::'
             'same_backup_switch_serves_and_replays_normal_successor_publications'])
+
+
+    def test_read_trace_selects_real_differentials_without_widening_old_caps(self):
+        source = ('src/engine/src/engine/backup_preparation/native_control/'
+                  'archive/read_trace.rs')
+        fixture = 'test/engine/unit/backup_native_read_trace_tests.rs'
+        for path in [source, fixture]:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn('backup-scoped-encoding-memo', plan['groups'])
+                self.assertIn('test_backup_encoding_memo_ci', plan['python_tests'])
+                if path == source:
+                    self.assertIn('held-directory-layout', plan['groups'])
+                    self.assertIn('container-tags-format', plan['groups'])
+                else:
+                    self.assertEqual(plan['groups'], ['backup-scoped-encoding-memo'])
+        unit, product, transaction, trace = self.policy['groups'][
+            'backup-scoped-encoding-memo']['rust_targets']
+        self.assertEqual(unit['max_tests'], 96)
+        self.assertEqual(unit['timeout_seconds'], 900)
+        self.assertEqual(product['mode'], 'check')
+        self.assertFalse(product['default_features'])
+        self.assertTrue(transaction['isolate'])
+        self.assertEqual(transaction['max_tests'], 1)
+        self.assertEqual(transaction['timeout_seconds'], 900)
+        self.assertEqual(trace['max_tests'], 5)
+        self.assertEqual(trace['timeout_seconds'], 900)
+        self.assertNotIn('prefixes', trace)
+        self.assertNotIn('whole', trace)
+        prefix = 'engine::backup_preparation::native_control::archive::read_trace::tests::'
+        self.assertEqual(trace['exact'], [
+            prefix + 'real_archive_trace_repeats_all_reads_and_budget_steps_before_returning_report',
+            prefix + 'changed_missing_and_cancelled_archive_inputs_keep_the_original_first_failure',
+            prefix + 'fallback_consumes_the_actual_changed_read_even_after_bytes_and_stop_change',
+            prefix + 'archive_trace_refusal_and_failed_transaction_leave_original_admission_unchanged',
+            prefix + 'warm_archive_trace_does_not_bypass_the_outer_actual_target_binding',
+        ])
+        # Same Cargo unit build, independent original 96/new 5 selections.
+        plan = CI.select_plan(self.policy, [fixture])
+        units = [target for target in plan['rust_targets']
+                 if target.get('mode', 'test') == 'test' and 'name' not in target]
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0]['selections'], [unit, trace])
 
 
 # External diagnostics tests: these do not contribute to Rust test outcomes.

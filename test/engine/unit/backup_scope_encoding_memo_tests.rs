@@ -165,7 +165,10 @@ fn canonical_pending_is_dropped_after_late_binding_error_or_cancellation() {
     assert_eq!(state.reserved_entries, 0);
 }
 
-fn memo_with_limit(bytes: usize, entries: usize) -> ScopeEncodingMemo {
+pub(in crate::engine::backup_preparation::native_control) fn memo_with_limit(
+    bytes: usize,
+    entries: usize,
+) -> ScopeEncodingMemo {
     ScopeEncodingMemo {
         state: Mutex::new(State::default()),
         maximum_bytes: bytes,
@@ -625,6 +628,7 @@ enum CommittedEntryObservation {
     System(Vec<u8>),
     DiskPair(Vec<u8>, Vec<u8>),
     Canonical { address: usize, stored: usize, payload: Option<usize> },
+    Archive { address: usize, payload: usize },
 }
 
 #[derive(PartialEq, Eq)]
@@ -649,6 +653,10 @@ fn committed_account(memo: &ScopeEncodingMemo) -> CommittedAccountObservation {
                 address: std::ptr::from_ref(encoding) as usize,
                 stored: *payload,
                 payload: encoding.payload_bytes(),
+            },
+            Bytes::Archive { trace, payload } => CommittedEntryObservation::Archive {
+                address: Arc::as_ptr(trace) as usize,
+                payload: *payload,
             },
         };
         (*key, observed)
@@ -798,4 +806,31 @@ fn committed_metadata_capacity_decline_and_colliding_proof_do_not_fill_or_replac
         RawMetadataRead::parse("state-page", &expected, raw).unwrap(),
     ).err().unwrap().code(), ErrorCode::ObjectCorrupt);
     assert!(committed_account(&memo) == before);
+}
+
+// Test-module access to the real account, not a production test hook.
+pub(in crate::engine::backup_preparation::native_control) fn memo_usage(
+    memo: &ScopeEncodingMemo,
+) -> (usize, usize, usize, usize) {
+    let state = memo.state.lock().unwrap();
+    (state.bytes, state.entries.len(), state.reserved_bytes, state.reserved_entries)
+}
+
+pub(in crate::engine::backup_preparation::native_control) fn memo_with_archive_headroom(
+    manifest: &[u8],
+    headroom: usize,
+) -> ScopeEncodingMemo {
+    let bytes = VerifiedReadTrace::initial_charge(manifest).unwrap()
+        + std::mem::size_of::<(Key, Bytes)>() + headroom;
+    memo_with_limit(bytes, 256)
+}
+
+pub(in crate::engine::backup_preparation::native_control) fn with_pending_system_byte(
+    memo: &ScopeEncodingMemo,
+    action: impl FnOnce(),
+) {
+    let mut session = Session::new(Some((memo, [93; 32])));
+    assert_eq!(session.system([94; 32], || Ok(vec![95])).unwrap(), [95]);
+    assert_eq!(session.reserved_entries, 1);
+    action();
 }

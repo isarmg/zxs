@@ -17,6 +17,8 @@ use crate::persist::layout;
 use data_serialization::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) mod read_trace;
+
 #[path = "generation_objects.rs"]
 pub(super) mod generation_objects;
 
@@ -245,24 +247,34 @@ struct Target<'a, 'memo> {
     budget: Budget,
     encodings: Option<Encodings<'a, 'memo>>,
 }
-impl Source for Target<'_, '_> {
-    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
+impl Target<'_, '_> {
+    fn read_object(&mut self, kind: &'static str, hash: &str) -> Result<Vec<u8>> {
         crate::history_package::preparation_checkpoint(self.stop)?;
         let bytes = self.root.read_bytes(
             &object_path(self.root.path(), kind, hash)?,
             MAX_BYTES - self.budget.bytes,
         )?;
         self.budget.account(bytes.len())?;
-        let read = RawMetadataRead::parse(kind, hash, &bytes)?;
+        Ok(bytes)
+    }
+
+    fn authenticate_object(
+        &mut self,
+        kind: &'static str,
+        hash: &str,
+        bytes: &[u8],
+    ) -> Result<AuthenticatedMetadataObject> {
+        let read = RawMetadataRead::parse(kind, hash, bytes)?;
         match self.encodings.as_mut() {
             Some(Encodings::Pending(encodings)) => encodings.metadata(read),
             Some(Encodings::Committed(encodings)) => encodings.committed_metadata(read),
             None => Ok(read.authenticate(None)?.into_object()),
         }
     }
-    fn journal(&mut self, index: usize, expected: &OriginalMember) -> Result<Vec<u8>> {
+
+    fn read_journal(&mut self, index: usize, expected_bytes: usize) -> Result<Vec<u8>> {
         crate::history_package::preparation_checkpoint(self.stop)?;
-        if expected.journal_bytes > MAX_JOURNAL {
+        if expected_bytes > MAX_JOURNAL {
             return Err(budget_error());
         }
         let bytes = self.root.read_bytes(
@@ -271,6 +283,16 @@ impl Source for Target<'_, '_> {
         )?;
         self.budget.account(bytes.len())?;
         Ok(bytes)
+    }
+}
+
+impl Source for Target<'_, '_> {
+    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
+        let bytes = self.read_object(kind, hash)?;
+        self.authenticate_object(kind, hash, &bytes)
+    }
+    fn journal(&mut self, index: usize, expected: &OriginalMember) -> Result<Vec<u8>> {
+        self.read_journal(index, expected.journal_bytes)
     }
     fn budget(&self) -> &Budget {
         &self.budget
@@ -583,15 +605,7 @@ fn verify(
     verify_observed(manifest, bytes, job, source, &mut |_, _, _, _| Ok(()))
 }
 
-fn verify_observed(
-    manifest: &Manifest,
-    bytes: &[u8],
-    job: &Job,
-    source: &mut impl Source,
-    observe: &mut impl FnMut(
-        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
-    ) -> Result<()>,
-) -> Result<(BackupNativeControlReport, AdmittedState)> {
+fn verify_manifest(manifest: &Manifest, job: &Job) -> Result<crate::ValidatedConfig> {
     if manifest.format != FORMAT
         || manifest.publications.is_empty()
         || manifest.publications.len() > MAX_PUBLICATIONS
@@ -604,7 +618,19 @@ fn verify_observed(
             "native prefix does not bind the complete frozen task",
         ));
     }
-    let config = crate::ValidatedConfig::try_from(manifest.config.clone())?;
+    crate::ValidatedConfig::try_from(manifest.config.clone())
+}
+
+fn verify_observed(
+    manifest: &Manifest,
+    bytes: &[u8],
+    job: &Job,
+    source: &mut impl Source,
+    observe: &mut impl FnMut(
+        &crate::ValidatedConfig, &Candidate, &str, &AdmittedState,
+    ) -> Result<()>,
+) -> Result<(BackupNativeControlReport, AdmittedState)> {
+    let config = verify_manifest(manifest, job)?;
     source.account(bytes.len())?;
     let (journals, journal_frames) = original_journals(manifest, source)?;
     let mut previous: Option<AdmittedState> = None;
@@ -900,10 +926,7 @@ pub(super) fn read_with_encodings(
     stop: &AtomicBool,
     encodings: &mut Transaction<'_>,
 ) -> Result<BackupNativeControlReport> {
-    let (report, _) = read_observed_with_encodings(
-        root, job, task, stop, &mut |_, _, _, _| Ok(()), encodings,
-    )?;
-    Ok(report)
+    read_trace::read(root, job, task, stop, encodings)
 }
 
 pub(super) fn read_observed_with_encodings(

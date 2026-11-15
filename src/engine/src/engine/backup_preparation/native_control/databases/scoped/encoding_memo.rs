@@ -1,5 +1,6 @@
-//! Request-local pure encodings. This is never admission or a verification result.
+//! Request-local encodings and sealed pure read computations, never root or writer authority.
 use crate::{Result, history_package::preparation_checkpoint};
+use super::super::super::archive::read_trace::VerifiedReadTrace;
 use crate::journal::{AuthenticatedMetadataObject, MetadataDomain, RawMetadataRead};
 use crate::journal::RetainedMetadataEncoding;
 use data_serialization::Serialize;
@@ -18,6 +19,7 @@ enum Kind {
     System,
     DiskPair,
     Canonical(MetadataDomain),
+    Archive,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -32,6 +34,7 @@ enum Bytes {
     System(Arc<[u8]>),
     DiskPair(Arc<[u8]>, Arc<[u8]>),
     Canonical { encoding: RetainedMetadataEncoding, payload: usize },
+    Archive { trace: Arc<VerifiedReadTrace>, payload: usize },
 }
 
 #[derive(Default)]
@@ -76,7 +79,8 @@ impl ScopeEncodingMemo {
         let retained = self.get(&key);
         let encoding = match &retained {
             Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
-            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _)) | None => None,
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _))
+            | Some(Bytes::Archive { .. }) | None => None,
         };
         Ok(read.authenticate(encoding)?.into_object())
     }
@@ -138,7 +142,8 @@ impl<'a> Session<'a> {
         let retained = memo.get(&key);
         let encoding = match &retained {
             Some(Bytes::Canonical { encoding, .. }) => Some(encoding),
-            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _)) | None => None,
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _))
+            | Some(Bytes::Archive { .. }) | None => None,
         };
         // A key is only a lookup hint. Journal compares the complete newly read
         // raw bytes and domain before reusing any canonical bytes or digest.
@@ -225,7 +230,7 @@ impl<'a> Session<'a> {
                 let payload = match &value {
                     Bytes::System(bytes) => bytes.len(),
                     Bytes::DiskPair(current, history) => current.len() + history.len(),
-                    Bytes::Canonical { payload, .. } => *payload,
+                    Bytes::Canonical { payload, .. } | Bytes::Archive { payload, .. } => *payload,
                 };
                 state.bytes += payload + std::mem::size_of::<(Key, Bytes)>();
                 state.entries.insert(key, value);
@@ -244,6 +249,37 @@ impl Drop for Session<'_> {
             state.reserved_bytes -= self.reserved_bytes;
             state.reserved_entries -= self.reserved_entries;
         }
+    }
+}
+
+/// One optional transcript shares the existing account with SQL and canonical
+/// bytes. Each raw copy is reserved before allocation; failure drops the whole
+/// transcript without changing archive admission or its read budget.
+pub(in crate::engine::backup_preparation::native_control) struct ArchiveReservation<'a> {
+    session: Session<'a>,
+    key: Key,
+    payload: usize,
+}
+
+impl ArchiveReservation<'_> {
+    pub(in crate::engine::backup_preparation::native_control) fn grow(
+        &mut self,
+        bytes: usize,
+    ) -> bool {
+        let Some(memo) = self.session.memo else {
+            return false;
+        };
+        let mut state = memo.state.lock().expect("encoding memo lock poisoned");
+        if state.bytes.checked_add(state.reserved_bytes)
+            .and_then(|current| current.checked_add(bytes))
+            .is_none_or(|total| total > memo.maximum_bytes)
+        {
+            return false;
+        }
+        state.reserved_bytes += bytes;
+        self.session.reserved_bytes += bytes;
+        self.payload += bytes;
+        true
     }
 }
 
@@ -347,6 +383,53 @@ impl<'a> Transaction<'a> {
         self.canonical.metadata(read)
     }
 
+    pub(in crate::engine::backup_preparation::native_control) fn archive(
+        &self,
+        manifest: &[u8],
+    ) -> Option<Arc<VerifiedReadTrace>> {
+        let memo = self.memo?;
+        let key = Key {
+            context: [0; 32],
+            input: *blake3::hash(manifest).as_bytes(),
+            kind: Kind::Archive,
+        };
+        match memo.get(&key) {
+            Some(Bytes::Archive { trace, .. }) => Some(trace),
+            Some(Bytes::System(_)) | Some(Bytes::DiskPair(_, _))
+            | Some(Bytes::Canonical { .. }) | None => None,
+        }
+    }
+
+    pub(in crate::engine::backup_preparation::native_control) fn reserve_archive(
+        &self,
+        manifest: &[u8],
+    ) -> Option<ArchiveReservation<'a>> {
+        let memo = self.memo?;
+        let payload = VerifiedReadTrace::initial_charge(manifest)?;
+        let key = Key {
+            context: [0; 32],
+            input: *blake3::hash(manifest).as_bytes(),
+            kind: Kind::Archive,
+        };
+        let mut session = Session::new(Some((memo, [0; 32])));
+        if !session.reserve(key, payload) {
+            return None;
+        }
+        Some(ArchiveReservation { session, key, payload })
+    }
+
+    pub(in crate::engine::backup_preparation::native_control) fn retain_archive(
+        &mut self,
+        mut reservation: ArchiveReservation<'a>,
+        trace: Arc<VerifiedReadTrace>,
+    ) {
+        reservation.session.pending.insert(reservation.key, Bytes::Archive {
+            trace,
+            payload: reservation.payload,
+        });
+        self.retain(reservation.session);
+    }
+
     pub(super) fn session(
         &self,
         input: &impl Serialize,
@@ -384,4 +467,4 @@ impl<'a> Transaction<'a> {
 
 #[cfg(test)]
 #[path = "../../../../../../../../test/engine/unit/backup_scope_encoding_memo_tests.rs"]
-mod tests;
+pub(in crate::engine::backup_preparation::native_control) mod tests;
