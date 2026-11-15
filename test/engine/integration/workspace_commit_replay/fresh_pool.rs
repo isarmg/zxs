@@ -26,7 +26,7 @@ fn entry(engine: &Engine, branch: &str) -> Entry {
 }
 
 fn body(engine: &Engine, version: &str) -> Vec<u8> {
-    let mut opened = engine.open_content(version, true).unwrap();
+    let mut opened = engine.open_content(version).unwrap();
     let mut bytes = Vec::new();
     opened.file.read_to_end(&mut bytes).unwrap();
     bytes
