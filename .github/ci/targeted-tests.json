@@ -4060,7 +4060,7 @@
       ]
     },
     "archive-original-visible": {
-      "reason": "Keep authenticated original archive snapshots separate from visible degraded receipts; exercise real degraded-plus-successor archive replay, source corruption rejection and actual D3 cold namespace recovery without changing native format.",
+      "reason": "Keep authenticated original archive snapshots separate from visible degraded receipts; exercise real degraded-plus-successor archive replay, source corruption rejection and actual D3 cold namespace recovery without changing native format. Preserve the recovered visible prefix consumed by completed Backup startup and retain its exact native serving/cold-successor regression.",
       "python_tests": [
         "test_archive_original_visible_targeted_ci"
       ],
@@ -4090,6 +4090,21 @@
           "manifest": "src/engine/Cargo.toml",
           "mode": "check",
           "default_features": false
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "isolate": true,
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "backup_preparation::transaction_serving::same_backup_switch_serves_and_replays_normal_successor_publications"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
         }
       ]
     }
@@ -4103,6 +4118,12 @@
     },
     {
       "path": "src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs",
+      "groups": [
+        "archive-original-visible"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/membership_transition/pending/activation/backup/startup.rs",
       "groups": [
         "archive-original-visible"
       ]

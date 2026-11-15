@@ -68,8 +68,8 @@ impl BackupStartupAdmission {
         }
         Ok(())
     }
-    /// Complete original publication replay, not a latest-State shortcut. Each
-    /// supplied State is independently admitted before the Current consumer.
+    /// Complete archived publication replay, not a latest-State shortcut. Each
+    /// recovered visible State is independently admitted before its consumer.
     pub(in crate::engine) fn replay_source(
         &self,
         stop: &AtomicBool,
@@ -90,7 +90,8 @@ impl BackupStartupAdmission {
                 if item.activation().is_some() || item.candidate().generation().is_some() {
                     return Err(invalid("Backup source replay is not the selected fixed Genesis archive"));
                 }
-                let state = AdmittedState::admit_replayed(item.state().as_ref().clone())?;
+                let state =
+                    AdmittedState::admit_replayed(Arc::unwrap_or_clone(item.visible_state()))?;
                 visit(item.candidate(), &state)
             })?;
         checkpoint(stop)

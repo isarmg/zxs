@@ -13,6 +13,7 @@ SPEC.loader.exec_module(CI)
 PATHS = [
     'src/engine/src/engine/membership_transition/archive/namespace_replay.rs',
     'src/engine/src/engine/membership_transition/pending/activation/exit/replay.rs',
+    'src/engine/src/engine/membership_transition/pending/activation/backup/startup.rs',
     'test/engine/unit/engine/membership_control_archive_tests.rs',
     'test/ci/test_archive_original_visible_targeted_ci.py',
 ]
@@ -46,15 +47,28 @@ class ArchiveOriginalVisibleSelection(unittest.TestCase):
         self.assertNotIn('archive-original-visible', unrelated['groups'])
         self.assertIn('workspace-version-construction', unrelated['groups'])
 
-    def test_four_exact_real_tests_use_fault_feature_and_separate_product_checks(self):
+    def test_archive_and_backup_exact_tests_keep_features_and_separate_product_checks(self):
         group = self.policy['groups']['archive-original-visible']
         runtime = [target for target in group['rust_targets']
                    if target.get('mode', 'test') == 'test']
-        self.assertEqual(len(runtime), 1)
+        self.assertEqual(len(runtime), 2)
         self.assertEqual(runtime[0]['exact'], EXACT)
         self.assertNotIn('prefixes', runtime[0])
         self.assertEqual(runtime[0]['features'], ['fault-injection'])
         self.assertEqual(runtime[0]['max_tests'], 4)
+        backup = runtime[1]
+        self.assertEqual(backup['package'], 'storage-engine')
+        self.assertEqual(backup['kind'], 'test')
+        self.assertEqual(backup['name'], 'recursive_backup_paths')
+        self.assertTrue(backup['isolate'])
+        self.assertEqual(backup['features'], ['fault-injection'])
+        self.assertEqual(backup['exact'], [
+            'backup_preparation::transaction_serving::'
+            'same_backup_switch_serves_and_replays_normal_successor_publications',
+        ])
+        self.assertNotIn('prefixes', backup)
+        self.assertEqual(backup['max_tests'], 1)
+        self.assertEqual(backup['timeout_seconds'], 900)
         checks = [target for target in group['rust_targets'] if target.get('mode') == 'check']
         self.assertEqual(
             {(target['package'], target.get('default_features', True)) for target in checks},
