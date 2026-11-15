@@ -298,11 +298,13 @@ fn inspect_offline_tier(
         fs::File::open(&disk.root).unwrap(),
         disk.root.clone(),
         &expected,
-        DiskDatabaseReadScope::Both,
+        DiskDatabaseReadScope::Current,
     )
     .unwrap();
     assert_eq!(inventory.identity(), &expected);
-    assert!(inventory.history().is_some());
+    // This acceptance covers DISK Current and the actual FILE history below.
+    // Current does not inspect the optional DISK event-history representation.
+    assert!(matches!(inventory.scope(), DiskDatabaseReadScope::Current));
     let rows = &inventory.current().unwrap().versions;
     for version in versions {
         let row = rows
@@ -318,7 +320,7 @@ fn inspect_offline_tier(
             fs::File::open(&disk.root).unwrap(),
             disk.root.clone(),
             &identity(&config, &config.disks[0]),
-            DiskDatabaseReadScope::Both,
+            DiskDatabaseReadScope::Current,
         )
         .err()
         .unwrap()

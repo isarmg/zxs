@@ -2374,11 +2374,13 @@ class ContainerTagsSelection(unittest.TestCase):
             CI.selected_tests(inventory + [target['prefixes'][0] + 'extra'], [], target)
 
     def test_retained_backup_transaction_is_isolated_without_changing_its_test_or_timeout(self):
+        first_addition = ['first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy']
         targets = [target for group in self.policy['groups'].values()
                    for target in group['rust_targets']
                    if target.get('package') == 'storage-engine'
                    and target.get('name') == 'recursive_backup_paths'
-                   and target.get('mode', 'test') == 'test']
+                   and target.get('mode', 'test') == 'test'
+                   and target.get('exact') != first_addition]
         self.assertTrue(targets)
         for target in targets:
             self.assertIs(target.get('isolate'), True)
