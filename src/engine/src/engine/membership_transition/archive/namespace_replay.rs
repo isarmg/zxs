@@ -7,15 +7,28 @@ use std::sync::Arc;
 /// snapshots and prescribed first publications have passed archive verification.
 pub(in crate::engine::membership_transition) struct VerifiedArchivePublication {
     candidate: Candidate,
-    state: Arc<State>,
+    original: Arc<State>,
+    recovered_result: Option<OperationResult>,
     activation: Option<PortableAuthority>,
 }
 impl VerifiedArchivePublication {
     pub(in crate::engine::membership_transition) fn candidate(&self) -> &Candidate {
         &self.candidate
     }
-    pub(in crate::engine::membership_transition) fn state(&self) -> &Arc<State> {
-        &self.state
+    pub(in crate::engine::membership_transition) fn original_state(&self) -> &Arc<State> {
+        &self.original
+    }
+
+    // The one successful business transition consumes original_state first.
+    // Only its next visible prefix includes the independently verified recovery
+    // outcome. No original snapshot or receipt is modified in place.
+    pub(in crate::engine::membership_transition) fn visible_state(&self) -> Arc<State> {
+        let Some(result) = &self.recovered_result else {
+            return Arc::clone(&self.original);
+        };
+        let mut visible = self.original.as_ref().clone();
+        visible.operations.insert(self.candidate.operation_id, result.clone());
+        Arc::new(visible)
     }
     pub(in crate::engine::membership_transition) fn activation(
         &self,
@@ -78,14 +91,10 @@ impl PendingControlArchive {
                         .load("snapshot", &candidate.snapshot_hash)?
                         .into_value(),
                 )?;
-                let mut state =
+                let original =
                     resolve_admitted_snapshot(snapshot, |kind, hash| self.store.load(kind, hash))?
                         .into_state();
-                if publication.recovery.is_some() {
-                    state
-                        .operations
-                        .insert(candidate.operation_id, publication.result);
-                }
+                let recovered_result = publication.recovery.is_some().then_some(publication.result);
                 let activation = match &authority {
                     Some(authority)
                         if sequence
@@ -106,7 +115,8 @@ impl PendingControlArchive {
                 };
                 visit(&VerifiedArchivePublication {
                     candidate,
-                    state: Arc::new(state),
+                    original: Arc::new(original),
+                    recovered_result,
                     activation,
                 })?;
                 previous_sequence = Some(sequence);

@@ -568,6 +568,24 @@ fn membership_control_archive_preserves_reprotect_plan_and_original_snapshot() {
     engine
         .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "admin", true)
         .unwrap();
+    let recovered = engine.state().operations[&operation].clone();
+    assert_eq!(recovered.commit_state, storage_contract::CommitState::PublishedDegraded);
+    assert_eq!(recovered.result["recovery_id"], plan.recovery_id);
+
+    // A real successor must consume the recovered visible receipt, not the
+    // original snapshot's optimistic publication result.
+    let successor = OperationId::generate().unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("after recovered workspace").unwrap(),
+            "P01",
+            1,
+            "admin",
+            successor,
+        )
+        .unwrap();
+    let frozen_state = engine.state().clone();
+    let frozen_snapshot = engine.snapshot.clone();
     let mut target = config.clone();
     target.disks[2].metadata_member = false;
     engine
@@ -606,10 +624,78 @@ fn membership_control_archive_preserves_reprotect_plan_and_original_snapshot() {
         .unwrap()
     );
     drop(engine);
-    for disk in config.disks {
+    for disk in &config.disks {
         fs::rename(&disk.root, disk.root.with_extension("unavailable")).unwrap();
     }
-    assert_eq!(verify(&path, &archive).unwrap().published_candidates, 2);
+    assert_eq!(verify(&path, &archive).unwrap().published_candidates, 3);
+    let archived_bytes = bytes(&path);
+    let admitted = PendingControlArchive::from_installed(
+        DiskRoot::open(&path).unwrap(),
+        &archive.root_hash,
+        &archive.transition_hash,
+    )
+    .unwrap();
+    use crate::engine::membership_transition::pending::activation::exit::replay::NamespaceReplay;
+    let mut replay = NamespaceReplay::new();
+    let mut observed_recovery = false;
+    let mut observed_successor = false;
+    let mut publications = 0usize;
+    admitted
+        .replay_publications(|publication| {
+            let candidate = publication.candidate();
+            let original = std::sync::Arc::clone(publication.original_state());
+            let original_bytes = canonical_json(original.as_ref())?;
+            assert_eq!(
+                prepare_snapshot(original.as_ref(), MAX_METADATA)?.hash,
+                candidate.snapshot_hash,
+            );
+            let visible = publication.visible_state();
+            let second_visible = publication.visible_state();
+            assert_eq!(
+                canonical_json(visible.as_ref())?,
+                canonical_json(second_visible.as_ref())?,
+            );
+            assert!(std::sync::Arc::ptr_eq(publication.original_state(), &original));
+            assert_eq!(
+                canonical_json(publication.original_state().as_ref())?,
+                original_bytes,
+            );
+            if candidate.operation_id == operation {
+                observed_recovery = true;
+                let receipt = &original.operations[&operation];
+                assert_eq!(receipt.commit_state, storage_contract::CommitState::Published);
+                assert_ne!(receipt, &recovered);
+                assert_eq!(visible.operations[&operation], recovered);
+                let mut expected_visible = original.as_ref().clone();
+                expected_visible.operations.insert(operation, recovered.clone());
+                assert_eq!(
+                    canonical_json(visible.as_ref())?,
+                    canonical_json(&expected_visible)?,
+                );
+            } else {
+                assert!(std::sync::Arc::ptr_eq(&visible, &original));
+                if candidate.operation_id == successor {
+                    observed_successor = true;
+                    assert_eq!(original.operations[&operation], recovered);
+                }
+            }
+            // This is the real archive replay consumer. It must validate the
+            // original transition before retaining the visible recovery overlay.
+            replay.advance(publication)?;
+            publications += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(publications, 3);
+    assert!(observed_recovery && observed_successor);
+    assert!(replay
+        .finish_source(&frozen_state, frozen_snapshot.as_deref())
+        .unwrap()
+        .is_none());
+    assert_eq!(bytes(&path), archived_bytes);
+    for disk in &config.disks {
+        assert!(!disk.root.exists());
+    }
     fs::remove_file(
         store
             .object_path("recovery-plan", &record.object_hash)

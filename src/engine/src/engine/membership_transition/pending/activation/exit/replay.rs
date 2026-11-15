@@ -42,7 +42,7 @@ impl NamespaceReplay {
                     AdmittedDiskExitPublication::from_archive(authority, &self.state, publication)?;
                 self.view = Some(prepared.admit(
                     &self.state,
-                    publication.state(),
+                    publication.original_state(),
                     &candidate.snapshot_hash,
                     &proof,
                 )?);
@@ -53,14 +53,16 @@ impl NamespaceReplay {
                 ));
             }
         } else if let Some(view) = &self.view {
-            let advanced = view.advance(&self.state, publication.state())?;
+            let advanced = view.advance(&self.state, publication.original_state())?;
             // Re-protection reuses historical bodies. Even a fully verified
             // control archive must bind its independent payload vector to that
             // exact native backup plan; it grants no historical disk I/O.
-            view.verify_backup_candidate_payloads(&self.state, publication.state(), candidate)?;
+            view.verify_backup_candidate_payloads(
+                &self.state, publication.original_state(), candidate,
+            )?;
             self.view = Some(advanced);
         }
-        self.state = Arc::clone(publication.state());
+        self.state = publication.visible_state();
         self.snapshot = Some(candidate.snapshot_hash.clone());
         Ok(())
     }
