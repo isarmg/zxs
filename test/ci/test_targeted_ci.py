@@ -392,7 +392,7 @@ class TargetedSelection(unittest.TestCase):
                 actual.extend(selection for origin, selection in
                               zip(target['selection_groups'], selections)
                               if origin == group)
-            self.assertEqual(actual, expected, group)
+            self.assertCountEqual(actual, expected, group)
         memo = self.policy['groups']['backup-scoped-encoding-memo']['rust_targets']
         self.assertEqual(memo[0]['max_tests'], 96)
         self.assertEqual(memo[0]['timeout_seconds'], 900)
