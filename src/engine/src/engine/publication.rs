@@ -18,6 +18,84 @@ struct RetainedExisting<'a> {
     reservation: PayloadProofReservation,
 }
 
+/// Only the ordinary preparation pipeline constructs this value, after its
+/// capacity and exact metadata preflights. It keeps the actual prepared inputs
+/// and their already-observed copies together; a caller cannot replace the
+/// version list between budget admission and physical preparation.
+struct BudgetedPhysicalPreparation<'context, 'source, 'payload> {
+    context: &'context crate::engine::PlanningContext<'source>,
+    decision: CandidatePreparation,
+    payloads: &'payload [Prepared],
+    existing: Vec<std::sync::Mutex<Option<ExistingCopies<'payload>>>>,
+    projection: crate::state_projection::ProjectionTransition<'payload>,
+}
+
+struct PreparedPhysicalPublication {
+    decision: CandidatePreparation,
+    verified: VerifiedPayloadSet,
+    names: crate::container_storage::PreparedNames,
+    history_owners: crate::state_projection::DerivedOwners,
+}
+
+impl<'context, 'source> BudgetedPhysicalPreparation<'context, 'source, '_> {
+    fn prepare(
+        self,
+        maximum: usize,
+    ) -> Result<PreparedPhysicalPublication> {
+        let preparation = PayloadPreparation::new(
+            self.context.config,
+            self.context.disk_resources,
+            self.decision.versions(),
+            std::sync::Arc::clone(self.context.metadata_integrity),
+        )?;
+        self.context.prepare_payloads(self.payloads, self.existing)?;
+        let verified = preparation.verify(self.context.config)?;
+        let names = crate::container_storage::prepare_names(
+            self.context.config,
+            self.context.disk_resources,
+            &self.projection,
+            maximum,
+        )?;
+        Ok(PreparedPhysicalPublication {
+            decision: self.decision,
+            verified,
+            names,
+            history_owners: self.projection.into_owners(),
+        })
+    }
+}
+
+impl PreparedPhysicalPublication {
+    /// No Candidate escapes the physical phase. Its envelope is formed only
+    /// after complete payload verification and FILE preparation have succeeded.
+    /// The preflight fields are moved unchanged, never filled in after sealing.
+    fn into_candidate(self) -> (
+        Candidate,
+        VerifiedPayloadSet,
+        crate::container_storage::PreparedNames,
+        crate::state_projection::DerivedOwners,
+    ) {
+        (
+            self.decision.finish(),
+            self.verified,
+            self.names,
+            self.history_owners,
+        )
+    }
+}
+
+fn bind_candidate(context: &crate::engine::PlanningContext<'_>, data: CandidateData) -> Candidate {
+    match context.config.generation().and_then(|generation| generation.registry()) {
+        Some(registry) => Candidate::new_with_registry(
+            data,
+            context.config.generation_hash()
+                .expect("invariant: registry belongs to an admitted exit generation"),
+            registry,
+        ),
+        None => Candidate::new(data, context.config.generation_hash()),
+    }
+}
+
 /// A publication receipt, not a hash cache. Only successful decide constructs
 /// this token, and reuse requires the exact current State allocation and config.
 #[derive(Clone)]
@@ -1472,47 +1550,30 @@ impl crate::engine::PlanningContext<'_> {
             metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
             history_roots: history_basis.reference().clone(),
         };
-        let candidate = match self
-            .config
-            .generation()
-            .and_then(|generation| generation.registry())
-        {
-            Some(registry) => Candidate::new_with_registry(
-                candidate_data,
-                self.config
-                    .generation_hash()
-                    .expect("invariant: registry belongs to an admitted exit generation"),
-                registry,
-            ),
-            None => Candidate::new(candidate_data, self.config.generation_hash()),
-        };
+        // The budget encoder needs the exact envelope shape, not a physical
+        // publication. Discard this encode-only envelope before entering I/O;
+        // its unchanged fields travel with the actual preparation inputs.
+        let budget_candidate = bind_candidate(self, candidate_data);
         crate::metadata_budget::preflight_publication_prepared(
             self,
-            &candidate,
+            &budget_candidate,
             &result,
             &next,
             None,
             maximum,
             Some((&snapshot, &history_basis)),
         )?;
+        let candidate_plan = budget_candidate.into_preparation();
         crate::container_storage::validate_new_projection_paths(&projection)?;
         crate::protection::preflight_backup_directories(self, &result)?;
-        let preparation = PayloadPreparation::new(
-            self.config,
-            self.disk_resources,
-            &candidate,
-            std::sync::Arc::clone(self.metadata_integrity),
-        )?;
-        self.prepare_payloads(&prepared, existing)?;
-        let verified = preparation.verify(self.config, &candidate)?;
-        // Payload installation establishes the physical container, but no decision
-        // exists yet. Encode its complete projection before ACCEPT can be written.
-        let names = crate::container_storage::prepare_names(
-            self.config,
-            self.disk_resources,
-            &projection,
-            cache_maximum,
-        )?;
+        let physical = BudgetedPhysicalPreparation {
+            context: self,
+            decision: candidate_plan,
+            payloads: &prepared,
+            existing,
+            projection,
+        }.prepare(cache_maximum)?;
+        let (candidate, verified, names, history_owners) = physical.into_candidate();
         if let Some(reuse) = &reused_dependencies {
             if !reuse.matches(self, &config_hash) {
                 return Err(Error::new(
@@ -1544,7 +1605,6 @@ impl crate::engine::PlanningContext<'_> {
             )
             .retryable());
         }
-        let history_owners = projection.into_owners();
         Ok(DetachedPublication {
             next,
             next_current_namespaces,

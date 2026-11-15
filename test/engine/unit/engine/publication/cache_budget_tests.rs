@@ -210,14 +210,36 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
     next.operations.insert(result.operation_id, result.clone());
-    let retry_pending = pending
-        .iter()
-        .map(|payload| Prepared {
+    let copy_pending = || {
+        pending.iter().map(|payload| Prepared {
             version: payload.version.clone(),
             placement: payload.placement.clone(),
             source: payload.source.clone(),
-        })
-        .collect();
+        }).collect::<Vec<_>>()
+    };
+    let retry_pending = copy_pending();
+    // Exact metadata admission must precede even the first new payload/container
+    // preparation. A smaller metadata budget is not permission to stage first.
+    let error = engine.planning_context().prepare_publication_bounded(
+        next.clone(), copy_pending(), result.clone(), 128, MAX_METADATA,
+    ).err().unwrap();
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(engine.snapshot, original_snapshot);
+    assert_eq!(engine.next_slot, original_slot);
+    for disk in &engine.config.disks {
+        assert!(!version_dir(disk, &repo.history_tree_id, &version.version_id).exists());
+    }
+    for (_, content, cache, cache_bytes) in &original_paths {
+        assert_eq!(std::fs::read(content).unwrap(), b"published bytes");
+        assert_eq!(std::fs::read(cache).unwrap(), *cache_bytes);
+    }
+    assert_eq!(
+        engine.members().iter()
+            .map(|disk| std::fs::read(log_path(disk)).unwrap())
+            .collect::<Vec<_>>(),
+        logs,
+    );
     let error = engine
         .planning_context()
         .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
@@ -257,6 +279,12 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     drop(engine);
     let mut engine = Engine::open(&root).unwrap();
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    let expected_state = canonical_json(&next).unwrap();
+    let expected_snapshot = prepare_snapshot(&next, MAX_METADATA).unwrap().hash;
+    let expected_versions = canonical_json(&retry_pending.iter().map(|payload| VersionEvidence {
+        version: payload.version.clone(),
+        placement: payload.placement.clone(),
+    }).collect::<Vec<_>>()).unwrap();
     let detached = engine
         .planning_context()
         .prepare_publication_bounded(
@@ -267,6 +295,10 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
             MAX_METADATA,
         )
         .unwrap();
+    assert_eq!(canonical_json(&detached.next).unwrap(), expected_state);
+    assert_eq!(detached.candidate.snapshot_hash, expected_snapshot);
+    assert_eq!(canonical_json(&detached.candidate.versions).unwrap(), expected_versions);
+    assert_eq!(detached.candidate.operation_id, result.operation_id);
     engine.decide_publication(detached).unwrap();
     assert_eq!(
         engine.list_tree(&repo.main_branch_id).unwrap()[0].path.as_str(),

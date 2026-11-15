@@ -138,23 +138,23 @@ std::thread_local! {
 }
 /// Disk identities are pinned before copying begins. Only complete verification
 /// can turn this preparation into a live decision proof.
-pub(super) struct PayloadPreparation {
+pub(super) struct PayloadPreparation<'a> {
+    versions: &'a [VersionEvidence],
     metadata_integrity: Arc<MetadataIntegrity>,
     disks: Vec<HeldSeal>,
     resources: Arc<DiskResources>,
 }
-impl PayloadPreparation {
+impl<'a> PayloadPreparation<'a> {
     pub(super) fn new(
         config: &ValidatedConfig,
         resources: &Arc<DiskResources>,
-        candidate: &Candidate,
+        versions: &'a [VersionEvidence],
         metadata_integrity: Arc<MetadataIntegrity>,
     ) -> Result<Self> {
         let mut disks = Vec::new();
         for disk in &config.disks {
             if !disk.metadata_member
-                && !candidate
-                    .versions
+                && !versions
                     .iter()
                     .any(|evidence| evidence.placement.route_slot_ids.contains(&disk.slot_id))
             {
@@ -180,6 +180,7 @@ impl PayloadPreparation {
             });
         }
         Ok(Self {
+            versions,
             metadata_integrity,
             disks,
             resources: Arc::clone(resources),
@@ -188,10 +189,9 @@ impl PayloadPreparation {
     pub(super) fn verify(
         self,
         config: &ValidatedConfig,
-        candidate: &Candidate,
     ) -> Result<VerifiedPayloadSet> {
-        let replicas = candidate
-            .versions
+        let versions = self.versions;
+        let replicas = versions
             .iter()
             .try_fold(0usize, |count, evidence| {
                 count
@@ -215,7 +215,7 @@ impl PayloadPreparation {
         let full_revalidation = reservation.is_none();
         let mut entries = Vec::new();
         if !full_revalidation {
-            for evidence in &candidate.versions {
+            for evidence in versions {
                 for slot in &evidence.placement.route_slot_ids {
                     entries.push(verify_replica(
                         config,
@@ -238,7 +238,7 @@ impl PayloadPreparation {
             full_revalidation,
             replicas,
         };
-        proof.validate(config, candidate)?;
+        proof.validate_versions(config, versions)?;
         Ok(proof)
     }
 }
@@ -356,10 +356,10 @@ impl VerifiedPayloadSet {
         PayloadPreparation::new(
             &engine.config,
             &engine.disk_resources,
-            candidate,
+            &candidate.versions,
             Arc::clone(&engine.metadata_integrity),
         )?
-        .verify(&engine.config, candidate)
+        .verify(&engine.config)
     }
     fn validate_disks(&self) -> Result<()> {
         for disk in &self.disks {
@@ -373,9 +373,17 @@ impl VerifiedPayloadSet {
         Ok(())
     }
     pub(super) fn validate(&self, config: &ValidatedConfig, candidate: &Candidate) -> Result<()> {
+        self.validate_versions(config, &candidate.versions)
+    }
+
+    fn validate_versions(
+        &self,
+        config: &ValidatedConfig,
+        versions: &[VersionEvidence],
+    ) -> Result<()> {
         self.validate_disks()?;
         let mut cursor = self.cursor();
-        for evidence in &candidate.versions {
+        for evidence in versions {
             for slot in &evidence.placement.route_slot_ids {
                 cursor.validate_payload(config, &evidence.version, slot)?;
             }

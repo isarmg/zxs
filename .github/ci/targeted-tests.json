@@ -1,5 +1,26 @@
 {
   "groups": {
+    "publication-physical-phase": {
+      "reason": "Verify unchanged publication bytes and exact budget refusal before physical preparation in the ordinary pipeline. Existing held-layout and payload-proof selections remain separate.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "engine::publication::cache_budget_tests::"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "first-backup-additions": {
       "reason": "Start with one held empty primary, enroll empty B then C through actual ordinary membership, publish real retained and successor BODY copies, verify exact cold Engine replica fallback, and separately inspect offline DISK/FILE history and tags. Does not claim independent backup-only authenticated BODY startup.",
       "python_tests": [],
@@ -4234,6 +4255,19 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/journal/candidate.rs",
+      "groups": [
+        "version-publication-location",
+        "publication-physical-phase"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/publication/cache_budget_tests.rs",
+      "groups": [
+        "publication-physical-phase"
+      ]
+    },
     {
       "path": "test/engine/integration/recursive_backup_paths.rs",
       "groups": [

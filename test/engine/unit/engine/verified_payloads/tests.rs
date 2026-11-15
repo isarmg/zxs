@@ -344,7 +344,7 @@ fn payload_preparation_reports_a_missing_metadata_seal_to_its_writer() {
         PayloadPreparation::new(
             &engine.config,
             &engine.disk_resources,
-            &candidate,
+            &candidate.versions,
             Arc::clone(&engine.metadata_integrity)
         )
         .is_err()
@@ -382,7 +382,7 @@ fn preparation_pins_disk_identity_before_payload_work() {
     let preparation = PayloadPreparation::new(
         &engine.config,
         &engine.disk_resources,
-        &candidate,
+        &candidate.versions,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
@@ -390,7 +390,7 @@ fn preparation_pins_disk_identity_before_payload_work() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    match preparation.verify(&engine.config, &candidate) {
+    match preparation.verify(&engine.config) {
         Err(error) => assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale),
         Ok(_) => panic!("replaced disk seal was accepted"),
     }
@@ -403,7 +403,7 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
     let preparation = PayloadPreparation::new(
         config,
         &engine.disk_resources,
-        candidate,
+        &candidate.versions,
         Arc::clone(&engine.metadata_integrity),
     )?;
     let replicas: usize = candidate
@@ -532,7 +532,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
     let preparation = PayloadPreparation::new(
         &engine.config,
         &engine.disk_resources,
-        &candidate,
+        &candidate.versions,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
@@ -547,7 +547,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
         }));
     });
     let error = preparation
-        .verify(&engine.config, &candidate)
+        .verify(&engine.config)
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale);
@@ -562,7 +562,7 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     let preparation = PayloadPreparation::new(
         &engine.config,
         &engine.disk_resources,
-        &candidate,
+        &candidate.versions,
         Arc::clone(&engine.metadata_integrity),
     )
     .unwrap();
@@ -570,7 +570,7 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    let (result, cost) = verification_cost(|| preparation.verify(&engine.config, &candidate));
+    let (result, cost) = verification_cost(|| preparation.verify(&engine.config));
     assert_eq!(
         result.err().unwrap().code(),
         storage_contract::ErrorCode::PreparationStale
@@ -690,11 +690,11 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
         PayloadPreparation::new(
             &engine.config,
             &engine.disk_resources,
-            &candidate,
+            &candidate.versions,
             Arc::clone(&engine.metadata_integrity)
         )
         .unwrap()
-        .verify(&engine.config, &candidate)
+        .verify(&engine.config)
         .err()
         .unwrap()
         .code(),
@@ -755,7 +755,7 @@ fn name_projection_uses_the_owner_but_payload_admission_reports_a_corrupt_seal()
         PayloadPreparation::new(
             &engine.config,
             &engine.disk_resources,
-            &candidate,
+            &candidate.versions,
             Arc::clone(&engine.metadata_integrity)
         )
         .is_err()

@@ -24,6 +24,22 @@ pub(crate) struct Candidate {
     data: CandidateData,
     binding: CandidateBinding,
 }
+
+/// An encode-only preflight's exact fields and original envelope binding.
+/// This is not serializable, mutable, cloneable or a durable decision proof.
+pub(crate) struct CandidatePreparation {
+    data: CandidateData,
+    binding: CandidateBinding,
+}
+impl CandidatePreparation {
+    pub(crate) fn versions(&self) -> &[VersionEvidence] {
+        &self.data.versions
+    }
+
+    pub(crate) fn finish(self) -> Candidate {
+        Candidate { data: self.data, binding: self.binding }
+    }
+}
 #[derive(Clone, Debug)]
 enum CandidateBinding {
     Genesis,
@@ -79,6 +95,12 @@ enum StoredCandidate {
     Original(CandidateData),
 }
 impl Candidate {
+    /// Keep the exact budgeted envelope across physical preparation. Finishing
+    /// moves it back unchanged rather than selecting or reconstructing a binding.
+    pub(crate) fn into_preparation(self) -> CandidatePreparation {
+        CandidatePreparation { data: self.data, binding: self.binding }
+    }
+
     pub(crate) fn new(data: CandidateData, generation: Option<&str>) -> Self {
         Self {
             data,

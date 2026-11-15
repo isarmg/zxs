@@ -1131,7 +1131,7 @@ pub(crate) struct VersionEvidence {
     pub placement: Placement,
 }
 mod candidate;
-pub(crate) use candidate::{Candidate, CandidateData};
+pub(crate) use candidate::{Candidate, CandidateData, CandidatePreparation};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Finalize {
