@@ -1,5 +1,7 @@
 //! Full upload generations, working files and atomic content publication.
 pub(super) mod file_location;
+pub(super) mod input;
+use crate::business::workspace::input::WorkspaceInput;
 mod version_build;
 use super::*;
 use crate::{
@@ -165,12 +167,23 @@ pub(crate) struct WorkspaceMutation {
 // Workspace state/fencing may advance after publication; the sealed files and
 // namespace input remain frozen and must still reproduce the original digest.
 fn workspace_commit_input(
-    workspace: &Workspace,
+    workspace: &(impl WorkspaceInput + ?Sized),
     request: &CommitRequest,
 ) -> Result<json_codec::Value> {
     let sealed = object_hash(
         "workspace",
-        &json!({"workspace_id":workspace.workspace_id,"base_head":workspace.base_head,"files":workspace.files.values().map(|f|json!({"item_id":f.item_id,"path":f.path,"hash":f.content_hash,"size":f.size.to_string(),"generation":f.dirty_generation.to_string()})).collect::<Vec<_>>(),"namespace_operations":workspace.namespace_operations}),
+        &json!({
+            "workspace_id": workspace.workspace_id(),
+            "base_head": workspace.base_head(),
+            "files": workspace.files().map(|file| json!({
+                "item_id": file.item(),
+                "path": file.path(),
+                "hash": file.hash(),
+                "size": file.size().to_string(),
+                "generation": file.generation().to_string(),
+            })).collect::<Vec<_>>(),
+            "namespace_operations": workspace.namespace_operations(),
+        }),
     )?;
     let mut request = request.clone();
     request.request_digest = None;
@@ -178,7 +191,7 @@ fn workspace_commit_input(
 }
 
 pub(crate) fn native_commit_digest(
-    workspace: &Workspace,
+    workspace: &(impl WorkspaceInput + ?Sized),
     request: &CommitRequest,
 ) -> Result<String> {
     object_hash(
@@ -187,14 +200,18 @@ pub(crate) fn native_commit_digest(
     ).map_err(Into::into)
 }
 
-fn validate_directory_selection_key(state: &State, workspace: &Workspace, key: &str) -> Result<()> {
-    let branch = state.branches.get(&workspace.branch_id).ok_or_else(|| {
+fn validate_directory_selection_key(
+    state: &State,
+    workspace: &(impl WorkspaceInput + ?Sized),
+    key: &str,
+) -> Result<()> {
+    let branch = state.branches.get(workspace.branch_id()).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::BranchNotFound,
             "workspace branch missing",
         )
     })?;
-    let base = state.commits.get(&workspace.base_head).ok_or_else(|| {
+    let base = state.commits.get(workspace.base_head()).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::StateInvalid,
             "workspace base missing",
@@ -214,11 +231,7 @@ fn validate_directory_selection_key(state: &State, workspace: &Workspace, key: &
             .directory_selection_generations
             .get(id)
             .is_some_and(|generation| {
-                workspace
-                    .directory_selection_generations
-                    .get(id)
-                    .copied()
-                    .unwrap_or(0)
+                workspace.directory_selection_generation(id)
                     != *generation
             })
     };
@@ -247,12 +260,12 @@ fn validate_directory_selection_key(state: &State, workspace: &Workspace, key: &
 // Callers validate directory selections first, including for new file paths.
 fn validate_file_context(
     state: &State,
-    workspace: &Workspace,
+    workspace: &(impl WorkspaceInput + ?Sized),
     file: &str,
     key: &str,
 ) -> Result<()> {
     let selected =
-        directory::branch_context_at_key(state, &workspace.branch_id, key).ok_or_else(|| {
+        directory::branch_context_at_key(state, workspace.branch_id(), key).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::FileNotFound,
                 "file context no longer exists",
@@ -270,19 +283,15 @@ fn validate_file_context(
             "selected file branch is not active; select a writable branch",
         ));
     }
-    let repo = repository::main_for_branch(state, &workspace.branch_id);
+    let repo = repository::main_for_branch(state, workspace.branch_id());
     let captured = repo.and_then(|r| {
-        workspace
-            .selected_file_contexts
-            .get(&directory::context_key_from_key(&r.repository_id, key))
+        workspace.selected_file_context(&directory::context_key_from_key(&r.repository_id, key))
     });
     let changed = if let Some(captured) = captured {
         captured != &selected
     } else {
-        workspace
-            .selected_file_branches
-            .get(file)
-            .is_some_and(|id| id != &selected.branch_id)
+        workspace.selected_file_branch(file)
+            .is_some_and(|id| id != selected.branch_id)
     };
     if changed {
         return Err(Error::new(

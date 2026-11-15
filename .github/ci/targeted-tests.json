@@ -1,5 +1,43 @@
 {
   "groups": {
+    "workspace-logical-input": {
+      "reason": "Borrow the existing logical workspace fields without altering requests, receipts or live authority. Exercise the two digest/source regressions plus six actual selection, baseline and D3/cold consumers; compile engine product features separately.",
+      "python_tests": [
+        "test_workspace_input_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::workspace::input::tests::"
+          ],
+          "exact": [
+            "business::workspace::selection_tests::empty_generations_still_validate_workspace_references_in_order",
+            "business::workspace::selection_tests::directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories",
+            "business::workspace::selection_tests::workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits",
+            "engine::disk_registry::current::tests::membership_registry_current_workspace_baseline_recovers_only_from_published_receipt",
+            "engine::disk_registry::current::tests::membership_registry_current_cold_workspace_admission_survives_later_head_and_restart_index",
+            "engine::disk_registry::current::tests::workspace_overlap::membership_registry_workspace_overlap_actual_d3_preserves_target_and_cold_restart"
+          ],
+          "max_tests": 8,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "workspace-version-construction": {
       "reason": "Single version metadata construction for real upload/copy ingress; preserve allocation, resource and placement checks and verify engine product features separately.",
       "python_tests": [],
@@ -3912,6 +3950,54 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/workspace.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/file_location.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/mod.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/workspace/input.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/workspace_input_tests.rs",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
+    {
+      "path": "test/ci/test_workspace_input_targeted_ci.py",
+      "groups": [
+        "workspace-logical-input"
+      ]
+    },
     {
       "path": "src/engine/src/business/workspace.rs",
       "groups": [

@@ -1,7 +1,7 @@
 //! A file workspace binds an explicit occurrence without changing content HEAD.
-use crate::business::{directory, namespace};
+use crate::business::{WorkspaceInput, directory, namespace};
 use crate::engine::CurrentNamespaces;
-use crate::{Entry, Error, NamespaceEntryKind, PathChangeError, Result, State, Workspace};
+use crate::{Entry, Error, NamespaceEntryKind, PathChangeError, Result, State};
 use name_policy::PortablePath;
 use std::borrow::Cow;
 
@@ -28,15 +28,15 @@ pub(super) fn same_source(left: Option<&Entry>, right: Option<&Entry>) -> bool {
 pub(crate) fn project<'a>(
     state: &State,
     view: Option<&CurrentNamespaces>,
-    workspace: &Workspace,
+    workspace: &(impl WorkspaceInput + ?Sized),
     entries: &'a [Entry],
     path: &PortablePath,
 ) -> Result<Cow<'a, [Entry]>> {
-    let branch = state.branches.get(&workspace.branch_id).ok_or_else(changed)?;
+    let branch = state.branches.get(workspace.branch_id()).ok_or_else(changed)?;
     let Some(file) = &branch.file_id else {
         return Ok(Cow::Borrowed(entries));
     };
-    if workspace.files.values().any(|staged| staged.path.key() != path.key()) {
+    if workspace.files().any(|staged| staged.path().key() != path.key()) {
         return Err(changed());
     }
     let mut bodies = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File);
@@ -48,10 +48,11 @@ pub(crate) fn project<'a>(
         .find(|repository| repository.history_tree_id == branch.history_tree_id)
         .ok_or_else(changed)?;
     let key = directory::context_key_from_key(&repository.repository_id, path.key());
-    let selected = workspace.selected_file_contexts.get(&key);
-    let bound = workspace.selected_file_contexts.values()
-        .any(|context| context.branch_id == workspace.branch_id);
-    let Some(selected) = selected.filter(|context| context.branch_id == workspace.branch_id) else {
+    let selected = workspace.selected_file_context(&key);
+    let bound = workspace.selected_file_contexts()
+        .any(|context| context.branch_id == workspace.branch_id());
+    let Some(selected) = selected.filter(|context| context.branch_id == workspace.branch_id())
+    else {
         // An unselected independent branch retains its own immutable namespace.
         // A selected workspace cannot silently fall back to a now-stale path.
         return if !bound && body.lookup_key() == path.key() {
@@ -62,7 +63,7 @@ pub(crate) fn project<'a>(
     };
     let changed_selection = |id: &str| {
         state.directory_selection_generations.get(id).is_some_and(|generation| {
-            workspace.directory_selection_generations.get(id).copied().unwrap_or(0) != *generation
+            workspace.directory_selection_generation(id) != *generation
         })
     };
     if changed_selection(&repository.repository_id) {

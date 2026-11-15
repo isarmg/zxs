@@ -169,16 +169,17 @@ pub(crate) fn apply_workspace_namespace(
 /// namespace collision/shape validation remains in apply_workspace_namespace.
 pub(crate) fn workspace_upload_locations(
     current: &[Entry],
-    workspace: &Workspace,
+    workspace: &(impl crate::business::WorkspaceInput + ?Sized),
 ) -> Result<BTreeMap<String, name_policy::PortablePath>> {
-    let renamed_files = container_name::operation_files(current, &workspace.namespace_operations)?;
-    workspace.files.values().map(|file| {
-        let original = current.iter().find(|entry| entry.lookup_key() == file.path.key());
+    let renamed_files = container_name::operation_files(current, workspace.namespace_operations())?;
+    workspace.files().map(|file| {
+        let original = current.iter().find(|entry| entry.lookup_key() == file.path().key());
         let file_id = original.filter(|entry| entry.kind == NamespaceEntryKind::File)
             .map(|entry| entry.file_id.parse::<storage_contract::FileId>()).transpose()?;
-        let mut path = current.binary_search_by(|entry| entry.lookup_key().cmp(file.path.key()))
-            .ok().map(|index| current[index].path.clone()).unwrap_or_else(|| file.path.clone());
-        for (operation, renamed_file) in workspace.namespace_operations.iter().zip(&renamed_files) {
+        let mut path = current.binary_search_by(|entry| entry.lookup_key().cmp(file.path().key()))
+            .ok().map(|index| current[index].path.clone()).unwrap_or_else(|| file.path().clone());
+        for (operation, renamed_file) in workspace.namespace_operations().iter().zip(&renamed_files)
+        {
             match operation {
                 NamespaceOperation::Mkdir { .. } => {}
                 NamespaceOperation::Delete { .. } if path.key() != operation.key() => {}
@@ -205,23 +206,25 @@ pub(crate) fn workspace_upload_locations(
                 }
             }
         }
-        Ok((file.item_id.clone(), path))
+        Ok((file.item().to_owned(), path))
     }).collect()
 }
 
-pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<()> {
+pub(crate) fn validate_workspace_dependencies(
+    workspace: &(impl crate::business::WorkspaceInput + ?Sized),
+) -> Result<()> {
     let overlaps = |left: &str, right: &str| {
         left == right || is_descendant(left, right) || is_descendant(right, left)
     };
-    for operation in &workspace.namespace_operations {
+    for operation in workspace.namespace_operations() {
         if operation.kind() == NamespaceOperationKind::Mkdir {
             continue;
         }
-        if workspace.files.values().any(|file| {
-            overlaps(file.path.key(), operation.key())
+        if workspace.files().any(|file| {
+            overlaps(file.path().key(), operation.key())
                 || operation
                     .destination()
-                    .is_some_and(|path| overlaps(file.path.key(), path.key()))
+                    .is_some_and(|path| overlaps(file.path().key(), path.key()))
         }) {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceDependencyBusy,

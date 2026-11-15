@@ -392,20 +392,20 @@ impl CurrentNamespaces {
     pub(crate) fn validate_workspace<'a>(
         &'a self,
         state: &'a State,
-        workspace: &Workspace,
+        workspace: &(impl crate::business::WorkspaceInput + ?Sized),
         baseline: Option<&WorkspaceNamespaceBaseline>,
     ) -> Result<&'a [Entry]> {
-        self.writable_scope(state, &workspace.branch_id)?;
+        self.writable_scope(state, workspace.branch_id())?;
         let baseline = baseline.ok_or_else(stale)?;
         if baseline.registry != self.registry
             || baseline.mask_hash != self.mask_hash
-            || baseline.workspace_id != workspace.workspace_id
-            || baseline.branch_id != workspace.branch_id
-            || baseline.head != workspace.base_head
-            || baseline.principal != workspace.principal
-            || !(baseline.fencing_token == workspace.fencing_token
-                || workspace.state == crate::WorkspaceState::Committed
-                    && baseline.fencing_token.checked_add(1) == Some(workspace.fencing_token))
+            || baseline.workspace_id != workspace.workspace_id()
+            || baseline.branch_id != workspace.branch_id()
+            || baseline.head != workspace.base_head()
+            || baseline.principal != workspace.principal()
+            || !(baseline.fencing_token == workspace.fencing_token()
+                || workspace.state() == &crate::WorkspaceState::Committed
+                    && baseline.fencing_token.checked_add(1) == Some(workspace.fencing_token()))
         {
             return Err(stale());
         }
@@ -414,7 +414,7 @@ impl CurrentNamespaces {
                 return Err(stale());
             }
         }
-        for operation in &workspace.namespace_operations {
+        for operation in workspace.namespace_operations() {
             self.require_namespace_operation(operation)?;
         }
         let scope = &self.branches[&baseline.branch_id];
@@ -474,10 +474,10 @@ impl CurrentNamespaces {
         &self,
         previous: &State,
         next: &State,
-        workspace: &Workspace,
+        workspace: &(impl crate::business::WorkspaceInput + ?Sized),
         entries: &[Entry],
     ) -> Result<()> {
-        let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
+        let scope = self.branches.get(workspace.branch_id()).ok_or_else(stale)?;
         // Only the previous authoritative names may normalize the visible source.
         // Candidate paths still require the existing one-source-per-occurrence proof.
         let names = crate::business::namespace::container_name::current_names(
@@ -487,16 +487,16 @@ impl CurrentNamespaces {
         crate::business::namespace::container_name::apply_file_names(&mut source, &names)?;
         let mut projected = scope.as_ref().clone();
         projected.entries = Arc::new(source);
-        if previous.branches.get(&workspace.branch_id)
+        if previous.branches.get(workspace.branch_id())
             .is_some_and(|branch| branch.file_id.is_some())
-            && let Some(file) = workspace.files.values().next()
+            && let Some(file) = workspace.files().next()
         {
             let source = crate::business::workspace_file_entries(
                 previous,
                 Some(self),
                 workspace,
                 &projected.entries,
-                &file.path,
+                file.path(),
             )?;
             projected.entries = Arc::new(source.into_owned());
         }
@@ -917,16 +917,16 @@ impl CurrentNamespaces {
     pub(crate) fn share_workspace_source(
         &self,
         state: &State,
-        workspace: &Workspace,
+        workspace: &(impl crate::business::WorkspaceInput + ?Sized),
         baseline: Option<&WorkspaceNamespaceBaseline>,
     ) -> Result<crate::NamespaceEntries> {
         self.validate_workspace(state, workspace, baseline)?;
-        let scope = self.branches.get(&workspace.branch_id).ok_or_else(stale)?;
-        if workspace.base_head == scope.source_head {
+        let scope = self.branches.get(workspace.branch_id()).ok_or_else(stale)?;
+        if workspace.base_head() == scope.source_head {
             Ok(crate::NamespaceEntries::Projected(Arc::clone(&scope.source_entries)))
         } else {
             Ok(crate::NamespaceEntries::Commit(
-                state.commits.get_shared(&workspace.base_head).ok_or_else(stale)?,
+                state.commits.get_shared(workspace.base_head()).ok_or_else(stale)?,
             ))
         }
     }

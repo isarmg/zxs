@@ -1242,7 +1242,8 @@ class TargetedSelection(unittest.TestCase):
             'ci-selection', 'container-tags-engine',
             'container-unchanged-save', 'portable-path-consumers',
         ], ['container-path-facts-engine', 'container-lifecycle-engine',
-            'upload-occurrence-source', 'workspace-version-construction'])
+            'upload-occurrence-source', 'workspace-version-construction',
+            'workspace-logical-input'])
         self.assertEqual(plan['groups'],
                          ['ci-selection', 'container-tags-engine',
                           'container-unchanged-save', 'portable-path-consumers'])
@@ -1278,8 +1279,9 @@ class TargetedSelection(unittest.TestCase):
             'src/engine/src/business/workspace/version_build.rs',
             'test/engine/unit/business/workspace_version_build_tests.rs',
         ]
-        assert_path_group_extension(self, self.policy, [paths[0]], None, [name])
-        assert_path_group_extension(self, self.policy, paths, None, [name])
+        added = [name, 'workspace-logical-input']
+        assert_path_group_extension(self, self.policy, [paths[0]], None, added)
+        assert_path_group_extension(self, self.policy, paths, None, added)
         for path in paths[1:]:
             with self.subTest(path=path):
                 plan = CI.select_plan(self.policy, [path], shardable=True)
