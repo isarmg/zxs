@@ -191,7 +191,22 @@ impl<'a> PlanningContext<'a> {
         {
             return Err(super::disk_registry::current::pending_publication());
         }
-        self.prepare_new_mutation(kind, principal, operation_id, digest, change)
+        let plan = self.prepare_new_mutation(kind, principal, operation_id, digest, change)?;
+        if crate::persist::file_metadata::is_kind(kind) {
+            let MutationPlan::Prepared { next, prepared, result } = &plan else {
+                unreachable!("invariant: new mutation preparation cannot replay a receipt");
+            };
+            if !prepared.is_empty() {
+                return Err(crate::business::file_metadata::invalid());
+            }
+            super::disk_registry::current::verify_file_metadata(
+                self.state,
+                next,
+                self.current_namespaces.map(AsRef::as_ref),
+                Some(result),
+            )?;
+        }
+        Ok(plan)
     }
 
     /// SMB binding has a closed, metadata-only proof, not a general kind permit.

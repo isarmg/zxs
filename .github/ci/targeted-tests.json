@@ -1,5 +1,78 @@
 {
   "groups": {
+    "file-metadata-plan": {
+      "reason": "One consumed file/version note and file-branch label plan closes native receipts and complete State in planning and cold replay. Preserve current-format bytes, actual offline metadata success, restore/copy labels, and authorization; no owner-format change.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "business::file_metadata::retained_metadata_tests::",
+            "engine::disk_registry::current::file_metadata::tests::"
+          ],
+          "exact": [
+            "history_package::tests::metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full_proofs",
+            "history_package::tests::real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes",
+            "history_package::tests::real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas"
+          ],
+          "max_tests": 12,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "file_history_copy",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "history_copy_keeps_all_bodies_branches_labels_notes_and_source_after_cold_replay",
+            "history_copy_failure_boundaries_keep_source_and_recover_one_operation"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "engine_backend::authorization_tests::retained_metadata::retained_metadata_d3_preserves_current_authorization_for_edits_and_receipts"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "test",
+          "name": "http_engine",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check"
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "workspace-logical-input": {
       "reason": "Borrow the existing logical workspace fields without altering requests, receipts or live authority. Exercise the two digest/source regressions plus six actual selection, baseline and D3/cold consumers; compile engine product features separately.",
       "python_tests": [
@@ -3950,6 +4023,96 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/file.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/file_metadata.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/mod.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/disk_registry/current/file_metadata.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/planning.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/engine/recovery/workspace_receipts.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/error.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/error/file_metadata.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/lib.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/file_metadata.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "src/engine/src/persist/mod.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/retained_metadata_tests.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "test/engine/unit/engine/current_file_metadata_tests.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
+    {
+      "path": "test/engine/unit/history_package/tests.rs",
+      "groups": [
+        "file-metadata-plan"
+      ]
+    },
     {
       "path": "src/engine/src/business/workspace.rs",
       "groups": [

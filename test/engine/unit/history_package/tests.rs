@@ -2508,6 +2508,21 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .as_str()
         .unwrap()
         .to_owned();
+    let file_note = engine.set_file_note(
+        &entry.file_id, None,
+        &storage_contract::Note::parse("restored whole-file note".into()).unwrap(),
+        "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let version_note = engine.set_file_note(
+        &entry.file_id, Some(&entry.version_id),
+        &storage_contract::Note::parse("restored original version note".into()).unwrap(),
+        "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
+    let branch_label = engine.rename_file_branch(
+        &entry.file_id, &left,
+        &storage_contract::BranchName::parse("restored label").unwrap(),
+        "alice", storage_contract::OperationId::generate().unwrap(),
+    ).unwrap();
     save(&mut engine, &left, b"left body");
     save(&mut engine, &right, b"right body");
     let chosen = engine.file_branch_head(&branch).unwrap();
@@ -2642,6 +2657,14 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         restored.state.file_branch_aliases,
         manifest.file_branch_aliases
     );
+    assert_eq!(restored.state.file_notes, manifest.file_notes);
+    assert_eq!(restored.state.version_notes, manifest.version_notes);
+    assert_eq!(restored.state.branches[&left].name, "restored label");
+    // Portable graph labels are restored, not the source pool's idempotency
+    // receipts. The enclosing history.restore is the only local publication.
+    for original in [&file_note, &version_note, &branch_label] {
+        assert!(!restored.state.operations.contains_key(&original.operation_id));
+    }
     assert_eq!(restored.state.file_path_notes, manifest.file_path_notes);
     assert_eq!(restored.state.file_backup_paths, manifest.file_backup_paths);
     assert_eq!(
@@ -2658,6 +2681,13 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     drop(restored);
     let restored = Engine::open(&temp.path().join("restored/state")).unwrap();
     assert_eq!(restored.file_branch_head(&left).unwrap(), merged);
+    assert_eq!(restored.state.file_notes, manifest.file_notes);
+    assert_eq!(restored.state.version_notes, manifest.version_notes);
+    assert_eq!(restored.state.branches[&left].name, "restored label");
+    for original in [&file_note, &version_note, &branch_label] {
+        assert!(!restored.state.operations.contains_key(&original.operation_id));
+    }
+
 }
 
 #[test]

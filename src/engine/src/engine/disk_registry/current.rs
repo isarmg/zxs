@@ -18,6 +18,8 @@ mod directory_branches;
 mod directory_metadata;
 mod directory_staging;
 mod file_branches;
+mod file_metadata;
+pub(in crate::engine) use file_metadata::verify as verify_file_metadata;
 mod file_restore;
 mod file_synchronization;
 mod file_tags;
@@ -604,6 +606,7 @@ impl CurrentNamespaces {
     fn advance_namespaces(&self, previous: &State, next: &State) -> Result<Self> {
         crate::node_retirement_engine::verify(previous, next)?;
         self.verify_file_tag_publications(previous, next)?;
+        file_metadata::verify(previous, next, Some(self), None)?;
         if let Some(view) = self.advance_history_move(previous, next)? {
             return Ok(view);
         }

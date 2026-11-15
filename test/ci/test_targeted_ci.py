@@ -243,7 +243,7 @@ class TargetedSelection(unittest.TestCase):
             ('test/contract/unit/lib/tests.rs', ['portable-path-consumers'],
              'storage-contract', 'tests::'),
             ('test/engine/unit/history_package/tests.rs',
-             ['container-tags-storage', 'portable-path-consumers'],
+             ['container-tags-storage', 'file-metadata-plan', 'portable-path-consumers'],
              'storage-engine', 'history_package::tests::'),
             ('test/engine/unit/journal/snapshot_incremental_oracle_tests.rs',
              ['container-tags-storage'], 'storage-engine',
@@ -610,7 +610,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-lifecycle-contract', 'container-lifecycle-http',
-            'container-lifecycle-web', 'container-path-facts-schema',
+            'container-lifecycle-web', 'container-path-facts-schema', 'file-metadata-plan',
         ])
         self.assertEqual(plan['groups'], [
             'checkpoint-layout', 'ci-selection', 'container-tags-format',
@@ -625,7 +625,7 @@ class TargetedSelection(unittest.TestCase):
                                              ['src/engine/src/lib.rs'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
             'typed-name-consumers',
-        ], ['container-path-facts-engine', 'container-lifecycle-engine'])
+        ], ['container-path-facts-engine', 'container-lifecycle-engine', 'file-metadata-plan'])
         self.assertNotIn('working-directory-prerequisite', central['groups'])
         self.assertEqual(central['groups'], [
             'held-directory-layout', 'ordinary-conversion-name-budget',
@@ -1271,6 +1271,44 @@ class TargetedSelection(unittest.TestCase):
         self.assertFalse(product['default_features'])
         self.assertEqual(CI.cargo_command(product, '/build')[1], 'check')
 
+    def test_file_metadata_plan_preserves_overlap_and_current_format_consumers(self):
+        name = 'file-metadata-plan'
+        group = self.policy['groups'][name]
+        paths = [
+            'src/engine/src/business/file.rs',
+            'src/engine/src/business/file_metadata.rs',
+            'src/engine/src/business/mod.rs',
+            'src/engine/src/engine/disk_registry/current.rs',
+            'src/engine/src/engine/disk_registry/current/file_metadata.rs',
+            'src/engine/src/engine/planning.rs',
+            'src/engine/src/engine/recovery/workspace_receipts.rs',
+            'src/engine/src/error.rs',
+            'src/engine/src/error/file_metadata.rs',
+            'src/engine/src/lib.rs',
+            'src/engine/src/persist/file_metadata.rs',
+            'src/engine/src/persist/mod.rs',
+            'test/engine/unit/business/retained_metadata_tests.rs',
+            'test/engine/unit/engine/current_file_metadata_tests.rs',
+            'test/engine/unit/history_package/tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                complete = CI.select_plan(self.policy, [path], shardable=True)
+                self.assertIn(name, complete['groups'])
+                self.assertCountEqual(origin_selections(complete, name), group['rust_targets'])
+        assert_path_group_extension(self, self.policy, paths, None, [name])
+        units, copy, authorization, http, default, lean = group['rust_targets']
+        self.assertEqual(units['prefixes'], [
+            'business::file_metadata::retained_metadata_tests::',
+            'engine::disk_registry::current::file_metadata::tests::',
+        ])
+        self.assertEqual((units['max_tests'], len(units['exact'])), (12, 3))
+        self.assertEqual((copy['name'], copy['max_tests']), ('file_history_copy', 2))
+        self.assertEqual((authorization['max_tests'], http['max_tests']), (1, 1))
+        self.assertEqual((default['mode'], lean['mode']), ('check', 'check'))
+        self.assertTrue(default.get('default_features', True))
+        self.assertFalse(lean['default_features'])
+
     def test_workspace_version_construction_keeps_overlap_and_both_product_checks(self):
         name = 'workspace-version-construction'
         group = self.policy['groups'][name]
@@ -1329,6 +1367,7 @@ class TargetedSelection(unittest.TestCase):
         ], [
             'container-path-facts-engine', 'container-lifecycle-engine',
             'container-path-facts-http', 'container-lifecycle-http', 'path-fact-activity',
+            'file-metadata-plan',
         ])
         self.assertEqual(plan['groups'], ['ci-selection', 'held-directory-layout',
                                          'ordinary-conversion-name-budget',

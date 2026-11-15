@@ -688,60 +688,6 @@ pub(super) fn create_file_branch_change<'a>(
 }
 
 impl Engine {
-    pub fn set_file_note(
-        &mut self,
-        file_id: &str,
-        version_id: Option<&str>,
-        note: &storage_contract::Note,
-        principal: &str,
-        operation: OperationId,
-    ) -> Result<OperationResult> {
-        let note = note.as_str();
-        self.mutate(
-            if version_id.is_some() {
-                "version.metadata"
-            } else {
-                "file.metadata"
-            },
-            principal,
-            operation,
-            json!({"file_id":file_id,"version_id":version_id,"note":note}),
-            |engine, state, _| {
-                let version = match version_id {
-                    Some(id) => state
-                        .versions
-                        .get(id)
-                        .filter(|version| version.file_id == file_id),
-                    None => {
-                        engine.require_current_metadata_file(file_id)?;
-                        state
-                            .versions
-                            .values()
-                            .find(|version| version.file_id == file_id)
-                    }
-                }
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::FileNotFound,
-                        "file or version not found",
-                    )
-                })?;
-                engine.repository_for_history(&version.history_tree_id)?;
-                let notes = if version_id.is_some() {
-                    &mut state.version_notes
-                } else {
-                    &mut state.file_notes
-                };
-                let key = version_id.unwrap_or(file_id);
-                if note.is_empty() {
-                    notes.remove(key);
-                } else {
-                    notes.insert(key.into(), note.into());
-                }
-                Ok(json!({"file_id":file_id,"version_id":version_id,"note":note}))
-            },
-        )
-    }
     pub fn file_namespace(
         &mut self,
         repository: &str,

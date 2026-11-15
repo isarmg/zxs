@@ -390,6 +390,9 @@ impl Engine {
         if let Some(view) = self.admitted_current_namespaces()? {
             verify_current_candidate_transition(view, &self.state, next, candidate)?;
         } else {
+            crate::engine::disk_registry::current::verify_file_metadata(
+                &self.state, next, None, None,
+            )?;
             crate::engine::disk_registry::current::verify_path_changes(
                 &self.state,
                 next,
@@ -408,6 +411,7 @@ impl Engine {
                 .is_some_and(|receipt| {
                     receipt.kind == storage_contract::file_container_tags::KIND
                         || crate::persist::path_changes::is_kind(&receipt.kind)
+                        || crate::persist::file_metadata::is_kind(&receipt.kind)
                 })
             {
                 verify_current_candidate_receipt(candidate, next)?;
@@ -499,6 +503,7 @@ pub(super) fn verify_current_candidate_receipt(candidate: &Candidate, next: &Sta
     if matches!(
         result.kind.as_str(),
         "plan.cancel" | "branch.archive" | "merge-link.create" | "file.container-tags.replace"
+            | "file.metadata" | "version.metadata" | "file.branch.rename"
     ) && !candidate.versions.is_empty()
     {
         return Err(Error::new(

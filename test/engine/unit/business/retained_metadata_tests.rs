@@ -1,6 +1,7 @@
 //! Real D3 publications and restart replay. These temporary directories may share
 //! a filesystem; no physical device, deployment or backup restoration is implied.
-use super::*;
+use crate::*;
+use json_codec::json;
 use crate::{MembershipExitAction, PlacementRuleUpdate};
 use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 
