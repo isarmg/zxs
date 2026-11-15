@@ -1,5 +1,43 @@
 {
   "groups": {
+    "namespace-allocation": {
+      "reason": "One allocator-parameterized namespace algorithm remains consumed by live wrappers; exercise ordered identities, unchanged refusal order, failure-prefix retry and six existing namespace consumers without changing persistent bytes.",
+      "python_tests": [
+        "test_namespace_allocation_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "exact": [
+            "business::namespace::tests::ordered_namespace_allocations_preserve_chained_paths_and_deletion_facts",
+            "business::namespace::tests::namespace_preconditions_fail_before_allocating_any_new_identity",
+            "business::namespace::draft::tests::explicit_parent_ids_preserve_failure_prefix_and_retry_only_missing_parents",
+            "business::namespace::tests::directory_rename_follows_normalized_ancestry_without_slicing_utf8_by_key_length",
+            "business::namespace::tests::namespace_deletion_facts_preserve_repeated_intermediate_paths_and_tree_members",
+            "business::namespace::tests::canonical_equivalent_namespace_sources_preserve_identity_and_strict_destinations",
+            "business::namespace::draft::tests::shared_parent_creation_matches_legacy_order_and_preserves_existing_identity",
+            "business::namespace::draft::tests::parent_file_errors_do_not_replace_or_drop_the_existing_entry",
+            "business::namespace::draft::tests::flattened_draft_keeps_namespace_operations_and_deletion_order_unchanged"
+          ],
+          "max_tests": 9,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "file-material-copy-reuse": {
       "reason": "Reuse one immutable FILE image only across actual targets of the same borrowed logical view. Retain per-target entity and old-database admission, byte charging, skipped-root ordering, crash pairs, exact wire bytes, and default/lean product compilation. No original inventory or native format activation.",
       "python_tests": [],
@@ -4110,6 +4148,36 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/business/namespace.rs",
+      "groups": [
+        "namespace-allocation"
+      ]
+    },
+    {
+      "path": "src/engine/src/business/namespace/draft.rs",
+      "groups": [
+        "namespace-allocation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/tests.rs",
+      "groups": [
+        "namespace-allocation"
+      ]
+    },
+    {
+      "path": "test/engine/unit/business/namespace/draft_tests.rs",
+      "groups": [
+        "namespace-allocation"
+      ]
+    },
+    {
+      "path": "test/ci/test_namespace_allocation_targeted_ci.py",
+      "groups": [
+        "namespace-allocation"
+      ]
+    },
     {
       "path": "src/engine/src/engine/membership_transition/archive/namespace_replay.rs",
       "groups": [

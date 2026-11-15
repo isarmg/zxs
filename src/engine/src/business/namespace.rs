@@ -107,6 +107,14 @@ pub(crate) fn ensure_parents(
     entries: &mut Vec<Entry>,
     path: &name_policy::PortablePath,
 ) -> Result<()> {
+    ensure_parents_with_ids(entries, path, &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn ensure_parents_with_ids(
+    entries: &mut Vec<Entry>,
+    path: &name_policy::PortablePath,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
     let mut parents = Vec::new();
     let mut parent = path.parent();
     while let Some(path) = parent {
@@ -126,7 +134,7 @@ pub(crate) fn ensure_parents(
             }
         } else {
             entries.push(Entry {
-                entry_id: new_id("entry")?,
+                entry_id: ids("entry")?,
                 path,
                 kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),
@@ -142,6 +150,15 @@ pub(crate) fn apply_workspace_namespace(
     base: &[Entry],
     operations: &[NamespaceOperation],
 ) -> Result<Vec<DeletedPath>> {
+    apply_workspace_namespace_with_ids(entries, base, operations, &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn apply_workspace_namespace_with_ids(
+    entries: &mut Vec<Entry>,
+    base: &[Entry],
+    operations: &[NamespaceOperation],
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<Vec<DeletedPath>> {
     let mut deleted = Vec::new();
     let mut explicit_directories = std::collections::BTreeSet::new();
     for op in operations {
@@ -156,7 +173,7 @@ pub(crate) fn apply_workspace_namespace(
         {
             continue;
         }
-        deleted.extend(apply_namespace(entries, op)?);
+        deleted.extend(apply_namespace_with_ids(entries, op, ids)?);
         if op.kind() == NamespaceOperationKind::Mkdir {
             explicit_directories.insert(op.key());
         }
@@ -276,6 +293,14 @@ pub(crate) fn apply_namespace(
     entries: &mut Vec<Entry>,
     op: &NamespaceOperation,
 ) -> Result<Vec<DeletedPath>> {
+    apply_namespace_with_ids(entries, op, &mut |prefix| Ok(new_id(prefix)?))
+}
+
+pub(super) fn apply_namespace_with_ids(
+    entries: &mut Vec<Entry>,
+    op: &NamespaceOperation,
+    ids: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<Vec<DeletedPath>> {
     let key = op.key();
     let mut deleted = Vec::new();
     match op {
@@ -286,9 +311,9 @@ pub(crate) fn apply_namespace(
                     "directory target exists",
                 ));
             }
-            ensure_parents(entries, path)?;
+            ensure_parents_with_ids(entries, path, ids)?;
             entries.push(Entry {
-                entry_id: new_id("entry")?,
+                entry_id: ids("entry")?,
                 path: path.clone(),
                 kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),
@@ -354,7 +379,7 @@ pub(crate) fn apply_namespace(
                     "rename destination exists",
                 ));
             }
-            ensure_parents(entries, target)?;
+            ensure_parents_with_ids(entries, target, ids)?;
             // Display spellings can differ in both case and UTF-8 length from
             // the normalized key (Straße / STRASSE). Select by key, then strip
             // display components rather than slicing by a different spelling.

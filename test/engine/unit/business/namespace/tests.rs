@@ -267,3 +267,101 @@ fn parsed_path_namespace_cost() {
         );
     }
 }
+
+#[test]
+fn ordered_namespace_allocations_preserve_chained_paths_and_deletion_facts() {
+    let base = vec![entry("source.txt", NamespaceEntryKind::File)];
+    let operations = [
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "New/Deep", None).unwrap(),
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "source.txt", Some("New/Deep/moved.txt"),
+        ).unwrap(),
+        NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "Other/Leaf", None).unwrap(),
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Rename, "New", Some("Other/Leaf/Renamed"),
+        ).unwrap(),
+        NamespaceOperation::parse(
+            NamespaceOperationKind::Delete, "Other/Leaf/Renamed/Deep/moved.txt", None,
+        ).unwrap(),
+    ];
+    let ids = (0..4).map(|_| storage_contract::EntryId::generate().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let mut actual = base.clone();
+    let mut trace = Vec::new();
+    let facts = apply_workspace_namespace_with_ids(
+        &mut actual, &base, &operations,
+        &mut |prefix| {
+            trace.push(prefix.to_owned());
+            Ok(ids[trace.len() - 1].clone())
+        },
+    ).unwrap();
+    assert_eq!(trace, ["entry", "entry", "entry", "entry"]);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].path, "Other/Leaf/Renamed/Deep/moved.txt");
+    assert_eq!(facts[0].kind, NamespaceEntryKind::File);
+    for (path, id) in [
+        ("Other/Leaf/Renamed", &ids[0]),
+        ("Other/Leaf/Renamed/Deep", &ids[1]),
+        ("Other", &ids[2]),
+        ("Other/Leaf", &ids[3]),
+    ] {
+        let directory = find_unordered(&actual, path).unwrap();
+        assert_eq!(&directory.entry_id, id);
+        assert_eq!(directory.kind, NamespaceEntryKind::Directory);
+    }
+    assert_eq!(actual.len(), 4);
+    let mut live = base.clone();
+    let live_facts = apply_workspace_namespace(&mut live, &base, &operations).unwrap();
+    assert_eq!(live_facts, facts);
+    for directory in &mut live {
+        directory.entry_id = find_unordered(&actual, directory.path())
+            .unwrap().entry_id.clone();
+    }
+    assert_eq!(live, actual);
+    validate_entries(&mut actual, 4).unwrap();
+}
+
+#[test]
+fn namespace_preconditions_fail_before_allocating_any_new_identity() {
+    let base = vec![
+        entry("Source.txt", NamespaceEntryKind::File),
+        entry("Parent", NamespaceEntryKind::File),
+        entry("Tree", NamespaceEntryKind::Directory),
+        entry("Tree/Child", NamespaceEntryKind::File),
+    ];
+    let cases = [
+        (NamespaceOperationKind::Mkdir, "Source.txt", None, ErrorCode::NameCollision),
+        (
+            NamespaceOperationKind::Rename, "missing", Some("New/Child"),
+            ErrorCode::EntryNotFound,
+        ),
+        (
+            NamespaceOperationKind::Rename, "Source.txt", Some("Parent/Child"),
+            ErrorCode::ParentNotDirectory,
+        ),
+        (
+            NamespaceOperationKind::Rename, "Source.txt", Some("Parent"),
+            ErrorCode::NameCollision,
+        ),
+        (
+            NamespaceOperationKind::Rename, "Tree", Some("Tree/New/Child"),
+            ErrorCode::InvalidMove,
+        ),
+        (NamespaceOperationKind::Delete, "Tree", None, ErrorCode::DirectoryNotEmpty),
+    ];
+    for (kind, source, destination, code) in cases {
+        let operation = NamespaceOperation::parse(kind, source, destination).unwrap();
+        let mut actual = base.clone();
+        let mut calls = 0;
+        let error = apply_namespace_with_ids(&mut actual, &operation, &mut |prefix| {
+            calls += 1;
+            Ok(new_id(prefix)?)
+        }).unwrap_err();
+        assert_eq!(error.code(), code);
+        assert_eq!(calls, 0);
+        assert_eq!(actual, base);
+        let mut live = base.clone();
+        assert_eq!(apply_namespace(&mut live, &operation).unwrap_err().code(), code);
+        assert_eq!(live, base);
+    }
+}

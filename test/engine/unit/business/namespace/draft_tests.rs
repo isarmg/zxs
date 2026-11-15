@@ -287,3 +287,49 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0], entries[1]);
 }
+
+#[test]
+fn explicit_parent_ids_preserve_failure_prefix_and_retry_only_missing_parents() {
+    let base = vec![entry("Existing", NamespaceEntryKind::Directory)];
+    let path = name_policy::PortablePath::parse("New/Nested/file.txt").unwrap();
+    let first = storage_contract::EntryId::generate().unwrap().to_string();
+    let second = storage_contract::EntryId::generate().unwrap().to_string();
+    let mut draft = NamespaceDraft::new(base.clone());
+    let mut calls = 0;
+    let failure = draft.ensure_parents_with_ids(&path, &mut |prefix| {
+        assert_eq!(prefix, "entry");
+        calls += 1;
+        if calls == 1 {
+            return Ok(first.clone());
+        }
+        let invalid: storage_contract::EntryId = "invalid-recorded-entry".parse()?;
+        Ok(invalid.to_string())
+    }).unwrap_err();
+    assert_eq!(calls, 2);
+    assert_eq!(failure.code(), storage_contract::ErrorCode::InvalidId);
+    assert_eq!(lookup(&draft, "New").unwrap().entry_id, first);
+    assert!(lookup(&draft, "New/Nested").is_none());
+    assert_eq!(lookup(&draft, "Existing"), Some(&base[0]));
+    let partial = draft.into_entries();
+    assert_eq!(partial.len(), 2);
+    let mut retry = NamespaceDraft::new(partial);
+    let mut replayed = 0;
+    retry.ensure_parents_with_ids(&path, &mut |prefix| {
+        assert_eq!(prefix, "entry");
+        replayed += 1;
+        Ok(second.clone())
+    }).unwrap();
+    assert_eq!(replayed, 1);
+    assert_eq!(lookup(&retry, "New").unwrap().entry_id, first);
+    assert_eq!(lookup(&retry, "New/Nested").unwrap().entry_id, second);
+    retry.ensure_parents_with_ids(&path, &mut |prefix| {
+        replayed += 1;
+        Ok(new_id(prefix)?)
+    }).unwrap();
+    assert_eq!(replayed, 1);
+    let actual = retry.into_entries();
+    assert_eq!(actual.len(), 3);
+    assert_eq!(actual[0], base[0]);
+    assert_eq!(actual[1].path.as_str(), "New");
+    assert_eq!(actual[2].path.as_str(), "New/Nested");
+}

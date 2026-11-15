@@ -47,6 +47,14 @@ impl NamespaceDraft {
     }
 
     pub(crate) fn ensure_parents(&mut self, path: &name_policy::PortablePath) -> Result<()> {
+        self.ensure_parents_with_ids(path, &mut |prefix| Ok(new_id(prefix)?))
+    }
+
+    pub(crate) fn ensure_parents_with_ids(
+        &mut self,
+        path: &name_policy::PortablePath,
+        ids: &mut impl FnMut(&str) -> Result<String>,
+    ) -> Result<()> {
         let mut parents = Vec::new();
         let mut parent = path.parent();
         while let Some(path) = parent {
@@ -63,7 +71,7 @@ impl NamespaceDraft {
                 }
             } else {
                 self.replace(Entry {
-                    entry_id: new_id("entry")?,
+                    entry_id: ids("entry")?,
                     path,
                     kind: NamespaceEntryKind::Directory,
                     file_id: String::new(),
