@@ -1,5 +1,38 @@
 {
   "groups": {
+    "first-backup-additions": {
+      "reason": "Start with one held empty primary, enroll empty B then C through actual ordinary membership, publish real retained and successor BODY copies, verify exact cold Engine replica fallback, and separately inspect offline DISK/FILE history and tags. Does not claim independent backup-only authenticated BODY startup.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "recursive_backup_paths",
+          "features": [
+            "fault-injection"
+          ],
+          "exact": [
+            "first_additions::empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "fresh-pool-core": {
       "reason": "Exercise a genuinely empty held single-primary pool, ordinary content and file branches, retained leased workspace input before explicit commit, cold node selection and exact permanent retries. This is not FILE-local Draft, sparse worktree or helper/daemon startup acceptance.",
       "python_tests": [
@@ -4201,6 +4234,18 @@
     }
   },
   "rules": [
+    {
+      "path": "test/engine/integration/recursive_backup_paths.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
+    {
+      "path": "test/engine/integration/recursive_backup_first_additions.rs",
+      "groups": [
+        "first-backup-additions"
+      ]
+    },
     {
       "path": "src/engine/src/business/namespace.rs",
       "groups": [
