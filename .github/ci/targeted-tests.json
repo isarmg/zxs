@@ -20,6 +20,14 @@
         {
           "package": "storage-engine",
           "manifest": "src/engine/Cargo.toml",
+          "exact": [
+            "persist::layout::tests::initialization_and_recovery_use_the_existing_disk_paths_and_bytes"
+          ],
+          "max_tests": 1
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
           "mode": "check",
           "timeout_seconds": 900
         },
@@ -11087,8 +11095,16 @@
       ]
     },
     {
+      "path": "src/engine/src/container_storage/shared_layout.rs",
+      "groups": [
+        "directory-layout-probe",
+        "fresh-pool-core"
+      ]
+    },
+    {
       "path": "test/ci/test_fresh_pool_core_targeted_ci.py",
       "groups": [
+        "directory-layout-probe",
         "fresh-pool-core"
       ]
     }
