@@ -53,13 +53,13 @@ pub(in crate::container_storage) fn reconstruct_material(
     validate_records(&records, file, history, material.source_sequence())?;
     // The archive envelope has already checked this digest. Preserve its exact
     // bytes and hash; local row admission above does not grant publication.
-    Ok(CapturedMaterial {
+    let encoded = CapturedMaterial {
         records,
         file: file.to_owned(),
         history: history.to_owned(),
         sequence: material.source_sequence(),
         records_hash: material.records_hash().to_owned(),
     }
-    .encode()?
-    .bytes)
+    .encode()?;
+    Ok(Arc::unwrap_or_clone(encoded.bytes))
 }

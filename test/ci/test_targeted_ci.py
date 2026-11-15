@@ -2582,6 +2582,40 @@ class ContainerTagsSelection(unittest.TestCase):
                       contract['exact'])
         self.assertEqual(contract['max_tests'], 96)
 
+    def test_file_material_copy_reuse_keeps_target_gates_and_product_checks(self):
+        paths = [
+            'src/engine/src/container_storage.rs',
+            'src/engine/src/container_storage/file_database.rs',
+            'src/engine/src/container_storage/file_database/install.rs',
+            'src/engine/src/container_storage/file_database/material.rs',
+            'src/engine/src/database_install.rs',
+            'test/engine/unit/container_storage/file_database_copy_tests.rs',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                plan = CI.select_plan(self.policy, [path])
+                self.assertIn('file-material-copy-reuse', plan['groups'])
+                self.assertCountEqual(
+                    self.selections(plan, 'file-material-copy-reuse'),
+                    self.policy['groups']['file-material-copy-reuse']['rust_targets'],
+                )
+        targets = self.policy['groups']['file-material-copy-reuse']['rust_targets']
+        self.assertEqual(targets[0]['prefixes'], [
+            'container_storage::file_database::tests::',
+            'container_storage::file_database::install::tests::',
+        ])
+        self.assertEqual(targets[0]['max_tests'], 21)
+        self.assertEqual(targets[1]['prefixes'], ['database_install::tests::'])
+        self.assertEqual(targets[1]['max_tests'], 16)
+        self.assertTrue(all(target['timeout_seconds'] == 900 for target in targets))
+        self.assertEqual(
+            [target.get('default_features', True) for target in targets
+             if target.get('mode') == 'check'],
+            [True, False],
+        )
+        fixture = CI.select_plan(self.policy, [paths[-1]])
+        self.assertEqual(fixture['groups'], ['file-material-copy-reuse'])
+
     def test_database_repair_source_and_fixture_select_completed_and_pending_regressions(self):
         for path in ['src/engine/src/database_install.rs',
                      'test/engine/unit/database_install_tests.rs']:
@@ -2788,7 +2822,7 @@ class ContainerPathFactSelection(unittest.TestCase):
         self.assertEqual(plan['groups'], [
             'ci-selection', 'container-lifecycle-engine', 'container-path-facts-engine',
             'container-tags-storage', 'current-name-layout-consumers',
-            'engine-integer-errors', 'held-directory-layout',
+            'engine-integer-errors', 'file-material-copy-reuse', 'held-directory-layout',
         ])
         for group in plan['groups']:
             self.assertCountEqual(self.selections(plan, group),

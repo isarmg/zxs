@@ -1,5 +1,43 @@
 {
   "groups": {
+    "file-material-copy-reuse": {
+      "reason": "Reuse one immutable FILE image only across actual targets of the same borrowed logical view. Retain per-target entity and old-database admission, byte charging, skipped-root ordering, crash pairs, exact wire bytes, and default/lean product compilation. No original inventory or native format activation.",
+      "python_tests": [],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "container_storage::file_database::tests::",
+            "container_storage::file_database::install::tests::"
+          ],
+          "max_tests": 21,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "prefixes": [
+            "database_install::tests::"
+          ],
+          "max_tests": 16,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "file-metadata-plan": {
       "reason": "One consumed file/version note and file-branch label plan closes native receipts and complete State in planning and cold replay. Preserve current-format bytes, actual offline metadata success, restore/copy labels, and authorization; no owner-format change.",
       "python_tests": [],
@@ -4023,6 +4061,42 @@
     }
   },
   "rules": [
+    {
+      "path": "src/engine/src/container_storage.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/install.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
+    {
+      "path": "src/engine/src/container_storage/file_database/material.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
+    {
+      "path": "src/engine/src/database_install.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
+    {
+      "path": "test/engine/unit/container_storage/file_database_copy_tests.rs",
+      "groups": [
+        "file-material-copy-reuse"
+      ]
+    },
     {
       "path": "src/engine/src/business/file.rs",
       "groups": [

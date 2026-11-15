@@ -1494,6 +1494,7 @@ fn prepare_names_inner(
         let locations = projection_locations(previous, view, &file);
         let mut description = None;
         let mut encoded_histories = BTreeMap::new();
+        let mut prepared_copies: Option<file_database::install::PreparedFileCopies<'_>> = None;
         // No merge traversal or tag memo is built until an actual container
         // descriptor needs it. Every cache lives only within this frozen file.
         let mut node_projection = None;
@@ -1608,14 +1609,24 @@ fn prepare_names_inner(
             let database = if skip_shared {
                 None
             } else {
-                let database = file_database::install::CapturedFile::capture(
-                    &held.root,
-                    (&history, &history_id),
-                    &current,
-                    &file,
-                    view,
-                )?
-                .prepare(admission)?;
+                let database = match &prepared_copies {
+                    Some(copies) => copies.prepare(
+                        &held.root, (&history, &history_id), &current, admission,
+                    )?,
+                    None => {
+                        let (copies, database) =
+                            file_database::install::PreparedFileCopies::capture(
+                                &held.root,
+                                (&history, &history_id),
+                                &current,
+                                &file,
+                                view,
+                                admission,
+                            )?;
+                        prepared_copies = Some(copies);
+                        database
+                    }
+                };
                 database_bytes += database.byte_len();
                 if database_bytes > file_database::MAX_TOTAL_BYTES {
                     return Err(Error::new(

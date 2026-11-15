@@ -4,6 +4,7 @@ pub(crate) use super::local_database::MAX_BYTES;
 use super::local_database::{Prepared, Record};
 use crate::{Error, ErrorCode, Result, state_projection::StateProjection};
 use sqlite_access::{Row, SqliteConnection};
+use std::sync::Arc;
 
 pub(super) mod changes;
 pub(super) mod install;
@@ -117,14 +118,14 @@ pub(crate) fn capture_projected_copy(
 pub(super) fn prepare(view: StateProjection<'_>, file: &str, history: &str) -> Result<Prepared> {
     let prepared = CapturedMaterial::from_projection(view, file, history)?.encode()?;
     Ok(Prepared {
-        bytes: prepared.bytes,
+        bytes: Arc::unwrap_or_clone(prepared.bytes),
     })
 }
 
 /// An encoded logical material, not publication or installation authority.
 /// Move staging still requires its typed joint audit instead of forged receipts.
 pub(crate) struct PreparedFileMaterial {
-    bytes: Vec<u8>,
+    bytes: Arc<Vec<u8>>,
     file: String,
     history: String,
     sequence: u64,
@@ -280,7 +281,7 @@ impl CapturedMaterial {
             &self.records_hash,
         )?;
         Ok(PreparedFileMaterial {
-            bytes: prepared.bytes,
+            bytes: Arc::new(prepared.bytes),
             file: self.file,
             history: self.history,
             sequence: self.sequence,

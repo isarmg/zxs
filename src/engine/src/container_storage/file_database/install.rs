@@ -1,6 +1,8 @@
 //! Source-bound file-container installation. The common installer owns all
 //! publication, retention and crash recovery; this adapter only proves scope.
-use super::{CapturedMaterial, MAX_BYTES, invalid, verify_scope};
+use crate::container_storage::file_database::{
+    CapturedMaterial, MAX_BYTES, PreparedFileMaterial, invalid, validate_owner, verify_scope,
+};
 use crate::{
     Result,
     database_install::{InstallAdmission, PreparedInstall, Scope},
@@ -8,18 +10,69 @@ use crate::{
     state_projection::StateProjection,
 };
 use platform_io::fs_safety::linux::FileIdentity;
-use std::path::Path;
+use std::{path::Path, sync::Arc};
+
+struct CapturedTarget<'a> {
+    root: &'a DiskRoot,
+    history: &'a Path,
+    container: &'a Path,
+    held: DiskRoot,
+    inode: FileIdentity,
+}
+
+impl<'a> CapturedTarget<'a> {
+    fn capture(
+        root: &'a DiskRoot,
+        history: (&'a Path, &str),
+        container: &'a Path,
+        file: &str,
+        view: StateProjection<'_>,
+    ) -> Result<Self> {
+        let held = capture_entity(root, history, container, file, view)?;
+        let inode = held.directory_identity(held.path())?;
+        Ok(Self {
+            root,
+            history: history.0,
+            container,
+            held,
+            inode,
+        })
+    }
+
+    fn prepare(
+        self,
+        database: &PreparedFileMaterial,
+        admission: InstallAdmission,
+    ) -> Result<PreparedFile> {
+        let Self {
+            root,
+            history,
+            container,
+            held: _held,
+            inode,
+        } = self;
+        let file = &database.file;
+        let history_id = &database.history;
+        let install = PreparedInstall::capture(
+            root,
+            history,
+            (container, inode),
+            (Scope::file(history_id, file)?, admission),
+            Arc::clone(&database.bytes),
+            MAX_BYTES,
+            |bytes| verify_scope(bytes, file, history_id),
+        )?;
+        // The original descriptor remains alive through matching capture.
+        Ok(PreparedFile { install, inode })
+    }
+}
 
 /// One retained entity and its complete logical FILE material. Capturing keeps
 /// physical admission ahead of row admission; preparation consumes the rows
 /// without consulting State or replacing the held entity binding. Neither
 /// phase authorizes publication or installation.
 pub(in crate::container_storage) struct CapturedFile<'a> {
-    root: &'a DiskRoot,
-    history: &'a Path,
-    container: &'a Path,
-    held: DiskRoot,
-    inode: FileIdentity,
+    target: CapturedTarget<'a>,
     material: CapturedMaterial,
 }
 
@@ -31,45 +84,57 @@ impl<'a> CapturedFile<'a> {
         file: &str,
         view: StateProjection<'_>,
     ) -> Result<Self> {
-        let held = capture_entity(root, history, container, file, view)?;
-        let inode = held.directory_identity(held.path())?;
+        let target = CapturedTarget::capture(root, history, container, file, view)?;
         let material = CapturedMaterial::from_projection(view, file, history.1)?;
-        Ok(Self {
-            root,
-            history: history.0,
-            container,
-            held,
-            inode,
-            material,
-        })
+        Ok(Self { target, material })
     }
 
     pub(in crate::container_storage) fn prepare(
         self,
         admission: InstallAdmission,
     ) -> Result<PreparedFile> {
-        let Self {
-            root,
-            history,
-            container,
-            held: _held,
-            inode,
-            material,
-        } = self;
+        self.target.prepare(&self.material.encode()?, admission)
+    }
+}
+
+/// One image for targets of this exact borrowed logical view. Construction is
+/// lazy at the first real target, after its physical capture. Each later target
+/// repeats physical and old-FILE admission; only pure row capture and encoding
+/// are shared. No target observation or installation authority is reused.
+pub(in crate::container_storage) struct PreparedFileCopies<'a> {
+    view: StateProjection<'a>,
+    database: PreparedFileMaterial,
+}
+
+impl<'a> PreparedFileCopies<'a> {
+    pub(in crate::container_storage) fn capture(
+        root: &DiskRoot,
+        history: (&Path, &str),
+        container: &Path,
+        file: &str,
+        view: StateProjection<'a>,
+        admission: InstallAdmission,
+    ) -> Result<(Self, PreparedFile)> {
+        let CapturedFile { target, material } =
+            CapturedFile::capture(root, history, container, file, view)?;
         let database = material.encode()?;
-        let file = &database.file;
-        let history_id = &database.history;
-        let install = PreparedInstall::capture(
-            root,
-            history,
-            (container, inode),
-            (Scope::file(history_id, file)?, admission),
-            database.bytes,
-            MAX_BYTES,
-            |bytes| verify_scope(bytes, file, history_id),
-        )?;
-        // The original descriptor remains alive through matching capture.
-        Ok(PreparedFile { install, inode })
+        let prepared = target.prepare(&database, admission)?;
+        Ok((Self { view, database }, prepared))
+    }
+
+    pub(in crate::container_storage) fn prepare(
+        &self,
+        root: &DiskRoot,
+        history: (&Path, &str),
+        container: &Path,
+        admission: InstallAdmission,
+    ) -> Result<PreparedFile> {
+        let target =
+            CapturedTarget::capture(root, history, container, &self.database.file, self.view)?;
+        // Locations include the predecessor as well as the next State. A later
+        // target must not silently replace its different history with this one.
+        validate_owner(self.view, &self.database.file, history.1)?;
+        target.prepare(&self.database, admission)
     }
 }
 
@@ -209,3 +274,7 @@ fn capture_entity(
     }
     Ok(held)
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/container_storage/file_database_copy_tests.rs"]
+mod tests;

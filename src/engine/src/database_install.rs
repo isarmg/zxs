@@ -7,7 +7,10 @@ use crate::{
 };
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{EntryName, linux::FileIdentity};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 pub(crate) const DISK_DATABASE_NAME: &str = ".zxs-disk.sqlite";
 pub(crate) const DISK_HISTORY_DATABASE_NAME: &str = ".zxs-disk-history.sqlite";
@@ -117,7 +120,7 @@ struct Envelope {
 pub(crate) struct PreparedInstall {
     entity: DiskRoot,
     source: Source,
-    bytes: Vec<u8>,
+    bytes: Arc<Vec<u8>>,
     old: Option<HeldRegular>,
     history: PathBuf,
     maximum: usize,
@@ -140,10 +143,11 @@ impl PreparedInstall {
         history: &Path,
         entity: (&Path, FileIdentity),
         scope: (Scope, InstallAdmission),
-        bytes: Vec<u8>,
+        bytes: impl Into<Arc<Vec<u8>>>,
         maximum: usize,
         verify: impl FnOnce(&[u8]) -> Result<()>,
     ) -> Result<Self> {
+        let bytes = bytes.into();
         if bytes.len() > maximum {
             return Err(invalid("prepared database exceeds its limit"));
         }
@@ -153,7 +157,7 @@ impl PreparedInstall {
         if let Some(old) = &old {
             verify(old.bytes())?;
         }
-        let already_current = old.as_ref().is_some_and(|old| old.bytes() == bytes);
+        let already_current = old.as_ref().is_some_and(|old| old.bytes() == bytes.as_slice());
         if let Some(old) = &mut old {
             old.release_bytes();
         }
@@ -333,7 +337,7 @@ impl PreparedInstall {
         let current = HeldRegular::capture(&self.entity, self.source.scope.leaf(), self.maximum)?;
         if current
             .as_ref()
-            .is_some_and(|file| file.bytes() == self.bytes)
+            .is_some_and(|file| file.bytes() == self.bytes.as_slice())
         {
             self.entity.sync_dir(self.entity.path())?;
             return Ok(());
@@ -361,7 +365,7 @@ impl PreparedInstall {
         observe("after_database_stage")?;
         let staged = HeldRegular::capture(&stage, "payload", self.maximum)?
             .ok_or_else(|| invalid("new database stage disappeared"))?;
-        if staged.bytes() != self.bytes {
+        if staged.bytes() != self.bytes.as_slice() {
             return Err(invalid("new database stage changed"));
         }
         let envelope = Envelope {
