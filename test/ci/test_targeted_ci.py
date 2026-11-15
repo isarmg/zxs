@@ -265,9 +265,11 @@ class TargetedSelection(unittest.TestCase):
                 for group in groups:
                     for original in self.policy['groups'][group]['rust_targets']:
                         self.assertIn((group, original), selected)
-        combined = CI.select_plan(self.policy, [case[0] for case in cases] + [
+        combined = assert_path_group_extension(self, self.policy, [case[0] for case in cases] + [
             '.github/ci/targeted-tests.json', 'test/ci/test_targeted_ci.py',
-        ], shardable=True)
+        ], [
+            'ci-selection', 'container-tags-storage', 'portable-path-consumers',
+        ], ['file-metadata-plan'])
         self.assertEqual(combined['groups'], [
             'ci-selection', 'container-tags-storage', 'portable-path-consumers',
         ])

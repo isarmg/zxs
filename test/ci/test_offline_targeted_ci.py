@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import unittest
 
+from test_targeted_ci import assert_path_group_extension
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     'offline_targeted_ci', ROOT / '.github/scripts/check-targeted-ci.py')
@@ -16,7 +18,10 @@ class OfflineTargetedCi(unittest.TestCase):
         self.policy = json.loads((ROOT / CI.PLAN_PATH).read_text())
 
     def test_engine_export_keeps_original_selections_and_adds_conversion_budget(self):
-        plan = CI.select_plan(self.policy, ['src/engine/src/lib.rs'])
+        plan = assert_path_group_extension(self, self.policy, ['src/engine/src/lib.rs'], [
+            'container-lifecycle-engine', 'container-path-facts-engine',
+            'held-directory-layout', 'ordinary-conversion-name-budget', 'typed-name-consumers',
+        ], ['file-metadata-plan'])
         self.assertEqual(plan['groups'], ['container-lifecycle-engine',
                                          'container-path-facts-engine',
                                          'held-directory-layout',

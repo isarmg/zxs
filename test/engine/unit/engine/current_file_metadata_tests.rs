@@ -239,6 +239,36 @@ fn metadata_empty_same_value_and_current_receipt_bytes_survive_cold_open() {
         assert_eq!(
             json_codec::to_vec(&result.result).unwrap(), json_codec::to_vec(&expected).unwrap(),
         );
+        if route != 2 {
+            // Real permanent receipts enter the same raw mirror as cold replay.
+            // Empty and the full UTF-8 byte bound remain valid without changing
+            // their text. A malformed note preserves the semantic parser cause.
+            for text in [String::new(), "é".repeat(64)] {
+                let mut encoded = result.clone();
+                encoded.result["note"] = json!(text.as_str());
+                let decoded = crate::persist::file_metadata::decode(&encoded).unwrap();
+                match decoded.request() {
+                    crate::business::file_metadata::Request::Note { note, .. } => {
+                        assert_eq!(note.as_str(), text);
+                    }
+                    crate::business::file_metadata::Request::Rename { .. } => {
+                        panic!("note receipt decoded as a rename")
+                    }
+                }
+            }
+            for text in ["x".repeat(129), "line\nbreak".into()] {
+                let mut encoded = result.clone();
+                encoded.result["note"] = json!(text.as_str());
+                let error = crate::persist::file_metadata::decode(&encoded).err().unwrap();
+                assert_eq!(error.code(), ErrorCode::PublicationInvalid);
+                match error {
+                    Error::FileMetadata(FileMetadataError::Note(source)) => {
+                        assert_eq!(source.code(), ErrorCode::InvalidRequest);
+                    }
+                    error => panic!("note parser cause was lost: {error}"),
+                }
+            }
+        }
         let sequence = fixture.engine.state.sequence;
         assert_eq!(fixture.edit(route, result.operation_id), result);
         assert_eq!(fixture.engine.state.sequence, sequence);

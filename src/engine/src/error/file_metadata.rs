@@ -26,6 +26,8 @@ pub enum FileMetadataError {
     Publication,
     #[error("file metadata publication cannot advance its business generation")]
     PublicationGeneration(#[source] storage_contract::GenerationExhausted),
+    #[error("file metadata receipt note: {0}")]
+    Note(#[source] storage_contract::Error),
     #[error("file metadata receipt encoding: {0}")]
     Encoding(#[source] json_codec::Error),
 }
@@ -43,7 +45,10 @@ impl FileMetadataError {
             Self::NameCollision => ErrorCode::NameCollision,
             Self::HistoryMissing => ErrorCode::HistoryNotFound,
             Self::RepositoryMissing => ErrorCode::StateInvalid,
-            Self::Publication | Self::PublicationGeneration(_) | Self::Encoding(_) => {
+            Self::Publication
+            | Self::PublicationGeneration(_)
+            | Self::Note(_)
+            | Self::Encoding(_) => {
                 ErrorCode::PublicationInvalid
             }
         }

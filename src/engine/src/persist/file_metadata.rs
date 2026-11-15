@@ -7,13 +7,24 @@ use storage_contract::{BranchId, BranchName, FileId, Generation, HistoryTreeId, 
 
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
+struct RawNoteEnvelope {
+    file_id: FileId,
+    version_id: Option<VersionId>,
+    note: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    timestamp: u64,
+    #[serialization(with = "storage_contract::u64_string")]
+    membership_epoch: u64,
+    version_protection: Vec<()>,
+}
+
+// The raw persist mirror is decoded first; the shared Note parser owns its
+// semantic boundary. No global Deserialize implementation is added to Note.
 pub(crate) struct NoteEnvelope {
     file_id: FileId,
     version_id: Option<VersionId>,
     note: Note,
-    #[serialization(with = "storage_contract::u64_string")]
     timestamp: u64,
-    #[serialization(with = "storage_contract::u64_string")]
     membership_epoch: u64,
     version_protection: Vec<()>,
 }
@@ -102,9 +113,16 @@ pub(crate) fn recognizes(receipt: &OperationResult) -> bool {
 pub(crate) fn decode(receipt: &OperationResult) -> Result<Decoded> {
     let codec = |source| Error::FileMetadata(FileMetadataError::Encoding(source));
     let decoded = match receipt.kind.as_str() {
-        "file.metadata" | "version.metadata" => Decoded::Note(
-            json_codec::from_value(receipt.result.clone()).map_err(codec)?,
-        ),
+        "file.metadata" | "version.metadata" => {
+            let RawNoteEnvelope {
+                file_id, version_id, note, timestamp, membership_epoch, version_protection,
+            } = json_codec::from_value(receipt.result.clone()).map_err(codec)?;
+            let note = Note::parse(note)
+                .map_err(|source| Error::FileMetadata(FileMetadataError::Note(source)))?;
+            Decoded::Note(NoteEnvelope {
+                file_id, version_id, note, timestamp, membership_epoch, version_protection,
+            })
+        }
         "file.branch.rename" => Decoded::Rename(
             json_codec::from_value(receipt.result.clone()).map_err(codec)?,
         ),
