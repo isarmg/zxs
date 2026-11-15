@@ -639,8 +639,8 @@ impl Engine {
             disk.root
                 .write_json(&d.root.join(layout::DISK_IDENTITY.as_path()), &disk.seal, false)?;
             disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-helper offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
+            disk.root.private_dir(&layout::histories(&d.root))?;
             for p in [
-                "histories",
                 "metadata/application-log",
                 "metadata/objects",
                 "staging",

@@ -1,6 +1,9 @@
 use std::fs;
 use storage_engine::{CommitRequest, Config, Engine, new_id};
 
+#[path = "workspace_commit_replay/fresh_pool.rs"]
+mod fresh_pool;
+
 fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([

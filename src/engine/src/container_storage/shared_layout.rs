@@ -202,7 +202,7 @@ pub(super) fn active_outer_ids(
             continue;
         };
         for (history_id, outer) in &histories {
-            let history = disk.root.join("histories").join(history_id);
+            let history = crate::persist::layout::histories(&disk.root).join(history_id);
             if !super::path_directory_exists_at(&held.root, held.root.path(), &history)? {
                 continue;
             }
@@ -559,7 +559,8 @@ pub(super) fn prepare(
                 let Some(held) = resources.available(disk) else {
                     continue;
                 };
-                let path = disk.root.join("histories").join(&history.history_tree_id);
+                let path =
+                    crate::persist::layout::histories(&disk.root).join(&history.history_tree_id);
                 if super::path_directory_exists_at(&held.root, held.root.path(), &path)?
                     && (!record_names(&held.root, &path, "directories")?.is_empty()
                         || !record_names(&held.root, &path, "files")?.is_empty())
@@ -603,7 +604,7 @@ pub(super) fn prepare(
                 "directory layout preparation requires its metadata reserve",
             ));
         }
-        let history = disk.root.join("histories").join(&history_id);
+        let history = crate::persist::layout::histories(&disk.root).join(&history_id);
         // History roots and private preparation parents are data-root metadata,
         // not the user namespace. State supplies their exact authorized IDs.
         held.root.private_dir(&history)?;

@@ -1053,8 +1053,7 @@ impl<'a> VerifiedExisting<'a> {
 }
 
 pub(crate) fn version_dir(disk: &DiskConfig, history: &str, version: &str) -> PathBuf {
-    disk.root
-        .join("histories")
+    layout::histories(&disk.root)
         .join(history)
         .join("versions")
         .join(version)
@@ -1169,7 +1168,7 @@ pub(crate) fn offline_check_in_context(
         tombstoned_versions: 0,
         issues: Vec::new(),
     };
-    let histories = root.join("histories");
+    let histories = layout::histories(root);
     let histories = match fs::read_dir(&histories) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
@@ -1228,7 +1227,7 @@ pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Resu
         &root.join(layout::DISK_IDENTITY.as_path()),
         MAX_METADATA,
     )?)?;
-    for h in fs::read_dir(root.join("histories"))? {
+    for h in fs::read_dir(layout::histories(root))? {
         let h = h?;
         if !h.file_type()?.is_dir() {
             continue;

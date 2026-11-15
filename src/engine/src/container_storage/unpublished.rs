@@ -20,7 +20,7 @@ pub(crate) fn read_unpublished_file_databases(
             .ok_or_else(|| invalid("unpublished FILE scope has no original disk"))?;
         let owner = resources.get(disk)?;
         let root = &owner.root;
-        let history = root.path().join("histories").join(history_id);
+        let history = crate::persist::layout::histories(root.path()).join(history_id);
         let container =
             container_at(root, &history, Some(history_id), file, &mut |_| observe())?
                 .ok_or_else(|| invalid("unpublished FILE scope has no retained container"))?;

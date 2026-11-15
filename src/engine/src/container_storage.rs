@@ -1521,7 +1521,7 @@ fn prepare_names_inner(
             if !skip_shared {
                 database_scopes.insert((slot.clone(), history_id.clone(), file.clone()));
             }
-            let history = disk.root.join("histories").join(&history_id);
+            let history = crate::persist::layout::histories(&disk.root).join(&history_id);
             let projected = layouts.projection(&slot, &history_id, &file);
             let (legacy_location, legacy_name) = projection_path(next, &file, &slot);
             let physical_location = projected
@@ -1732,7 +1732,7 @@ pub(crate) fn verify_move_files<O: crate::engine::move_execution::MoveOutcome>(
             .find(|disk| disk.slot_id == *slot)
             .ok_or_else(|| invalid("published move FILE binding is absent"))?;
         let root = &resources.get(disk)?.root;
-        let history = disk.root.join("histories").join(history_id);
+        let history = crate::persist::layout::histories(&disk.root).join(history_id);
         let container = container_at(root, &history, Some(history_id), file, &mut |_| Ok(()))?
             .ok_or_else(|| invalid("published move FILE container is absent"))?;
         let expected = file_database::prepare(transition.next(), file, history_id)?;

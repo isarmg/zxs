@@ -1,5 +1,37 @@
 {
   "groups": {
+    "fresh-pool-core": {
+      "reason": "Exercise a genuinely empty held single-primary pool, ordinary content and file branches, retained leased workspace input before explicit commit, cold node selection and exact permanent retries. This is not FILE-local Draft, sparse worktree or helper/daemon startup acceptance.",
+      "python_tests": [
+        "test_fresh_pool_core_targeted_ci"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "kind": "test",
+          "name": "workspace_commit_replay",
+          "exact": [
+            "fresh_pool::empty_held_pool_stages_reopens_commits_and_selects_real_file_history"
+          ],
+          "max_tests": 1,
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "timeout_seconds": 900
+        },
+        {
+          "package": "storage-engine",
+          "manifest": "src/engine/Cargo.toml",
+          "mode": "check",
+          "default_features": false,
+          "timeout_seconds": 900
+        }
+      ]
+    },
     "namespace-allocation": {
       "reason": "One allocator-parameterized namespace algorithm remains consumed by live wrappers; exercise ordered identities, unchanged refusal order, failure-prefix retry and six existing namespace consumers without changing persistent bytes.",
       "python_tests": [
@@ -6766,7 +6798,8 @@
     {
       "path": "test/engine/integration/workspace_commit_replay.rs",
       "groups": [
-        "portable-path-consumers"
+        "portable-path-consumers",
+        "fresh-pool-core"
       ]
     },
     {
@@ -11045,6 +11078,18 @@
       "path": "test/engine/unit/business/workspace_file_location_tests.rs",
       "groups": [
         "upload-occurrence-source"
+      ]
+    },
+    {
+      "path": "test/engine/integration/workspace_commit_replay/fresh_pool.rs",
+      "groups": [
+        "fresh-pool-core"
+      ]
+    },
+    {
+      "path": "test/ci/test_fresh_pool_core_targeted_ci.py",
+      "groups": [
+        "fresh-pool-core"
       ]
     }
   ],

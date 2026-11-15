@@ -1,7 +1,10 @@
 //! Stable entry names shared by runtime publication and recovery.
 pub(crate) mod worktree;
 use platform_io::fs_safety::{EntryName, RelativePath};
-use std::sync::LazyLock;
+use std::{
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 pub(crate) mod snapshot;
 
@@ -29,6 +32,12 @@ pub(crate) static SNAPSHOT_REPOSITORY: LazyLock<EntryName> = LazyLock::new(|| {
 pub(crate) static HISTORIES: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("histories").expect("invariant: histories uses one canonical entry")
 });
+
+/// Address the current history area without opening or admitting its root.
+/// Callers retain their held-root and publication checks; this is not a format selector.
+pub(crate) fn histories(root: &Path) -> PathBuf {
+    root.join(HISTORIES.as_path())
+}
 
 pub(crate) static VERSIONS: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("versions").expect("invariant: versions uses one canonical entry")

@@ -20,6 +20,11 @@ fn initialization_and_recovery_use_the_existing_disk_paths_and_bytes() {
     let disk = temp.path().join("disk");
     let config = Config::development([disk.clone()]).unwrap();
     let engine = Engine::initialize(&system, config).unwrap();
+    let histories = layout::histories(&disk);
+    assert_eq!(histories, disk.join("histories"));
+    let history_root = fs::metadata(&histories).unwrap();
+    assert!(history_root.is_dir());
+    let history_identity = (history_root.dev(), history_root.ino());
     let seal = fs::read(disk.join("disk.json")).unwrap();
     let journal = fs::read(disk.join("metadata/application-log/journal.bin")).unwrap();
     assert!(!seal.is_empty());
@@ -32,6 +37,11 @@ fn initialization_and_recovery_use_the_existing_disk_paths_and_bytes() {
     drop(engine);
 
     let _reopened = Engine::open(&system).unwrap();
+    let reopened_history = fs::metadata(layout::histories(&disk)).unwrap();
+    assert_eq!(
+        (reopened_history.dev(), reopened_history.ino()),
+        history_identity,
+    );
     assert_eq!(fs::read(disk.join("disk.json")).unwrap(), seal);
     assert_eq!(
         fs::read(disk.join("metadata/application-log/journal.bin")).unwrap(),
