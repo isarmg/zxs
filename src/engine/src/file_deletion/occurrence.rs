@@ -201,6 +201,19 @@ pub(crate) fn restore(
     evidence: &DisplacedOccurrence,
     request: RestorePublication<'_>,
 ) -> Result<()> {
+    prepare_restore(previous, next.sequence, current, node, evidence, request)?.apply(next)
+}
+
+/// Pure occurrence preflight, shared with retained publication verification.
+/// The caller still owns lifecycle and publication admission.
+pub(super) fn prepare_restore<'a>(
+    previous: &'a State,
+    sequence: u64,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    node: &FileDeletionNode,
+    evidence: &'a DisplacedOccurrence,
+    request: RestorePublication<'_>,
+) -> Result<PreparedRestore<'a>> {
     let original = original_namespace(previous, node, evidence)?;
     let repository = previous
         .repositories
@@ -242,7 +255,7 @@ pub(crate) fn restore(
     let mut restored = entries.to_vec();
     restored.push(evidence.displaced.clone());
     crate::business::validate_entries(&mut restored, usize::MAX)?;
-    let restored = commit(head, restored, next.sequence, request)?;
+    let restored = commit(head, restored, sequence, request)?;
     if previous.commits.contains_key(&restored.commit_id)
         || previous
             .commits
@@ -251,35 +264,59 @@ pub(crate) fn restore(
     {
         return Err(invalid());
     }
-    next.file_contexts
-        .insert(key, evidence.displaced_context.clone());
-    let main = next
-        .branches
-        .get_mut(&repository.main_branch_id)
-        .expect("invariant: the original namespace branch was admitted");
-    main.head_commit_id = restored.commit_id.clone();
-    main.generation = main
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "namespace generation exhausted"))?;
-    next.commits.insert(restored.commit_id.clone(), restored);
-    let mut ordinal = 0u64;
-    crate::business::record_restored_namespace_with_ids(
-        next,
-        &repository.repository_id,
-        &evidence.displaced.path,
-        &mut |prefix| {
-            ordinal = ordinal.checked_add(1).ok_or_else(|| {
-                Error::new(
-                    ErrorCode::ResourceLimit,
-                    "restoration identity budget exhausted",
-                )
-            })?;
-            identity(
-                request.operation_id,
-                prefix,
-                &format!("directory-{ordinal}"),
-            )
-        },
-    )
+    Ok(PreparedRestore {
+        repository,
+        evidence,
+        restored,
+        operation: request.operation_id,
+    })
+}
+
+pub(super) struct PreparedRestore<'a> {
+    repository: &'a Repository,
+    evidence: &'a DisplacedOccurrence,
+    restored: Commit,
+    operation: OperationId,
+}
+
+impl PreparedRestore<'_> {
+    pub(super) fn apply(self, next: &mut State) -> Result<()> {
+        let Self {
+            repository,
+            evidence,
+            restored,
+            operation,
+        } = self;
+        let key = crate::business::context_key_from_key(
+            &repository.repository_id,
+            evidence.displaced.path.key(),
+        );
+        next.file_contexts
+            .insert(key, evidence.displaced_context.clone());
+        let main = next
+            .branches
+            .get_mut(&repository.main_branch_id)
+            .expect("invariant: the original namespace branch was admitted");
+        main.head_commit_id = restored.commit_id.clone();
+        main.generation = main
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "namespace generation exhausted"))?;
+        next.commits.insert(restored.commit_id.clone(), restored);
+        let mut ordinal = 0u64;
+        crate::business::record_restored_namespace_with_ids(
+            next,
+            &repository.repository_id,
+            &evidence.displaced.path,
+            &mut |prefix| {
+                ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ResourceLimit,
+                        "restoration identity budget exhausted",
+                    )
+                })?;
+                identity(operation, prefix, &format!("directory-{ordinal}"))
+            },
+        )
+    }
 }

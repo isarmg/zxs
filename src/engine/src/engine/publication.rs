@@ -4,6 +4,7 @@ use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
 use json_codec::json;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
 use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
@@ -974,15 +975,17 @@ impl Engine {
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let Some(handle) = self.disk_resources.available(d) else {
+                let Some(_) = self.disk_resources.available(d) else {
                     continue;
                 };
-                let dir = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                match handle.management_root()?.directory_identity(&dir) {
+                let scope = super::fresh_layout::containers::observe_replica(
+                    &self.config, &self.disk_resources, next,
+                    evidence.version.file_id.parse()?, d,
+                )?;
+                let material = VersionMaterial::current(&scope, &evidence.version)?;
+                let root = material.root()?;
+                let dir = material.directory()?;
+                match root.directory_identity(&dir) {
                     Ok(_) => {}
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
                     | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
@@ -1030,15 +1033,15 @@ impl Engine {
                 let proof_dir = if first_on_slot {
                     dir
                 } else {
-                    local_proof_directory_at(handle.management_root()?, &dir, hash)?
+                    local_proof_directory_at(root, &dir, hash)?
                 };
                 repair_local_proof(
-                    handle.management_root()?,
+                    root,
                     &proof_dir.join("commit-proof.json"),
                     &proof,
                 )?;
                 repair_local_proof(
-                    handle.management_root()?,
+                    root,
                     &proof_dir.join("publication-proof.json"),
                     &LocalPublicationRef {
                         candidate: c,
@@ -1188,12 +1191,6 @@ impl Engine {
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let handle = self.disk_resources.get(d)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
                 if let Some(cursor) = &mut payload_cursor {
                     cursor.validate_payload_after_names(
                         &self.config,
@@ -1201,27 +1198,50 @@ impl Engine {
                         slot,
                         Some(&renamed_payloads),
                     )?;
-                } else {
-                    // Recovery has no live held-inode proof and must re-read all bytes.
-                    handle.verify_payload(&directory, &evidence.version)?;
                 }
-                let proof = CommitProof {
-                    candidate_hash: hash.into(),
-                    finalize: finalize.clone(),
-                    version_hash: object_hash("version", &evidence.version)?,
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    route_slot_ids: evidence.placement.route_slot_ids.clone(),
-                };
-                let proof_dir = local_proof_directory_at(handle.management_root()?, &directory, hash)?;
-                handle.management_root()?
-                    .write_json(&proof_dir.join("commit-proof.json"), &proof, false)?;
-                payload_receipts.push(PayloadReceipt {
-                    version_id: evidence.version.version_id.clone(),
-                    disk_id: d.disk_id.clone(),
-                    slot_id: d.slot_id.clone(),
-                    proof_hash: object_hash("commit-proof", &proof)?,
-                });
+                let mut write_proof =
+                    |scope: &crate::container_storage::ObservedContainerReplica| {
+                        let material = VersionMaterial::current(scope, &evidence.version)?;
+                        let root = material.root()?;
+                        let directory = material.directory()?;
+                        if verified.is_none() {
+                            // Recovery keeps the original full-byte gate under
+                            // this exact source area and actual container.
+                            VerifiedExisting::read_container(
+                                root, &directory, &evidence.version,
+                                scope.container()?, scope.name(),
+                            )?;
+                        }
+                        let proof = CommitProof {
+                            candidate_hash: hash.into(),
+                            finalize: finalize.clone(),
+                            version_hash: object_hash("version", &evidence.version)?,
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            route_slot_ids: evidence.placement.route_slot_ids.clone(),
+                        };
+                        let proof_dir = local_proof_directory_at(root, &directory, hash)?;
+                        root.write_json(&proof_dir.join("commit-proof.json"), &proof, false)?;
+                        payload_receipts.push(PayloadReceipt {
+                            version_id: evidence.version.version_id.clone(),
+                            disk_id: d.disk_id.clone(),
+                            slot_id: d.slot_id.clone(),
+                            proof_hash: object_hash("commit-proof", &proof)?,
+                        });
+                        material.verify()
+                    };
+                match verified {
+                    Some(verified) => verified.with_replica(
+                        &self.config, &evidence.version, d, &mut write_proof,
+                    )?,
+                    None => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            &self.config, &self.disk_resources, next,
+                            evidence.version.file_id.parse()?, d,
+                        )?;
+                        write_proof(&scope)?;
+                    }
+                }
             }
         }
         if let Some(cursor) = payload_cursor {
@@ -1281,26 +1301,39 @@ impl Engine {
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
-                let directory = version_dir(
-                    d,
-                    &evidence.version.history_tree_id,
-                    &evidence.version.version_id,
-                );
-                let root = self.disk_resources.get(d)?.management_root()?;
-                let proof_dir = local_proof_directory_at(root, &directory, hash)?;
-                let proof = decode_proof(
-                    &root.read_bytes(&proof_dir.join("commit-proof.json"), MAX_METADATA)?,
-                )?;
-                root.write_json(
-                    &proof_dir.join("publication-proof.json"),
-                    &LocalPublicationRef {
-                        candidate: c,
-                        publication: &publication,
-                        commit_proof: &proof,
-                        publication_receipts: &publication_receipts,
-                    },
-                    false,
-                )?;
+                let write_publication =
+                    |scope: &crate::container_storage::ObservedContainerReplica| {
+                        let material = VersionMaterial::current(scope, &evidence.version)?;
+                        let root = material.root()?;
+                        let directory = material.directory()?;
+                        let proof_dir = local_proof_directory_at(root, &directory, hash)?;
+                        let proof = decode_proof(
+                            &root.read_bytes(&proof_dir.join("commit-proof.json"), MAX_METADATA)?,
+                        )?;
+                        root.write_json(
+                            &proof_dir.join("publication-proof.json"),
+                            &LocalPublicationRef {
+                                candidate: c,
+                                publication: &publication,
+                                commit_proof: &proof,
+                                publication_receipts: &publication_receipts,
+                            },
+                            false,
+                        )?;
+                        material.verify()
+                    };
+                match verified {
+                    Some(verified) => verified.with_replica(
+                        &self.config, &evidence.version, d, write_publication,
+                    )?,
+                    None => {
+                        let scope = super::fresh_layout::containers::observe_replica(
+                            &self.config, &self.disk_resources, next,
+                            evidence.version.file_id.parse()?, d,
+                        )?;
+                        write_publication(&scope)?;
+                    }
+                }
             }
         }
         #[cfg(feature = "fault-injection")]
@@ -1577,9 +1610,6 @@ impl crate::engine::PlanningContext<'_> {
             let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
             for slot in &p.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                let directory =
-                    version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
-                let handle = self.disk_resources.get(disk)?;
                 let reservation = proof_budget.reserve(1);
                 let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
                 let published = self.state.file_containers
@@ -1587,23 +1617,23 @@ impl crate::engine::PlanningContext<'_> {
                     .filter(|record| record.replicas.contains_key(&disk_id));
                 let observed = match published {
                     Some(record) => {
-                        let container = super::fresh_layout::containers::verify_replica(
+                        let scope = super::fresh_layout::containers::observe_replica(
                             self.config, self.disk_resources, self.state,
                             p.version.file_id.parse()?, disk,
                         )?;
+                        let material = VersionMaterial::current(&scope, &p.version)?;
+                        // Only a missing version leaf permits a full new copy.
+                        // A failed source/container identity observation above
+                        // is not converted to missing content.
                         VerifiedExisting::read_container(
-                            handle.management_root()?, &directory, &p.version,
-                            &container, &record.namespace.name,
+                            material.root()?, &material.directory()?, &p.version,
+                            scope.container()?, &record.namespace.name,
                         ).map(Some)
                     }
                     None => {
-                        // A new replica has no published container. Existing
-                        // metadata cannot turn an orphan or old implicit locator
-                        // into this plan's source; decided recovery is separate.
-                        if handle.management_root()?.optional_metadata(&directory)?.is_some() {
-                            return Err(super::fresh_layout::FreshLayoutError::ContainerIdentity
-                                .into());
-                        }
+                        // No source area exists yet for this replica. Charge
+                        // the complete payload before exclusive preparation;
+                        // do not probe an unrelated disk-global directory.
                         Ok(None)
                     }
                 };
@@ -1938,15 +1968,24 @@ impl crate::engine::PlanningContext<'_> {
         let mut source: Option<(storage_contract::DiskId, ReadFile)> = None;
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
-            let handle = self.disk_resources.get(disk)?;
-            let root = handle.management_root()?;
+            let disk_id = disk.disk_id.parse::<storage_contract::DiskId>()?;
             if let Some(containers) = containers {
                 containers.require_direct_source(
                     p.version.file_id.parse()?, disk.disk_id.parse()?,
                     source.as_ref().map(|(disk, _)| *disk),
                 )?;
             }
-            let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
+            let scope = match containers {
+                Some(containers) => containers.retain_scope(p.version.file_id.parse()?, disk_id)?,
+                None => Arc::new(super::fresh_layout::containers::observe_replica(
+                    self.config, self.disk_resources, self.state,
+                    p.version.file_id.parse()?, disk,
+                )?),
+            };
+            let material = VersionMaterial::current(&scope, &p.version)?;
+            let root = material.root()?;
+            let directory = material.directory()?;
+            let name = scope.name();
             // Keep the lease outside the consuming install call, including its
             // error/unwind paths. That call drops the body FD before returning.
             let mut reservation = None;
@@ -1954,6 +1993,12 @@ impl crate::engine::PlanningContext<'_> {
                 .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| Ok(()))
             {
                 Ok(recorded) => {
+                    let already_published = self.state.file_containers
+                        .get(&p.version.file_id.parse::<storage_contract::FileId>()?)
+                        .is_some_and(|record| record.replicas.contains_key(&disk_id));
+                    if !already_published {
+                        return Err(super::fresh_layout::FreshLayoutError::ContainerIdentity.into());
+                    }
                     if object_hash("version", &recorded)? != object_hash("version", &p.version)? {
                         return Err(Error::new(
                             storage_contract::ErrorCode::ObjectCollision,
@@ -1965,17 +2010,9 @@ impl crate::engine::PlanningContext<'_> {
                             reservation = Some(retained.reservation);
                             retained.proof
                         }
-                        None => match containers {
-                            Some(containers) => {
-                                let file = p.version.file_id.parse()?;
-                                let disk_id = disk.disk_id.parse()?;
-                                VerifiedExisting::read_container(
-                                    root, &directory, &p.version, containers.target(file, disk_id)?,
-                                    containers.name(file, disk_id)?,
-                                )?
-                            }
-                            None => VerifiedExisting::read_at(root, &directory, &p.version)?,
-                        },
+                        None => VerifiedExisting::read_container(
+                            root, &directory, &p.version, scope.container()?, name,
+                        )?,
                     };
                     verified.assert_binding(&directory, &p.version);
                     crate::container_storage::PreparedContent::Verified(verified)
@@ -1984,10 +2021,7 @@ impl crate::engine::PlanningContext<'_> {
                 | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
                     if error.kind() == std::io::ErrorKind::NotFound =>
                 {
-                    let staging = layout::version_metadata(&disk.root)
-                        .join(&p.version.history_tree_id)
-                        .join(".zxs-prepared")
-                        .join(OperationId::generate()?.to_string());
+                    let staging = material.preparation(OperationId::generate()?)?;
                     root.private_dir(&staging.join("content"))?;
                     let target = staging.join("content").join(&p.version.creation_name);
                     let copied = verified_full_copy_at(
@@ -2027,26 +2061,17 @@ impl crate::engine::PlanningContext<'_> {
             };
             // Install a real version file in this file's named container before
             // any protection receipt is issued. The next level reads this copy.
-            let target = containers.map(|containers| {
-                containers.target(p.version.file_id.parse()?, disk.disk_id.parse()?)
-            }).transpose()?;
-            let path = match target {
-                Some(target) => crate::container_storage::install_version_content_in(
-                    root, &directory, content, target,
-                    containers.ok_or(super::fresh_layout::FreshLayoutError::ContainerScope)?
-                        .name(p.version.file_id.parse()?, disk.disk_id.parse()?)?,
-                )?,
-                None => crate::container_storage::install_version_content_at(
-                    root, &directory, content,
-                )?,
-            };
+            let target = scope.container()?;
+            let path = crate::container_storage::install_version_content_in(
+                root, &directory, content, target, name,
+            )?;
             drop(reservation);
-            if let Some(containers) = containers {
-                containers.verify()?;
-            }
+            scope.verify()?;
             if index + 1 < p.placement.route_slot_ids.len() {
-                source = Some((disk.disk_id.parse()?,
-                    ReadFile::from(target.unwrap_or(root).open_leased_regular(&path)?)));
+                source = Some((
+                    disk_id,
+                    ReadFile::in_container(target.open_leased_regular(&path)?, Arc::clone(&scope)),
+                ));
             }
         }
         Ok(())

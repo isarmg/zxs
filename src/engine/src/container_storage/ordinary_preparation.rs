@@ -9,11 +9,12 @@ use storage_contract::file_container::{ContainerEntity, FileContainerRecord};
 use std::sync::OnceLock;
 
 mod prefix;
+mod areas;
 mod draft;
 use prefix::{HeldParent, HeldPrefixes, Observation};
-pub(crate) use prefix::open_published_backup_parent;
 
-struct HeldContainer {
+pub(crate) struct ObservedContainerReplica {
+    file: FileId,
     disk: Arc<DiskHandle>,
     record: FileContainerRecord,
     parent: HeldParent,
@@ -23,8 +24,85 @@ struct HeldContainer {
     // Initial publication and actual recovery may observe the same inode at
     // either end of the one decided rename. A published-only reader cannot.
     installed: OnceLock<()>,
+    // Every shared descriptor keeps the one actual admission charged until its
+    // last consumer closes. This Arc shares accounting, not a second reservation.
+    _reservation: Arc<crate::engine::PayloadProofReservation>,
 }
-impl HeldContainer {
+impl ObservedContainerReplica {
+    pub(crate) fn observe(
+        source: crate::engine::fresh_layout::containers::PublishedReplicaSource<'_>,
+    ) -> Result<Self> {
+        use crate::engine::fresh_layout::containers::ReplicaNamespace;
+        let (file, record, disk, namespace) = source.into_parts();
+        let id = disk.seal.disk_id.parse::<DiskId>()?;
+        let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
+        let container_descriptors = if record.working.draft().is_some() { 2 } else { 1 };
+        let count = replica.prefixes.len().checked_mul(6)
+            .and_then(|count| count.checked_add(container_descriptors))
+            .ok_or(Failure::ContainerBudget)?;
+        let reservation = Arc::new(crate::engine::payload_proof_budget().reserve(count)
+            .ok_or(Failure::ContainerBudget)?);
+        let parent = match namespace {
+            ReplicaNamespace::Owner(source) => {
+                if !std::ptr::eq(source.common()?, disk.content_root()?) {
+                    return Err(Failure::ContainerScope.into());
+                }
+                HeldParent::Common(Arc::clone(disk))
+            }
+            ReplicaNamespace::Backup(source) => {
+                prefix::published_parent(&source, disk, &replica.prefixes)?
+            }
+        };
+        let held = open_published_container(
+            parent.root()?, &record.namespace.name, replica.entity,
+        )?;
+        let installed = OnceLock::new();
+        let _ = installed.set(());
+        let mut result = Self {
+            file, _reservation: reservation,
+            disk: Arc::clone(disk), record: record.clone(), parent,
+            held: Arc::new(held), entity: replica.entity, draft: None, installed,
+        };
+        if let Some((_, payload)) = record.working.draft() {
+            result.draft = Some(draft::HeldDraft::capture(&result, *payload)?);
+        }
+        result.verify()?;
+        Ok(result)
+    }
+
+    pub(crate) fn container(&self) -> Result<&DiskRoot> {
+        self.verify()?;
+        Ok(&self.held)
+    }
+
+    pub(crate) fn current_zxs(&self) -> Result<&DiskRoot> {
+        self.verify()?;
+        self.parent.current_zxs()
+    }
+
+    pub(crate) fn disk(&self) -> &Arc<DiskHandle> {
+        &self.disk
+    }
+
+    pub(crate) fn require_version(&self, version: &FileVersion) -> Result<()> {
+        if version.file_id.parse::<FileId>()? != self.file
+            || version.history_tree_id.parse::<storage_contract::HistoryTreeId>()?
+                != self.record.history_tree_id
+        {
+            return Err(Failure::ContainerScope.into());
+        }
+        self.verify()
+    }
+
+    pub(crate) fn name(&self) -> &name_policy::LookupName {
+        &self.record.namespace.name
+    }
+
+    pub(crate) fn body_path(&self, version: &FileVersion) -> Result<PathBuf> {
+        self.require_version(version)?;
+        ordinary_body_path(self.held.path(), version, self.name())
+    }
+
     fn identity(&self) -> FileIdentity {
         FileIdentity { device: self.entity.device(), inode: self.entity.inode() }
     }
@@ -56,8 +134,9 @@ impl HeldContainer {
         Ok(())
     }
 
-    fn verify(&self) -> Result<()> {
+    pub(crate) fn verify(&self) -> Result<()> {
         self.verify_entity()?;
+        self.parent.current_zxs()?;
         match (&self.draft, self.record.working.draft()) {
             (Some(draft), Some(_)) => draft.validate(self),
             (None, None) => Ok(()),
@@ -94,12 +173,29 @@ impl HeldContainer {
 }
 
 pub(crate) struct PreparedContainerEntities {
-    held: BTreeMap<(FileId, DiskId), HeldContainer>,
+    held: BTreeMap<(FileId, DiskId), Arc<ObservedContainerReplica>>,
     prefixes: HeldPrefixes,
     config: ValidatedConfig,
     resources: Arc<DiskResources>,
-    _reservation: crate::engine::PayloadProofReservation,
+    _reservation: Arc<crate::engine::PayloadProofReservation>,
 }
+/// Best-effort local-proof discovery is not a complete installation set. This
+/// wrapper deliberately cannot be passed to PreparedNames or unwrapped by it.
+pub(crate) struct AvailableCandidateContainers {
+    observed: PreparedContainerEntities,
+}
+impl AvailableCandidateContainers {
+    pub(crate) fn scope(&self, file: FileId, disk: DiskId) -> Result<&ObservedContainerReplica> {
+        self.observed.scope(file, disk)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CandidateAvailability {
+    Required,
+    Available,
+}
+
 impl PreparedContainerEntities {
     /// Budgets have already admitted this exact plan. No user-name entry is
     /// created until its Candidate has crossed the existing decision gate.
@@ -115,14 +211,17 @@ impl PreparedContainerEntities {
         plan: &ContainerPreparation,
         input: Option<&mut crate::engine::file_draft::DraftPublicationInput>,
     ) -> Result<Self> {
-        let reservation = crate::engine::payload_proof_budget()
+        let reservation = Arc::new(crate::engine::payload_proof_budget()
             .reserve(descriptor_count(plan.budget_state(), Some(plan.targets()))?)
-            .ok_or(Failure::ContainerBudget)?;
+            .ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
         // Check every component against the actual held target before any mkdir.
         // Existing source directories are not retroactively charged as new names.
         for (file, id) in plan.targets() {
+            crate::engine::fresh_layout::containers::require_current_container(
+                plan.budget_state(), *file,
+            )?;
             let record = &plan.budget_state().file_containers[file];
             let disk = configured_disk(context.config, *id)?;
             let handle = context.disk_resources.get(disk)?;
@@ -133,6 +232,12 @@ impl PreparedContainerEntities {
                 source.require_context(context)?;
                 if record.replicas[id].prefixes.iter().any(|prefix| prefix.entity.inode() == 0) {
                     source.verify_new_component_budget()?;
+                    for name in [
+                        &*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT,
+                        &*layout::ZXS_DATA_ROOT,
+                    ] {
+                        version_names::check_target_name(source.target_root()?, name)?;
+                    }
                 }
             } else {
                 require_owner(context, record, *id)?;
@@ -164,6 +269,9 @@ impl PreparedContainerEntities {
             }
         }
         for (file, id) in plan.targets() {
+            crate::engine::fresh_layout::containers::require_current_container(
+                plan.budget_state(), *file,
+            )?;
             let record = &plan.budget_state().file_containers[file];
             let disk = configured_disk(context.config, *id)?;
             let handle = context.disk_resources.get(disk)?;
@@ -188,14 +296,16 @@ impl PreparedContainerEntities {
                 let _ = installed.set(());
                 (directory, replica.entity)
             };
-            held.insert((*file, *id), HeldContainer {
+            held.insert((*file, *id), ObservedContainerReplica {
+                file: *file, _reservation: Arc::clone(&reservation),
                 disk: Arc::clone(handle), record: record.clone(), parent,
                 held: Arc::new(directory), entity, draft: None, installed,
             });
         }
         draft::populate(&mut held, input, context.config.max_file_bytes)?;
         let result = Self {
-            held, prefixes, config: context.config.clone(),
+            held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
+            prefixes, config: context.config.clone(),
             resources: Arc::clone(context.disk_resources), _reservation: reservation,
         };
         result.verify()?;
@@ -210,30 +320,101 @@ impl PreparedContainerEntities {
         candidate: &crate::journal::Candidate,
         original: &crate::publication_evidence::AdmittedSnapshot,
     ) -> Result<Self> {
+        Self::observe_candidate_from_prefix(
+            context.config, context.disk_resources, context.state, context.snapshot,
+            candidate, original,
+        )
+    }
+
+    /// Actual recovery prefix, not a synthesized PlanningContext or an inferred
+    /// directory source. This remains read-only and cannot expose preparations.
+    pub(crate) fn observe_candidate_from_prefix(
+        config: &ValidatedConfig,
+        resources: &Arc<DiskResources>,
+        previous: &State,
+        previous_snapshot: &Option<String>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+    ) -> Result<Self> {
+        Self::observe_candidate_inner(
+            config, resources, previous, previous_snapshot, candidate, original,
+            CandidateAvailability::Required,
+        )
+    }
+
+    /// Preserve read-only discovery on the actual available candidate routes.
+    /// No missing resource becomes absence evidence or completion permission.
+    pub(crate) fn observe_available_candidate_from_prefix(
+        config: &ValidatedConfig,
+        resources: &Arc<DiskResources>,
+        previous: &State,
+        previous_snapshot: &Option<String>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+    ) -> Result<AvailableCandidateContainers> {
+        let observed = Self::observe_candidate_inner(
+            config, resources, previous, previous_snapshot, candidate, original,
+            CandidateAvailability::Available,
+        )?;
+        Ok(AvailableCandidateContainers { observed })
+    }
+
+    fn observe_candidate_inner(
+        config: &ValidatedConfig,
+        resources: &Arc<DiskResources>,
+        previous: &State,
+        previous_snapshot: &Option<String>,
+        candidate: &crate::journal::Candidate,
+        original: &crate::publication_evidence::AdmittedSnapshot,
+        availability: CandidateAvailability,
+    ) -> Result<Self> {
         let next = original.for_candidate(candidate)?.state();
-        if &candidate.previous_snapshot != context.snapshot || next.sequence != candidate.sequence {
+        if &candidate.previous_snapshot != previous_snapshot
+            || next.sequence != candidate.sequence
+        {
             return Err(Failure::ContainerScope.into());
         }
         crate::engine::fresh_layout::containers::verify_transition(
-            context.config, context.state, next, candidate,
+            config, previous, next, candidate,
         )?;
-        let count = descriptor_count(next, None)?;
-        let reservation = crate::engine::payload_proof_budget()
-            .reserve(count).ok_or(Failure::ContainerBudget)?;
+        let targets = match availability {
+            CandidateAvailability::Required => None,
+            CandidateAvailability::Available => {
+                let mut targets = BTreeSet::new();
+                for evidence in &candidate.versions {
+                    let file = evidence.version.file_id.parse::<FileId>()?;
+                    for slot in &evidence.placement.route_slot_ids {
+                        let disk = config.disks.iter()
+                            .find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
+                            .ok_or(Failure::Registration)?;
+                        if resources.available(disk).is_some() {
+                            targets.insert((file, disk.disk_id.parse::<DiskId>()?));
+                        }
+                    }
+                }
+                Some(targets)
+            }
+        };
+        let count = descriptor_count(next, targets.as_ref())?;
+        let reservation = Arc::new(crate::engine::payload_proof_budget()
+            .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
         for (file, record) in next.file_containers.iter() {
-            let source = context.namespace_host_root(
-                record.namespace.repository, record.namespace.branch,
-            )?;
-            if source.disk().disk_id.parse::<DiskId>()? != record.owner_disk {
-                return Err(Failure::NamespaceSource.into());
+            if targets.as_ref().is_some_and(|targets| {
+                !record.replicas.keys().any(|id| targets.contains(&(*file, *id)))
+            }) {
+                continue;
             }
+            crate::engine::fresh_layout::containers::require_current_container(next, *file)?;
             for (id, replica) in &record.replicas {
-                let disk = configured_disk(context.config, *id)?;
-                let handle = context.disk_resources.get(disk)?;
-                let parent = bind_parent(context, record, *id,
-                    Observation::Candidate(context.state), &mut prefixes)?;
+                if targets.as_ref().is_some_and(|targets| !targets.contains(&(*file, *id))) {
+                    continue;
+                }
+                let disk = configured_disk(config, *id)?;
+                let handle = resources.get(disk)?;
+                let parent = bind_read_parent(config, resources, previous, record, *id,
+                    Observation::Candidate(previous), &mut prefixes)?;
                 let common = parent.root()?;
                 let management = handle.management_root()?;
                 let named = common.path()
@@ -244,7 +425,7 @@ impl PreparedContainerEntities {
                     device: replica.entity.device(), inode: replica.entity.inode(),
                 };
                 let installed = OnceLock::new();
-                let directory = if context.state.file_containers.get(file)
+                let directory = if previous.file_containers.get(file)
                     .is_some_and(|old| old.replicas.contains_key(id))
                 {
                     if !parent.installed() {
@@ -267,16 +448,18 @@ impl PreparedContainerEntities {
                         }
                     }
                 };
-                held.insert((*file, *id), HeldContainer {
+                held.insert((*file, *id), ObservedContainerReplica {
+                    file: *file, _reservation: Arc::clone(&reservation),
                     disk: Arc::clone(handle), record: record.clone(), parent,
                     held: Arc::new(directory), entity: replica.entity, draft: None, installed,
                 });
             }
         }
-        draft::populate(&mut held, None, context.config.max_file_bytes)?;
+        draft::populate(&mut held, None, config.max_file_bytes)?;
         let result = Self {
-            held, prefixes, config: context.config.clone(),
-            resources: Arc::clone(context.disk_resources),
+            held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
+            prefixes, config: config.clone(),
+            resources: Arc::clone(resources),
             _reservation: reservation,
         };
         result.verify()?;
@@ -290,11 +473,12 @@ impl PreparedContainerEntities {
     ) -> Result<Self> {
         crate::engine::fresh_layout::containers::validate_state(state)?;
         let count = descriptor_count(state, None)?;
-        let reservation = crate::engine::payload_proof_budget()
-            .reserve(count).ok_or(Failure::ContainerBudget)?;
+        let reservation = Arc::new(crate::engine::payload_proof_budget()
+            .reserve(count).ok_or(Failure::ContainerBudget)?);
         let mut held = BTreeMap::new();
         let mut prefixes = HeldPrefixes::new();
         for (file, record) in state.file_containers.iter() {
+            crate::engine::fresh_layout::containers::require_current_container(state, *file)?;
             for (id, replica) in &record.replicas {
                 let disk = config.disks.iter().find(|disk| disk.disk_id == id.to_string())
                     .ok_or(Failure::Registration)?;
@@ -306,23 +490,31 @@ impl PreparedContainerEntities {
                     let Some(handle) = resources.available(disk) else { continue; };
                     handle
                 };
-                let parent = if *id == record.owner_disk {
-                    crate::engine::fresh_layout::containers::verify_replica(
-                        config, resources, state, *file, disk,
-                    )?;
-                    HeldParent::Common(Arc::clone(handle))
-                } else {
-                    let source = crate::engine::fresh_layout::containers::read_backup_source(
-                        config, resources, state, record, *id,
-                    )?;
-                    prefix::bind_chain(&source, handle, &replica.prefixes,
-                        Observation::Published, &mut prefixes)?
+                let source = crate::engine::fresh_layout::containers::published_source(
+                    config, resources, state, *file, disk,
+                )?;
+                let (_, _, observed_handle, namespace) = source.into_parts();
+                if !Arc::ptr_eq(handle, observed_handle) {
+                    return Err(Failure::ContainerScope.into());
+                }
+                let parent = match namespace {
+                    crate::engine::fresh_layout::containers::ReplicaNamespace::Owner(source) => {
+                        if !std::ptr::eq(source.common()?, handle.content_root()?) {
+                            return Err(Failure::ContainerScope.into());
+                        }
+                        HeldParent::Common(Arc::clone(handle))
+                    }
+                    crate::engine::fresh_layout::containers::ReplicaNamespace::Backup(source) => {
+                        prefix::bind_chain(&source, handle, &replica.prefixes,
+                            Observation::Published, &mut prefixes)?
+                    }
                 };
                 let directory = open_published_container(parent.root()?, &record.namespace.name,
                     replica.entity)?;
                 let installed = OnceLock::new();
                 let _ = installed.set(());
-                held.insert((*file, *id), HeldContainer {
+                held.insert((*file, *id), ObservedContainerReplica {
+                    file: *file, _reservation: Arc::clone(&reservation),
                     disk: Arc::clone(handle), record: record.clone(), parent,
                     held: Arc::new(directory), entity: replica.entity, draft: None, installed,
                 });
@@ -330,7 +522,8 @@ impl PreparedContainerEntities {
         }
         draft::populate(&mut held, None, config.max_file_bytes)?;
         let result = Self {
-            held, prefixes, config: config.clone(), resources: Arc::clone(resources),
+            held: held.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
+            prefixes, config: config.clone(), resources: Arc::clone(resources),
             _reservation: reservation,
         };
         result.verify()?;
@@ -362,8 +555,24 @@ impl PreparedContainerEntities {
         Ok(container.entity)
     }
 
-    pub(crate) fn prefix_entity(&self, disk: DiskId, source: DiskId) -> Result<ContainerEntity> {
-        prefix::entity(&self.prefixes, disk, source)
+    pub(crate) fn prefix_record(
+        &self, disk: DiskId, source: DiskId,
+    ) -> Result<storage_contract::file_container::ContainerPrefix> {
+        prefix::record(&self.prefixes, disk, source)
+    }
+
+    pub(crate) fn scope(&self, file: FileId, disk: DiskId) -> Result<&ObservedContainerReplica> {
+        let scope = self.held.get(&(file, disk)).ok_or(Failure::ContainerScope)?;
+        scope.verify()?;
+        Ok(scope)
+    }
+
+    pub(crate) fn retain_scope(
+        &self, file: FileId, disk: DiskId,
+    ) -> Result<Arc<ObservedContainerReplica>> {
+        let scope = self.held.get(&(file, disk)).ok_or(Failure::ContainerScope)?;
+        scope.verify()?;
+        Ok(Arc::clone(scope))
     }
 
     pub(crate) fn target(&self, file: FileId, disk: DiskId) -> Result<&DiskRoot> {
@@ -431,10 +640,7 @@ impl PreparedContainerEntities {
     pub(crate) fn body_path(
         &self, file: FileId, disk: DiskId, version: &FileVersion,
     ) -> Result<PathBuf> {
-        if version.file_id.parse::<FileId>()? != file {
-            return Err(Failure::ContainerScope.into());
-        }
-        ordinary_body_path(self.target(file, disk)?.path(), version, self.name(file, disk)?)
+        self.scope(file, disk)?.body_path(version)
     }
 
     pub(super) fn share_target(&self, file: FileId, disk: DiskId) -> Result<Arc<DiskRoot>> {
@@ -499,6 +705,11 @@ fn bind_parent(
     mode: Observation<'_>,
     held: &mut HeldPrefixes,
 ) -> Result<HeldParent> {
+    if !matches!(mode, Observation::Prepare) {
+        return bind_read_parent(
+            context.config, context.disk_resources, context.state, record, id, mode, held,
+        );
+    }
     let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
     let disk = configured_disk(context.config, id)?;
     let handle = context.disk_resources.get(disk)?;
@@ -509,17 +720,41 @@ fn bind_parent(
         }
         return Ok(HeldParent::Common(Arc::clone(handle)));
     }
-    let source = match mode {
-        Observation::Prepare => context.prepare_backup_source_path(
-            record.namespace.repository, record.namespace.branch, id,
-        )?,
-        Observation::Candidate(_) | Observation::Published => {
-            crate::engine::fresh_layout::containers::read_backup_source(
-                context.config, context.disk_resources, context.state, record, id,
-            )?
-        }
-    };
+    let source = context.prepare_backup_source_path(
+        record.namespace.repository, record.namespace.branch, id,
+    )?;
     source.require_context(context)?;
+    prefix::bind_chain(&source, handle, &replica.prefixes, mode, held)
+}
+
+fn bind_read_parent(
+    config: &ValidatedConfig,
+    resources: &Arc<DiskResources>,
+    previous: &State,
+    record: &FileContainerRecord,
+    id: DiskId,
+    mode: Observation<'_>,
+    held: &mut HeldPrefixes,
+) -> Result<HeldParent> {
+    if matches!(mode, Observation::Prepare) {
+        return Err(Failure::ContainerScope.into());
+    }
+    let replica = record.replicas.get(&id).ok_or(Failure::ContainerScope)?;
+    let disk = configured_disk(config, id)?;
+    let handle = resources.get(disk)?;
+    let owner = crate::engine::fresh_layout::containers::read_container_owner(
+        config, resources, previous, record,
+    )?;
+    if id == record.owner_disk {
+        if !replica.prefixes.is_empty() || !std::ptr::eq(owner.common()?, handle.content_root()?) {
+            return Err(Failure::ContainerScope.into());
+        }
+        return Ok(HeldParent::Common(Arc::clone(handle)));
+    }
+    let source = crate::engine::fresh_layout::containers::read_backup_source(
+        config, resources, previous, record, id,
+    )?;
+    source.require_source(previous, config, resources)?;
     prefix::bind_chain(&source, handle, &replica.prefixes, mode, held)
 }
 
@@ -539,5 +774,6 @@ fn descriptor_count(
             prefixes.extend(replica.prefixes.iter().map(|prefix| (*id, prefix.source_disk)));
         }
     }
-    containers.checked_add(prefixes.len()).ok_or_else(|| Failure::ContainerBudget.into())
+    let prefix_descriptors = prefixes.len().checked_mul(6).ok_or(Failure::ContainerBudget)?;
+    containers.checked_add(prefix_descriptors).ok_or_else(|| Failure::ContainerBudget.into())
 }

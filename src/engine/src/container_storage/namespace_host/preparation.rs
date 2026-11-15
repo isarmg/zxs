@@ -95,6 +95,8 @@ impl NamespaceHost<'_> {
             root.roots.common_data.directory_id,
             root.roots.deleted_data.directory_id,
             root.roots.zxs_data.directory_id,
+            root.roots.zxs_lifecycles.common_data.directory_id,
+            root.roots.zxs_lifecycles.deleted_data.directory_id,
         ]).collect::<BTreeSet<_>>();
         let mut plan = Vec::with_capacity(components.len());
         for component in components {

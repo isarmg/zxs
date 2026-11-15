@@ -152,6 +152,39 @@ impl PreparedInstall {
             return Err(invalid("prepared database exceeds its limit"));
         }
         let held = root.private_child_matching(entity.0, entity.1)?;
+        Self::capture_observed(root, history, held, entity.1, scope, bytes, maximum, verify)
+    }
+
+    /// Ordinary containers and their lifecycle-scoped retention may be under
+    /// different held ancestors while the same publication is still prepared.
+    /// Neither ancestor may be reconstructed from the other's diagnostic path.
+    pub(crate) fn capture_held(
+        retention: &DiskRoot,
+        history: &Path,
+        entity: &DiskRoot,
+        scope: (Scope, InstallAdmission),
+        bytes: Arc<Vec<u8>>,
+        maximum: usize,
+        verify: impl FnOnce(&[u8]) -> Result<()>,
+    ) -> Result<Self> {
+        if bytes.len() > maximum {
+            return Err(invalid("prepared database exceeds its limit"));
+        }
+        let identity = entity.directory_identity(entity.path())?;
+        let held = entity.private_child_matching(entity.path(), identity)?;
+        Self::capture_observed(retention, history, held, identity, scope, bytes, maximum, verify)
+    }
+
+    fn capture_observed(
+        root: &DiskRoot,
+        history: &Path,
+        held: DiskRoot,
+        entity: FileIdentity,
+        scope: (Scope, InstallAdmission),
+        bytes: Arc<Vec<u8>>,
+        maximum: usize,
+        verify: impl FnOnce(&[u8]) -> Result<()>,
+    ) -> Result<Self> {
         let (scope, admission) = scope;
         let mut old = HeldRegular::capture(&held, scope.leaf(), maximum)?;
         if let Some(old) = &old {
@@ -163,8 +196,8 @@ impl PreparedInstall {
         }
         let source = Source {
             scope,
-            device: entity.1.device,
-            inode: entity.1.inode,
+            device: entity.device,
+            inode: entity.inode,
             bytes: bytes.len() as u64,
             digest: blake3::hash(&bytes).to_hex().to_string(),
         };
@@ -564,6 +597,7 @@ pub(crate) struct Reservations {
 }
 struct HistoryReservation {
     disk: std::sync::Arc<crate::disk::DiskHandle>,
+    ordinary: Option<std::sync::Arc<crate::container_storage::ObservedContainerReplica>>,
     bytes: u64,
     entries: usize,
 }
@@ -579,6 +613,7 @@ impl Reservations {
             .entry((disk.seal.disk_id.clone(), history.to_owned()))
             .or_insert_with(|| HistoryReservation {
                 disk: std::sync::Arc::clone(disk),
+                ordinary: None,
                 bytes: 0,
                 entries: 0,
             });
@@ -592,10 +627,39 @@ impl Reservations {
             .ok_or_else(retention_limit)?;
         Ok(())
     }
+    pub(crate) fn add_container(
+        &mut self,
+        scope: &std::sync::Arc<crate::container_storage::ObservedContainerReplica>,
+        history: &Path,
+        reservation: (u64, usize),
+    ) -> Result<()> {
+        let root = scope.current_zxs()?;
+        let key = (scope.disk().seal.disk_id.clone(), history.to_owned());
+        if let Some(existing) = self.histories.get(&key) {
+            let previous = existing.ordinary.as_ref()
+                .ok_or(crate::engine::FreshLayoutError::ContainerScope)?;
+            let previous = previous.current_zxs()?;
+            if previous.directory_identity(previous.path())?
+                != root.directory_identity(root.path())?
+            {
+                return Err(crate::engine::FreshLayoutError::ContainerIdentity.into());
+            }
+        }
+        self.add(scope.disk(), history, reservation)?;
+        let entry = self.histories.get_mut(&key)
+            .expect("invariant: the combined reservation was just inserted");
+        entry.ordinary = Some(std::sync::Arc::clone(scope));
+        Ok(())
+    }
+
     pub(crate) fn check(self, admission: InstallAdmission) -> Result<()> {
         for ((_, history), reservation) in self.histories {
+            let root = match &reservation.ordinary {
+                Some(scope) => scope.current_zxs()?,
+                None => &reservation.disk.root,
+            };
             admission.check(
-                &reservation.disk.root,
+                root,
                 &history,
                 reservation.bytes,
                 reservation.entries,

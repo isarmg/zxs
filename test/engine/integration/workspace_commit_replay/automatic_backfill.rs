@@ -118,8 +118,8 @@ fn automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold
         .map(|prefix| prefix.source_disk).collect::<Vec<_>>(), vec![ids[0]]);
     assert_eq!(fs::read_dir(roots[2].join("common-data")).unwrap().count(), 0);
     let a_container = roots[0].join("common-data/one.txt");
-    let b_prefix = roots[1].join("common-data").join(&a_component);
-    let b_container = b_prefix.join("one.txt");
+    let b_prefix = roots[1].join(&a_component);
+    let b_container = b_prefix.join("common-data/one.txt");
     let prefix_entity = fs::metadata(&b_prefix).unwrap();
     assert_eq!((with_b.replicas[&ids[1]].prefixes[0].entity.device(),
         with_b.replicas[&ids[1]].prefixes[0].entity.inode()),
@@ -139,7 +139,7 @@ fn automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold
         assert_eq!(fs::read(&b_body).unwrap(), bytes);
         assert_eq!(b_rows[&("version".into(), version.version_id.clone())]["version"],
             json_codec::to_value(version).unwrap());
-        assert!(roots[1].join("zxs-data").join(&repository.history_tree_id)
+        assert!(b_prefix.join("zxs-data/common-data").join(&repository.history_tree_id)
             .join("versions").join(&version.version_id).join("version.json").is_file());
         let parked = temporary.path().join(format!("A-{}", version.storage_id));
         fs::rename(&a_body, &parked).unwrap();
@@ -159,14 +159,16 @@ fn automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold
     assert_eq!(with_c.replicas[&ids[1]], with_b.replicas[&ids[1]]);
     assert_eq!(with_c.replicas[&ids[2]].prefixes.iter()
         .map(|prefix| prefix.source_disk).collect::<Vec<_>>(), vec![ids[1], ids[0]]);
-    let outer = roots[2].join("common-data").join(&b_component);
+    let outer = roots[2].join(&b_component);
     let nested = outer.join(&a_component);
-    let c_container = nested.join("one.txt");
+    let c_container = nested.join("common-data/one.txt");
     for (prefix, path) in with_c.replicas[&ids[2]].prefixes.iter().zip([&outer, &nested]) {
         let entity = fs::metadata(path).unwrap();
         assert_eq!((prefix.entity.device(), prefix.entity.inode()), (entity.dev(), entity.ino()));
     }
-    assert!(!roots[2].join("common-data").join(&a_component).exists());
+    assert!(!roots[2].join(&a_component).exists());
+    assert!(!roots[2].join("common-data").join(&b_component).exists());
+    assert!(!roots[1].join("common-data").join(&a_component).exists());
     drop(engine);
     engine = Engine::open(&system).unwrap();
     assert!(!engine.is_read_only());
@@ -189,7 +191,7 @@ fn automatic_backfill_keeps_retained_versions_and_reads_real_b_then_c_after_cold
         let a_body = a_container.join("versions").join(&leaf);
         let b_body = b_container.join("versions").join(&leaf);
         let c_body = c_container.join("versions").join(&leaf);
-        assert!(roots[2].join("zxs-data").join(&repository.history_tree_id)
+        assert!(nested.join("zxs-data/common-data").join(&repository.history_tree_id)
             .join("versions").join(&version.version_id).join("version.json").is_file());
         let parked_a = temporary.path().join(format!("C-read-A-{}", version.storage_id));
         let parked_b = temporary.path().join(format!("C-read-B-{}", version.storage_id));

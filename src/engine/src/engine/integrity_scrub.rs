@@ -281,17 +281,22 @@ impl Engine {
         ) {
             for slot in &placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                let directory = version_dir(disk, &version.history_tree_id, version_id);
                 payloads.push((
                     slot.clone(),
-                    plan.disk_resources.get(disk).and_then(|handle| {
-                        open_payload_file_observed_at(
-                            &handle.root,
-                            &directory,
-                            version,
-                            &mut observe_layout,
-                        )
-                    }),
+                    (|| {
+                        let scope = std::sync::Arc::new(
+                            super::fresh_layout::containers::observe_replica(
+                                &plan.config, &plan.disk_resources, &plan.state,
+                                version.file_id.parse()?, disk,
+                            )?,
+                        );
+                        observe_layout(0)?;
+                        let file = scope.container()?.open_leased_regular(
+                            &scope.body_path(version)?,
+                        )?;
+                        scope.verify()?;
+                        Ok(crate::engine::ReadFile::in_container(file, scope))
+                    })(),
                 ));
             }
         }
@@ -662,20 +667,30 @@ impl IntegrityScrubPlan {
                     disk.metadata_member
                         .then_some(self.metadata_integrity.as_ref()),
                 );
-                let directory = version_dir(disk, &version.history_tree_id, id);
                 let target = || IntegrityScrubTarget::Version {
                     slot_id: slot.clone(),
                     version_id: id.clone(),
                 };
+                let scope = match super::fresh_layout::containers::observe_replica(
+                    &self.config, &self.disk_resources, &self.state, version.file_id.parse()?, disk,
+                ) {
+                    Ok(scope) => scope,
+                    Err(error) => {
+                        let error = resumable_failure(error)?;
+                        report.issue(IntegrityScrubArea::Metadata, target(), error);
+                        progress(report);
+                        continue;
+                    }
+                };
+                let material = VersionMaterial::current(&scope, version)?;
+                let directory = material.directory()?;
                 match state {
                     None | Some(ContentState::Available) => {
                         let allows_missing_proof = acknowledged_unavailable
                             .as_ref()
                             .is_some_and(|proof| proof.contains(id, slot));
                         match verify_version_metadata_observed(
-                            &handle.root,
-                            &directory,
-                            version,
+                            &material,
                             allows_missing_proof,
                             observe,
                             Some(&metadata),
@@ -703,7 +718,9 @@ impl IntegrityScrubPlan {
                         }
                         let file = opened.remove(slot).expect("invariant: successful batch admission holds each available required route");
                         let verified =
-                            read_checksum_manifest_at(&handle.root, &directory, version, observe)
+                            read_checksum_manifest_at(
+                                material.root()?, &directory, version, observe,
+                            )
                                 .and_then(|manifest| {
                                     verify_open_payload_observed(file, manifest, version, observe)
                                 });
@@ -721,9 +738,7 @@ impl IntegrityScrubPlan {
                         | ContentState::Retired),
                     ) => {
                         match verify_retained_tombstone_observed(
-                            &handle.root,
-                            &directory,
-                            version,
+                            &material,
                             state,
                             observe,
                             Some(&metadata),
@@ -819,13 +834,14 @@ enum LocalReplicaMetadata {
 }
 
 fn verify_version_metadata_observed(
-    root: &DiskRoot,
-    directory: &std::path::Path,
-    version: &FileVersion,
+    material: &VersionMaterial<'_>,
     allows_missing_proof: bool,
     observe: &mut impl FnMut(usize) -> Result<()>,
     metadata: Option<&super::provenance::MetadataReadContext<'_>>,
 ) -> Result<LocalReplicaMetadata> {
+    let root = material.root()?;
+    let directory = material.directory()?;
+    let version = material.version();
     let stored: FileVersion = root.read_json_observed(&directory.join("version.json"), observe)?;
     if stored != *version {
         return Err(Error::new(
@@ -840,21 +856,22 @@ fn verify_version_metadata_observed(
     {
         return Ok(LocalReplicaMetadata::AcknowledgedUnavailable);
     }
-    verify_local_publication_at(root, directory, version, observe, metadata)?;
+    verify_source_publication(material, observe, metadata)?;
     Ok(LocalReplicaMetadata::Published)
 }
 
 fn verify_retained_tombstone_observed(
-    root: &DiskRoot,
-    directory: &std::path::Path,
-    version: &FileVersion,
+    material: &VersionMaterial<'_>,
     state: ContentState,
     observe: &mut impl FnMut(usize) -> Result<()>,
     metadata: Option<&super::provenance::MetadataReadContext<'_>>,
 ) -> Result<bool> {
+    let root = material.root()?;
+    let directory = material.directory()?;
+    let version = material.version();
     // The safe component-by-component directory opener rejects symlink
     // ancestors before absence can be classified as a legitimately removed tree.
-    match root.directory(directory) {
+    match root.directory(&directory) {
         Ok(_) => (),
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
             if error.kind() == std::io::ErrorKind::NotFound =>
@@ -881,7 +898,7 @@ fn verify_retained_tombstone_observed(
             "local tombstone differs from current content state",
         ));
     }
-    verify_tombstone_content_at(root, directory, version, &tombstone, observe, metadata)?;
+    verify_source_tombstone(material, &tombstone, observe, metadata)?;
     Ok(true)
 }
 
@@ -891,8 +908,8 @@ fn verify_retained_tombstone(
     version: &FileVersion,
     state: ContentState,
 ) -> Result<bool> {
-    let root = DiskRoot::open(directory.ancestors().nth(4).unwrap())?;
-    verify_retained_tombstone_observed(&root, directory, version, state, &mut |_| Ok(()), None)
+    let _ = (directory, version, state);
+    Err(super::FreshLayoutError::VersionSource.into())
 }
 
 #[cfg(test)]

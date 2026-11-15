@@ -720,7 +720,11 @@ fn entropy_fault_returns_typed_failure_without_panic_or_identity() {
         assert!(error.source().is_some());
     }
     assert!(matches!(
-        Config::development(["/unused".into()]).unwrap_err(),
+        Config::development([(
+            name_policy::Name::parse("Primary").unwrap(),
+            "/unused".into(),
+        )])
+        .unwrap_err(),
         Error::IdentifierGeneration { .. }
     ));
     std::fs::remove_file(marker).unwrap();

@@ -4,23 +4,36 @@ use super::*;
 use crate::engine::fresh_layout::namespace::PreparedBackupSourcePath;
 use platform_io::fs_safety::EntryName;
 use storage_contract::file_container::ContainerPrefix;
+use crate::container_storage::ordinary_preparation::areas::HeldAreas;
 
 pub(super) enum HeldParent {
+    Disk(Arc<DiskHandle>),
     Common(Arc<DiskHandle>),
     Prefix(Arc<HeldPrefix>),
+    Current(Arc<HeldPrefix>),
 }
 impl Clone for HeldParent {
     fn clone(&self) -> Self {
         match self {
+            Self::Disk(disk) => Self::Disk(Arc::clone(disk)),
             Self::Common(disk) => Self::Common(Arc::clone(disk)),
             Self::Prefix(prefix) => Self::Prefix(Arc::clone(prefix)),
+            Self::Current(prefix) => Self::Current(Arc::clone(prefix)),
         }
     }
 }
 impl HeldParent {
     pub(super) fn root(&self) -> Result<&DiskRoot> {
         match self {
+            Self::Disk(disk) => {
+                disk.current_management_root()?;
+                Ok(&disk.root)
+            }
             Self::Common(disk) => disk.content_root(),
+            Self::Current(prefix) => {
+                prefix.verify()?;
+                Ok(prefix.areas.common())
+            }
             Self::Prefix(prefix) => {
                 prefix.verify()?;
                 Ok(&prefix.held)
@@ -30,23 +43,37 @@ impl HeldParent {
 
     pub(super) fn installed(&self) -> bool {
         match self {
-            Self::Common(_) => true,
-            Self::Prefix(prefix) => prefix.installed.get().is_some(),
+            Self::Disk(_) | Self::Common(_) => true,
+            Self::Prefix(prefix) | Self::Current(prefix) => prefix.installed.get().is_some(),
         }
     }
 
     pub(super) fn published_path(&self) -> Result<PathBuf> {
         match self {
+            Self::Disk(disk) => Ok(disk.root.path().to_owned()),
             Self::Common(disk) => Ok(disk.content_root()?.path().to_owned()),
+            Self::Current(prefix) => Ok(prefix.parent.published_path()?
+                .join(prefix.component.as_path()).join(layout::COMMON_DATA_ROOT.as_path())),
             Self::Prefix(prefix) => Ok(prefix.parent.published_path()?
                 .join(prefix.component.as_path())),
         }
     }
 
+    pub(super) fn current_zxs(&self) -> Result<&DiskRoot> {
+        match self {
+            Self::Common(disk) => disk.current_management_root(),
+            Self::Current(prefix) => {
+                prefix.verify()?;
+                Ok(prefix.areas.current_zxs())
+            }
+            Self::Disk(_) | Self::Prefix(_) => Err(Failure::ContainerScope.into()),
+        }
+    }
+
     pub(super) fn install(&self) -> Result<()> {
         match self {
-            Self::Common(_) => Ok(()),
-            Self::Prefix(prefix) => prefix.install(),
+            Self::Disk(_) | Self::Common(_) => Ok(()),
+            Self::Prefix(prefix) | Self::Current(prefix) => prefix.install(),
         }
     }
 }
@@ -58,6 +85,7 @@ pub(super) struct HeldPrefix {
     record: ContainerPrefix,
     held: Arc<DiskRoot>,
     entity: ContainerEntity,
+    areas: HeldAreas,
     installed: OnceLock<()>,
 }
 impl HeldPrefix {
@@ -86,7 +114,7 @@ impl HeldPrefix {
         {
             return Err(Failure::ContainerIdentity.into());
         }
-        Ok(())
+        self.areas.verify(&self.held)
     }
 
     fn install(&self) -> Result<()> {
@@ -141,10 +169,10 @@ pub(super) fn bind_chain(
     {
         return Err(Failure::ContainerScope.into());
     }
-    if !std::ptr::eq(source.target_common()?, disk.content_root()?) {
+    if !std::ptr::eq(source.target_root()?, &disk.root) {
         return Err(Failure::ContainerScope.into());
     }
-    let mut parent = HeldParent::Common(Arc::clone(disk));
+    let mut parent = HeldParent::Disk(Arc::clone(disk));
     for (record, component) in records.iter()
         .zip(layout::container::source_components(source.destination()))
     {
@@ -212,22 +240,40 @@ pub(super) fn bind_chain(
                 }
             }
         };
+        let areas = if matches!(mode, Observation::Prepare) && record.entity.inode() == 0 {
+            if record.areas != storage_contract::file_container::ContainerAreas::budget() {
+                return Err(Failure::ContainerIdentity.into());
+            }
+            HeldAreas::create(&directory)?
+        } else {
+            HeldAreas::observe(&directory, record.areas)?
+        };
         let prefix = Arc::new(HeldPrefix {
             disk: Arc::clone(disk), parent, component, record: record.clone(),
             held: Arc::new(directory),
-            entity: ContainerEntity::new(identity.device, identity.inode), installed,
+            entity: ContainerEntity::new(identity.device, identity.inode), areas, installed,
         });
         prefix.verify()?;
         parent = HeldParent::Prefix(Arc::clone(&prefix));
         held.insert(key, prefix);
     }
-    Ok(parent)
+    match parent {
+        HeldParent::Prefix(prefix) => Ok(HeldParent::Current(prefix)),
+        HeldParent::Disk(_) | HeldParent::Common(_) | HeldParent::Current(_) => {
+            Err(Failure::ContainerScope.into())
+        }
+    }
 }
 
-pub(super) fn entity(held: &HeldPrefixes, disk: DiskId, source: DiskId) -> Result<ContainerEntity> {
+pub(super) fn record(
+    held: &HeldPrefixes, disk: DiskId, source: DiskId,
+) -> Result<ContainerPrefix> {
     let prefix = held.get(&(disk, source)).ok_or(Failure::ContainerScope)?;
     prefix.verify()?;
-    Ok(prefix.entity)
+    let mut record = prefix.record.clone();
+    record.entity = prefix.entity;
+    record.areas = prefix.areas.record();
+    Ok(record)
 }
 
 pub(super) fn create_exclusive(root: &DiskRoot, leaf: &EntryName)
@@ -247,55 +293,12 @@ pub(super) fn create_exclusive(root: &DiskRoot, leaf: &EntryName)
     }
 }
 
-/// Final-only reader. Each name must carry the exact prefix entity published in
-/// this replica; matching BODYs or a configured name never identify a prefix.
-pub(crate) fn open_published_backup_parent(
+/// Published observation shares the same entity/area verifier as recovery,
+/// but has no preparation fallback and cannot install anything.
+pub(super) fn published_parent(
     source: &PreparedBackupSourcePath<'_>,
+    disk: &Arc<DiskHandle>,
     records: &[ContainerPrefix],
-) -> Result<DiskRoot> {
-    if records.is_empty()
-        || records.iter().map(|record| record.source_disk).collect::<Vec<_>>()
-            != source.destination().source_ids().collect::<Vec<_>>()
-    {
-        return Err(Failure::ContainerScope.into());
-    }
-    let mut ancestors = Vec::with_capacity(records.len());
-    for (record, component) in records.iter()
-        .zip(layout::container::source_components(source.destination()))
-    {
-        let parent = match ancestors.last() {
-            Some(directory) => directory,
-            None => source.target_common()?,
-        };
-        let identity = FileIdentity {
-            device: record.entity.device(), inode: record.entity.inode(),
-        };
-        if identity.inode == 0 {
-            return Err(Failure::ContainerIdentity.into());
-        }
-        let next = parent.private_child_matching(
-            &parent.path().join(component.as_path()), identity,
-        )?;
-        ancestors.push(next);
-    }
-    // Opening the inner A descriptor must not hide replacement of its outer B
-    // name while admission was in progress. Recheck each name through the same
-    // retained parent, then return the already observed final descriptor.
-    for (index, (record, component)) in records.iter()
-        .zip(layout::container::source_components(source.destination())).enumerate()
-    {
-        let parent = if index == 0 { source.target_common()? } else { &ancestors[index - 1] };
-        let observed = parent.private_child_matching(
-            &parent.path().join(component.as_path()),
-            FileIdentity { device: record.entity.device(), inode: record.entity.inode() },
-        )?;
-        let retained = &ancestors[index];
-        if observed.directory_identity(observed.path())?
-            != retained.directory_identity(retained.path())?
-        {
-            return Err(Failure::ContainerIdentity.into());
-        }
-    }
-    source.target_common()?;
-    ancestors.pop().ok_or_else(|| Failure::ContainerScope.into())
+) -> Result<HeldParent> {
+    bind_chain(source, disk, records, Observation::Published, &mut HeldPrefixes::new())
 }

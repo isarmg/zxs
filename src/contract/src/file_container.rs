@@ -46,12 +46,50 @@ impl<'de> Deserialize<'de> for ContainerEntity {
     }
 }
 
+/// One source slice, including the management partitions belonging to its
+/// current and retained objects. These are physical observations, not permission
+/// to move an object between lifecycles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct ContainerManagementAreas {
+    pub root: ContainerEntity,
+    pub common_data: ContainerEntity,
+    pub deleted_data: ContainerEntity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct ContainerAreas {
+    pub common_data: ContainerEntity,
+    pub deleted_data: ContainerEntity,
+    pub zxs_data: ContainerManagementAreas,
+}
+impl ContainerAreas {
+    /// Fixed-width capacity shape only. Native admission rejects every zero inode.
+    pub const fn budget() -> Self {
+        let empty = ContainerEntity::new(0, 0);
+        Self {
+            common_data: empty,
+            deleted_data: empty,
+            zxs_data: ContainerManagementAreas {
+                root: empty, common_data: empty, deleted_data: empty,
+            },
+        }
+    }
+
+    pub fn entities(self) -> [ContainerEntity; 5] {
+        [self.common_data, self.deleted_data, self.zxs_data.root,
+            self.zxs_data.common_data, self.zxs_data.deleted_data]
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct ContainerPrefix {
     pub source_disk: DiskId,
     pub preparation: DirectoryId,
     pub entity: ContainerEntity,
+    pub areas: ContainerAreas,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -1,15 +1,12 @@
 //! Repair the original unpublished candidate using complete verified bytes.
 use crate::{
     disk::*,
-    engine::{Prepared, ReadSource},
+    engine::ReadSource,
     journal::Candidate,
     *,
 };
 use platform_io::payload::Expectation;
 
-fn required(message: impl Into<String>) -> Error {
-    Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
-}
 fn matching(source: Result<impl Into<ReadFile>>, version: &FileVersion) -> Result<bool> {
     let mut file = match source {
         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
@@ -48,18 +45,14 @@ impl Engine {
         &self,
         version: &FileVersion,
         placement: &Placement,
+        sources: &crate::container_storage::PreparedContainerEntities,
     ) -> Result<Option<ReadSource>> {
         for slot in &placement.route_slot_ids {
             let disk = self.disk(slot)?;
-            let owner = self.disk_resources.get(disk)?;
-            let root = &owner.root;
-            let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-            let source =
-                crate::container_storage::content_path_at(root, &directory, version, &mut |_| {
-                    Ok(())
-                })?;
-            if matching(root.open_leased_regular(&source), version)? {
-                return Ok(Some(ReadSource::on_disk(owner, source)));
+            let scope = sources.retain_scope(version.file_id.parse()?, disk.disk_id.parse()?)?;
+            let source = ReadSource::container(scope, version)?;
+            if matching(source.open(), version)? {
+                return Ok(Some(source));
             }
         }
         for id in self.retained_workspace_ids() {
@@ -146,20 +139,27 @@ impl Engine {
     }
 
     pub(crate) fn repair_pending_payloads(&self, candidate: &Candidate) -> Result<()> {
+        self.verify_candidate_membership(candidate)?;
+        let original = crate::publication_evidence::verified_recovery_snapshot_at(
+            &self.disk_resources, &self.members(), &candidate.snapshot_hash,
+        )?;
+        let sources = crate::container_storage::PreparedContainerEntities::observe_candidate(
+            &self.planning_context(), candidate, &original,
+        )?;
         for evidence in &candidate.versions {
             let version = &evidence.version;
             let mut damaged = Vec::new();
             for slot in &evidence.placement.route_slot_ids {
                 let disk = self.disk(slot)?;
-                let handle = self.disk_resources.get(disk)?;
-                let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-                let intact = handle
-                    .root
+                let scope = sources.scope(version.file_id.parse()?, disk.disk_id.parse()?)?;
+                let material = VersionMaterial::current(scope, version)?;
+                let directory = material.directory()?;
+                let intact = material.root()?
                     .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| {
                         Ok(())
                     })
                     .is_ok_and(|stored| stored == *version)
-                    && handle.verify_payload(&directory, version).is_ok();
+                    && material.verify_payload().is_ok();
                 if !intact {
                     damaged.push((disk.clone(), directory));
                 }
@@ -167,67 +167,11 @@ impl Engine {
             if damaged.is_empty() {
                 continue;
             }
-            let mut source = self
-                .pending_payload_source(version, &evidence.placement)?
-                .ok_or_else(|| {
-                    required(format!(
-                        "no verified complete bytes can repair {}; inspect permanent-loss recovery",
-                        version.version_id
-                    ))
-                })?;
-            for (disk, directory) in damaged {
-                let owner = self.disk_resources.get(&disk)?;
-                let root = &owner.root;
-                let quarantine = disk.root.join("quarantine");
-                root.private_dir(&quarantine)?;
-                let name = format!("{}-repair-{}", version.version_id, new_id("req")?);
-                let bundle = quarantine.join(&name);
-                root.private_dir(&bundle)?;
-                let content = crate::container_storage::content_path_at(
-                    root,
-                    &directory,
-                    version,
-                    &mut |_| Ok(()),
-                )?;
-                match root.open_read_regular(&content) {
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                    Ok(_) => {
-                        let destination = bundle.join("content");
-                        root.private_dir(&destination)?;
-                        // Keep repair's source-first barriers in one admitted
-                        // operation, including either tail after cancellation.
-                        root.rename_noreplace_synced(
-                            &content,
-                            &destination.join(&version.creation_name),
-                        )?;
-                        if source.path() == content {
-                            source = ReadSource::on_disk(
-                                owner,
-                                destination.join(&version.creation_name),
-                            );
-                        }
-                    }
-                }
-                match root.directory_identity(&directory) {
-                    Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                    | Err(Error::Contract(storage_contract::Error::Io { source: error, .. }))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                    Ok(_) => {}
-                }
-                root.rename_noreplace_synced(&directory, &bundle.join("metadata"))?;
-            }
-            self.prepare_payload(&Prepared {
-                version: version.clone(),
-                placement: evidence.placement.clone(),
-                source,
-            })?;
+            // The legacy repair moves both BODY and metadata into disk-global
+            // quarantine with source-first durability/error ordering. Neither
+            // its raw disk path nor the destination-first held rename is that
+            // transaction. Preserve observation, but perform no partial repair.
+            return Err(crate::engine::FreshLayoutError::SourceQuarantine.into());
         }
         Ok(())
     }

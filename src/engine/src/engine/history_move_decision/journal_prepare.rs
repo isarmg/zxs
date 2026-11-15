@@ -205,6 +205,7 @@ impl Engine {
             }
         }
         checkpoint(cancellation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         // Consume the ordinary counter once. Original move reconstruction uses
         // its selected slot, never a new operation/clock or a rewind of this one.
         self.history_move_prepare = Some(binding.clone());

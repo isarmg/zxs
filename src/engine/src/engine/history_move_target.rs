@@ -163,6 +163,7 @@ impl Engine {
     ) -> Result<FileHistoryMoveTargetReport> {
         self.verify_file_history_move_recovery(projection, reviewed, cancellation)?;
         let materials = Materials::capture(projection)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let prepare = || -> Result<CopyIdentities> {
             for slot in projection.capture().target_slots() {
                 checkpoint(cancellation)?;

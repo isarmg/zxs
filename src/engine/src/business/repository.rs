@@ -247,7 +247,9 @@ impl Engine {
                     RepositoryIds::random()?,
                 )?;
                 let origin = if file_manager_root {
-                    Some(engine.prepare_namespace_root_origin(state, &repository, operation)?)
+                    Some(engine.planning_context().prepare_namespace_root_origin(
+                        state, &repository, operation,
+                    )?)
                 } else {
                     None
                 };

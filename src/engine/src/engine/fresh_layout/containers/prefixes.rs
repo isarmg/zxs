@@ -1,7 +1,7 @@
 //! Shared replica prefixes are actual observed directories, not path authority.
 use super::*;
 use crate::disk_names::configuration::ConfiguredDiskNames;
-use storage_contract::file_container::{ContainerNamespace, ContainerPrefix};
+use storage_contract::file_container::{ContainerAreas, ContainerNamespace, ContainerPrefix};
 use storage_contract::working_tree::DirectoryId;
 
 pub(super) type Prefixes = BTreeMap<(DiskId, DiskId), ContainerPrefix>;
@@ -24,6 +24,9 @@ pub(super) fn collect(state: &State) -> Result<Prefixes> {
                 let key = (*disk, prefix.source_disk);
                 if !seen.insert(prefix.source_disk) || prefix.source_disk == *disk
                     || prefix.entity.inode() == 0
+                    || prefix.areas.entities().iter().any(|entity| {
+                        entity.inode() == 0 || entity.device() != prefix.entity.device()
+                    })
                     || parents.insert(key, parent).is_some_and(|old| old != parent)
                     || result.insert(key, prefix.clone()).is_some_and(|old| old != *prefix)
                 {
@@ -68,6 +71,7 @@ pub(super) fn plan(
                     source_disk,
                     preparation: DirectoryId::generate()?,
                     entity: ContainerEntity::new(0, 0),
+                    areas: ContainerAreas::budget(),
                 };
                 known.insert(key, prefix.clone());
                 prefix

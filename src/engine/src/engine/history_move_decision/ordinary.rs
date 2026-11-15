@@ -123,6 +123,7 @@ impl Engine {
             target.preflight(self, &materials, &native, &scopes, &frozen, cancellation)?;
             targets.push(target);
         }
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let mut finish = || -> Result<FileHistoryMoveOrdinaryPreparation> {
             for target in &mut targets {
                 checkpoint(cancellation)?;

@@ -392,7 +392,7 @@ fn preparation_pins_disk_identity_before_payload_work() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    match preparation.verify(&engine.config) {
+    match preparation.verify_published(&engine.config, Arc::clone(&engine.state)) {
         Err(error) => assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale),
         Ok(_) => panic!("replaced disk seal was accepted"),
     }
@@ -416,16 +416,19 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
     let reservation = payload_proof_budget().reserve(replicas * 4);
     let full_revalidation = reservation.is_none();
     let mut entries = Vec::new();
+    let sources = PayloadSources::Published(Arc::clone(&engine.state));
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            let entry = verify_replica(config, &engine.disk_resources, &evidence.version, slot, None)?;
+            let entry = verify_replica(
+                config, &engine.disk_resources, &evidence.version, slot, &sources,
+            )?;
             if !full_revalidation {
                 entries.push(entry);
             }
         }
     }
     let proof = VerifiedPayloadSet {
-        containers: None,
+        sources,
         metadata_integrity: preparation.metadata_integrity,
         entries,
         _reservation: reservation,
@@ -550,7 +553,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
         }));
     });
     let error = preparation
-        .verify(&engine.config)
+        .verify_published(&engine.config, Arc::clone(&engine.state))
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::PreparationStale);
@@ -573,7 +576,9 @@ fn large_preparation_rejects_disk_change_before_hashing() {
     let bytes = std::fs::read(&path).unwrap();
     std::fs::rename(&path, path.with_extension("old")).unwrap();
     std::fs::write(&path, bytes).unwrap();
-    let (result, cost) = verification_cost(|| preparation.verify(&engine.config));
+    let (result, cost) = verification_cost(|| {
+        preparation.verify_published(&engine.config, Arc::clone(&engine.state))
+    });
     assert_eq!(
         result.err().unwrap().code(),
         storage_contract::ErrorCode::PreparationStale
@@ -697,7 +702,7 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
             Arc::clone(&engine.metadata_integrity)
         )
         .unwrap()
-        .verify(&engine.config)
+        .verify_published(&engine.config, Arc::clone(&engine.state))
         .err()
         .unwrap()
         .code(),

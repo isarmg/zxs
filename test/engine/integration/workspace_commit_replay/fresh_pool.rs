@@ -39,6 +39,70 @@ fn staged_body(engine: &Engine, workspace: &str, item: &str) -> Vec<u8> {
     bytes
 }
 
+// This uses the already published first FILE, not a second bootstrap fixture.
+fn unsupported_container_lifecycle_preserves_first_file(
+    engine: &mut Engine,
+    repository: &storage_engine::Repository,
+    first: &Entry,
+    original: &CommitRequest,
+    container: &std::path::Path,
+) {
+    use storage_contract::file_relocation::{NamespaceEntryId, ObjectMoveRequest};
+    use storage_contract::history_window::{HistoryFileId, HistoryRepositoryId};
+    use storage_engine::{DeleteFileRequest, FileDeletionTarget, UndoFileDeletionRequest};
+
+    let repository_id = HistoryRepositoryId::parse(&repository.repository_id).unwrap();
+    let file_id = HistoryFileId::parse(&first.file_id).unwrap();
+    let path = name_policy::LookupPath::from(&first.path);
+    let target = FileDeletionTarget {
+        repository_id: &repository_id,
+        file_id: &file_id,
+        path: &path,
+    };
+    let before = storage_engine::canonical_json(engine.state()).unwrap();
+    let file_database = fs::read(container.join(".zxs-file.sqlite")).unwrap();
+    let old_body = body(engine, &first.version_id);
+    let saved = engine.operation(original.operation_id).unwrap();
+    let deletion = OperationId::generate().unwrap();
+    assert_eq!(engine.soft_delete_file(DeleteFileRequest {
+        target, principal: "admin", operation_id: deletion,
+    }).unwrap_err().code(), ErrorCode::UnsupportedOperation);
+    // Existing ownership/digest rules still win before unsupported new writes.
+    assert_eq!(engine.soft_delete_file(DeleteFileRequest {
+        target, principal: "admin", operation_id: original.operation_id,
+    }).unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
+    let undo = OperationId::generate().unwrap();
+    let deletion_id = storage_contract::FileDeletionId::generate().unwrap().to_string();
+    assert_eq!(engine.undo_file_deletion(UndoFileDeletionRequest {
+        file_id: &file_id,
+        deletion_node_id: &deletion_id,
+        principal: "admin",
+        operation_id: undo,
+    }).unwrap_err().code(), ErrorCode::FileNodeNotFound);
+    let movement = OperationId::generate().unwrap();
+    let request = ObjectMoveRequest {
+        source_repository_id: repository_id.clone(),
+        source_entry_id: NamespaceEntryId::parse(&first.entry_id).unwrap(),
+        source_path: path,
+        target_slot_id: repository.primary_slot_id.clone(),
+        target_repository_id: Some(repository_id),
+        target_path: name_policy::PortablePath::parse("moved-notes.txt").unwrap(),
+        replace: false,
+        target_entry_id: None,
+    };
+    assert_eq!(engine.move_object(&request, "admin", movement).unwrap_err().code(),
+        ErrorCode::UnsupportedOperation);
+    for operation in [deletion, undo, movement] {
+        assert!(!engine.state().operations.contains_key(&operation));
+    }
+    assert!(engine.file_deletion(&first.file_id).is_none());
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(fs::read(container.join(".zxs-file.sqlite")).unwrap(), file_database);
+    assert_eq!(body(engine, &first.version_id), old_body);
+    assert_eq!(engine.commit_workspace(original.clone()).unwrap(), saved);
+    assert_eq!(storage_engine::canonical_json(engine.state()).unwrap(), before);
+}
+
 fn copy_directory(source: &std::path::Path, target: &std::path::Path) {
     fs::create_dir(target).unwrap();
     fs::set_permissions(target, fs::Permissions::from_mode(0o700)).unwrap();
@@ -184,6 +248,9 @@ fn empty_held_pool_stages_reopens_commits_and_selects_real_file_history() {
     assert_eq!((replica.entity.device(), replica.entity.inode()),
         (container_identity.dev(), container_identity.ino()));
     assert_ne!(replica.entity.inode(), 0);
+    unsupported_container_lifecycle_preserves_first_file(
+        &mut engine, &repository, &first, &first_request, &container,
+    );
     let before_container_fault = storage_engine::canonical_json(engine.state()).unwrap();
     let parked_container = temporary.path().join("parked-original-container");
     fs::rename(&container, &parked_container).unwrap();
@@ -204,13 +271,13 @@ fn empty_held_pool_stages_reopens_commits_and_selects_real_file_history() {
 
     // The new root is an actual ordinary FILE writer/reader destination, not
     // an empty sidecar alongside a silently retained histories layout.
-    assert!(disk.join("zxs-data").join(&repository.history_tree_id)
+    assert!(disk.join("zxs-data/common-data").join(&repository.history_tree_id)
         .join("versions").join(&first.version_id).join("version.json").is_file());
     assert!(!disk.join("common-data").join(&repository.history_tree_id).exists());
     assert!(!disk.join("histories").exists());
     // Complete matching local proofs at the retired address are not a second
     // format. The published reader must use only management metadata.
-    let metadata = disk.join("zxs-data").join(&repository.history_tree_id)
+    let metadata = disk.join("zxs-data/common-data").join(&repository.history_tree_id)
         .join("versions").join(&first.version_id);
     let retired_history = disk.join("common-data").join(&repository.history_tree_id);
     let retired_versions = retired_history.join("versions");
@@ -561,7 +628,7 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         let backup = config.disks[1].disk_id.parse::<storage_contract::DiskId>().unwrap();
         let slot = config.disks[0].slot_id.clone();
         let component = format!("Alpha--{}", &owner.to_string()["disk_".len()..]);
-        let prefix = roots[1].join("common-data").join(&component);
+        let prefix = roots[1].join(&component);
         let mut engine = Engine::initialize_held(
             &system, ValidatedConfig::try_from(config).unwrap(),
             roots.iter().map(|root| fs::File::open(root).unwrap()).collect()).unwrap();
@@ -658,11 +725,11 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
             .join(format!("source-prepare-{}", binding.preparation)).exists());
         let version = &engine.state().versions[&first.version_id];
         let body_leaf = format!("{}-one.txt", version.storage_id);
-        assert_eq!(fs::read(prefix.join("one.txt/versions").join(&body_leaf)).unwrap(),
+        assert_eq!(fs::read(prefix.join("common-data/one.txt/versions").join(&body_leaf)).unwrap(),
             b"owner and actual B replica");
         assert_eq!(fs::read(roots[0].join("common-data/one.txt/versions").join(&body_leaf))
             .unwrap(), b"owner and actual B replica");
-        assert!(roots[1].join("zxs-data").join(&repository.history_tree_id)
+        assert!(prefix.join("zxs-data/common-data").join(&repository.history_tree_id)
             .join("versions").join(&first.version_id).join("version.json").is_file());
         assert!(!prefix.join(&repository.history_tree_id).exists());
         assert_eq!(fs::read_dir(roots[2].join("common-data")).unwrap().count(), 0);
@@ -692,13 +759,28 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         let parked = temporary.path().join("real-published-prefix");
         fs::rename(&prefix, &parked).unwrap();
         copy_directory(&parked, &prefix);
-        assert_eq!(fs::read(prefix.join("one.txt/versions").join(&body_leaf)).unwrap(),
-            fs::read(parked.join("one.txt/versions").join(&body_leaf)).unwrap());
+        assert_eq!(fs::read(prefix.join("common-data/one.txt/versions").join(&body_leaf)).unwrap(),
+            fs::read(parked.join("common-data/one.txt/versions").join(&body_leaf)).unwrap());
         let journal_before = journals();
         assert_eq!(Engine::open(&system).err().unwrap().code(), ErrorCode::ContainerLayoutInvalid);
         assert_eq!(journals(), journal_before);
         fs::remove_dir_all(&prefix).unwrap();
         fs::rename(&parked, &prefix).unwrap();
+
+        // Keep the authenticated source prefix itself untouched. Matching bytes
+        // at a replacement lifecycle root do not carry its recorded identity.
+        let common = prefix.join("common-data");
+        let parked_common = temporary.path().join("real-B-common-area");
+        fs::rename(&common, &parked_common).unwrap();
+        copy_directory(&parked_common, &common);
+        assert_eq!(fs::read(common.join("one.txt/versions").join(&body_leaf)).unwrap(),
+            fs::read(parked_common.join("one.txt/versions").join(&body_leaf)).unwrap());
+        let journal_before = journals();
+        assert_eq!(Engine::open(&system).err().unwrap().code(), ErrorCode::ContainerLayoutInvalid);
+        assert_eq!(journals(), journal_before);
+        fs::remove_dir_all(&common).unwrap();
+        fs::rename(&parked_common, &common).unwrap();
+
         engine = Engine::open(&system).unwrap();
         let before_retry = storage_engine::canonical_json(engine.state()).unwrap();
         engine.commit_workspace(second_request).unwrap();
@@ -711,8 +793,8 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         // Its direct source is B, so its address is Beta--B/Alpha--A, not A alone.
         let third = engine.config().disks[2].disk_id.parse::<storage_contract::DiskId>()
             .unwrap();
-        let outer = roots[2].join("common-data")
-            .join(format!("Beta--{}", &backup.to_string()["disk_".len()..]));
+        let beta_component = format!("Beta--{}", &backup.to_string()["disk_".len()..]);
+        let outer = roots[2].join(&beta_component);
         let nested = outer.join(&component);
         engine.update_protection_policy(storage_engine::ProtectionPolicyUpdate {
             policy_id: &policy, repository_id: &repository.repository_id, path_prefix: "",
@@ -808,20 +890,22 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
             assert!(!roots[2].join("zxs-data")
                 .join(format!("source-prepare-{}", bound.preparation)).exists());
         }
-        assert!(!roots[2].join("common-data").join(&component).exists());
+        assert!(!roots[2].join(&component).exists());
+        assert!(!roots[2].join("common-data").join(&beta_component).exists());
+        assert!(!roots[1].join("common-data").join(&component).exists());
         let latest_version = &engine.state().versions[&latest.version_id];
         let latest_leaf = format!("{}-one.txt", latest_version.storage_id);
-        assert_eq!(fs::read(nested.join("one.txt/versions").join(&latest_leaf)).unwrap(),
+        assert_eq!(fs::read(nested.join("common-data/one.txt/versions").join(&latest_leaf)).unwrap(),
             b"new version copied A to B to C");
-        assert!(roots[2].join("zxs-data").join(&repository.history_tree_id)
+        assert!(nested.join("zxs-data/common-data").join(&repository.history_tree_id)
             .join("versions").join(&latest.version_id).join("version.json").is_file());
-        assert!(!outer.join("zxs-data").exists());
+        assert!(!outer.join("zxs-data/common-data").join(&repository.history_tree_id).exists());
         assert_eq!(body(&engine, &first.version_id), b"owner and actual B replica");
         // Only C has a readable BODY here; the normal authenticated reader must
         // still use the exact final two-level prefix, not a byte-matching copy.
         let upstream_bodies = [
             roots[0].join("common-data/one.txt/versions").join(&latest_leaf),
-            prefix.join("one.txt/versions").join(&latest_leaf),
+            prefix.join("common-data/one.txt/versions").join(&latest_leaf),
         ];
         let parked_bodies = [temporary.path().join("A-latest-body"),
             temporary.path().join("B-latest-body")];
@@ -906,15 +990,24 @@ fn fresh_backup_replica_publishes_exact_named_prefix_and_recovers_its_preparatio
         assert_eq!(engine.state().file_containers[&file], extended);
         assert_eq!(engine.state().container_tags[&file], expected_tags);
         let v3_leaf = format!("{}-one.txt", engine.state().versions[&v3.version_id].storage_id);
-        let c_body = nested.join("one.txt/versions").join(&v3_leaf);
+        let c_body = nested.join("common-data/one.txt/versions").join(&v3_leaf);
         let a_body = roots[0].join("common-data/one.txt/versions").join(&v3_leaf);
-        let b_body = prefix.join("one.txt/versions").join(&v3_leaf);
+        let b_body = prefix.join("common-data/one.txt/versions").join(&v3_leaf);
         drop(engine);
         engine = Engine::open(&system).unwrap();
         assert_eq!(engine.file_branch_head(&selected_branch).unwrap(), v3.version_id);
         assert_eq!(engine.file_container_tags(&tag_read).unwrap().tags, tag_command.tags);
-        let c_rows = file_database_rows(&nested.join("one.txt/.zxs-file.sqlite"));
-        for container in [roots[0].join("common-data/one.txt"), prefix.join("one.txt")] {
+        let c_rows = file_database_rows(&nested.join("common-data/one.txt/.zxs-file.sqlite"));
+        for source in [&prefix, &nested] {
+            let version = source.join("zxs-data/common-data").join(&repository.history_tree_id)
+                .join("versions").join(&v3.version_id);
+            assert!(version.join("version.json").is_file());
+        }
+        for disk in [&roots[1], &roots[2]] {
+            assert!(!disk.join("zxs-data").join(&repository.history_tree_id)
+                .join("versions").join(&v3.version_id).exists());
+        }
+        for container in [roots[0].join("common-data/one.txt"), prefix.join("common-data/one.txt")] {
             assert_eq!(file_database_rows(&container.join(".zxs-file.sqlite")), c_rows);
         }
         assert_eq!(c_rows[&("file".into(), first.file_id.clone())]["container_tags"],

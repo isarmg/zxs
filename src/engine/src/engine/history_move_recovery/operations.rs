@@ -252,6 +252,7 @@ impl Engine {
         self.recheck_file_history_move_projection(projection, cancellation)?;
         let record = RecoveryRecord::capture(self, projection)?;
         record.validate()?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let system = persist::Store::system(self)?;
         // The first original envelope is already a durable deny fence. An I/O
         // failure before the later candidate choice must not permit a fresh
@@ -372,6 +373,10 @@ impl Engine {
         let (projection, system, observed) =
             self.original_move_projection(operation, reviewed, principal, cancellation)?;
         let record = &observed.record;
+        crate::engine::fresh_layout::require_whole_container_lifecycle().map_err(|error| {
+            error.context(ErrorCode::RecoveryRequired,
+                "original move remains retained; no envelope or physical lifecycle was advanced")
+        })?;
         // Synchronize the same system bytes too: a prior failure may have
         // installed the name without completing all parent-directory barriers.
         let finish = || -> Result<()> {

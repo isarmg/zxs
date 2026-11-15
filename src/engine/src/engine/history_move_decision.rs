@@ -158,6 +158,7 @@ impl Engine {
         let targets = self.verify_file_history_move_target(projection, recovery, cancellation)?;
         let materials = Materials::capture(self, projection, recovery, &targets)?;
         checkpoint(cancellation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let prepare = || -> Result<()> {
             store::Store::system(self, &materials, store::Mode::Prepare)?
                 .install(&materials, cancellation)?;

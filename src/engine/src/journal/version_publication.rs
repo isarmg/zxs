@@ -5,7 +5,7 @@
 //! its actual retained data/management roots; their common verification kernel
 //! does not infer a source from the payload path or mint a publication.
 use crate::disk::{
-    DiskHandle, DiskRoot, DiskSeal, MAX_METADATA, absolute_path, decode_seal, read_bytes,
+    DiskHandle, DiskRoot, DiskSeal, MAX_METADATA, decode_seal,
 };
 use crate::engine::provenance::MetadataReadContext;
 use crate::journal::{
@@ -14,7 +14,9 @@ use crate::journal::{
 };
 use crate::persist::layout;
 use crate::{ContentState, Error, ErrorCode, FileVersion, Result, object_hash};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 /// Only original proof files cross this boundary. Membership has a separate
 /// operation so its shared-authority failures retain their own fault scope.
@@ -36,65 +38,35 @@ trait VersionPublicationRead {
     ) -> Result<()>;
 }
 
-/// One supported address shape. It proves location identity only; the complete
-/// proof and actual retained DISK domains are still verified by the reader.
-struct CurrentVersionProofLocation<'a> {
-    directory: &'a Path,
-    root: &'a Path,
+/// Local material is source-scoped; disk identity and membership are not.
+/// No ancestor of a version address can supply destination disk authority.
+struct SourceVersionProofReader<'a, 'source, O> {
+    material: &'a crate::disk::VersionMaterial<'source>,
+    observe: O,
 }
 
-impl<'a> CurrentVersionProofLocation<'a> {
-    fn admit(directory: &'a Path, version: &FileVersion) -> Result<Self> {
-        if directory.file_name().and_then(|s| s.to_str()) != Some(version.version_id.as_str())
-            || directory.ancestors().nth(1).and_then(Path::file_name)
-                != Some(layout::VERSIONS.as_os_str())
-            || directory
-                .ancestors()
-                .nth(2)
-                .and_then(Path::file_name)
-                .and_then(|s| s.to_str())
-                != Some(version.history_tree_id.as_str())
-            || directory.ancestors().nth(3).and_then(Path::file_name)
-                != Some(layout::ZXS_DATA_ROOT.as_os_str())
-        {
-            return Err(Error::new(
-                ErrorCode::PublicationInvalid,
-                "version directory identity differs from its descriptor",
-            ));
-        }
-        let root = directory.ancestors().nth(4).ok_or_else(|| {
-            Error::new(ErrorCode::PublicationInvalid, "version is outside disk layout")
-        })?;
-        Ok(Self { directory, root })
-    }
-
-    fn material(&self, material: VersionProofMaterial) -> PathBuf {
-        match material {
-            VersionProofMaterial::Publication => {
-                self.directory.join(layout::VERSION_PUBLICATION_PROOF.as_path())
-            }
-            VersionProofMaterial::Commit => {
-                self.directory.join(layout::VERSION_COMMIT_PROOF.as_path())
-            }
-            VersionProofMaterial::DiskIdentity => self.root.join(layout::DISK_IDENTITY.as_path()),
-        }
-    }
-
-    fn tombstone(&self) -> PathBuf {
-        self.directory.join(layout::VERSION_TOMBSTONE.as_path())
-    }
-}
-
-struct CurrentVersionProofReader<'a, R> {
-    location: CurrentVersionProofLocation<'a>,
-    read: R,
-}
-
-impl<R: FnMut(&Path) -> Result<Vec<u8>>> VersionPublicationRead
-    for CurrentVersionProofReader<'_, R>
+impl<O: FnMut(usize) -> Result<()>> VersionPublicationRead
+    for SourceVersionProofReader<'_, '_, O>
 {
     fn read(&mut self, material: VersionProofMaterial) -> Result<Vec<u8>> {
-        (self.read)(&self.location.material(material))
+        match material {
+            VersionProofMaterial::Publication => self.material.root()?.read_bytes_observed(
+                &self.material.directory()?.join(layout::VERSION_PUBLICATION_PROOF.as_path()),
+                MAX_METADATA, &mut self.observe,
+            ),
+            VersionProofMaterial::Commit => self.material.root()?.read_bytes_observed(
+                &self.material.directory()?.join(layout::VERSION_COMMIT_PROOF.as_path()),
+                MAX_METADATA, &mut self.observe,
+            ),
+            VersionProofMaterial::DiskIdentity => {
+                let root = &self.material.disk().root;
+                root.read_bytes_observed(
+                    &root.path().join(layout::DISK_IDENTITY.as_path()),
+                    MAX_METADATA,
+                    &mut self.observe,
+                )
+            }
+        }
     }
 
     fn verify_membership(
@@ -103,8 +75,57 @@ impl<R: FnMut(&Path) -> Result<Vec<u8>>> VersionPublicationRead
         seal: &DiskSeal,
         metadata: Option<&MetadataReadContext<'_>>,
     ) -> Result<()> {
-        verify_local_membership(self.location.root, candidate, seal, &mut self.read, metadata)
+        let disk = self.material.disk();
+        verify_local_membership(
+            disk.root.path(), candidate, seal,
+            &mut |path| disk.root_for(path)?.read_bytes_observed(
+                path, MAX_METADATA, &mut self.observe,
+            ),
+            metadata,
+        )
     }
+}
+
+pub(crate) fn verify_source_publication(
+    material: &crate::disk::VersionMaterial<'_>,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&MetadataReadContext<'_>>,
+) -> Result<()> {
+    let mut source = SourceVersionProofReader { material, observe };
+    verify_local_publication_with(
+        material.version(), &mut source,
+        &mut || material.root()?.open_optional_read_regular(
+            &material.directory()?.join(layout::VERSION_TOMBSTONE.as_path()),
+        ).map(|file| file.is_some()),
+        metadata,
+    )?;
+    material.verify()
+}
+
+pub(crate) fn verify_source_version_publication(
+    material: &crate::disk::VersionMaterial<'_>,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_local_version_publication(
+        material.version(), &mut SourceVersionProofReader { material, observe }, metadata,
+    )?;
+    material.verify()
+}
+
+/// A tombstone does not move a live container into the Deleted lifecycle.
+/// This validates content availability independently of the Current source.
+pub(crate) fn verify_source_tombstone(
+    material: &crate::disk::VersionMaterial<'_>,
+    tombstone: &ContentTombstone,
+    observe: &mut impl FnMut(usize) -> Result<()>,
+    metadata: Option<&MetadataReadContext<'_>>,
+) -> Result<()> {
+    verify_tombstone_content_with(
+        material.version(), tombstone,
+        &mut SourceVersionProofReader { material, observe }, metadata,
+    )?;
+    material.verify()
 }
 
 fn read_local_seal(
@@ -120,84 +141,48 @@ fn read_local_seal(
     }
 }
 
-pub(crate) fn verify_local_publication(directory: &Path, version: &FileVersion) -> Result<()> {
-    verify_local_publication_in_context(directory, version, None)
+// Raw locators deliberately retain no source-proof I/O. Neither a path nor a
+// global disk seal authenticates a source chain/lifecycle. These old entry
+// points reject; only VersionMaterial enters the unchanged verification kernel.
+pub(crate) fn verify_local_publication(_directory: &Path, _version: &FileVersion) -> Result<()> {
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 pub(crate) fn verify_local_publication_in_context(
-    directory: &Path,
-    version: &FileVersion,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _directory: &Path,
+    _version: &FileVersion,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    verify_local_publication_observed(directory, version, &mut |_| Ok(()), metadata)
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 pub(crate) fn verify_local_publication_observed(
-    directory: &Path,
-    version: &FileVersion,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _directory: &Path,
+    _version: &FileVersion,
+    _observe: &mut impl FnMut(usize) -> Result<()>,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    let directory = absolute_path(directory)?;
-    let root = directory.ancestors().nth(4).ok_or_else(|| {
-        Error::new(
-            ErrorCode::PublicationInvalid,
-            "version is outside disk layout",
-        )
-    })?;
-    let root = DiskRoot::open(root)?;
-    verify_local_publication_at(&root, &directory, version, observe, metadata)
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 pub(crate) fn verify_local_publication_on_disk(
-    disk: &DiskHandle,
-    directory: &Path,
-    version: &FileVersion,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _disk: &DiskHandle,
+    _directory: &Path,
+    _version: &FileVersion,
+    _observe: &mut impl FnMut(usize) -> Result<()>,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    let location = CurrentVersionProofLocation::admit(directory, version)?;
-    if location.root != disk.root.path() {
-        return Err(crate::engine::FreshLayoutError::PublicationLocation.into());
-    }
-    let tombstone = location.tombstone();
-    let mut source = CurrentVersionProofReader {
-        location,
-        read: |path: &Path| disk.root_for(path)?.read_bytes_observed(path, MAX_METADATA, observe),
-    };
-    verify_local_publication_with(
-        version,
-        &mut source,
-        &mut || disk.management_root()?.open_optional_read_regular(&tombstone)
-            .map(|file| file.is_some()),
-        metadata,
-    )?;
-    disk.management_root()?;
-    Ok(())
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 pub(crate) fn verify_local_publication_at(
-    root: &DiskRoot,
-    directory: &Path,
-    version: &FileVersion,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _root: &DiskRoot,
+    _directory: &Path,
+    _version: &FileVersion,
+    _observe: &mut impl FnMut(usize) -> Result<()>,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    let location = CurrentVersionProofLocation::admit(directory, version)?;
-    let tombstone = location.tombstone();
-    let mut source = CurrentVersionProofReader {
-        location,
-        read: |path: &Path| root.read_bytes_observed(path, MAX_METADATA, observe),
-    };
-    verify_local_publication_with(
-        version,
-        &mut source,
-        &mut || {
-            root.open_optional_read_regular(&tombstone)
-                .map(|file| file.is_some())
-        },
-        metadata,
-    )
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 fn verify_local_publication_with(
@@ -216,19 +201,15 @@ fn verify_local_publication_with(
     Ok(())
 }
 
-/// Recheck the original version identity on a held root even when a previous
-/// cleanup already installed a tombstone. This does not grant body availability.
+/// A held raw root alone cannot admit a retained version source. Actual Current
+/// content cleanup uses verify_source_version_publication with its scope.
 pub(crate) fn verify_retained_version_publication_at(
-    root: &DiskRoot,
-    directory: &Path,
-    version: &FileVersion,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _root: &DiskRoot,
+    _directory: &Path,
+    _version: &FileVersion,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    let mut source = CurrentVersionProofReader {
-        location: CurrentVersionProofLocation::admit(directory, version)?,
-        read: |path: &Path| root.read_bytes(path, MAX_METADATA),
-    };
-    verify_local_version_publication(version, &mut source, metadata)
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 /// Verify immutable publication identity independently of current availability.
@@ -323,39 +304,23 @@ fn verify_local_version_publication(
 }
 
 pub(crate) fn verify_tombstone_content_in_context(
-    directory: &Path,
-    version: &FileVersion,
-    t: &ContentTombstone,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _directory: &Path,
+    _version: &FileVersion,
+    _t: &ContentTombstone,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    verify_tombstone_content_with(
-        version,
-        t,
-        &mut CurrentVersionProofReader {
-            location: CurrentVersionProofLocation::admit(directory, version)?,
-            read: |path: &Path| read_bytes(path, MAX_METADATA),
-        },
-        metadata,
-    )
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 pub(crate) fn verify_tombstone_content_at(
-    root: &DiskRoot,
-    directory: &Path,
-    version: &FileVersion,
-    t: &ContentTombstone,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-    metadata: Option<&MetadataReadContext<'_>>,
+    _root: &DiskRoot,
+    _directory: &Path,
+    _version: &FileVersion,
+    _t: &ContentTombstone,
+    _observe: &mut impl FnMut(usize) -> Result<()>,
+    _metadata: Option<&MetadataReadContext<'_>>,
 ) -> Result<()> {
-    verify_tombstone_content_with(
-        version,
-        t,
-        &mut CurrentVersionProofReader {
-            location: CurrentVersionProofLocation::admit(directory, version)?,
-            read: |path: &Path| root.read_bytes_observed(path, MAX_METADATA, observe),
-        },
-        metadata,
-    )
+    Err(crate::engine::FreshLayoutError::VersionSource.into())
 }
 
 fn verify_tombstone_content_with(

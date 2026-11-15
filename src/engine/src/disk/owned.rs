@@ -1235,6 +1235,8 @@ struct RetainedLayoutRoots {
     common: DiskRoot,
     deleted: DiskRoot,
     management: DiskRoot,
+    current_management: DiskRoot,
+    retained_management: DiskRoot,
 }
 
 impl DiskHandle {
@@ -1251,10 +1253,22 @@ impl DiskHandle {
                 let retain = |name, entity| root.private_entry_matching(
                     name, crate::working_tree::records::file_identity(entity),
                 ).map_err(crate::engine::fresh_layout::directory_error);
+                let common = retain(&layout::COMMON_DATA_ROOT, binding.roots.common_data.entity)?;
+                let deleted = retain(
+                    &layout::DELETED_DATA_ROOT, binding.roots.deleted_data.entity,
+                )?;
+                let management = retain(&layout::ZXS_DATA_ROOT, binding.roots.zxs_data.entity)?;
+                let partitions = &binding.roots.zxs_lifecycles;
+                let current_management = management.private_entry_matching(
+                    &layout::COMMON_DATA_ROOT,
+                    crate::working_tree::records::file_identity(partitions.common_data.entity),
+                ).map_err(crate::engine::fresh_layout::directory_error)?;
+                let retained_management = management.private_entry_matching(
+                    &layout::DELETED_DATA_ROOT,
+                    crate::working_tree::records::file_identity(partitions.deleted_data.entity),
+                ).map_err(crate::engine::fresh_layout::directory_error)?;
                 Some(RetainedLayoutRoots {
-                    common: retain(&layout::COMMON_DATA_ROOT, binding.roots.common_data.entity)?,
-                    deleted: retain(&layout::DELETED_DATA_ROOT, binding.roots.deleted_data.entity)?,
-                    management: retain(&layout::ZXS_DATA_ROOT, binding.roots.zxs_data.entity)?,
+                    common, deleted, management, current_management, retained_management,
                 })
             }
             None => None,
@@ -1289,6 +1303,22 @@ impl DiskHandle {
         let layout = self.layout.as_ref()
             .ok_or(crate::engine::FreshLayoutError::Registration)?;
         self.retained_child(&layout::ZXS_DATA_ROOT, &layout.management)
+    }
+
+    /// Current-object management only. Retained-object operations need their
+    /// own lifecycle transaction; this method cannot issue a deleted-area root.
+    pub(crate) fn current_management_root(&self) -> Result<&DiskRoot> {
+        let roots = self.layout.as_ref()
+            .ok_or(crate::engine::FreshLayoutError::Registration)?;
+        let management = self.management_root()?;
+        for (name, child) in [
+            (&*layout::COMMON_DATA_ROOT, &roots.current_management),
+            (&*layout::DELETED_DATA_ROOT, &roots.retained_management),
+        ] {
+            management.private_entry_matching(name, child.directory_identity(child.path())?)
+                .map_err(crate::engine::fresh_layout::directory_error)?;
+        }
+        Ok(&roots.current_management)
     }
 
     fn retained_child<'a>(&self, name: &EntryName, child: &'a DiskRoot) -> Result<&'a DiskRoot> {

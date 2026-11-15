@@ -124,6 +124,7 @@ pub(crate) fn plan(
             .collect::<Result<_>>()?,
         slots,
     };
+    crate::engine::fresh_layout::require_whole_container_lifecycle()?;
     let (state, receipt, result) = compose(
         engine.state(),
         unit,

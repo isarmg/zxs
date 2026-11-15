@@ -1272,7 +1272,12 @@ fn unreadable_local_publication_is_not_absent_evidence() {
     let path = directory.join("publication-proof.json");
     std::os::unix::fs::symlink("publication-proof.json", &path).unwrap();
     let hash = object_hash("candidate", &candidate).unwrap();
-    let error = discover_publication(&engine, &candidate, &hash).unwrap_err();
+    let original = crate::publication_evidence::verified_recovery_snapshot_at(
+        &engine.disk_resources, &engine.members(), &candidate.snapshot_hash,
+    ).unwrap();
+    let error = discover_publication(
+        &engine, &candidate, &hash, &engine.state, &engine.snapshot, &original,
+    ).unwrap_err();
     assert!(std::error::Error::source(&error).is_some());
 }
 
@@ -1354,11 +1359,15 @@ fn incomplete_quorum_only_recovery_preserves_pending_torn_evidence() {
     fs::rename(&disks[2].root, &missing).unwrap();
     let mut incomplete = Engine::open(&temp.path().join("state")).unwrap();
     assert!(incomplete.is_read_only());
+    let original = crate::publication_evidence::verified_recovery_snapshot_at(
+        &incomplete.disk_resources, &incomplete.members(), &candidate.snapshot_hash,
+    ).unwrap();
     assert!(
         discover_publication(
             &incomplete,
             &candidate,
             &object_hash("candidate", &candidate).unwrap(),
+            &incomplete.state, &incomplete.snapshot, &original,
         )
         .unwrap()
         .is_none()

@@ -121,6 +121,13 @@ impl<'a> PreparedBackupSourcePath<'a> {
         &self.origin
     }
 
+    /// Source components begin at the admitted destination disk, not inside
+    /// its own common-data. This observation does not create a source slice.
+    pub(crate) fn target_root(&self) -> Result<&DiskRoot> {
+        verify_held(self.source.config, self.target, self.target_handle, self.target_binding)?;
+        Ok(&self.target_handle.root)
+    }
+
     pub(crate) fn target_common(&self) -> Result<&DiskRoot> {
         verify_held(self.source.config, self.target, self.target_handle, self.target_binding)?;
         self.target_handle.content_root()
@@ -134,7 +141,7 @@ impl<'a> PreparedBackupSourcePath<'a> {
     /// Call only for an actual introduction. Existing prefix observations must
     /// not retroactively charge their components as newly created names.
     pub(crate) fn verify_new_component_budget(&self) -> Result<()> {
-        let maximum = self.target_common()?.component_name_maximum()?;
+        let maximum = self.target_root()?.component_name_maximum()?;
         self.destination.verify_component_budget(maximum).map_err(Error::ConfiguredDiskName)
     }
 }

@@ -33,7 +33,7 @@ class FreshPoolCoreSelection(unittest.TestCase):
                 elif path in [SHARED_LAYOUT, ORACLE]:
                     self.assertEqual(plan["groups"], ["directory-layout-probe", "fresh-pool-core"])
                 else:
-                    self.assertEqual(plan["groups"], ["fresh-pool-core"])
+                    self.assertEqual(plan["groups"], ["fresh-managed-core", "fresh-pool-core"])
         previous = self.policy["groups"]["portable-path-consumers"]["rust_targets"]
         retained = [target for target in previous
                     if target.get("name") == "workspace_commit_replay"]

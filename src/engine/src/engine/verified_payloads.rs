@@ -104,7 +104,6 @@ impl HeldFile {
     }
 }
 struct VerifiedPayload {
-    disk: Arc<DiskHandle>,
     version_id: String,
     slot_id: String,
     version_hash: String,
@@ -118,8 +117,35 @@ struct HeldSeal {
     path: PathBuf,
     seal: HeldFile,
 }
+enum PayloadSources {
+    Prepared(Arc<crate::container_storage::PreparedContainerEntities>),
+    Published(Arc<State>),
+}
+impl PayloadSources {
+    fn with_replica<T>(
+        &self,
+        config: &ValidatedConfig,
+        resources: &DiskResources,
+        version: &FileVersion,
+        disk: &DiskConfig,
+        use_scope: impl FnOnce(&crate::container_storage::ObservedContainerReplica) -> Result<T>,
+    ) -> Result<T> {
+        match self {
+            Self::Prepared(containers) => use_scope(containers.scope(
+                version.file_id.parse()?, disk.disk_id.parse()?,
+            )?),
+            Self::Published(state) => {
+                let scope = crate::engine::fresh_layout::containers::observe_replica(
+                    config, resources, state, version.file_id.parse()?, disk,
+                )?;
+                use_scope(&scope)
+            }
+        }
+    }
+}
+
 pub(super) struct VerifiedPayloadSet {
-    containers: Option<Arc<crate::container_storage::PreparedContainerEntities>>,
+    sources: PayloadSources,
     metadata_integrity: Arc<MetadataIntegrity>,
     entries: Vec<VerifiedPayload>,
     // Struct fields drop in declaration order: all per-replica FDs close first.
@@ -188,23 +214,24 @@ impl<'a> PayloadPreparation<'a> {
             resources: Arc::clone(resources),
         })
     }
-    pub(super) fn verify(
+    pub(super) fn verify_published(
         self,
         config: &ValidatedConfig,
+        state: Arc<State>,
     ) -> Result<VerifiedPayloadSet> {
-        self.verify_inner(config, None)
+        self.verify_inner(config, PayloadSources::Published(state))
     }
     pub(super) fn verify_with_containers(
         self,
         config: &ValidatedConfig,
         containers: Arc<crate::container_storage::PreparedContainerEntities>,
     ) -> Result<VerifiedPayloadSet> {
-        self.verify_inner(config, Some(containers))
+        self.verify_inner(config, PayloadSources::Prepared(containers))
     }
     fn verify_inner(
         self,
         config: &ValidatedConfig,
-        containers: Option<Arc<crate::container_storage::PreparedContainerEntities>>,
+        sources: PayloadSources,
     ) -> Result<VerifiedPayloadSet> {
         let versions = self.versions;
         let replicas = versions
@@ -238,7 +265,7 @@ impl<'a> PayloadPreparation<'a> {
                         &self.resources,
                         &evidence.version,
                         slot,
-                        containers.as_deref(),
+                        &sources,
                     )?);
                 }
             }
@@ -247,7 +274,7 @@ impl<'a> PayloadPreparation<'a> {
         // already hashes every byte with held-inode checks; a preceding pass
         // would only hash and immediately discard the same proof.
         let proof = VerifiedPayloadSet {
-            containers,
+            sources,
             metadata_integrity: self.metadata_integrity,
             entries,
             _reservation: reservation,
@@ -265,7 +292,7 @@ fn verify_replica(
     resources: &DiskResources,
     version: &FileVersion,
     slot: &str,
-    containers: Option<&crate::container_storage::PreparedContainerEntities>,
+    sources: &PayloadSources,
 ) -> Result<VerifiedPayload> {
     #[cfg(test)]
     VERIFICATION_COST.with(|cost| {
@@ -282,95 +309,88 @@ fn verify_replica(
                 "prepared payload slot disappeared",
             )
         })?;
-    let handle = resources.get(disk)?;
-    let root = handle.management_root()?;
-    let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
-    let mut metadata = Vec::new();
-    for name in ["version.json", "checksums.bin", "payload.json"] {
-        let path = directory.join(name);
-        metadata.push((path.clone(), HeldFile::open(root, &path)?));
-    }
-    let recorded: FileVersion = root
-        .read_json_observed(&directory.join("version.json"), &mut |_| Ok(()))?;
-    let version_hash = object_hash("version", version)?;
-    if object_hash("version", &recorded)? != version_hash {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ObjectCollision,
-            "prepared version metadata differs",
-        ));
-    }
-    let checks = root
-        .read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-    if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "checksum manifest digest differs",
-        ));
-    }
-    let manifest = ChecksumManifest::decode(&checks)?;
-    if manifest.logical_size != version.logical_size
-        || manifest.chunk_bytes != version.checksum_chunk_bytes
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "checksum header differs from version",
-        ));
-    }
-    let (body_root, path) = match containers {
-        Some(scope) => {
-            let file = version.file_id.parse()?;
-            let disk = disk.disk_id.parse()?;
-            (scope.target(file, disk)?, scope.body_path(file, disk, version)?)
+    sources.with_replica(config, resources, version, disk, |scope| {
+        let material = VersionMaterial::current(scope, version)?;
+        let root = material.root()?;
+        let directory = material.directory()?;
+        let mut metadata = Vec::new();
+        for name in ["version.json", "checksums.bin", "payload.json"] {
+            let path = directory.join(name);
+            metadata.push((path.clone(), HeldFile::open(root, &path)?));
         }
-        None => (root, crate::container_storage::content_path_at(
-            root, &directory, version, &mut |_| Ok(()),
-        )?),
-    };
-    let mut body = HeldFile::open(body_root, &path)?;
-    if body.stamp.size != version.logical_size {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "payload length differs",
-        ));
-    }
-    let mut full = blake3::Hasher::new();
-    let mut buffer = vec![0; manifest.chunk_bytes as usize];
-    let mut remaining = manifest.logical_size;
-    for expected in manifest.chunks {
-        let n = remaining.min(buffer.len() as u64) as usize;
-        body.file.read_exact(&mut buffer[..n])?;
-        #[cfg(test)]
-        VERIFICATION_COST.with(|cost| {
-            let (replicas, bytes) = cost.get();
-            cost.set((replicas, bytes + n as u64));
-        });
-        if blake3::hash(&buffer[..n]).as_bytes() != &expected {
+        let recorded: FileVersion = root
+            .read_json_observed(&directory.join("version.json"), &mut |_| Ok(()))?;
+        let version_hash = object_hash("version", version)?;
+        if object_hash("version", &recorded)? != version_hash {
             return Err(Error::new(
-                storage_contract::ErrorCode::ChecksumMismatch,
-                "payload chunk differs",
+                storage_contract::ErrorCode::ObjectCollision,
+                "prepared version metadata differs",
             ));
         }
-        full.update(&buffer[..n]);
-        remaining -= n as u64;
-    }
-    if remaining != 0 || ContentHash::from_digest(full.finalize()) != version.content_hash {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "complete payload hash differs",
-        ));
-    }
-    body.validate(body_root, &path)?;
-    for (path, held) in &metadata {
-        held.validate(root, path)?;
-    }
-    Ok(VerifiedPayload {
-        disk: Arc::clone(handle),
-        version_id: version.version_id.clone(),
-        slot_id: slot.to_owned(),
-        version_hash,
-        directory,
-        body,
-        metadata,
+        let checks = root
+            .read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
+        if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "checksum manifest digest differs",
+            ));
+        }
+        let manifest = ChecksumManifest::decode(&checks)?;
+        if manifest.logical_size != version.logical_size
+            || manifest.chunk_bytes != version.checksum_chunk_bytes
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "checksum header differs from version",
+            ));
+        }
+        let body_root = scope.container()?;
+        let path = scope.body_path(version)?;
+        let mut body = HeldFile::open(body_root, &path)?;
+        if body.stamp.size != version.logical_size {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "payload length differs",
+            ));
+        }
+        let mut full = blake3::Hasher::new();
+        let mut buffer = vec![0; manifest.chunk_bytes as usize];
+        let mut remaining = manifest.logical_size;
+        for expected in manifest.chunks {
+            let n = remaining.min(buffer.len() as u64) as usize;
+            body.file.read_exact(&mut buffer[..n])?;
+            #[cfg(test)]
+            VERIFICATION_COST.with(|cost| {
+                let (replicas, bytes) = cost.get();
+                cost.set((replicas, bytes + n as u64));
+            });
+            if blake3::hash(&buffer[..n]).as_bytes() != &expected {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ChecksumMismatch,
+                    "payload chunk differs",
+                ));
+            }
+            full.update(&buffer[..n]);
+            remaining -= n as u64;
+        }
+        if remaining != 0 || ContentHash::from_digest(full.finalize()) != version.content_hash {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ChecksumMismatch,
+                "complete payload hash differs",
+            ));
+        }
+        body.validate(body_root, &path)?;
+        for (path, held) in &metadata {
+            held.validate(root, path)?;
+        }
+        Ok(VerifiedPayload {
+            version_id: version.version_id.clone(),
+            slot_id: slot.to_owned(),
+            version_hash,
+            directory,
+            body,
+            metadata,
+        })
     })
 }
 
@@ -383,7 +403,7 @@ impl VerifiedPayloadSet {
             &candidate.versions,
             Arc::clone(&engine.metadata_integrity),
         )?
-        .verify(&engine.config)
+        .verify_published(&engine.config, Arc::clone(&engine.state))
     }
     fn validate_disks(&self) -> Result<()> {
         for disk in &self.disks {
@@ -401,17 +421,30 @@ impl VerifiedPayloadSet {
     }
 
     pub(super) fn retains_draft_on(&self, disk: storage_contract::DiskId) -> bool {
-        self.containers.as_ref().is_some_and(|scope| scope.retains_draft_on(disk))
+        match &self.sources {
+            PayloadSources::Prepared(scope) => scope.retains_draft_on(disk),
+            PayloadSources::Published(_) => false,
+        }
     }
 
     /// FILE-only publications have no payload cursor entries. Their exact
     /// container occurrences still cross the decision boundary, and must not
     /// become an unchecked empty-vector success after physical preparation.
     pub(super) fn validate_containers(&self) -> Result<()> {
-        if let Some(containers) = &self.containers {
+        if let PayloadSources::Prepared(containers) = &self.sources {
             containers.verify()?;
         }
         Ok(())
+    }
+
+    pub(super) fn with_replica<T>(
+        &self,
+        config: &ValidatedConfig,
+        version: &FileVersion,
+        disk: &DiskConfig,
+        use_scope: impl FnOnce(&crate::container_storage::ObservedContainerReplica) -> Result<T>,
+    ) -> Result<T> {
+        self.sources.with_replica(config, &self.resources, version, disk, use_scope)
     }
 
     fn validate_versions(
@@ -506,7 +539,7 @@ impl PayloadProofCursor<'_> {
             // byte with the same metadata and held-inode checks, one replica at
             // a time, rather than exhausting process-wide file descriptors.
             verify_replica(
-                config, &self.proof.resources, version, slot, self.proof.containers.as_deref(),
+                config, &self.proof.resources, version, slot, &self.proof.sources,
             )?;
             return Ok(());
         }
@@ -532,60 +565,56 @@ impl PayloadProofCursor<'_> {
                     "payload slot changed",
                 )
             })?;
-        if entry.directory != version_dir(disk, &version.history_tree_id, &version.version_id)
-            || entry.version_hash != object_hash("version", version)?
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PreparationStale,
-                "payload proof identity differs",
-            ));
-        }
-        let (body_root, path) = match &self.proof.containers {
-            Some(scope) => {
-                let file = version.file_id.parse()?;
-                let disk = disk.disk_id.parse()?;
-                (scope.target(file, disk)?, scope.body_path(file, disk, version)?)
+        self.proof.sources.with_replica(
+            config, &self.proof.resources, version, disk, |scope| {
+            let material = VersionMaterial::current(scope, version)?;
+            if entry.directory != material.directory()?
+                || entry.version_hash != object_hash("version", version)?
+            {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::PreparationStale,
+                    "payload proof identity differs",
+                ));
             }
-            None => (entry.disk.content_root()?, crate::container_storage::content_path_at(
-                entry.disk.content_root()?, &entry.directory, version, &mut |_| Ok(()),
-            )?),
-        };
-        let current = FileStamp::from_metadata(&entry.body.file.metadata()?);
-        let version_id = version.version_id.parse()?;
-        let renamed_payload = match renamed {
-            Some(renamed) => renamed.matches(
-                &name_policy::SlotId::parse(slot)?, version_id, &entry.body.stamp, &current,
-            ),
-            None => false,
-        };
-        if renamed_payload {
-            // Only an actual, inode-bound rename can replace the old ctime.
-            // Its exact before/after stamps are retained in process. Re-read
-            // every byte, then bind both the reopened path and original FD to
-            // that exact post-syscall stamp, rejecting replacement or mutation.
-            entry.body.validate_stamp(body_root, &path, &current)?;
-            // Reuse the budgeted descriptor and positional reads. Retaining a
-            // second replica proof here would bypass PayloadProofBudget.
-            let mut full = blake3::Hasher::new();
-            let mut buffer = vec![0; 64 * 1024];
-            let mut offset = 0;
-            while offset < version.logical_size {
-                let count = (version.logical_size - offset).min(buffer.len() as u64) as usize;
-                entry.body.file.read_exact_at(&mut buffer[..count], offset)?;
-                full.update(&buffer[..count]);
-                offset += count as u64;
+            let body_root = scope.container()?;
+            let path = scope.body_path(version)?;
+            let current = FileStamp::from_metadata(&entry.body.file.metadata()?);
+            let version_id = version.version_id.parse()?;
+            let renamed_payload = match renamed {
+                Some(renamed) => renamed.matches(
+                    &name_policy::SlotId::parse(slot)?, version_id, &entry.body.stamp, &current,
+                ),
+                None => false,
+            };
+            if renamed_payload {
+                // Only an actual, inode-bound rename can replace the old ctime.
+                // Its exact before/after stamps are retained in process. Re-read
+                // every byte, then bind both the reopened path and original FD to
+                // that exact post-syscall stamp, rejecting replacement or mutation.
+                entry.body.validate_stamp(body_root, &path, &current)?;
+                // Reuse the budgeted descriptor and positional reads. Retaining a
+                // second replica proof here would bypass PayloadProofBudget.
+                let mut full = blake3::Hasher::new();
+                let mut buffer = vec![0; 64 * 1024];
+                let mut offset = 0;
+                while offset < version.logical_size {
+                    let count = (version.logical_size - offset).min(buffer.len() as u64) as usize;
+                    entry.body.file.read_exact_at(&mut buffer[..count], offset)?;
+                    full.update(&buffer[..count]);
+                    offset += count as u64;
+                }
+                if ContentHash::from_digest(full.finalize()) != version.content_hash {
+                    return Err(Error::Payload(platform_io::payload::Error::Digest));
+                }
+                entry.body.validate_stamp(body_root, &path, &current)?;
+            } else {
+                entry.body.validate(body_root, &path)?;
             }
-            if ContentHash::from_digest(full.finalize()) != version.content_hash {
-                return Err(Error::Payload(platform_io::payload::Error::Digest));
+            for (path, held) in &entry.metadata {
+                held.validate(material.root()?, path)?;
             }
-            entry.body.validate_stamp(body_root, &path, &current)?;
-        } else {
-            entry.body.validate(body_root, &path)?;
-        }
-        for (path, held) in &entry.metadata {
-            held.validate(entry.disk.management_root()?, path)?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 

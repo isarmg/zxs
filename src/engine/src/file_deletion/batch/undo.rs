@@ -99,6 +99,7 @@ impl Engine {
             |engine, next, _| {
                 let batch = eligible(engine, deletion_operation_id)?;
                 let result = undo_record::outcome(deletion_operation_id, &batch.nodes)?;
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
                 for node in batch.nodes {
                     next.file_deletions.remove(&node.file_id).expect(
                         "invariant: every original batch deletion was admitted in this draft",

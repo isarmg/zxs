@@ -31,7 +31,8 @@ pub(crate) fn validate_state(state: &State) -> Result<()> {
     let mut entities = BTreeSet::new();
     let mut preparations = BTreeSet::new();
     for ((disk, _), prefix) in prefixes::collect(state)? {
-        if !entities.insert((disk, prefix.entity))
+        if std::iter::once(prefix.entity).chain(prefix.areas.entities())
+            .any(|entity| !entities.insert((disk, entity)))
             || !preparations.insert((disk, prefix.preparation))
         {
             return Err(Failure::ContainerShape.into());
@@ -212,41 +213,94 @@ impl ContainerPreparation {
         entities: &crate::container_storage::PreparedContainerEntities,
     ) -> Result<State> {
         entities.verify()?;
+        let mut updated = BTreeMap::new();
         for (file, disk) in self.additions.keys() {
             let entity = entities.entity(*file, *disk)?;
-            let replica = self.next.file_containers.get_mut(file)
-                .and_then(|record| record.replicas.get_mut(disk))
-                .ok_or(Failure::ContainerScope)?;
+            let record = match updated.entry(*file) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
+                    self.next.file_containers.get(file).ok_or(Failure::ContainerScope)?.clone(),
+                ),
+            };
+            let replica = record.replicas.get_mut(disk).ok_or(Failure::ContainerScope)?;
             if replica.entity != ContainerEntity::new(0, 0) {
                 return Err(Failure::ContainerScope.into());
             }
             replica.entity = entity;
         }
-        // One shared prefix occurrence is fed back into every referencing row.
-        // Its fixed-width shape was budgeted before any exclusive mkdir.
-        for record in self.next.file_containers.values_mut() {
+        // Only newly added replicas can contain unbound prefixes: the admitted
+        // previous rows were complete and planning preserved all existing replicas.
+        // Feed back every new occurrence without scanning or dirtying other FILE rows.
+        for record in updated.values_mut() {
             for (disk, replica) in &mut record.replicas {
                 for prefix in &mut replica.prefixes {
                     if prefix.entity == ContainerEntity::new(0, 0) {
-                        prefix.entity = entities.prefix_entity(*disk, prefix.source_disk)?;
+                        *prefix = entities.prefix_record(*disk, prefix.source_disk)?;
                     }
                 }
             }
+        }
+        for (file, record) in updated {
+            self.next.file_containers.insert(file, record);
         }
         validate_state(&self.next)?;
         Ok(self.next)
     }
 }
 
-/// Same published native row, held registered disk and root identity. Locators
-/// select a path only; the published entity admits the descriptor used for I/O.
-pub(crate) fn verify_replica(
+/// The complete published record and actual registered namespace issue this
+/// short-lived source together. It has no constructor outside this module.
+pub(crate) struct PublishedReplicaSource<'a> {
+    file: FileId,
+    record: &'a FileContainerRecord,
+    handle: &'a std::sync::Arc<crate::disk::DiskHandle>,
+    namespace: ReplicaNamespace<'a>,
+}
+pub(crate) enum ReplicaNamespace<'a> {
+    Owner(super::namespace::RegisteredNamespaceRoot<'a>),
+    Backup(super::namespace::PreparedBackupSourcePath<'a>),
+}
+impl<'a> PublishedReplicaSource<'a> {
+    pub(crate) fn into_parts(self) -> (
+        FileId, &'a FileContainerRecord, &'a std::sync::Arc<crate::disk::DiskHandle>,
+        ReplicaNamespace<'a>,
+    ) {
+        (self.file, self.record, self.handle, self.namespace)
+    }
+}
+
+/// Current/retained is the whole-container lifecycle, not version headness.
+/// The retained transaction has not been implemented for this physical format.
+pub(crate) fn require_current_container(state: &State, file: FileId) -> Result<()> {
+    if state.file_deletions.contains_key(&file.to_string()) {
+        return Err(Failure::WholeContainerLifecycleUnsupported.into());
+    }
+    Ok(())
+}
+
+/// Published read observation retains the exact prefix, area and container
+/// descriptors. It cannot observe an unpublished preparation or install it.
+pub(crate) fn observe_replica(
     config: &Config,
     resources: &DiskResources,
     state: &State,
     file: FileId,
     disk: &DiskConfig,
-) -> Result<crate::disk::DiskRoot> {
+) -> Result<crate::container_storage::ObservedContainerReplica> {
+    crate::container_storage::ObservedContainerReplica::observe(published_source(
+        config, resources, state, file, disk,
+    )?)
+}
+
+/// Aggregate readers share this same admission and their one descriptor budget;
+/// they retain the resulting physical occurrences rather than observing twice.
+pub(crate) fn published_source<'a>(
+    config: &'a Config,
+    resources: &'a DiskResources,
+    state: &'a State,
+    file: FileId,
+    disk: &DiskConfig,
+) -> Result<PublishedReplicaSource<'a>> {
     let id = disk.disk_id.parse::<DiskId>()?;
     let record = state.file_containers.get(&file).ok_or(Failure::ContainerShape)?;
     let replica = record.replicas.get(&id).ok_or(Failure::ContainerShape)?;
@@ -257,6 +311,7 @@ pub(crate) fn verify_replica(
     if super::namespace::file_target(state, file, record.history_tree_id)? != record.namespace {
         return Err(Failure::NamespaceSource.into());
     }
+    require_current_container(state, file)?;
     let source = super::namespace::registered_root(
         state, config, resources, record.namespace.repository, record.namespace.branch,
     )?;
@@ -264,20 +319,43 @@ pub(crate) fn verify_replica(
         return Err(Failure::NamespaceSource.into());
     }
     prefixes::require_geometry(config, record, id)?;
-    if id == record.owner_disk {
-        return crate::container_storage::open_published_container(
-            source.common()?, &record.namespace.name, replica.entity,
-        );
+    let namespace = if id == record.owner_disk {
+        ReplicaNamespace::Owner(source)
+    } else {
+        ReplicaNamespace::Backup(super::namespace::read_backup_source_path(
+            state, config, resources, record.namespace.repository, record.namespace.branch, id,
+        )?)
+    };
+    Ok(PublishedReplicaSource {
+        file, record, handle: resources.get(disk)?, namespace,
+    })
+}
+
+pub(crate) fn verify_replica(
+    config: &Config,
+    resources: &DiskResources,
+    state: &State,
+    file: FileId,
+    disk: &DiskConfig,
+) -> Result<()> {
+    observe_replica(config, resources, state, file, disk).map(|_| ())
+}
+
+/// The same permanent namespace registration, borrowed from the actual replay
+/// prefix. This does not accept a next snapshot as its own owner authority.
+pub(crate) fn read_container_owner<'a>(
+    config: &'a Config,
+    resources: &'a DiskResources,
+    previous: &'a State,
+    record: &FileContainerRecord,
+) -> Result<super::namespace::RegisteredNamespaceRoot<'a>> {
+    let source = super::namespace::registered_root(
+        previous, config, resources, record.namespace.repository, record.namespace.branch,
+    )?;
+    if source.disk().disk_id.parse::<DiskId>()? != record.owner_disk {
+        return Err(Failure::NamespaceSource.into());
     }
-    let backup = super::namespace::read_backup_source_path(
-        state, config, resources, record.namespace.repository, record.namespace.branch, id,
-    )?;
-    let parent = crate::container_storage::open_published_backup_parent(
-        &backup, &replica.prefixes,
-    )?;
-    crate::container_storage::open_published_container(
-        &parent, &record.namespace.name, replica.entity,
-    )
+    Ok(source)
 }
 
 /// A read-only replica namespace source. The actual registered owner receipt,

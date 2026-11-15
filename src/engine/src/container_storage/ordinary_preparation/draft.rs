@@ -13,7 +13,9 @@ pub(super) struct HeldDraft {
     stamp: FileStamp,
 }
 impl HeldDraft {
-    fn capture(container: &HeldContainer, payload: DraftPayload) -> Result<Self> {
+    pub(super) fn capture(
+        container: &ObservedContainerReplica, payload: DraftPayload,
+    ) -> Result<Self> {
         let path = draft_path(&container.held, payload);
         let mut file = container.held.open_leased_regular(&path)?;
         let stamp = FileStamp::from_metadata(&file.metadata()?);
@@ -25,7 +27,7 @@ impl HeldDraft {
         Ok(held)
     }
 
-    pub(super) fn validate(&self, container: &HeldContainer) -> Result<()> {
+    pub(super) fn validate(&self, container: &ObservedContainerReplica) -> Result<()> {
         if container.record.working.draft().map(|(_, payload)| *payload) != Some(self.payload) {
             return Err(Failure::ContainerScope.into());
         }
@@ -39,7 +41,7 @@ impl HeldDraft {
         Ok(())
     }
 
-    pub(super) fn open(&self, container: &HeldContainer) -> Result<ReadFile> {
+    pub(super) fn open(&self, container: &ObservedContainerReplica) -> Result<ReadFile> {
         self.validate(container)?;
         let mut file = ReadFile::from(self.file.try_clone()?);
         file.seek(SeekFrom::Start(0))?;
@@ -55,7 +57,7 @@ fn draft_path(container: &DiskRoot, payload: DraftPayload) -> PathBuf {
 /// The only writer consumes the actual live plan's sealed payload input after
 /// metadata and capacity preflight. No idempotency-by-existing-bytes shortcut.
 pub(super) fn populate(
-    held: &mut BTreeMap<(FileId, DiskId), HeldContainer>,
+    held: &mut BTreeMap<(FileId, DiskId), ObservedContainerReplica>,
     input: Option<&mut crate::engine::file_draft::DraftPublicationInput>,
     maximum: u64,
 ) -> Result<()> {

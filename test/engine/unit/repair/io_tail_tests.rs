@@ -277,7 +277,14 @@ fn source_discovery_read_and_close_stay_owned_until_real_syscall_returns() {
             }
             let work = threads.spawn(move || {
                 let evidence = &candidate.versions[0];
-                engine.pending_payload_source(&evidence.version, &evidence.placement)
+                let original = crate::publication_evidence::verified_recovery_snapshot_at(
+                    &engine.disk_resources, &engine.members(), &candidate.snapshot_hash,
+                )?;
+                let sources =
+                    crate::container_storage::PreparedContainerEntities::observe_candidate(
+                        &engine.planning_context(), &candidate, &original,
+                    )?;
+                engine.pending_payload_source(&evidence.version, &evidence.placement, &sources)
             });
             gate.wait();
             drop(binding.begin_quiesce().unwrap().unwrap());

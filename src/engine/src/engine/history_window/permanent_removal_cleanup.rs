@@ -271,8 +271,12 @@ fn inspect_replica(
         &mut |bytes| budget.read(bytes),
     )?;
     let handle = engine.disk_resources.get(disk)?;
-    let root = &handle.root;
-    let directory = crate::disk::version_dir(disk, &version.history_tree_id, &version.version_id);
+    let scope = crate::engine::fresh_layout::containers::observe_replica(
+        &engine.config, &engine.disk_resources, &engine.state, version.file_id.parse()?, disk,
+    )?;
+    let material = crate::disk::VersionMaterial::current(&scope, version)?;
+    let root = material.root()?;
+    let directory = material.directory()?;
     if root
         .open_optional_read_regular(&directory.join("purged.json"))?
         .is_none()
@@ -306,24 +310,20 @@ fn inspect_replica(
         disk.metadata_member
             .then_some(engine.metadata_integrity.as_ref()),
     );
-    crate::journal::verify_tombstone_content_at(
-        root,
-        &directory,
-        version,
+    crate::journal::verify_source_tombstone(
+        &material,
         &tombstone,
         observe,
         Some(&metadata),
     )?;
-    Ok(
-        match crate::container_storage::content_location_at(root, &directory, version, observe)? {
-            crate::container_storage::ContentLocation::Present(_) => {
-                RemovalReplicaCleanupState::PayloadPresent
-            }
-            crate::container_storage::ContentLocation::Absent(_) => {
-                RemovalReplicaCleanupState::VerifiedAbsent
-            }
-        },
-    )
+    let present = scope.container()?.open_optional_read_regular(&scope.body_path(version)?)?
+        .is_some();
+    material.verify()?;
+    Ok(if present {
+        RemovalReplicaCleanupState::PayloadPresent
+    } else {
+        RemovalReplicaCleanupState::VerifiedAbsent
+    })
 }
 
 #[cfg(test)]

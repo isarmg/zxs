@@ -14,9 +14,17 @@ fn operation() -> OperationId {
     OperationId::from_random([3; 16])
 }
 fn root(index: u8, source_chain: Vec<crate::DiskRegistrationIdentity>) -> RootBinding {
-    let local = |offset| LocalDirectoryBinding {
-        directory_id: DirectoryId::from_random([index * 4 + offset; 16]),
-        entity: LocalEntityIdentity::new(u64::from(index), u64::from(offset) + 10),
+    let local = |offset| {
+        let mut bytes = [index * 4 + offset; 16];
+        if offset >= 3 {
+            bytes[0] = 240;
+            bytes[1] = index;
+            bytes[2] = offset;
+        }
+        LocalDirectoryBinding {
+            directory_id: DirectoryId::from_random(bytes),
+            entity: LocalEntityIdentity::new(u64::from(index), u64::from(offset) + 10),
+        }
     };
     RootBinding {
         layout: StorageLayout::UnifiedWorkingTreeV1,
@@ -33,6 +41,9 @@ fn root(index: u8, source_chain: Vec<crate::DiskRegistrationIdentity>) -> RootBi
             common_data: local(0),
             deleted_data: local(1),
             zxs_data: local(2),
+            zxs_lifecycles: ZxsLifecycleBindings {
+                common_data: local(3), deleted_data: local(4),
+            },
         },
         operation_id: operation(),
         generation: Generation::new(1),

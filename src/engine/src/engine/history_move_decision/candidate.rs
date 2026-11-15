@@ -324,6 +324,7 @@ impl Engine {
             self.selected_move_inputs(projection, recovery, cancellation)?;
         let frozen = FrozenCandidate::capture(self, projection, &native, &choice, cancellation)?;
         frozen.preflight(self, &materials, &native, &scopes, cancellation)?;
+        crate::engine::fresh_layout::require_whole_container_lifecycle()?;
         let prepare = || -> Result<()> {
             // Every exact input manifest is synchronized before any ordinary
             // candidate object can exist. Partial installs remain unjournaled.

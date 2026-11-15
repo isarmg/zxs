@@ -43,8 +43,9 @@ pub(crate) fn histories(root: &Path) -> PathBuf {
     root.join(COMMON_DATA_ROOT.as_path())
 }
 
-/// Descriptor/checksum/publication metadata is never a user namespace entry.
-/// Every version_dir consumer has this one address; no old address is probed.
+/// The legacy raw locator does not supply a source/lifecycle admission.
+/// Ordinary live/cold version material uses `source_version` below an admitted
+/// Current lifecycle FD. Private native packages retain their own codec.
 pub(crate) fn version_metadata(root: &Path) -> PathBuf {
     root.join(ZXS_DATA_ROOT.as_path())
 }
@@ -52,6 +53,42 @@ pub(crate) fn version_metadata(root: &Path) -> PathBuf {
 pub(crate) static VERSIONS: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("versions").expect("invariant: versions uses one canonical entry")
 });
+
+pub(crate) static VERSION_DESCRIPTOR: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("version.json").expect("invariant: version descriptor is one entry")
+});
+
+pub(crate) static VERSION_CHECKSUMS: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("checksums.bin").expect("invariant: checksum manifest is one entry")
+});
+
+pub(crate) static VERSION_PAYLOAD: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("payload.json").expect("invariant: payload descriptor is one entry")
+});
+
+pub(crate) static VERSION_PREPARATIONS: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new(".zxs-prepared").expect("invariant: version preparation is one entry")
+});
+
+pub(crate) static PREPARED_CONTENT: LazyLock<EntryName> = LazyLock::new(|| {
+    EntryName::new("content").expect("invariant: prepared content is one entry")
+});
+
+/// Relative to an already admitted source lifecycle root, never a disk root.
+pub(crate) fn source_version(
+    history: storage_contract::HistoryTreeId,
+    version: storage_contract::VersionId,
+) -> PathBuf {
+    PathBuf::from(history.to_string()).join(VERSIONS.as_path()).join(version.to_string())
+}
+
+pub(crate) fn source_version_preparation(
+    history: storage_contract::HistoryTreeId,
+    operation: storage_contract::OperationId,
+) -> PathBuf {
+    PathBuf::from(history.to_string())
+        .join(VERSION_PREPARATIONS.as_path()).join(operation.to_string())
+}
 
 pub(crate) static VERSION_PUBLICATION_PROOF: LazyLock<EntryName> = LazyLock::new(|| {
     EntryName::new("publication-proof.json")

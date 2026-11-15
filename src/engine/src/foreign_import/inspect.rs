@@ -562,55 +562,18 @@ fn availability_at(
     remaining: &mut u64,
 ) -> Result<ForeignVersionAvailability> {
     use ForeignVersionAvailability::*;
+    let _ = (evidence, version, remaining);
     match disposition {
-        ContentState::Purged => return Ok(RecordedPurged),
-        ContentState::Migrated => return Ok(RecordedMigrated),
-        ContentState::Retired => {
-            return Err(Error::new(
-                storage_contract::ErrorCode::HistoryPackageInvalid,
-                "retired-node history requires its full native retirement receipts",
-            ));
-        }
-        ContentState::Available => {}
+        ContentState::Purged => Ok(RecordedPurged),
+        ContentState::Migrated => Ok(RecordedMigrated),
+        ContentState::Retired => Err(Error::new(
+            storage_contract::ErrorCode::HistoryPackageInvalid,
+            "retired-node history requires its full native retirement receipts",
+        )),
+        // A foreign disk seal/history receipt is not the local Current source
+        // occurrence. Keep the graph inspection, but do not guess proof paths.
+        ContentState::Available => Err(crate::engine::FreshLayoutError::VersionSource.into()),
     }
-    let directory = version_dir(
-        &evidence.disk,
-        &version.history_tree_id,
-        &version.version_id,
-    );
-    if !held_directory_present(evidence.root, &directory)? {
-        return Ok(TemporarilyUnavailable);
-    }
-    let local: FileVersion = decode_strict(&evidence.read(&directory.join("version.json"))?)?;
-    if local != *version {
-        return Err(invalid("local version differs from the bound history"));
-    }
-    verify_local_publication_at(
-        evidence.root,
-        &directory,
-        version,
-        &mut |n| evidence.budget.observe(n),
-        None,
-    )?;
-    let checksums = read_checksum_manifest_at(evidence.root, &directory, version, &mut |count| {
-        evidence.budget.observe(count)
-    })?;
-    let path =
-        crate::container_storage::content_path_at(evidence.root, &directory, version, &mut |n| {
-            evidence.budget.observe(n)
-        })?;
-    if evidence.root.optional_metadata(&path)?.is_none() {
-        return Ok(TemporarilyUnavailable);
-    }
-    *remaining = remaining.checked_sub(version.logical_size).ok_or_else(|| {
-        Error::new(
-            ErrorCode::ResourceLimit,
-            "foreign body verification budget exceeded",
-        )
-    })?;
-    let file = evidence.root.open_read_regular(&path)?;
-    verify_open_payload_observed(file, checksums, version, &mut |_| Ok(()))?;
-    Ok(VerifiedLocal)
 }
 
 fn held_directory_present(root: &DiskRoot, path: &Path) -> Result<bool> {

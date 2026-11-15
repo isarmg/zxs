@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use storage_contract::{DiskId, Generation, OperationId};
 use storage_contract::working_tree::{
     DirectoryId, DiskRegistrationIdentity, LocalDirectoryBinding, RootBinding, RootId,
-    StorageLayout, ThreeRootBinding, WorkingTreeCatalog,
+    StorageLayout, ThreeRootBinding, WorkingTreeCatalog, ZxsLifecycleBindings,
 };
 
 pub(crate) mod containers;
@@ -31,8 +31,14 @@ pub enum FreshLayoutError {
     RootIdentity,
     #[error("the version publication proof is outside its retained disk")]
     PublicationLocation,
+    #[error("source-scoped version material requires an admitted container lifecycle source")]
+    VersionSource,
+    #[error("source-scoped damaged-version repair requires a held quarantine transaction")]
+    SourceQuarantine,
     #[error("this namespace has no published genesis common-root registration")]
     NamespaceUnmapped,
+    #[error("whole-container lifecycle transactions are not supported by this physical layout")]
+    WholeContainerLifecycleUnsupported,
     #[error("the selected namespace does not match its exact root creation source")]
     NamespaceSource,
     #[error("the permanent namespace root creation record is invalid: {0}")]
@@ -43,6 +49,8 @@ pub enum FreshLayoutError {
     ContainerScope,
     #[error("the physical container differs from its published entity")]
     ContainerIdentity,
+    #[error("the source slice's retained area changed: {0}")]
+    ContainerArea(#[source] std::io::Error),
     #[error("completed physical metadata differs from its exact budget shape")]
     ContainerBudget,
     #[error("the verified draft body changed before publication")]
@@ -67,14 +75,22 @@ impl FreshLayoutError {
             }
             Self::Directory(_) => ErrorCode::IoError,
             Self::PublicationLocation => ErrorCode::PublicationInvalid,
+            Self::VersionSource | Self::SourceQuarantine => ErrorCode::UnsupportedOperation,
             Self::ContainerShape => ErrorCode::StateInvalid,
             Self::NamespaceSource | Self::NamespaceRecord(_) => ErrorCode::PublicationInvalid,
-            Self::NamespaceUnmapped => ErrorCode::UnsupportedOperation,
+            Self::NamespaceUnmapped | Self::WholeContainerLifecycleUnsupported => {
+                ErrorCode::UnsupportedOperation
+            }
             Self::ContainerScope => ErrorCode::PublicationInvalid,
-            Self::ContainerIdentity => ErrorCode::ContainerLayoutInvalid,
+            Self::ContainerIdentity | Self::ContainerArea(_) => ErrorCode::ContainerLayoutInvalid,
             Self::ContainerBudget => ErrorCode::ResourceLimit,
         }
     }
+}
+
+/// New lifecycle writes have no whole-container physical transaction yet.
+pub(crate) fn require_whole_container_lifecycle() -> Result<()> {
+    Err(FreshLayoutError::WholeContainerLifecycleUnsupported.into())
 }
 
 pub(super) struct CreatedRoots {
@@ -93,7 +109,8 @@ impl CreatedRoots {
             Ok((
                 disk.disk_id.parse::<DiskId>()?,
                 RootId::generate()?,
-                [DirectoryId::generate()?, DirectoryId::generate()?, DirectoryId::generate()?],
+                [DirectoryId::generate()?, DirectoryId::generate()?, DirectoryId::generate()?,
+                    DirectoryId::generate()?, DirectoryId::generate()?],
             ))
         }).collect::<Result<Vec<_>>>()?;
         let mut roots = BTreeMap::new();
@@ -123,6 +140,32 @@ impl CreatedRoots {
                 };
                 created.push(LocalDirectoryBinding { directory_id, entity });
             }
+            let management = held.private_entry_matching(
+                &layout::ZXS_DATA_ROOT, file_identity(created[2].entity),
+            ).map_err(directory_error)?;
+            let lifecycle = [&*layout::COMMON_DATA_ROOT, &*layout::DELETED_DATA_ROOT]
+                .into_iter().zip(directory_ids.into_iter().skip(3))
+                .map(|(name, directory_id)| {
+                    let (directory, identity) = match management.create_private_entry(name) {
+                        DirectoryCreateOutcome::Created { directory, identity, durability } => {
+                            durability.map_err(directory_error)?;
+                            (directory, identity)
+                        }
+                        DirectoryCreateOutcome::Rejected(error)
+                        | DirectoryCreateOutcome::Uncertain { source: error, .. } => {
+                            return Err(directory_error(error));
+                        }
+                    };
+                    if directory.directory_identity(directory.path())? != identity {
+                        return Err(FreshLayoutError::RootIdentity.into());
+                    }
+                    management.sync_private_entry_matching(name, identity)
+                        .map_err(directory_error)?;
+                    Ok(LocalDirectoryBinding { directory_id, entity: local_entity(identity) })
+                }).collect::<Result<Vec<_>>>()?;
+            management.sync_dir(management.path())?;
+            held.sync_dir(held.path())?;
+            let mut lifecycle = lifecycle.into_iter();
             let mut created = created.into_iter();
             let binding = RootBinding {
                 layout: StorageLayout::UnifiedWorkingTreeV1,
@@ -134,6 +177,10 @@ impl CreatedRoots {
                     common_data: created.next().expect("invariant: three created roots"),
                     deleted_data: created.next().expect("invariant: three created roots"),
                     zxs_data: created.next().expect("invariant: three created roots"),
+                    zxs_lifecycles: ZxsLifecycleBindings {
+                        common_data: lifecycle.next().expect("invariant: two created partitions"),
+                        deleted_data: lifecycle.next().expect("invariant: two created partitions"),
+                    },
                 },
                 operation_id: operation,
                 generation: Generation::new(1),
@@ -259,6 +306,16 @@ fn verify_bound_root(config: &Config, disk: &DiskConfig, root: &DiskRoot) -> Res
         if held.directory_identity(held.path())? != file_identity(directory.entity) {
             return Err(FreshLayoutError::RootIdentity.into());
         }
+    }
+    let management = root.private_entry_matching(
+        &layout::ZXS_DATA_ROOT, file_identity(binding.roots.zxs_data.entity),
+    ).map_err(directory_error)?;
+    for (name, directory) in [
+        (&*layout::COMMON_DATA_ROOT, &binding.roots.zxs_lifecycles.common_data),
+        (&*layout::DELETED_DATA_ROOT, &binding.roots.zxs_lifecycles.deleted_data),
+    ] {
+        management.private_entry_matching(name, file_identity(directory.entity))
+            .map_err(directory_error)?;
     }
     Ok(())
 }

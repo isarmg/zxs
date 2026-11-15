@@ -14,6 +14,7 @@ use std::{path::Path, sync::Arc};
 
 struct CapturedTarget<'a> {
     root: &'a DiskRoot,
+    scoped: bool,
     history: &'a Path,
     container: &'a Path,
     held: DiskRoot,
@@ -32,6 +33,7 @@ impl<'a> CapturedTarget<'a> {
         let inode = held.directory_identity(held.path())?;
         Ok(Self {
             root,
+            scoped: false,
             history: history.0,
             container,
             held,
@@ -55,9 +57,11 @@ impl<'a> CapturedTarget<'a> {
         }) {
             return Err(crate::engine::fresh_layout::FreshLayoutError::ContainerIdentity.into());
         }
-        let held = root.private_child_matching(container.path(), inode)?;
+        let held = container.private_child_matching(container.path(), inode)?;
         verify_entity_contents(&held, file, view, false, Some(&record.namespace.name))?;
-        Ok(Self { root, history: history.0, container: container.path(), held, inode })
+        Ok(Self {
+            root, scoped: true, history: history.0, container: container.path(), held, inode,
+        })
     }
 
     fn prepare(
@@ -67,22 +71,27 @@ impl<'a> CapturedTarget<'a> {
     ) -> Result<PreparedFile> {
         let Self {
             root,
+            scoped,
             history,
             container,
-            held: _held,
+            held,
             inode,
         } = self;
         let file = &database.file;
         let history_id = &database.history;
-        let install = PreparedInstall::capture(
-            root,
-            history,
-            (container, inode),
-            (Scope::file(history_id, file)?, admission),
-            Arc::clone(&database.bytes),
-            MAX_BYTES,
-            |bytes| verify_scope(bytes, file, history_id),
-        )?;
+        let install = if scoped {
+            PreparedInstall::capture_held(
+                root, history, &held, (Scope::file(history_id, file)?, admission),
+                Arc::clone(&database.bytes), MAX_BYTES,
+                |bytes| verify_scope(bytes, file, history_id),
+            )?
+        } else {
+            PreparedInstall::capture(
+                root, history, (container, inode),
+                (Scope::file(history_id, file)?, admission), Arc::clone(&database.bytes),
+                MAX_BYTES, |bytes| verify_scope(bytes, file, history_id),
+            )?
+        };
         // The original descriptor remains alive through matching capture.
         Ok(PreparedFile { install, inode })
     }

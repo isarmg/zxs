@@ -130,6 +130,16 @@ fn apply_create(
     input: &DeleteInput,
     request: Creation<'_>,
 ) -> Result<Value> {
+    prepare_create(previous, next.sequence, current, input, request)?.apply(next)
+}
+
+fn prepare_create(
+    previous: &State,
+    sequence: u64,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    input: &DeleteInput,
+    request: Creation<'_>,
+) -> Result<PreparedCreation> {
     let Creation {
         principal,
         operation,
@@ -192,7 +202,7 @@ fn apply_create(
             parent_node_ids: capture.parent_node_ids().to_vec(),
             operation_id: operation,
             author: principal.into(),
-            sequence: next.sequence,
+            sequence,
             created_at: timestamp,
         };
         members.insert(
@@ -216,7 +226,7 @@ fn apply_create(
         source_tree_id: captured.tree,
         operation_id: operation,
         author: principal.into(),
-        sequence: next.sequence,
+        sequence,
         created_at: timestamp,
         files: members,
     };
@@ -224,15 +234,28 @@ fn apply_create(
         "input": input, "directory_deletion": node, "deletion_nodes": nodes
     });
     receipt_budget(&result, super::batch::MAX_RESULT_BYTES - 1024)?;
-    next.directory_git_repositories
-        .get_mut(&node.owner_directory_id)
-        .expect("invariant: capture admitted the initialized owner")
-        .deletions
-        .insert(node.directory_id.clone(), node);
-    for node in nodes {
-        next.file_deletions.insert(node.file_id.clone(), node);
+    Ok(PreparedCreation { node, nodes, result })
+}
+
+struct PreparedCreation {
+    node: DirectoryDeletionNode,
+    nodes: Vec<FileDeletionNode>,
+    result: Value,
+}
+
+impl PreparedCreation {
+    fn apply(self, next: &mut State) -> Result<Value> {
+        let Self { node, nodes, result } = self;
+        next.directory_git_repositories
+            .get_mut(&node.owner_directory_id)
+            .expect("invariant: capture admitted the initialized owner")
+            .deletions
+            .insert(node.directory_id.clone(), node);
+        for node in nodes {
+            next.file_deletions.insert(node.file_id.clone(), node);
+        }
+        Ok(result)
     }
-    Ok(result)
 }
 
 fn apply_undo(
@@ -241,6 +264,14 @@ fn apply_undo(
     current: Option<&crate::engine::CurrentNamespaces>,
     input: &UndoInput,
 ) -> Result<Value> {
+    prepare_undo(previous, current, input)?.apply(next)
+}
+
+fn prepare_undo(
+    previous: &State,
+    current: Option<&crate::engine::CurrentNamespaces>,
+    input: &UndoInput,
+) -> Result<PreparedUndo> {
     let node = previous
         .directory_git_repositories
         .get(&input.owner_directory_id)
@@ -281,25 +312,37 @@ fn apply_undo(
             ));
         }
     }
-    for deletion in &admitted.files {
-        if next.file_deletions.remove(&deletion.file_id).as_ref() != Some(deletion) {
-            return Err(invalid());
+    Ok(PreparedUndo { admitted })
+}
+
+struct PreparedUndo {
+    admitted: Admitted,
+}
+
+impl PreparedUndo {
+    fn apply(self, next: &mut State) -> Result<Value> {
+        let admitted = self.admitted;
+        let node = &admitted.node;
+        for deletion in &admitted.files {
+            if next.file_deletions.remove(&deletion.file_id).as_ref() != Some(deletion) {
+                return Err(invalid());
+            }
         }
+        let removed = next
+            .directory_git_repositories
+            .get_mut(&node.owner_directory_id)
+            .expect("invariant: the exact deletion owner was admitted")
+            .deletions
+            .remove(&node.directory_id)
+            .ok_or_else(invalid)?;
+        let result = json!({
+            "restored_directory_id": node.directory_id,
+            "removed_directory_deletion": removed,
+            "removed_deletion_nodes": admitted.files,
+        });
+        receipt_budget(&result, super::batch::MAX_RESULT_BYTES - 1024)?;
+        Ok(result)
     }
-    let removed = next
-        .directory_git_repositories
-        .get_mut(&node.owner_directory_id)
-        .expect("invariant: the exact deletion owner was admitted")
-        .deletions
-        .remove(&node.directory_id)
-        .ok_or_else(invalid)?;
-    let result = json!({
-        "restored_directory_id": node.directory_id,
-        "removed_directory_deletion": removed,
-        "removed_deletion_nodes": admitted.files,
-    });
-    receipt_budget(&result, super::batch::MAX_RESULT_BYTES - 1024)?;
-    Ok(result)
 }
 
 /// A member cannot partially escape a still-active directory restoration unit.
@@ -351,9 +394,9 @@ impl Engine {
             operation,
             json!(&input),
             |engine, next, _| {
-                apply_create(
+                let prepared = prepare_create(
                     engine.state(),
-                    next,
+                    next.sequence,
                     engine.admitted_current_namespaces()?,
                     &input,
                     Creation {
@@ -362,7 +405,9 @@ impl Engine {
                         timestamp: crate::business::now()?,
                         maximum: engine.config().max_entries,
                     },
-                )
+                )?;
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
+                prepared.apply(next)
             },
         )
     }
@@ -391,12 +436,13 @@ impl Engine {
             request.operation_id,
             json!(&input),
             |engine, next, _| {
-                apply_undo(
+                let prepared = prepare_undo(
                     engine.state(),
-                    next,
                     engine.admitted_current_namespaces()?,
                     &input,
-                )
+                )?;
+                crate::engine::fresh_layout::require_whole_container_lifecycle()?;
+                prepared.apply(next)
             },
         )
     }

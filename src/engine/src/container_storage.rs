@@ -7,7 +7,7 @@ pub(crate) mod backup_original_objects;
 mod changes;
 mod ordinary_preparation;
 pub(crate) use ordinary_preparation::{
-    PreparedContainerEntities, open_published_backup_parent, open_published_container,
+    ObservedContainerReplica, PreparedContainerEntities, open_published_container,
     ordinary_body_path,
 };
 mod version_names;
@@ -1051,6 +1051,7 @@ struct PreparedNameCache {
     file: fs::File,
 }
 struct PreparedName {
+    ordinary_scope: Option<Arc<ObservedContainerReplica>>,
     container: Option<Arc<DiskRoot>>,
     published_path: Option<PathBuf>,
     disk: Arc<DiskHandle>,
@@ -1087,6 +1088,13 @@ impl AppliedPayloadRenames {
 }
 
 impl PreparedName {
+    fn management(&self) -> Result<&DiskRoot> {
+        match &self.ordinary_scope {
+            Some(scope) => scope.current_zxs(),
+            None => self.disk.management_root(),
+        }
+    }
+
     fn root(&self) -> Result<&DiskRoot> {
         match &self.container {
             Some(_) => Ok(&self.disk.root),
@@ -1321,7 +1329,7 @@ impl PreparedNames {
                 &stable
             };
             if ordinary {
-                item.disk.management_root()?.sync_dir(parent)?;
+                item.management()?.sync_dir(parent)?;
             } else {
                 root.sync_dir(parent)?;
             }
@@ -1340,11 +1348,14 @@ impl PreparedNames {
             cache_root.write_atomic(&cache_path.join("container.json"), &bytes, true)?;
             cache_root.sync_dir(cache_path)?;
             if let Some(database) = item.database {
-                match &item.container {
-                    Some(container) => database.apply_container(
-                        item.disk.management_root()?, container, observe,
+                match (&item.container, &item.ordinary_scope) {
+                    (Some(container), Some(scope)) => database.apply_container(
+                        scope.current_zxs()?, container, observe,
                     )?,
-                    None => database.apply(root, &named, observe)?,
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(crate::engine::FreshLayoutError::ContainerScope.into());
+                    }
+                    (None, None) => database.apply(root, &named, observe)?,
                 }
             }
             if let Some(expected) = &item.finish_version_names {
@@ -1655,6 +1666,9 @@ fn prepare_names_inner(
                 None => resources.get(disk)?,
             };
             crate::engine::fresh_layout::verify_root(config, disk, &held.root)?;
+            let ordinary_scope = containers.as_ref().map(|scope| {
+                scope.retain_scope(file.parse()?, held.seal.disk_id.parse()?)
+            }).transpose()?;
             let container = containers.as_ref().map(|scope| {
                 scope.share_target(file.parse()?, held.seal.disk_id.parse()?)
             }).transpose()?;
@@ -1662,9 +1676,10 @@ fn prepare_names_inner(
             if !skip_shared {
                 database_scopes.insert((slot.clone(), history_id.clone(), file.clone()));
             }
-            let history = if container.is_some() {
-                let history = held.management_root()?.path().join(&history_id);
-                held.management_root()?.private_dir(&history)?;
+            let history = if let Some(scope) = &ordinary_scope {
+                let management = scope.current_zxs()?;
+                let history = management.path().join(&history_id);
+                management.private_dir(&history)?;
                 history
             } else {
                 crate::persist::layout::histories(&disk.root).join(&history_id)
@@ -1763,10 +1778,14 @@ fn prepare_names_inner(
             let database = if skip_shared {
                 None
             } else {
+                let database_root = match &ordinary_scope {
+                    Some(scope) => scope.current_zxs()?,
+                    None => root,
+                };
                 let database = match &prepared_copies {
                     Some(copies) => match &container {
                         Some(container) => copies.prepare_container(
-                            root, (&history, &history_id), container, admission,
+                            database_root, (&history, &history_id), container, admission,
                         )?,
                         None => copies.prepare(
                             root, (&history, &history_id), &current, admission,
@@ -1776,7 +1795,8 @@ fn prepare_names_inner(
                         let (copies, database) = match &container {
                             Some(container) => {
                                 file_database::install::PreparedFileCopies::capture_container(
-                                    root, (&history, &history_id), container, &file, view, admission,
+                                    database_root, (&history, &history_id),
+                                    container, &file, view, admission,
                                 )?
                             }
                             None => file_database::install::PreparedFileCopies::capture(
@@ -1801,7 +1821,12 @@ fn prepare_names_inner(
                         "file databases exceed the preparation byte budget",
                     ));
                 }
-                reservations.add(held, &history, database.reservation())?;
+                match &ordinary_scope {
+                    Some(scope) => {
+                        reservations.add_container(scope, &history, database.reservation())?;
+                    }
+                    None => reservations.add(held, &history, database.reservation())?,
+                }
                 Some(database)
             };
             let staged = match &mut cache {
@@ -1829,6 +1854,7 @@ fn prepare_names_inner(
                 scope.published_path(file.parse()?, held.seal.disk_id.parse()?)
             }).transpose()?;
             staged.items.push(PreparedName {
+                ordinary_scope,
                 container,
                 published_path,
                 disk: Arc::clone(held),

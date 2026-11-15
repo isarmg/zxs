@@ -102,10 +102,18 @@ pub struct LocalDirectoryBinding {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
+pub struct ZxsLifecycleBindings {
+    pub common_data: LocalDirectoryBinding,
+    pub deleted_data: LocalDirectoryBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub struct ThreeRootBinding {
     pub common_data: LocalDirectoryBinding,
     pub deleted_data: LocalDirectoryBinding,
     pub zxs_data: LocalDirectoryBinding,
+    pub zxs_lifecycles: ZxsLifecycleBindings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

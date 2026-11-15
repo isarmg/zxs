@@ -41,7 +41,7 @@ impl ReservedFileVersion {
             .map_err(|source| Error::SnapshotSource(Box::new(
                 SnapshotSourceError::Encoding(source),
             )))?;
-        if !std::ptr::eq(self.source.as_ref(), context.state)
+        if !std::ptr::eq(self.source.as_ref(), context.state.as_ref())
             || request.operation_id != self.plan.file_operation
             || digest != self.plan.file_request
             || workspace.branch_id != branch.to_string()
@@ -73,7 +73,7 @@ impl ReservedFileVersion {
         size: u64,
         hash: ContentHash,
     ) -> Result<()> {
-        if !std::ptr::eq(self.source.as_ref(), context.state)
+        if !std::ptr::eq(self.source.as_ref(), context.state.as_ref())
             || !matches!(self.consumption, Consumption::Pending)
             || self.source.versions.contains_key(&self.plan.edit.material.version_id.to_string())
             || history != self.plan.file_history.to_string()
