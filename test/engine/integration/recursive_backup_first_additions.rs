@@ -11,7 +11,8 @@ use std::{
 };
 use storage_contract::file_container_tags::{Context, ReadRequest, ReplaceCommand, Tag, TagSet};
 use storage_engine::{
-    BackupConfigurationRequest, CommitRequest, CommitState, Config, DiskCatalogRole, DiskConfig,
+    BackupConfigurationRequest, BranchKind, BranchName, BranchState, CommitRequest, CommitState,
+    Config, DiskCatalogRole, DiskConfig,
     DiskDatabaseReadScope, DiskRegistrationIdentity, Engine, Entry, ErrorCode, FileVersion,
     ObjectDatabaseScope, OperationId, OperationResult, PendingMemberDirectory, ProtectionAtPublish,
     Repository, RepositoryName, ValidatedConfig, inspect_disk_database_material,
@@ -22,6 +23,7 @@ const PATH: &str = "docs/report";
 const FIRST: &[u8] = b"first body before a backup exists";
 const SECOND: &[u8] = b"second body after the first backup is published";
 const TAG: &str = "first-backup-history";
+const BRANCH: &str = "backup version chain";
 
 fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Entry {
     let workspace = engine
@@ -182,8 +184,23 @@ fn assert_copies(engine: &Engine, versions: &[FileVersion], copies: usize) {
     }
 }
 
-fn assert_cold_state(engine: &Engine, repository: &Repository, versions: &[FileVersion]) {
+fn assert_cold_state(
+    engine: &Engine,
+    repository: &Repository,
+    versions: &[FileVersion],
+    branch_id: &str,
+) {
     assert!(!engine.is_read_only());
+    let file = versions[0].file_id.as_str();
+    assert_eq!(engine.state().file_selections[file], branch_id);
+    let branch = &engine.state().branches[branch_id];
+    assert_eq!(branch.branch_kind, BranchKind::File);
+    assert_eq!(branch.file_id.as_deref(), Some(file));
+    assert_eq!(branch.history_tree_id, versions[0].history_tree_id);
+    assert_eq!(branch.name, BRANCH);
+    assert_eq!(branch.state, BranchState::Active);
+    assert!(!branch.pending_file_versions.contains_key(file));
+    assert_eq!(engine.file_branch_head(branch_id).unwrap(), versions[1].version_id);
     let history = engine.file_history(&versions[0].file_id).unwrap();
     assert_eq!(
         history
@@ -269,6 +286,7 @@ fn inspect_offline_tier(
     engine: Engine,
     system: &Path,
     versions: &[FileVersion],
+    branch_id: &str,
     target: usize,
 ) -> Engine {
     let config = engine.config().clone();
@@ -359,7 +377,20 @@ fn inspect_offline_tier(
         .unwrap();
     let body: json_codec::Value = json_codec::from_str(file.body_json()).unwrap();
     assert_eq!(body["container_tags"]["tags"], json_codec::json!([TAG]));
-    assert!(local.records().iter().any(|row| row.kind() == "branch"));
+    assert_eq!(body["selected_branch_id"], json_codec::json!(branch_id));
+    let branch = local
+        .records()
+        .iter()
+        .find(|row| row.kind() == "branch" && row.id() == branch_id)
+        .unwrap();
+    let body: json_codec::Value = json_codec::from_str(branch.body_json()).unwrap();
+    assert_eq!(body["branch_id"], json_codec::json!(branch_id));
+    assert_eq!(body["file_id"], json_codec::json!(versions[0].file_id));
+    assert_eq!(body["history_tree_id"], json_codec::json!(versions[0].history_tree_id));
+    assert_eq!(body["name"], json_codec::json!(BRANCH));
+    assert_eq!(body["state"], json_codec::json!("active"));
+    assert_eq!(body["head_node_id"], json_codec::json!(versions[1].version_id));
+    assert_eq!(body["pending_version_id"], json_codec::Value::Null);
     assert_eq!(files(&disk.root), before);
     for (original, saved) in parked.into_iter().rev() {
         assert_eq!(
@@ -404,6 +435,31 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
         )
         .unwrap();
     let first = save(&mut engine, &repository, FIRST);
+    // A directory main branch is not a FILE branch. Create and select one
+    // through the public mutation path before either backup is added.
+    let created = engine
+        .create_file_branch(
+            &first.file_id,
+            &first.version_id,
+            &BranchName::parse(BRANCH).unwrap(),
+            "admin",
+            operation(),
+        )
+        .unwrap();
+    assert_eq!(created.commit_state, CommitState::Published);
+    let branch_id = created.branch_id.unwrap();
+    let selected = engine
+        .select_file_branch_at(
+            &repository.repository_id,
+            &name_policy::PortablePath::parse(PATH).unwrap(),
+            &first.file_id,
+            &branch_id,
+            "admin",
+            operation(),
+        )
+        .unwrap();
+    assert_eq!(selected.commit_state, CommitState::Published);
+    assert_eq!(selected.branch_id.as_deref(), Some(branch_id.as_str()));
     let read = tags(&repository, &first.file_id);
     let current = engine.file_container_tags(&read).unwrap();
     engine
@@ -432,14 +488,14 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     ];
     drop(engine);
     engine = Engine::open(&system).unwrap();
-    assert_cold_state(&engine, &repository, &versions);
+    assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 2);
     assert_eq!(
         configure(&mut engine, &repository, &prefixes, 0, first_configuration.operation_id),
         first_configuration
     );
     assert_engine_reads_only_surviving_tier(&engine, &versions, temp.path(), 1);
-    engine = inspect_offline_tier(engine, &system, &versions, 1);
+    engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 1);
 
     add_empty_tier(&mut engine, &topology.disks[2]);
     for version in &versions {
@@ -449,14 +505,14 @@ fn empty_pool_adds_backup_tiers_and_cold_reads_each_real_copy() {
     let second_configuration = configure(&mut engine, &repository, &prefixes, 1, operation());
     drop(engine);
     engine = Engine::open(&system).unwrap();
-    assert_cold_state(&engine, &repository, &versions);
+    assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 3);
     assert_eq!(
         configure(&mut engine, &repository, &prefixes, 1, second_configuration.operation_id),
         second_configuration
     );
     assert_engine_reads_only_surviving_tier(&engine, &versions, temp.path(), 2);
-    engine = inspect_offline_tier(engine, &system, &versions, 2);
-    assert_cold_state(&engine, &repository, &versions);
+    engine = inspect_offline_tier(engine, &system, &versions, &branch_id, 2);
+    assert_cold_state(&engine, &repository, &versions, &branch_id);
     assert_copies(&engine, &versions, 3);
 }
