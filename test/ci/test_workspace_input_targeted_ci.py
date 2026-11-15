@@ -61,7 +61,10 @@ class WorkspaceInputSelection(unittest.TestCase):
                 self.assertIn("workspace-logical-input", plan["groups"])
                 self.assertTrue(OLD_GROUPS.get(path, set()).issubset(plan["groups"]))
                 self.assertIn("test_workspace_input_targeted_ci", plan["python_tests"])
-        unrelated = CI.select_plan(self.policy, ["src/engine/src/protection.rs"], shardable=True)
+        unrelated = CI.select_plan(self.policy, [
+            "src/engine/src/business/workspace/version_build.rs",
+        ], shardable=True)
+        self.assertIn("workspace-version-construction", unrelated["groups"])
         self.assertNotIn("workspace-logical-input", unrelated["groups"])
 
     def test_exact_two_new_six_existing_and_product_checks_are_not_stale(self):
