@@ -17,7 +17,9 @@ fn roots() -> Roots {
 
 fn roots_with_target(occupied: bool) -> Roots {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([temp.path().join("p"), temp.path().join("b")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [temp.path().join("p"), temp.path().join("b")],
+    )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].slot_id = "P02".into();
     config.disks[1].upstream_slot_id = None;

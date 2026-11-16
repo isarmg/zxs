@@ -34,11 +34,11 @@ fn fixture() -> (
     Identity,
 ) {
     let root = crate::tests::private_tempdir();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine

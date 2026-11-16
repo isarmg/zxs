@@ -28,7 +28,9 @@ fn fixture() -> Fixture {
         .create(&discovery)
         .unwrap();
     let mut original =
-        Config::development([discovery.join("old-voter"), discovery.join("retained-data")])
+        Config::development(crate::test_disks(
+            [discovery.join("old-voter"), discovery.join("retained-data")],
+        ))
             .unwrap();
     original.disks[1].metadata_member = false;
     let mut engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
@@ -116,6 +118,7 @@ fn request(f: &Fixture) -> AdditionRequest {
     AdditionRequest {
         operation_id: OperationId::generate().unwrap(),
         additions: vec![DirectoryAddition {
+            name: name_policy::Name::parse("Resumed member").unwrap(),
             selection,
             slot_id: "N01".into(),
             level: 1,

@@ -91,7 +91,9 @@ fn rename(file: &str, branch: &str, operation_id: OperationId) -> RenameFileBran
 fn retained_metadata_d3_preserves_current_authorization_for_edits_and_receipts() {
     let root = crate::tests::private_tempdir();
     let mut config =
-        storage_engine::Config::development((0..4).map(|n| root.path().join(format!("disk-{n}"))))
+        storage_engine::Config::development(crate::test_disks(
+            (0..4).map(|n| root.path().join(format!("disk-{n}"))),
+        ))
             .unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;

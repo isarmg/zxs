@@ -47,7 +47,7 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
     let root = crate::tests::private_tempdir();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let backend = EngineBackend::new(engine);
@@ -118,7 +118,7 @@ fn a_valid_singleton_admits_its_owner_but_not_arbitrary_callers() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -139,7 +139,7 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
@@ -222,7 +222,7 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
     let disk = root.path().join("disk");
     let mut engine = Engine::initialize(
         &system,
-        storage_engine::Config::development([disk.clone()]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([disk.clone()])).unwrap(),
     )
     .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
@@ -342,7 +342,7 @@ fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
@@ -455,7 +455,7 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
@@ -633,7 +633,7 @@ fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
     let system = root.path().join("system");
     let mut engine = Engine::initialize(
         &system,
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");

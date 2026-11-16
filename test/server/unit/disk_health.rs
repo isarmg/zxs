@@ -120,7 +120,9 @@ fn query_command(command: &mut Command, timeout: Duration) -> Result<(i32, Vec<u
     let root = tempfile::tempdir().unwrap();
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let directory = engine.open_disk_observation_directory("P01").unwrap();
@@ -163,7 +165,9 @@ fn unavailable_mapping_never_executes_a_device_query() {
     let root = tempfile::tempdir().unwrap();
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let directory = engine.open_disk_observation_directory("P01").unwrap();
@@ -290,7 +294,9 @@ fn canceled_query_refuses_spawn_before_starting_an_external_process() {
     let root = tempfile::tempdir().unwrap();
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let directory = engine.open_disk_observation_directory("P01").unwrap();
@@ -319,7 +325,9 @@ fn observation_child_is_reaped_before_error_and_panic_release_admission() {
         let root = tempfile::tempdir().unwrap();
         let engine = storage_engine::Engine::initialize(
             &root.path().join("system"),
-            storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+            storage_contract::Config::development(crate::test_disks(
+                [root.path().join("disk")],
+            )).unwrap(),
         )
         .unwrap();
         let directory = engine.open_disk_observation_directory("P01").unwrap();
@@ -370,7 +378,7 @@ fn quiesced_directory_cannot_start_smart_worker_even_for_a_single_mapping() {
     let disk = root.path().join("disk");
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([disk.clone()]).unwrap(),
+        storage_contract::Config::development(crate::test_disks([disk.clone()])).unwrap(),
     )
     .unwrap();
     let directory = engine.open_disk_observation_directory("P01").unwrap();
@@ -532,7 +540,9 @@ fn native_capture_checks_stop_and_deadline_before_any_ioctl() {
     let root = tempfile::tempdir().unwrap();
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let directory = engine.open_disk_observation_directory("P01").unwrap();

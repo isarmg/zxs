@@ -19,7 +19,9 @@ fn fixture_with_metadata_members(metadata_members: usize) -> Fixture {
     let temp = crate::tests::private_tempdir();
     let data = temp.path().join("system");
     let mut original =
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+        )).unwrap();
     for (index, disk) in original.disks.iter_mut().enumerate() {
         disk.metadata_member = index < metadata_members;
     }
@@ -420,6 +422,7 @@ fn successive_http_exits_replay_old_receipts_and_recover_the_setup_configuration
     let addition = AdditionRequest {
         operation_id: OperationId::generate().unwrap(),
         additions: vec![DirectoryAddition {
+            name: name_policy::Name::parse("Later metadata member").unwrap(),
             selection: selected,
             slot_id: "P04".into(),
             level: 1,

@@ -30,7 +30,7 @@ impl Fixture {
         let management = directory.path().join("management");
         let mut engine = Engine::initialize(
             &data,
-            Config::development([directory.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([directory.path().join("disk")])).unwrap(),
         )
         .unwrap();
         engine
@@ -650,7 +650,7 @@ async fn actual_http_controls_expose_baseline_progress_and_keep_check_unchanged(
     drop(
         Engine::initialize(
             &data,
-            Config::development([directory.path().join("disk")]).unwrap(),
+            Config::development(crate::test_disks([directory.path().join("disk")])).unwrap(),
         )
         .unwrap(),
     );

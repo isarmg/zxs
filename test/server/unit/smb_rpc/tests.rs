@@ -932,11 +932,11 @@ fn fixture_configure(
     configure: impl FnOnce(&mut Config),
 ) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>, String) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ])
+    ]))
     .unwrap();
     configure(&mut config);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();

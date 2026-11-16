@@ -11,7 +11,9 @@ mod phase1_new_file_tests;
 
 fn empty_fixture(two_primaries: bool) -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::development([temp.path().join("p"), temp.path().join("b")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [temp.path().join("p"), temp.path().join("b")],
+    )).unwrap();
     if two_primaries {
         config.disks[1].level = 1;
         config.disks[1].slot_id = "P02".into();
@@ -728,7 +730,9 @@ fn default_namespace_changes_reject_missing_cross_disk_parent_without_creating_r
 #[test]
 fn default_disk_pages_are_bounded_and_do_not_mix_changed_snapshots() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("p"), temp.path().join("b")]).unwrap();
+    let config = Config::development(crate::test_disks(
+        [temp.path().join("p"), temp.path().join("b")],
+    )).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_disk_root(
@@ -1152,7 +1156,7 @@ fn default_share_rejects_colliding_disk_directory_basenames() {
     let second = temp.path().join("right/DISK");
     std::fs::create_dir_all(first.parent().unwrap()).unwrap();
     std::fs::create_dir_all(second.parent().unwrap()).unwrap();
-    let config = Config::development([first, second]).unwrap();
+    let config = Config::development(crate::test_disks([first, second])).unwrap();
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let (_temp, shared, _backend) = fixture_backend(temp, engine);
     let error = shared

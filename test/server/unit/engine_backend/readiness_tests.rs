@@ -6,7 +6,7 @@ fn readiness_and_topology_counters_follow_publication_and_release_the_engine_loc
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temp.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
@@ -50,7 +50,7 @@ fn readiness_uses_fixed_membership_and_reports_single_disk_no_metadata_redundanc
             .collect();
         let engine = Engine::initialize(
             &temp.path().join("system"),
-            Config::development(disks.clone()).unwrap(),
+            Config::development(crate::test_disks(disks.clone())).unwrap(),
         )
         .unwrap();
         let backend = EngineBackend::new(engine);
@@ -72,7 +72,13 @@ fn backend_reports_and_consumes_nonfatal_recovery_checkpoint_warnings() {
     let temp = tempfile::tempdir().unwrap();
     let disk = temp.path().join("disk");
     let root = temp.path().join("system");
-    drop(Engine::initialize(&root, Config::development([disk.clone()]).unwrap()).unwrap());
+    drop(
+        Engine::initialize(
+            &root,
+            Config::development(crate::test_disks([disk.clone()])).unwrap(),
+        )
+        .unwrap(),
+    );
     drop(Engine::open(&root).unwrap());
     std::fs::write(
         disk.join("metadata/replay-checkpoint.json"),
@@ -96,8 +102,11 @@ fn returned_read_only_engine_reports_the_publication_seal_cause_only_once() {
     let disks: Vec<_> = (0..3)
         .map(|i| temp.path().join(format!("disk-{i}")))
         .collect();
-    let mut engine =
-        Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development(crate::test_disks(disks.clone())).unwrap(),
+    )
+    .unwrap();
     engine
         .create_repository(
             &storage_contract::RepositoryName::parse("unsealed").unwrap(),
@@ -146,7 +155,9 @@ fn returned_read_only_engine_reports_the_publication_seal_cause_only_once() {
 fn readiness_ignores_missing_nonmember_and_preserves_member_failure_source() {
     let temp = tempfile::tempdir().unwrap();
     let mut config =
-        Config::development([temp.path().join("member"), temp.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [temp.path().join("member"), temp.path().join("backup")],
+        )).unwrap();
     config.disks[1].metadata_member = false;
     let engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
     let sequence = engine.state().sequence;

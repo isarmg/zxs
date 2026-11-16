@@ -9,7 +9,7 @@ fn backend() -> (
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");

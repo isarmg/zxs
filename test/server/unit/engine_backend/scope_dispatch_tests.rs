@@ -6,7 +6,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");

@@ -734,11 +734,11 @@ struct Fixture {
 impl Fixture {
     fn new(protected: bool) -> Self {
         let root = crate::tests::private_tempdir();
-        let config = Config::development([
+        let config = Config::development(crate::test_disks([
             root.path().join("primary"),
             root.path().join("secondary"),
             root.path().join("tertiary"),
-        ])
+        ]))
         .unwrap();
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
         let repo = engine

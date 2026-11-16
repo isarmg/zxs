@@ -240,7 +240,10 @@ fn activate_first(fixture: &Fixture, finish: bool) -> Result<(), ApiError> {
     setup.activate(
         &identity,
         StorageActivationRequest {
-            selections: vec![selection],
+            selections: vec![storage_contract::storage_directories::NamedStorageSelection {
+                selection,
+                name: name_policy::Name::parse("Activated storage").unwrap(),
+            }],
             mode: storage_contract::Mode::Development,
         },
         |_| Ok(()),

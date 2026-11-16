@@ -44,9 +44,9 @@ fn save(engine: &mut Engine, repo: &Repository, path: &str, bytes: &[u8]) {
 impl Fixture {
     fn new() -> Self {
         let root = crate::tests::private_tempdir();
-        let mut config = storage_contract::Config::development(
+        let mut config = storage_contract::Config::development(crate::test_disks(
             (0..5).map(|index| root.path().join(format!("disk-{index}"))),
-        )
+        ))
         .unwrap();
         config.disks[3].level = 1;
         config.disks[3].upstream_slot_id = None;

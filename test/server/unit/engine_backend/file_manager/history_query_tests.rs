@@ -9,7 +9,7 @@ fn history_context_preserves_projection_and_current_admission() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine

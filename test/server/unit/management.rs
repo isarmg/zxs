@@ -16,7 +16,9 @@ fn managed_readiness_exposes_real_index_failure_without_rejecting_published_oper
     let management = root.path().join("management");
     let mut engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let before = engine.state().sequence;
@@ -113,7 +115,7 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
     drop(
         storage_engine::Engine::initialize(
             &data,
-            storage_contract::Config::development(disks.clone()).unwrap(),
+            storage_contract::Config::development(crate::test_disks(disks.clone())).unwrap(),
         )
         .unwrap(),
     );
@@ -295,11 +297,11 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
     drop(
         storage_engine::Engine::initialize(
             &data,
-            storage_contract::Config::development([
+            storage_contract::Config::development(crate::test_disks([
                 root.path().join("d1"),
                 root.path().join("d2"),
                 root.path().join("d3"),
-            ])
+            ]))
             .unwrap(),
         )
         .unwrap(),
@@ -750,11 +752,11 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
     let management = root.path().join("management");
     let engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([
+        storage_contract::Config::development(crate::test_disks([
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -795,11 +797,11 @@ fn stale_readiness_retry_waits_for_existing_engine_holders() {
     let management = root.path().join("management");
     let engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([
+        storage_contract::Config::development(crate::test_disks([
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -839,7 +841,7 @@ fn completed_disk_observation_releases_engine_before_retry() {
     let detached = root.path().join("detached-disk");
     let mut engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([disk.clone()]).unwrap(),
+        storage_contract::Config::development(crate::test_disks([disk.clone()])).unwrap(),
     )
     .unwrap();
     let auth =
@@ -961,7 +963,10 @@ async fn activation_completion_uses_original_directories_and_preserves_current_a
         .activate(
             &identity,
             crate::setup_recovery::StorageActivationRequest {
-                selections: vec![selection],
+                selections: vec![storage_contract::storage_directories::NamedStorageSelection {
+                    selection,
+                    name: name_policy::Name::parse("Activated storage").unwrap(),
+                }],
                 mode: storage_engine::Mode::Development,
             },
             |_| Ok(()),
@@ -1158,7 +1163,9 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("pool");
     let management = root.path().join("management");
-    let mut config = storage_engine::Config::development([root.path().join("disk")]).unwrap();
+    let mut config = storage_engine::Config::development(crate::test_disks(
+        [root.path().join("disk")],
+    )).unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let mut engine = storage_engine::Engine::initialize(&data, config.clone()).unwrap();
@@ -1276,7 +1283,9 @@ fn below_baseline_runtime_limits_fail_in_background_without_blocking_management(
     drop(
         storage_engine::Engine::initialize(
             &data,
-            storage_engine::Config::development([root.path().join("disk")]).unwrap(),
+            storage_engine::Config::development(crate::test_disks(
+                [root.path().join("disk")],
+            )).unwrap(),
         )
         .unwrap(),
     );
@@ -1429,7 +1438,9 @@ fn anonymous_account_initialization_cannot_drain_or_detach_an_existing_backend()
             let management = root.path().join("management");
             let engine = storage_engine::Engine::initialize(
                 &data,
-                storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+                storage_contract::Config::development(crate::test_disks(
+                    [root.path().join("disk")],
+                )).unwrap(),
             )
             .unwrap();
             let existing = Arc::new(EngineBackend::new(engine));

@@ -26,7 +26,9 @@ fn fixture_for_mode(mode: storage_contract::Mode) -> Fixture {
     let data = root.path().join("data");
     let disk_root = root.path().join("simulated-disk");
     let management = root.path().join("management");
-    let mut config = storage_contract::Config::development([disk_root.clone()]).unwrap();
+    let mut config = storage_contract::Config::development(crate::test_disks(
+        [disk_root.clone()],
+    )).unwrap();
     config.mode = mode;
     let engine = storage_engine::Engine::initialize(&data, config).unwrap();
     let disk_id = engine.config().disks[0].disk_id.clone();

@@ -69,7 +69,9 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
     let root = crate::tests::private_tempdir();
     let mut engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let repo = engine

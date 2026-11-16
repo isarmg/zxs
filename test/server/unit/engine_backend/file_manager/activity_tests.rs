@@ -177,7 +177,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -244,7 +244,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     let restored_root = crate::tests::private_tempdir();
     let mut restored = Engine::initialize(
         &restored_root.path().join("system"),
-        Config::development([restored_root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([restored_root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     restored
@@ -319,7 +319,7 @@ fn file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback(
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -485,7 +485,9 @@ fn empty_file_projection_preserves_current_namespace_admission_errors() {
     let root = crate::tests::private_tempdir();
     let engine = storage_engine::Engine::initialize(
         &root.path().join("system"),
-        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [root.path().join("disk")],
+        )).unwrap(),
     )
     .unwrap();
     let mut projection = super::FileProjection::new(&engine);

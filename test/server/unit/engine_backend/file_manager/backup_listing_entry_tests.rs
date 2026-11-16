@@ -15,7 +15,9 @@ use storage_engine::{BackupConfigurationRequest, CommitRequest, Engine};
 fn initialize(maximum: usize) -> (tempfile::TempDir, Engine) {
     let root = crate::tests::private_tempdir();
     let mut config =
-        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [root.path().join("primary"), root.path().join("backup")],
+        )).unwrap();
     config.max_entries = maximum;
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     (root, engine)

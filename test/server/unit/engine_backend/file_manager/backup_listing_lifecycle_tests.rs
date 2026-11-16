@@ -68,7 +68,9 @@ fn save(engine: &mut Engine, repo: &Repository, files: &[(&str, &[u8])]) {
 fn fixture() -> Fixture {
     let root = crate::tests::private_tempdir();
     let config =
-        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [root.path().join("primary"), root.path().join("backup")],
+        )).unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -397,7 +399,7 @@ fn reopen(backend: &EngineBackend, root: &std::path::Path) {
     let spare_root = crate::tests::private_tempdir();
     let spare = Engine::initialize(
         &spare_root.path().join("system"),
-        Config::development([spare_root.path().join("primary")]).unwrap(),
+        Config::development(crate::test_disks([spare_root.path().join("primary")])).unwrap(),
     )
     .unwrap();
     backend.test_with_engine_locked(|engine| {
@@ -492,7 +494,7 @@ async fn canceled_backup_listing_retains_only_required_records_auth_and_slot_unt
     };
     let spare = Engine::initialize(
         &root.path().join("replacement-system"),
-        Config::development([root.path().join("replacement-primary")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("replacement-primary")])).unwrap(),
     )
     .unwrap();
     let auth = Arc::new(Mutex::new(auth));

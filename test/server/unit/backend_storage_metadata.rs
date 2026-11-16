@@ -82,8 +82,8 @@ fn disk_directory_names_are_exact_portable_basenames() {
 #[cfg(feature = "core")]
 fn disk_directory_names_preserve_order_and_check_backup_roots() {
     let config = storage_contract::Config::development([
-        std::path::PathBuf::from("/data/资料"),
-        std::path::PathBuf::from("/data/Archive"),
+        (name_policy::Name::parse("资料").unwrap(), std::path::PathBuf::from("/data/资料")),
+        (name_policy::Name::parse("Archive").unwrap(), std::path::PathBuf::from("/data/Archive")),
     ])
     .unwrap();
     assert_eq!(config.disks[1].level, 2);
@@ -101,6 +101,8 @@ fn disk_directory_names_preserve_order_and_check_backup_roots() {
         let mut disks = config.disks.clone();
         disks[0].root = std::path::Path::new("/left").join(first);
         disks[1].root = std::path::Path::new("/right").join(second);
+        disks[0].name = name_policy::Name::parse(first).unwrap();
+        disks[1].name = name_policy::Name::parse(second).unwrap();
         assert_eq!(
             disk_directory_names(&disks).unwrap_err().code,
             storage_contract::ErrorCode::NameConflict

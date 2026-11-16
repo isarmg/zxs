@@ -9,7 +9,9 @@ use storage_engine::{BackupConfigurationRequest, CommitRequest, ProtectionPolicy
 fn initialize(maximum: usize) -> (tempfile::TempDir, AdmissionEngine) {
     let root = crate::tests::private_tempdir();
     let mut config =
-        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
+        Config::development(crate::test_disks(
+            [root.path().join("primary"), root.path().join("backup")],
+        )).unwrap();
     config.max_entries = maximum;
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     (root, AdmissionEngine::new(engine))
@@ -120,7 +122,9 @@ fn listing_on(
 fn recursive_native_paths_feed_the_existing_backup_reader_at_each_tier() {
     let root = crate::tests::private_tempdir();
     let mut config =
-        Config::development((0..4).map(|index| root.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..4).map(|index| root.path().join(format!("disk-{index}"))),
+        )).unwrap();
     config.disks[3].level = 1;
     config.disks[3].upstream_slot_id = None;
     config.disks[3].metadata_member = false;

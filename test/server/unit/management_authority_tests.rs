@@ -26,7 +26,7 @@ impl Fixture {
         let old_session = source_auth.login("admin", PASSWORD).unwrap().token;
         let mut engine = storage_engine::Engine::initialize(
             &source,
-            storage_contract::Config::development(vec![disk.clone()]).unwrap(),
+            storage_contract::Config::development(crate::test_disks(vec![disk.clone()])).unwrap(),
         )
         .unwrap();
         engine

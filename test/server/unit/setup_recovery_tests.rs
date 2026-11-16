@@ -43,9 +43,18 @@ fn permit(service: &SetupRecovery) -> LocalBootstrapPermit {
         .authorize_bootstrap("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         .unwrap()
 }
+fn setup_disks(ids: &[&str]) -> Vec<NamedSetupDisk> {
+    ids.iter()
+        .enumerate()
+        .map(|(index, id)| NamedSetupDisk {
+            disk_id: (*id).into(),
+            name: name_policy::Name::parse(&format!("Setup disk {}", index + 1)).unwrap(),
+        })
+        .collect()
+}
 fn request() -> SetupRequest {
     SetupRequest {
-        disk_ids: vec!["one".into(), "two".into(), "three".into()],
+        disks: setup_disks(&["one", "two", "three"]),
         mode: Mode::Development,
         username: "admin".into(),
         password: "long-valid-password".into(),
@@ -330,7 +339,18 @@ fn rejects_symbolic_link_lock_and_unknown_request_fields() {
     std::os::unix::fs::symlink(&target, f.service.data_root.join("setup.lock")).unwrap();
     assert!(f.service.lock().is_err());
     assert_eq!(fs::read(target).unwrap(), b"do not change");
-    assert!(json_codec::from_str::<SetupRequest>(r#"{"disk_ids":["one","two","three"],"mode":"development","username":"admin","password":"long-valid-password","output":"/tmp/unsafe"}"#).is_err());
+    let input = r#"{
+        "disks": [
+            {"disk_id":"one","name":"First"},
+            {"disk_id":"two","name":"Second"},
+            {"disk_id":"three","name":"Third"}
+        ],
+        "mode":"development",
+        "username":"admin",
+        "password":"long-valid-password",
+        "output":"/tmp/unsafe"
+    }"#;
+    assert!(json_codec::from_str::<SetupRequest>(input).is_err());
 }
 
 #[test]
@@ -387,11 +407,11 @@ fn configured_management_subdirectory_does_not_prevent_first_setup() {
 #[test]
 fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_selection() {
     let f = fixture();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         f.service.disks["one"].clone(),
         f.service.disks["two"].clone(),
         f.service.disks["three"].clone(),
-    ])
+    ]))
     .unwrap();
     drop(Engine::initialize(&f.service.data_root, config).unwrap());
     fs::rename(
@@ -528,11 +548,11 @@ fn completion_cannot_reset_old_pool_or_partial_authority_or_changed_data() {
     drop(
         Engine::initialize(
             &f.service.data_root,
-            Config::development([
+            Config::development(crate::test_disks([
                 f.service.disks["one"].clone(),
                 f.service.disks["two"].clone(),
                 f.service.disks["three"].clone(),
-            ])
+            ]))
             .unwrap(),
         )
         .unwrap(),
@@ -616,13 +636,14 @@ fn preset_fixture() -> (Fixture, Config, PathBuf) {
     f.service
         .identities
         .insert("four".into(), directory_identity(&extra).unwrap());
-    let mut config = Config::development([
+    let mut config = Config::development(crate::test_disks([
         f.service.disks["one"].clone(),
         f.service.disks["two"].clone(),
         f.service.disks["three"].clone(),
-    ])
+    ]))
     .unwrap();
     let mut fourth = config.disks[2].clone();
+    fourth.name = name_policy::Name::parse("Fourth disk").unwrap();
     fourth.root = extra;
     fourth.slot_id = "D01".into();
     fourth.disk_id = storage_engine::new_id("disk").unwrap();
@@ -825,11 +846,11 @@ fn bootstrap_selection_order_never_infers_backup_edges() {
         let f = fixture();
         let mut input = request();
         input.mode = mode.clone();
-        input.disk_ids = vec!["three".into(), "one".into(), "two".into()];
+        input.disks = setup_disks(&["three", "one", "two"]);
         let paths = input
-            .disk_ids
+            .disks
             .iter()
-            .map(|id| f.service.disks[id].clone())
+            .map(|disk| f.service.disks[&disk.disk_id].clone())
             .collect::<Vec<_>>();
         let mut identities = Vec::new();
         f.service
@@ -863,7 +884,7 @@ fn single_disk_setup_is_empty_and_creates_exactly_one_member() {
     let f = fixture_with_disks(&["one"]);
     assert_eq!(f.service.status().state, InstallationState::Empty);
     let mut input = request();
-    input.disk_ids = vec!["one".into()];
+    input.disks = setup_disks(&["one"]);
     f.service
         .initialize(&permit(&f.service), input, |engine, _, _| {
             assert_eq!(engine.config().disks.len(), 1);
@@ -887,7 +908,7 @@ fn production_setup_accepts_a_managed_directory_and_retains_selection_fences() {
     for ids in [vec![], vec!["one", "one"], vec!["unapproved"]] {
         let f = fixture_with_disks(&["one"]);
         let mut input = request();
-        input.disk_ids = ids.into_iter().map(str::to_owned).collect();
+        input.disks = setup_disks(&ids);
         assert!(
             f.service
                 .initialize(&permit(&f.service), input, |_, _, _| panic!())
@@ -899,7 +920,7 @@ fn production_setup_accepts_a_managed_directory_and_retains_selection_fences() {
     let mut f = fixture_with_disks(&["one"]);
     f.service.allow_development = false;
     let mut input = request();
-    input.disk_ids = vec!["one".into()];
+    input.disks = setup_disks(&["one"]);
     input.mode = Mode::Production;
     f.service
         .initialize(&permit(&f.service), input, |engine, _, _| {
@@ -943,7 +964,7 @@ fn setup_rejects_storage_overlapping_system_control_directories() {
         .allow_development_mode();
         assert!(service.selected(&["one".into()]).is_err(), "{placement}");
         let mut input = request();
-        input.disk_ids = vec!["one".into()];
+        input.disks = setup_disks(&["one"]);
         assert!(
             service
                 .initialize(&permit(&service), input, |_, _, _| panic!())
@@ -960,11 +981,11 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
         drop(
             Engine::initialize(
                 &f.service.data_root,
-                Config::development(
+                Config::development(crate::test_disks(
                     ids.iter()
                         .map(|id| f.service.disks[*id].clone())
                         .collect::<Vec<_>>(),
-                )
+                ))
                 .unwrap(),
             )
             .unwrap(),
@@ -1009,7 +1030,7 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
 fn single_disk_interrupted_setup_still_requires_bound_completion_proof() {
     let f = fixture_with_disks(&["one"]);
     let mut input = request();
-    input.disk_ids = vec!["one".into()];
+    input.disks = setup_disks(&["one"]);
     assert_eq!(
         f.service
             .initialize(&permit(&f.service), input, |_, _, _| Err(
@@ -1113,7 +1134,7 @@ fn recoverable_fixture() -> Fixture {
     let mut f = fixture_with_disks(&["one"]);
     let mut engine = Engine::initialize(
         &f.service.data_root,
-        Config::development(vec![f.service.disks["one"].clone()]).unwrap(),
+        Config::development(crate::test_disks(vec![f.service.disks["one"].clone()])).unwrap(),
     )
     .unwrap();
     engine
@@ -1331,7 +1352,9 @@ fn runtime_workspace_limits_below_selected_setup_baseline_do_not_publish_intent(
 #[test]
 fn initialization_and_bound_completion_keep_runtime_workspace_limits_out_of_config() {
     let mut f = fixture();
-    let baseline = Config::development(f.service.disks.values().cloned()).unwrap();
+    let baseline = Config::development(crate::test_disks(
+        f.service.disks.values().cloned(),
+    )).unwrap();
     let limits = raised_workspace_limits(&baseline);
     f.service = f.service.with_workspace_limits(Some(limits)).unwrap();
     let error = f

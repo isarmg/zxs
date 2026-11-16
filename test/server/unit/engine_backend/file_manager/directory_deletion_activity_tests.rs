@@ -11,7 +11,9 @@ use storage_contract::{
 use storage_engine::{DeleteFileRequest, Engine, FileDeletionTarget};
 
 fn seed(root: &std::path::Path, members: bool) -> (Engine, Repository) {
-    let config = Config::development((0..3).map(|n| root.join(format!("disk-{n}")))).unwrap();
+    let config = Config::development(crate::test_disks(
+        (0..3).map(|n| root.join(format!("disk-{n}"))),
+    )).unwrap();
     let mut engine = Engine::initialize(&root.join("system"), config).unwrap();
     let repo = engine
         .create_disk_root("P01", "writer", OperationId::generate().unwrap())

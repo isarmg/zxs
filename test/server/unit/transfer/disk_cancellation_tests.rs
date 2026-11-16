@@ -16,11 +16,11 @@ struct ManagedFixture {
 impl ManagedFixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let mut config = Config::development([
+        let mut config = Config::development(crate::test_disks([
             root.path().join("primary"),
             root.path().join("backup-one"),
             root.path().join("backup-two"),
-        ])
+        ]))
         .unwrap();
         config.checksum_chunk_bytes = 65_536;
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();

@@ -7,7 +7,9 @@ use storage_contract::{CommitRequest, Config, FileDeletionNode, OperationId, Ope
 use storage_engine::{DeleteFileRequest, Engine, FileDeletionTarget, UndoFileDeletionRequest};
 
 fn seed(root: &std::path::Path) -> (Engine, HistoryRepositoryId, HistoryFileId) {
-    let mut config = Config::development([root.join("disk"), root.join("target")]).unwrap();
+    let mut config = Config::development(crate::test_disks(
+        [root.join("disk"), root.join("target")],
+    )).unwrap();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&root.join("system"), config).unwrap();

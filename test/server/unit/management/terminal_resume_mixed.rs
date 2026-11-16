@@ -37,6 +37,7 @@ fn mixed_request(f: &Fixture) -> AdditionRequest {
     )
     .unwrap();
     request.additions.push(DirectoryAddition {
+        name: name_policy::Name::parse("Additional data member").unwrap(),
         selection,
         slot_id: "N02".into(),
         level: 1,

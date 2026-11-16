@@ -87,10 +87,11 @@ fn request(service: &SetupRecovery, ids: &[&str]) -> StorageActivationRequest {
         .to_owned();
     let selections = ids
         .iter()
-        .map(|id| {
+        .enumerate()
+        .map(|(index, id)| {
             let path = service.disks[*id].to_str().unwrap();
             let location = crate::storage_directories::browse(path).unwrap();
-            crate::storage_directories::inspect_within(
+            let selection = crate::storage_directories::inspect_within(
                 &root,
                 &storage_contract::storage_directories::InspectRequest {
                     mount_path: location.mount_path,
@@ -98,7 +99,11 @@ fn request(service: &SetupRecovery, ids: &[&str]) -> StorageActivationRequest {
                 },
                 &[service.data_root.clone(), service.management_root.clone()],
             )
-            .unwrap()
+            .unwrap();
+            NamedStorageSelection {
+                selection,
+                name: name_policy::Name::parse(&format!("Activation disk {}", index + 1)).unwrap(),
+            }
         })
         .collect();
     StorageActivationRequest {
@@ -374,15 +379,20 @@ fn unbrowseable_disk_names_are_rejected_before_activation_intent_or_writes() {
             *path = renamed;
         }
         initialize(&f.service);
-        let selected = request(&f.service, &["one", "two"]);
-        let error = f
-            .service
-            .activate(
-                &admin(),
-                selected,
-                |_| Ok(()),
-                |_| panic!("invalid namespace installed"),
-            )
+        let mut input = json_codec::to_value(request(&f.service, &["one", "two"])).unwrap();
+        for (disk, name) in input["selections"].as_array_mut().unwrap().iter_mut().zip(names) {
+            disk["name"] = json_codec::json!(name);
+        }
+        let error = json_codec::from_value::<StorageActivationRequest>(input)
+            .map_err(ApiError::invalid_source)
+            .and_then(|selected| {
+                f.service.activate(
+                    &admin(),
+                    selected,
+                    |_| Ok(()),
+                    |_| panic!("invalid namespace installed"),
+                )
+            })
             .unwrap_err();
         assert_eq!(error.code, expected, "{names:?}");
         assert_eq!(f.service.status().state, InstallationState::ManagementReady);
@@ -563,7 +573,7 @@ fn activated_engine(service: &SetupRecovery, data_only_target: bool) -> Engine {
         request
             .selections
             .iter()
-            .map(|selection| PathBuf::from(&selection.root_path)),
+            .map(|named| (named.name.clone(), PathBuf::from(&named.selection.root_path))),
     )
     .unwrap();
     config.disks[0].metadata_member = !data_only_target;
@@ -626,7 +636,9 @@ fn add_activation_successor(engine: &mut Engine, base: &Path) {
     publish_activation_source(engine);
     let mut target = engine.config().clone();
     let additions =
-        Config::development((0..4).map(|index| base.join(format!("added-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..4).map(|index| base.join(format!("added-{index}"))),
+        )).unwrap();
     let added = additions.disks.into_iter().nth(3).unwrap();
     fs::create_dir(&added.root).unwrap();
     fs::set_permissions(&added.root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1271,7 +1283,7 @@ fn exact_offline_activation_rejects_another_original_selection_or_mode() {
             .is_err()
     );
     let mut other = selected;
-    other.selections[0].root_identity.inode += 1;
+    other.selections[0].selection.root_identity.inode += 1;
     assert!(f.service.initial_activation_matches(&other).is_err());
 }
 

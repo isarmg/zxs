@@ -33,11 +33,11 @@ pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Va
 #[test]
 fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independent() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let mut engine =
         AdmissionEngine::new(Engine::initialize(&root.path().join("system"), config).unwrap());
@@ -178,7 +178,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("d1")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("d1")])).unwrap(),
     )
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
@@ -226,7 +226,7 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("d1")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("d1")])).unwrap(),
     )
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
@@ -308,11 +308,11 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([
+        Config::development(crate::test_disks([
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();

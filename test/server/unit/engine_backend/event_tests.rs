@@ -59,7 +59,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     let root = temporary.path().join("system");
     let mut engine = Engine::initialize(
         &root,
-        Config::development([temporary.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([temporary.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -172,7 +172,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");

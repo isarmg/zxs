@@ -47,7 +47,7 @@ fn fixture() -> Fixture {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -280,7 +280,7 @@ fn reopen(backend: &EngineBackend, root: &std::path::Path) {
     let spare_root = crate::tests::private_tempdir();
     let spare = Engine::initialize(
         &spare_root.path().join("system"),
-        Config::development([spare_root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([spare_root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     backend.test_with_engine_locked(|engine| {
@@ -453,7 +453,7 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     });
     let spare = Engine::initialize(
         &root.path().join("replacement-system"),
-        Config::development([root.path().join("replacement-disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("replacement-disk")])).unwrap(),
     )
     .unwrap();
     let auth = Arc::new(Mutex::new(auth));

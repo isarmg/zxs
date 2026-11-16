@@ -21,7 +21,9 @@ fn fixture() -> Fixture {
     let root = crate::tests::private_tempdir();
     let data = root.path().join("system");
     let mut original =
-        Config::development((0..3).map(|index| root.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| root.path().join(format!("disk-{index}"))),
+        )).unwrap();
     original.disks[2].metadata_member = false;
     let mut engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
     let historical_operation = OperationId::generate().unwrap();
@@ -522,7 +524,7 @@ fn fresh_add_pending_cannot_be_consumed_as_a_retained_readmission() {
     let intent = record(&f);
     let root = f._root.path().join("fresh-metadata");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-    let mut fresh = Config::development([root.clone()]).unwrap().disks.remove(0);
+    let mut fresh = Config::development(crate::test_disks([root.clone()])).unwrap().disks.remove(0);
     fresh.slot_id = "N01".into();
     let mut target = intent.original.clone();
     for disk in &mut target.disks {

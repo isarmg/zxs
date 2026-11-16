@@ -5,11 +5,11 @@ use storage_engine::{Config, new_id};
 
 fn fixture() -> (tempfile::TempDir, AdmissionEngine) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([
+    let config = Config::development(crate::test_disks([
         temp.path().join("disk1"),
         temp.path().join("disk2"),
         temp.path().join("disk3"),
-    ])
+    ]))
     .unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     (temp, AdmissionEngine::new(engine))

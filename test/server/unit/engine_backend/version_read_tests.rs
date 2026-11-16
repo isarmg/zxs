@@ -3,7 +3,9 @@ use storage_contract::{CommitRequest, Entry, ErrorCode, OperationId, RepositoryN
 
 fn fixture() -> (tempfile::TempDir, Engine, Repository, Identity) {
     let root = crate::tests::private_tempdir();
-    let config = storage_engine::Config::development([root.path().join("disk")]).unwrap();
+    let config = storage_engine::Config::development(crate::test_disks(
+        [root.path().join("disk")],
+    )).unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(

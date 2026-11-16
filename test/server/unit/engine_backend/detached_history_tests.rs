@@ -38,7 +38,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]).unwrap(),
+        Config::development(crate::test_disks([root.path().join("disk")])).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -418,7 +418,7 @@ fn both_history_reads_recheck_actual_split_scope() {
 fn replacement(root: &std::path::Path, auth: &AuthStore) -> Engine {
     let mut engine = Engine::initialize(
         &root.join("replacement-system"),
-        Config::development([root.join("replacement-disk")]).unwrap(),
+        Config::development(crate::test_disks([root.join("replacement-disk")])).unwrap(),
     )
     .unwrap();
     engine

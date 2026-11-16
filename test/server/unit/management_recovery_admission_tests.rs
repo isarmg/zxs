@@ -51,7 +51,9 @@ impl Fixture {
         ]);
         let auth = AuthStore::initialize_management(&management, "admin", PASSWORD).unwrap();
         let mut engine =
-            Engine::initialize(&data, Config::development(disks.values().cloned()).unwrap())
+            Engine::initialize(&data, Config::development(crate::test_disks(
+                disks.values().cloned(),
+            )).unwrap())
                 .unwrap();
         engine
             .persist_auth_state(

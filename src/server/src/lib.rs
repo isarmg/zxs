@@ -1814,3 +1814,9 @@ mod authorized_backend_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/container_tags.rs"]
 mod container_tags_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/support/configured_disks.rs"]
+mod configured_disks;
+#[cfg(test)]
+pub(crate) use configured_disks::disks as test_disks;

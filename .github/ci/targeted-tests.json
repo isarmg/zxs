@@ -1,5 +1,43 @@
 {
   "groups": {
+    "server-named-disk-fixtures": {
+      "reason": "Compile the actual Server core unit-test target after its fixtures adopt typed configured disk names. Run only the two disk-name oracles here; original overlapping runtime checks and limits remain.",
+      "python_tests": [
+        "test_server_named_disk_fixture_selection"
+      ],
+      "rust_targets": [
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "kind": "lib",
+          "features": [
+            "core"
+          ],
+          "exact": [
+            "backend_storage_metadata::tests::disk_directory_names_are_exact_portable_basenames",
+            "backend_storage_metadata::tests::disk_directory_names_preserve_order_and_check_backup_roots"
+          ],
+          "max_tests": 2,
+          "timeout_seconds": 900,
+          "isolate": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "features": [
+            "core"
+          ],
+          "default_features": true
+        },
+        {
+          "package": "storage-server",
+          "manifest": "src/server/Cargo.toml",
+          "mode": "check",
+          "default_features": false
+        }
+      ]
+    },
     "fresh-first-add-root-binding": {
       "reason": "Fresh ordinary one-device Add records actual five-area identities on the original members before install, then preserves the same roots through enrollment, Joint and cold activation. Genuine root-lock/unrecorded-stage/recorded-feedback/partial-install cuts, strict feedback and same-bytes inode replacement refusal. No claim of Current backup backfill or terminal cutover; preserve their separate exact targets and original 900s.",
       "python_tests": [],
@@ -4809,6 +4847,240 @@
     }
   },
   "rules": [
+    {
+      "path": "test/server/support/foreign_disk_fixture.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/backend_storage_metadata.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/disk_hardware.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/disk_health.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/authorization_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/branch_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/disk_monitor_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/event_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/backup_listing_entry_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/backup_listing_lifecycle_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/backup_namespace_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/deletion_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/deregistration_listing_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/listing_detached_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/listing_integration_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/file_manager/request_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/locked_admission_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/operations/tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/readiness_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/engine_backend/scope_dispatch_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/disk_cards.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/exclusive_exit.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/foreign_intent.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/integrity_scrub_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_addition.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_lifecycle.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/storage_readmission.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_readmission.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_resume.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management_authority_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery/activation_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/setup_recovery_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/smb_rpc/history_move_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/storage_directories.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/transfer/disk_cancellation_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/management/terminal_resume_mixed.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/server/unit/startup_admission_tests.rs",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
+    {
+      "path": "test/ci/test_server_named_disk_fixture_selection.py",
+      "groups": [
+        "server-named-disk-fixtures"
+      ]
+    },
     {
       "path": "src/engine/src/engine/config.rs",
       "groups": [

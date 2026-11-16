@@ -21,7 +21,11 @@ fn fixture() -> Fixture {
         .unwrap();
     let engine = storage_engine::Engine::initialize(
         &data,
-        Config::development([discovery.join("original")]).unwrap(),
+        Config::development([(
+            name_policy::Name::parse("original").unwrap(),
+            discovery.join("original"),
+        )])
+        .unwrap(),
     )
     .unwrap();
     // Exercise the product's actual default, not an external archive workaround.
@@ -75,6 +79,12 @@ fn request(selection: CandidateSelection, slot: &str, metadata: bool) -> Additio
         operation_id: OperationId::generate().unwrap(),
         additions: vec![DirectoryAddition {
             selection,
+            name: name_policy::Name::parse(match slot {
+                "N01" => "First addition",
+                "N02" => "Second addition",
+                _ => panic!("fixture must explicitly name the requested addition"),
+            })
+            .unwrap(),
             slot_id: slot.into(),
             level: 1,
             upstream_slot_id: None,
@@ -181,11 +191,10 @@ fn addition_rejects_unbrowseable_disk_names_without_persisting_a_plan() {
         let seal = fs::read(f.discovery.join("original/disk.json")).unwrap();
         let request = request(selection(&f, name), "N01", true);
         let operation = request.operation_id;
+        let mut input = json!(request);
+        input["additions"][0]["name"] = json!(name);
         assert_eq!(
-            f.backend
-                .preview_storage_addition(&f.identity, request)
-                .unwrap_err()
-                .code,
+            command(&f, "disk_add_preview", input).unwrap_err().code,
             expected,
             "{name}"
         );
@@ -234,8 +243,10 @@ fn addition_rejects_colliding_new_primary_and_backup_roots() {
     )
     .unwrap();
     let mut request = request(first, "N01", true);
+    request.additions[0].name = name_policy::Name::parse("Straße").unwrap();
     request.additions.push(DirectoryAddition {
         selection: second,
+        name: name_policy::Name::parse("STRASSE").unwrap(),
         slot_id: "N02".into(),
         level: 2,
         upstream_slot_id: Some("N01".into()),
@@ -291,6 +302,7 @@ fn existing_pool_accepts_data_only_then_mixed_addition_and_exact_replay() {
     let mut mixed = request(data_selection, "N02", false);
     mixed.additions.push(DirectoryAddition {
         selection: metadata_selection,
+        name: name_policy::Name::parse("Metadata addition").unwrap(),
         slot_id: "N03".into(),
         level: 1,
         upstream_slot_id: None,

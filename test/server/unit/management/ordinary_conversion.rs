@@ -22,7 +22,9 @@ fn fixture() -> Fixture {
         .unwrap();
     let engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([discovery.join("known")]).unwrap(),
+        storage_contract::Config::development(crate::test_disks(
+            [discovery.join("known")],
+        )).unwrap(),
     )
     .unwrap();
     let management = data.join("management");
@@ -98,6 +100,7 @@ fn preview(f: &Fixture) -> OrdinaryDiskConversionPreview {
         .preview_ordinary_conversion(
             &f.identity,
             OrdinaryDiskConversionRequest {
+                name: name_policy::Name::parse("new-primary").unwrap(),
                 operation_id: OperationId::generate().unwrap(),
                 source,
                 target,
@@ -468,6 +471,7 @@ fn cold_import_boundaries_have_a_durable_stop_that_retains_source_and_staging() 
                 .preview_ordinary_conversion(
                     &f.identity,
                     OrdinaryDiskConversionRequest {
+                        name: name_policy::Name::parse("converted-successor").unwrap(),
                         operation_id: OperationId::generate().unwrap(),
                         source,
                         target,
@@ -634,6 +638,7 @@ fn ordinary_conversion_rejects_overlapping_sources_before_admitting_empty_target
                 .preview_ordinary_conversion(
                     &f.identity,
                     OrdinaryDiskConversionRequest {
+                        name: name_policy::Name::parse("overlap-target").unwrap(),
                         operation_id: OperationId::generate().unwrap(),
                         source,
                         target: target.clone(),
@@ -1181,9 +1186,9 @@ fn registered_conversion_import_rejects_a_later_membership_fence() {
     backend.test_with_engine_locked(|engine| {
         let mut target = engine.config().clone();
         let previous = target.disks.len();
-        let generated = storage_contract::Config::development(
+        let generated = storage_contract::Config::development(crate::test_disks(
             (0..=previous).map(|index| f.discovery.join(format!("later-fence-{index}"))),
-        )
+        ))
         .unwrap();
         let mut addition = generated.disks.into_iter().nth(previous).unwrap();
         addition.slot_id = "D03".into();
@@ -1242,6 +1247,7 @@ fn target_name_budget_rejects_preview_and_user_rename_requires_a_new_review() {
     let failure = f.backend.preview_ordinary_conversion(
         &f.identity,
         OrdinaryDiskConversionRequest {
+            name: name_policy::Name::parse("bounded-conversion").unwrap(),
             operation_id: OperationId::generate().unwrap(),
             source,
             target,

@@ -723,7 +723,9 @@ fn diagnostic_discovery_distinguishes_empty_recognized_and_unsupported_children(
     private(&empty);
     let a = root.join("a");
     let b = root.join("b");
-    let config = storage_engine::Config::development([a.clone(), b.clone()]).unwrap();
+    let config = storage_engine::Config::development(crate::test_disks(
+        [a.clone(), b.clone()],
+    )).unwrap();
     let engine =
         storage_engine::Engine::initialize(&tmp.path().join("system"), config.clone()).unwrap();
     let plain = root.join("plain");
@@ -733,13 +735,13 @@ fn diagnostic_discovery_distinguishes_empty_recognized_and_unsupported_children(
     let nested = plain.join("nested-zxs");
     let nested_engine = storage_engine::Engine::initialize(
         &tmp.path().join("nested-system"),
-        storage_engine::Config::development([nested.clone()]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([nested.clone()])).unwrap(),
     )
     .unwrap();
     let foreign = root.join("foreign");
     let foreign_engine = storage_engine::Engine::initialize(
         &tmp.path().join("foreign-system"),
-        storage_engine::Config::development([foreign.clone()]).unwrap(),
+        storage_engine::Config::development(crate::test_disks([foreign.clone()])).unwrap(),
     )
     .unwrap();
     symlink(&a, root.join("alias")).unwrap();

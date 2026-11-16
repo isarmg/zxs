@@ -52,11 +52,11 @@ fn lazy_root_creation_keeps_directory_git_initialization_explicit() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &root.path().join("system"),
-            storage_engine::Config::development([
+            storage_engine::Config::development(crate::test_disks([
                 root.path().join("one"),
                 root.path().join("two"),
                 root.path().join("three"),
-            ])
+            ]))
             .unwrap(),
         )
         .unwrap();
@@ -109,11 +109,11 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
     let disks = root.path().join("disks");
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([
+        storage_engine::Config::development(crate::test_disks([
             disks.join("one"),
             disks.join("two"),
             disks.join("three"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -160,11 +160,11 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([
+        storage_engine::Config::development(crate::test_disks([
             root.path().join("one"),
             root.path().join("two"),
             root.path().join("three"),
-        ])
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -278,11 +278,11 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             let disks = temporary.path().join("disks");
             let engine = Engine::initialize(
                 &temporary.path().join("system"),
-                storage_engine::Config::development([
+                storage_engine::Config::development(crate::test_disks([
                     disks.join("one"),
                     disks.join("two"),
                     disks.join("three"),
-                ])
+                ]))
                 .unwrap(),
             )
             .unwrap();

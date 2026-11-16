@@ -372,7 +372,7 @@ fn held_root_mount_observation_does_not_reopen_a_replaced_directory_name() {
     let registered = directory.path().join("registered");
     let engine = storage_engine::Engine::initialize(
         &directory.path().join("system"),
-        storage_contract::Config::development([registered.clone()]).unwrap(),
+        storage_contract::Config::development(crate::test_disks([registered.clone()])).unwrap(),
     )
     .unwrap();
     let held = engine.open_disk_observation_directory("P01").unwrap();

@@ -16,7 +16,9 @@ impl Fixture {
         let system = temp.path().join("system");
         let management = temp.path().join("management");
         let mut config =
-            Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+            Config::development(crate::test_disks(
+                (0..3).map(|n| temp.path().join(format!("disk-{n}"))),
+            )).unwrap();
         for (index, disk) in config.disks.iter_mut().enumerate() {
             disk.metadata_member = index == 0;
         }

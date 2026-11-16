@@ -17,7 +17,9 @@ fn fixture(metadata_member: bool) -> Fixture {
     let root = crate::tests::private_tempdir();
     let data = root.path().join("system");
     let mut original =
-        Config::development((0..3).map(|index| root.path().join(format!("disk-{index}")))).unwrap();
+        Config::development(crate::test_disks(
+            (0..3).map(|index| root.path().join(format!("disk-{index}"))),
+        )).unwrap();
     let target = if metadata_member { 0 } else { 2 };
     original.disks[target].metadata_member = metadata_member;
     let mut engine = storage_engine::Engine::initialize(&data, original.clone()).unwrap();
@@ -855,6 +857,7 @@ fn add_readmission_successor(f: &Fixture) {
     let request = AdditionRequest {
         operation_id: OperationId::generate().unwrap(),
         additions: vec![DirectoryAddition {
+            name: name_policy::Name::parse("Later data member").unwrap(),
             selection,
             slot_id: "LATER".into(),
             level: 1,

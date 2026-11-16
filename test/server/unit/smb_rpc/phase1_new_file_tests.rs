@@ -3,7 +3,7 @@ use super::*;
 
 fn primary_fixture() -> (Fixture, Arc<Shared>, Arc<LostCommitReply>) {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("p")]).unwrap();
+    let config = Config::development(crate::test_disks([temp.path().join("p")])).unwrap();
     assert_eq!(config.disks.len(), 1);
     assert_eq!(config.disks[0].level, 1);
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();

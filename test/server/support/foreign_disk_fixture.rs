@@ -52,15 +52,17 @@ pub(super) fn fixture() -> Fixture {
         .unwrap();
     let data = root.path().join("system");
     let known = discovery.join("known");
-    let engine =
-        storage_engine::Engine::initialize(&data, Config::development([known.clone()]).unwrap())
-            .unwrap();
+    let engine = storage_engine::Engine::initialize(
+        &data,
+        Config::development(crate::test_disks([known.clone()])).unwrap(),
+    )
+    .unwrap();
     let source = discovery.join("foreign");
-    let mut foreign_config = Config::development([
+    let mut foreign_config = Config::development(crate::test_disks([
         root.path().join("primary-one"),
         root.path().join("primary-two"),
         source.clone(),
-    ])
+    ]))
     .unwrap();
     foreign_config.disks[1].level = 1;
     foreign_config.disks[1].upstream_slot_id = None;

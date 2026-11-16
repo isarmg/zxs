@@ -50,11 +50,11 @@ fn monitoring_uses_sampled_physical_bytes_not_logical_accounting() {
 #[test]
 fn unmounted_member_capacity_is_unknown_in_management_payload() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = storage_contract::Config::development([
+    let config = storage_contract::Config::development(crate::test_disks([
         temporary.path().join("d1"),
         temporary.path().join("d2"),
         temporary.path().join("d3"),
-    ])
+    ]))
     .unwrap();
     let engine =
         storage_engine::Engine::initialize(&temporary.path().join("system"), config.clone())

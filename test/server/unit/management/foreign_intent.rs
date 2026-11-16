@@ -90,10 +90,10 @@ fn intent_directory(f: &Fixture) -> PathBuf {
 fn fence(f: &Fixture, backend: &EngineBackend) {
     backend.test_with_engine_locked(|engine| {
         let mut target = engine.config().clone();
-        let generated = storage_contract::Config::development([
+        let generated = storage_contract::Config::development(crate::test_disks([
             f.known.clone(),
             f._root.path().join("later-primary"),
-        ])
+        ]))
         .unwrap();
         let mut addition = generated.disks.into_iter().nth(1).unwrap();
         addition.level = 1;
