@@ -166,11 +166,17 @@ fn prepared(engine: &mut Engine, request: &BackupTransactionRequest) {
             .phase,
         BackupPreparationPhase::TargetEntitiesPrepared
     );
-    // Genesis has no generation directory before the first native vote.
-    // Inspecting the original slots must admit that missing ancestor without
-    // creating it before every original member has passed preflight.
+    // Genesis has no generation or feedback parents before the first native
+    // vote. Read-only inspection must admit absent ancestors without creating
+    // them before every original member has passed the preparation preflight.
     for disk in &engine.config().disks {
-        assert!(!disk.root.join("metadata/membership-generations").exists());
+        for relative in [
+            "metadata/membership-generations",
+            "metadata/backup-root-preparations",
+            "metadata/backup-layout-preparations",
+        ] {
+            assert!(!disk.root.join(relative).exists(), "unexpected prebuilt {relative}");
+        }
     }
     diagnostic(started, "prepared: start registry placement decision");
     engine

@@ -179,7 +179,9 @@ fn path(root: &DiskRoot, operation: OperationId) -> std::path::PathBuf {
 }
 fn read(source: &Source, operation: OperationId) -> Result<Option<Feedback>> {
     let path = path(&source.root, operation);
-    if source.root.optional_metadata(&path)?.is_none() {
+    // The neutral feedback parent is absent on the first preparation. Probe
+    // every ancestor from the same held root; unsafe entries still fail closed.
+    if !crate::history_package::preparation_path_exists(&source.root, &path)? {
         return Ok(None);
     }
     let bytes = source.root.read_bytes(&path, MAX_LAYOUT)?;
