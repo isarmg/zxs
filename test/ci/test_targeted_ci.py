@@ -377,7 +377,14 @@ class TargetedSelection(unittest.TestCase):
         ]
         for path, retained in paths:
             with self.subTest(path=path):
-                assert_path_group_extension(self, self.policy, [path], retained, [name])
+                if retained:
+                    assert_path_group_extension(self, self.policy, [path], retained, [name])
+                else:
+                    # A newly mapped path has no valid old-only targeted plan.
+                    plan = CI.select_plan(self.policy, [path], shardable=True)
+                    self.assertEqual(plan['groups'], [name])
+                    self.assertCountEqual(origin_selections(plan, name),
+                                          self.policy['groups'][name]['rust_targets'])
         assert_path_group_extension(self, self.policy, [path for path, _ in paths], None, [name])
         target, product, lean = self.policy['groups'][name]['rust_targets']
         prefix = ('engine::membership_transition::pending::terminal_resume::tests::'
