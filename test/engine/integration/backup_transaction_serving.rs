@@ -322,6 +322,16 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
     let operation = request.preparation.operation_id;
     diagnostic(started, "main: prepare transaction");
     prepared(&mut engine, &request);
+    // Fresh original roots retain Genesis in zxs-data, not in the future
+    // native selector directory. The final switch must admit this real absence
+    // without provisioning a selector or weakening the old/new identity gate.
+    for disk in &originals {
+        assert_eq!(
+            fs::symlink_metadata(disk.root.join("metadata/pool-membership"))
+                .unwrap_err().kind(),
+            std::io::ErrorKind::NotFound,
+        );
+    }
     diagnostic(started, "main: inspect published configuration");
     // The admitted source chain already runs primary-first. The published
     // configuration must preserve it before appending the selected fanout.
@@ -393,6 +403,13 @@ fn same_backup_switch_serves_and_replays_normal_successor_publications() {
         assert!(!system.join("backup-serving-installed.json").exists());
         let selected = fs::read(extension.join("selected.json")).unwrap();
         let plan = fs::read(extension.join("plan.json")).unwrap();
+        for disk in &originals {
+            assert_eq!(
+                fs::symlink_metadata(disk.root.join("metadata/pool-membership"))
+                    .unwrap_err().kind(),
+                std::io::ErrorKind::NotFound,
+            );
+        }
         let seals = originals.iter().map(|disk| {
             let path = disk.root.join("disk.json");
             let bytes = fs::read(&path).unwrap();

@@ -62,10 +62,9 @@ impl Original {
         let old = HeldRegular::capture_entry(root, &layout::DISK_IDENTITY, MAX_METADATA)?
             .ok_or_else(|| invalid("original disk seal disappeared before Backup selection"))?;
         validate_stored_seal(&decode_seal(old.bytes())?, &handle.seal)?;
-        if root
-            .optional_metadata(&root.path().join(GENERATION))?
-            .is_some()
-        {
+        // Initial roots keep their Genesis anchor in zxs-data. The native
+        // selector's parent need not exist before this exact switch selects it.
+        if preparation_path_exists(root, &root.path().join(GENERATION))? {
             return Err(invalid(
                 "original Backup selector already started; resume this operation through its native cold boundary",
             ));

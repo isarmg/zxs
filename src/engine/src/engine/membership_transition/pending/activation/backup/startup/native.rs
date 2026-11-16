@@ -2,6 +2,7 @@
 //! prescribed first State, actual Publication and both native registry graphs.
 use super::*;
 use crate::disk::{decode_seal, identity_at, validate_stored_seal};
+use crate::history_package::preparation_path_exists;
 use crate::journal::{load_authenticated_object_at, publication_seal_path};
 use crate::persist::layout;
 
@@ -162,10 +163,17 @@ pub(super) fn require_selector(
     if !is_old {
         validate_stored_seal(&stored, &selected)?;
     }
-    let selector = root
-        .open_optional_read_regular(&root.path().join(GENERATION_FILE))?
-        .map(|file| crate::disk::read_file_bytes(file, MAX_METADATA))
-        .transpose()?;
+    let path = root.path().join(GENERATION_FILE);
+    // An unfinished original may still have no native selector directory.
+    // Only actual absence is optional; unsafe ancestors and present files still
+    // pass through the held path/read gates, and the state classification below.
+    let selector = if preparation_path_exists(root, &path)? {
+        root.open_optional_read_regular(&path)?
+            .map(|file| crate::disk::read_file_bytes(file, MAX_METADATA))
+            .transpose()?
+    } else {
+        None
+    };
     match selector {
         Some(bytes) if bytes == canonical_json(&plan.authority)? && !is_old => (),
         None if !completed && old.is_some() => (), // seal-first, selector-second interruption
