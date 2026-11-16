@@ -297,7 +297,8 @@ fn real_http_mode_switch_fences_old_auto_rpc_and_retains_undecided_bytes_across_
     assert!(!status.is_success());
     assert_eq!(busy["error"]["code"], "COMMIT_PREPARATION_BUSY");
     assert_eq!(published["commit_state"], "PUBLISHED");
-    assert_eq!(published["operation_kind"], "workspace.commit");
+    // The public wire projects the native workspace receipt as a content save.
+    assert_eq!(published["operation_kind"], "content_save");
     let identity = fronts.identity();
     assert_eq!(fronts.backend.file_history(&identity, &first.file_id).unwrap().len(), 2);
 
