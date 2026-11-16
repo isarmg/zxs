@@ -277,13 +277,33 @@ fn same_parent_rename_replays_exact_finalized_cut_without_new_content() {
         if point == "after_container_names" {
             // Intent cleanup is complete but the decision is not Published yet.
             // With no rename left to do, cold recovery must still reject bad BODY.
+            use std::io::{Seek, Write};
+            use std::os::unix::fs::PermissionsExt;
             let original = std::fs::read(&renamed_body).unwrap();
+            let metadata = std::fs::metadata(&renamed_body).unwrap();
+            assert_eq!(metadata.mode() & 0o222, 0, "installed BODY is immutable");
+            // Acquire a test-only corruption FD, then restore the original mode
+            // before cold admission. Never replace the original BODY inode.
+            std::fs::set_permissions(&renamed_body, std::fs::Permissions::from_mode(
+                metadata.mode() | 0o200,
+            )).unwrap();
+            let mut body = std::fs::OpenOptions::new().write(true).open(&renamed_body).unwrap();
+            body.set_permissions(metadata.permissions()).unwrap();
+            let held = body.metadata().unwrap();
+            assert_eq!((held.dev(), held.ino()), (metadata.dev(), metadata.ino()));
             let mut corrupt = original.clone();
             corrupt[0] ^= 0x40;
-            std::fs::write(&renamed_body, &corrupt).unwrap();
+            body.write_all(&corrupt).unwrap();
+            body.sync_all().unwrap();
+            assert_eq!(std::fs::metadata(&renamed_body).unwrap().mode(), metadata.mode());
             assert!(Engine::open(&system).is_err());
             assert_eq!(std::fs::read(&renamed_body).unwrap(), corrupt);
-            std::fs::write(&renamed_body, &original).unwrap();
+            body.rewind().unwrap();
+            body.write_all(&original).unwrap();
+            body.sync_all().unwrap();
+            let restored = std::fs::metadata(&renamed_body).unwrap();
+            assert_eq!((restored.dev(), restored.ino()), (metadata.dev(), metadata.ino()));
+            assert_eq!(restored.mode(), metadata.mode());
         }
         if point == "after_publication_1" {
             // Publication may need missing receipts repaired, but its already
