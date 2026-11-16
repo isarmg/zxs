@@ -211,6 +211,14 @@ pub(super) fn interrupt_and_resume(
     let result = commit_worktree(&mut engine, request, principal).unwrap();
     assert_eq!(result, plan.handle());
     assert_eq!(engine.state().operations.len(), operations.len() + 1);
+    let completion = engine.operation(plan.completion).unwrap();
+    assert_eq!(completion.commit_state, CommitState::Published);
+    assert!(node.sequence < completion.sequence);
+    let Record::CompleteCommit(record) = codec::decode(&completion).unwrap().unwrap().record else {
+        panic!("the original reserved operation must publish the final completion");
+    };
+    assert_eq!(record.reserve, request.operation_id);
+    assert_eq!(record.checkpoint.sequence, finished);
     assert_eq!(engine.operation(plan.file_operation).unwrap(), file);
     assert_eq!(engine.operation(plan.node_publication).unwrap(), node);
     assert_eq!(engine.state().versions, versions);
@@ -224,6 +232,7 @@ pub(super) fn interrupt_and_resume(
     assert_eq!(commit_worktree(&mut engine, request, principal).unwrap(), result);
     assert!(Arc::ptr_eq(&source, &engine.state));
     assert_eq!(engine.next_slot, slot);
+    assert_eq!(engine.operation(plan.completion).unwrap(), completion);
     assert_eq!(inventory(&ledger), completed_ledger);
     engine
 }
